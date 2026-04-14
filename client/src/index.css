@@ -1,0 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* HSL Color System */
+  /* Background: Almost Black */
+  --background: 0 0% 8%;
+  /* Foreground: Off-white */
+  --foreground: 45 20% 96%;
+
+  /* Primary: Gold */
+  --primary: 43 74% 49%;
+  --primary-foreground: 0 0% 10%;
+
+  /* Secondary: Dark Grey */
+  --secondary: 0 0% 15%;
+  --secondary-foreground: 45 20% 96%;
+
+  /* Muted: Lighter Grey */
+  --muted: 0 0% 20%;
+  --muted-foreground: 0 0% 60%;
+
+  /* Accent: Slightly brighter gold/yellow for emphasis */
+  --accent: 43 74% 55%;
+  --accent-foreground: 0 0% 10%;
+
+  /* Destructive: Deep Red */
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+
+  /* Borders & Inputs */
+  --border: 0 0% 20%;
+  --input: 0 0% 20%;
+  --ring: 43 74% 49%;
+  
+  /* Cards */
+  --card: 0 0% 12%;
+  --card-foreground: 45 20% 96%;
+
+  /* Radius */
+  --radius: 0.5rem;
+
+  /* Fonts */
+  --font-display: 'Playfair Display', serif;
+  --font-body: 'DM Sans', sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary-foreground;
+    font-family: var(--font-body);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    @apply font-bold tracking-tight text-white;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary) / 0.5);
+}
+
+/* Utilities for gold gradients */
+.gold-gradient-text {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-[#D4AF37] via-[#F2D06B] to-[#D4AF37];
+}
+
+.gold-border {
+  @apply border border-[#D4AF37]/30;
+}

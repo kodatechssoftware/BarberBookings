@@ -1,0 +1,92 @@
+Quero adicionar uma funcionalidade de exportação de relatórios em Excel (.xlsx) no painel administrativo do meu sistema de marcações para barbearias.
+
+🎯 Objetivo
+
+Permitir gerar relatórios com base num intervalo de datas selecionado (data início e data fim).
+
+O sistema deve permitir:
+	•	Barbeiro: gerar apenas o seu próprio relatório.
+	•	Dono/Administrador: gerar relatório individual por barbeiro OU relatório geral com todos os barbeiros.
+
+⸻
+
+🔐 Permissões
+	•	Se o utilizador for BARBEIRO:
+	•	Só pode exportar dados relativos a si próprio.
+	•	Não pode visualizar dados de outros barbeiros.
+	•	Se o utilizador for DONO/ADMIN:
+	•	Pode exportar relatório:
+	•	De um barbeiro específico
+	•	Ou de todos os barbeiros (relatório geral)
+
+⸻
+
+📅 Filtros obrigatórios
+
+Antes de gerar o relatório deve existir:
+	•	Campo “Data Início”
+	•	Campo “Data Fim”
+	•	Botão “Gerar Relatório”
+
+O sistema deve considerar apenas:
+	•	Marcações com estado “concluído”
+	•	Dentro do intervalo selecionado
+
+⸻
+
+📊 Estrutura do ficheiro Excel (.xlsx)
+
+O Excel deve conter DUAS folhas:
+
+⸻
+
+📄 Folha 1: Resumo por Barbeiro
+
+Colunas:
+	•	Nome do Barbeiro
+	•	Número Total de Serviços
+	•	Total Faturado (€)
+
+Regras:
+	•	Agrupar por barbeiro
+	•	Ordenar por Total Faturado (maior para menor)
+	•	No final da tabela adicionar linha:
+	•	Total Geral de Serviços
+	•	Total Geral Faturado
+
+Valores monetários devem estar formatados como moeda (€).
+
+⸻
+
+📄 Folha 2: Detalhe Completo
+
+Colunas:
+	•	Data
+	•	Nome do Barbeiro
+	•	Nome do Cliente
+	•	Serviço Realizado
+	•	Valor (€)
+
+Regras:
+	•	Listar todas as marcações concluídas no período
+	•	Ordenar por data (mais antigas primeiro)
+	•	Valores formatados como moeda (€)
+
+⸻
+
+📁 Nome do ficheiro
+
+O ficheiro deve ser exportado com nome automático:
+
+relatorio_[data_inicio]a[data_fim].xlsx
+
+Exemplo:
+relatorio_01-03-2025_a_31-03-2025.xlsx
+
+⸻
+
+⚙️ Requisitos Técnicos
+	•	Usar os dados existentes na base de dados de marcações
+	•	Garantir que as permissões são respeitadas antes da geração do relatório
+	•	O botão de exportação só deve aparecer para utilizadores autenticados
+	•	A geração deve ser feita no backend para evitar exposição de dados
