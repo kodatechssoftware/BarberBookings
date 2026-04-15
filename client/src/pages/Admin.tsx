@@ -36,7 +36,7 @@ export default function Admin() {
   } as any);
   const { data: barbers } = useBarbers();
   const { data: services } = useServices();
-  const { data: blacklistEntries } = useQuery({ 
+  const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist"],
     enabled: user?.role === "admin"
   });
