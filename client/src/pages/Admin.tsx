@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { useAppointments, useUpdateAppointmentStatus, useCreateAppointment } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
@@ -31,11 +31,12 @@ export default function Admin() {
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
+    enabled: user?.authorized === true,
     date: format(selectedDateFilter, 'yyyy-MM-dd'),
     barberId: user?.role === "barber" ? (user as any).id : (selectedBarberFilter === "all" ? undefined : selectedBarberFilter)
   } as any);
-  const { data: barbers } = useBarbers();
-  const { data: services } = useServices();
+  const { data: barbers } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
+  const { data: services } = useServices({ enabled: user?.authorized === true, includeHidden: true });
   const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist"],
     enabled: user?.role === "admin"
@@ -103,9 +104,9 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/services"] });
       setIsAddingService(false);
       setServiceFormData({ name: "", description: "", price: 0, duration: 30 });
-      toast({ title: "Sucesso", description: "Serviço adicionado com sucesso." });
+      toast({ title: "Sucesso", description: "ServiÃ§o adicionado com sucesso." });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Erro ao adicionar serviço.", variant: "destructive" });
+      toast({ title: "Erro", description: err.message || "Erro ao adicionar serviÃ§o.", variant: "destructive" });
     }
   };
 
@@ -114,9 +115,9 @@ export default function Admin() {
     try {
       const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportDates.barberId}`;
       window.open(url, '_blank');
-      toast({ title: "Sucesso", description: "O relatório está a ser gerado." });
+      toast({ title: "Sucesso", description: "O relatÃ³rio estÃ¡ a ser gerado." });
     } catch (err) {
-      toast({ title: "Erro", description: "Falha ao gerar o relatório.", variant: "destructive" });
+      toast({ title: "Erro", description: "Falha ao gerar o relatÃ³rio.", variant: "destructive" });
     } finally {
       setIsExporting(false);
     }
@@ -147,7 +148,7 @@ export default function Admin() {
       });
       if (res.ok) {
         const data = await res.json();
-        setUser({ authorized: true, role: data.role });
+        await checkAuth();
         toast({ title: "Bem-vindo", description: data.message });
       } else {
         toast({ title: "Erro", description: "Utilizador ou senha incorretos.", variant: "destructive" });
@@ -194,11 +195,11 @@ export default function Admin() {
       return;
     }
     if (blockData.times.length === 0) {
-      toast({ title: "Erro", description: "Selecione pelo menos um horário.", variant: "destructive" });
+      toast({ title: "Erro", description: "Selecione pelo menos um horÃ¡rio.", variant: "destructive" });
       return;
     }
     if (blockData.isManualBooking && !blockData.serviceId) {
-      toast({ title: "Erro", description: "Selecione um serviço.", variant: "destructive" });
+      toast({ title: "Erro", description: "Selecione um serviÃ§o.", variant: "destructive" });
       return;
     }
 
@@ -310,19 +311,19 @@ export default function Admin() {
                 <Button variant="ghost" size="sm" onClick={handleLogout} className="text-gray-500 hover:text-white w-fit px-0 sm:px-3"><LogOut className="w-4 h-4 mr-2" /> Sair</Button>
               </div>
             </div>
-            <p className="text-gray-400 text-sm">Gerencie marcações, equipa e serviços.</p>
+            <p className="text-gray-400 text-sm">Gerencie marcaÃ§Ãµes, equipa e serviÃ§os.</p>
           </div>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="bg-card border border-white/10 p-1">
-            <TabsTrigger value="appointments" className="gap-2 text-white data-[state=active]:text-primary"><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
+            <TabsTrigger value="appointments" className="gap-2 text-white data-[state=active]:text-primary"><Clock className="w-4 h-4" /> MarcaÃ§Ãµes</TabsTrigger>
             {user.role === "admin" && (
               <>
                 <TabsTrigger value="barbers" className="gap-2 text-white data-[state=active]:text-primary"><Users className="w-4 h-4" /> Equipa</TabsTrigger>
-                <TabsTrigger value="services" className="gap-2 text-white data-[state=active]:text-primary"><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
+                <TabsTrigger value="services" className="gap-2 text-white data-[state=active]:text-primary"><Scissors className="w-4 h-4" /> ServiÃ§os</TabsTrigger>
                 <TabsTrigger value="blacklist" className="gap-2 text-white data-[state=active]:text-primary"><User className="w-4 h-4 text-red-400" /> Blacklist</TabsTrigger>
-                <TabsTrigger value="reports" className="gap-2 text-white data-[state=active]:text-primary"><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
+                <TabsTrigger value="reports" className="gap-2 text-white data-[state=active]:text-primary"><FileDown className="w-4 h-4" /> RelatÃ³rios</TabsTrigger>
               </>
             )}
           </TabsList>
@@ -357,25 +358,25 @@ export default function Admin() {
               </Popover>
 
               <Dialog open={isBlocking} onOpenChange={setIsBlocking}>
-                <DialogTrigger asChild><Button variant="gold" className="gap-2 h-11 sm:h-9 ml-auto"><Plus className="w-4 h-4" /> Bloquear Horário</Button></DialogTrigger>
+                <DialogTrigger asChild><Button variant="gold" className="gap-2 h-11 sm:h-9 ml-auto"><Plus className="w-4 h-4" /> Bloquear HorÃ¡rio</Button></DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-md rounded-2xl p-6 shadow-2xl backdrop-blur-md">
-                  <DialogHeader><DialogTitle className="text-xl font-display font-bold text-primary">Gestão de Horário</DialogTitle></DialogHeader>
+                  <DialogHeader><DialogTitle className="text-xl font-display font-bold text-primary">GestÃ£o de HorÃ¡rio</DialogTitle></DialogHeader>
                   <div className="space-y-6">
                     <div className="flex flex-col gap-3 p-3 bg-primary/5 rounded-xl border border-primary/10">
                       <div className="flex items-center gap-2">
                         <input type="checkbox" id="manualBooking" checked={blockData.isManualBooking} onChange={(e) => setBlockData({...blockData, isManualBooking: e.target.checked, isMultiDay: false})} className="w-4 h-4 rounded border-white/10 accent-primary" />
-                        <Label htmlFor="manualBooking" className="text-sm font-medium cursor-pointer">Nova Marcação (Cliente ligou)</Label>
+                        <Label htmlFor="manualBooking" className="text-sm font-medium cursor-pointer">Nova MarcaÃ§Ã£o (Cliente ligou)</Label>
                       </div>
                       {!blockData.isManualBooking && (
                         <div className="flex items-center gap-2 pt-2 border-t border-primary/10">
                           <input type="checkbox" id="multiDay" checked={blockData.isMultiDay} onChange={(e) => setBlockData({...blockData, isMultiDay: e.target.checked, isManualBooking: false, isRecurring: false})} className="w-4 h-4 rounded border-white/10 accent-primary" />
-                          <Label htmlFor="multiDay" className="text-sm font-medium cursor-pointer">Bloqueio de vários dias (Férias/Ausência)</Label>
+                          <Label htmlFor="multiDay" className="text-sm font-medium cursor-pointer">Bloqueio de vÃ¡rios dias (FÃ©rias/AusÃªncia)</Label>
                         </div>
                       )}
                       {blockData.isManualBooking && (
                         <div className="flex items-center gap-2 pt-2 border-t border-primary/10">
                           <input type="checkbox" id="recurring" checked={blockData.isRecurring} onChange={(e) => setBlockData({...blockData, isRecurring: e.target.checked, isMultiDay: false})} className="w-4 h-4 rounded border-white/10 accent-primary" />
-                          <Label htmlFor="recurring" className="text-sm font-medium cursor-pointer">Marcação Recorrente (Repetir reserva)</Label>
+                          <Label htmlFor="recurring" className="text-sm font-medium cursor-pointer">MarcaÃ§Ã£o Recorrente (Repetir reserva)</Label>
                         </div>
                       )}
                     </div>
@@ -399,7 +400,7 @@ export default function Admin() {
                           <Select value={blockData.recurringMonths} onValueChange={(v) => setBlockData({...blockData, recurringMonths: v})}>
                             <SelectTrigger className="bg-background/50 border-white/10 h-10"><SelectValue /></SelectTrigger>
                             <SelectContent className="bg-card border-white/10 text-white">
-                              <SelectItem value="1">1 mês</SelectItem>
+                              <SelectItem value="1">1 mÃªs</SelectItem>
                               <SelectItem value="3">3 meses</SelectItem>
                               <SelectItem value="6">6 meses</SelectItem>
                               <SelectItem value="12">1 ano</SelectItem>
@@ -411,7 +412,7 @@ export default function Admin() {
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-3">
-                        <Label className="text-sm font-medium text-gray-300">{blockData.isMultiDay ? "Início" : "Data"}</Label>
+                        <Label className="text-sm font-medium text-gray-300">{blockData.isMultiDay ? "InÃ­cio" : "Data"}</Label>
                         <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                           <PopoverTrigger asChild><Button variant="outline" className="w-full bg-background/50 border-white/10 h-12 rounded-xl justify-start gap-2 text-white"><CalendarIcon className="w-4 h-4" />{format(blockData.date, "dd/MM/yyyy")}</Button></PopoverTrigger>
                           <PopoverContent className="w-auto p-0 bg-card border-white/10"><Calendar mode="single" selected={blockData.date} onSelect={(d) => { if (d) { setBlockData({ ...blockData, date: d }); setIsCalendarOpen(false); } }} locale={pt} initialFocus /></PopoverContent>
@@ -438,7 +439,7 @@ export default function Admin() {
                       </div>
                       {blockData.isManualBooking && (
                         <div className="space-y-3">
-                          <Label className="text-sm font-medium text-gray-300">Serviço</Label>
+                          <Label className="text-sm font-medium text-gray-300">ServiÃ§o</Label>
                           <Select onValueChange={(v) => setBlockData({...blockData, serviceId: v})}>
                             <SelectTrigger className="bg-background/50 border-white/10 h-12 rounded-xl text-white"><SelectValue placeholder="Selecione" /></SelectTrigger>
                             <SelectContent className="bg-card border-white/10 text-white">{services?.map(s => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
@@ -448,7 +449,7 @@ export default function Admin() {
                     </div>
 
                     <div className="space-y-3">
-                      <Label className="text-sm font-medium text-gray-300">Horários</Label>
+                      <Label className="text-sm font-medium text-gray-300">HorÃ¡rios</Label>
                       <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin">
                         {["09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30", "17:00", "17:30", "18:00", "18:30", "19:00", "19:30"].map((time) => (
                           <Button key={time} variant={blockData.times.includes(time) ? "gold" : "outline"} size="sm" className="h-10 text-xs rounded-lg" onClick={() => setBlockData({ ...blockData, times: blockData.times.includes(time) ? blockData.times.filter(t => t !== time) : [...blockData.times, time] })}>{time}</Button>
@@ -459,11 +460,11 @@ export default function Admin() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-3">
                           <Label className="text-sm font-medium text-gray-300">Nome do Cliente / Nota</Label>
-                          <Input value={blockData.name} onChange={(e) => setBlockData({...blockData, name: e.target.value})} className="bg-background/50 border-white/10 h-12 rounded-xl text-white" placeholder="João" />
+                          <Input value={blockData.name} onChange={(e) => setBlockData({...blockData, name: e.target.value})} className="bg-background/50 border-white/10 h-12 rounded-xl text-white" placeholder="JoÃ£o" />
                         </div>
                         {blockData.isManualBooking && (
                           <div className="space-y-3">
-                            <Label className="text-sm font-medium text-gray-300">Telemóvel</Label>
+                            <Label className="text-sm font-medium text-gray-300">TelemÃ³vel</Label>
                             <Input value={blockData.phone} onChange={(e) => setBlockData({...blockData, phone: e.target.value})} className="bg-background/50 border-white/10 h-12 rounded-xl text-white" placeholder="912..." />
                           </div>
                         )}
@@ -478,7 +479,7 @@ export default function Admin() {
             <div className="rounded-xl border border-white/10 overflow-hidden bg-card">
               {isLoadingAppointments ? <div className="p-12 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div> : (
                 <div className="overflow-x-auto"><table className="w-full text-left text-sm text-white">
-                  <thead className="bg-white/5 uppercase text-xs font-bold text-gray-400"><tr><th className="px-6 py-4">Hora</th><th className="px-6 py-4">Cliente</th><th className="px-6 py-4">Serviço</th><th className="px-6 py-4">Profissional</th><th className="px-6 py-4">Estado</th><th className="px-6 py-4 text-right">Ações</th></tr></thead>
+                  <thead className="bg-white/5 uppercase text-xs font-bold text-gray-400"><tr><th className="px-6 py-4">Hora</th><th className="px-6 py-4">Cliente</th><th className="px-6 py-4">ServiÃ§o</th><th className="px-6 py-4">Profissional</th><th className="px-6 py-4">Estado</th><th className="px-6 py-4 text-right">AÃ§Ãµes</th></tr></thead>
                   <tbody className="divide-y divide-white/5">
                     {appointments?.map((app: any) => (
                       <tr key={app.id} className={cn("hover:bg-white/5 transition-colors", app.status === 'cancelled' && "opacity-40")}>
@@ -491,11 +492,11 @@ export default function Admin() {
                           <div className="flex justify-end gap-2">
                             {app.status === 'booked' && (
                               <div className="flex gap-2">
-                                <Button size="icon" variant="ghost" onClick={() => updateStatus.mutate({ id: app.id, status: 'cancelled' })} className="text-red-500 hover:text-red-400 h-8 w-8" title="Cancelar Marcação"><XCircle className="w-4 h-4" /></Button>
-                                <Button size="icon" variant="ghost" className="text-destructive hover:text-red-400 h-8 w-8" title="Adicionar à Blacklist" onClick={async () => {
-                                  if (confirm(`Deseja bloquear ${app.customerName} (${app.customerPhone})? Ele não conseguirá marcar mais online.`)) {
-                                    await apiRequest("POST", "/api/admin/blacklist", { phone: app.customerPhone, email: app.customerEmail, reason: `Faltou à marcação de ${format(parseISO(app.startTime), "dd/MM/yyyy HH:mm")}` });
-                                    toast({ title: "Sucesso", description: "Cliente adicionado à blacklist." });
+                                <Button size="icon" variant="ghost" onClick={() => updateStatus.mutate({ id: app.id, status: 'cancelled' })} className="text-red-500 hover:text-red-400 h-8 w-8" title="Cancelar MarcaÃ§Ã£o"><XCircle className="w-4 h-4" /></Button>
+                                <Button size="icon" variant="ghost" className="text-destructive hover:text-red-400 h-8 w-8" title="Adicionar Ã  Blacklist" onClick={async () => {
+                                  if (confirm(`Deseja bloquear ${app.customerName} (${app.customerPhone})? Ele nÃ£o conseguirÃ¡ marcar mais online.`)) {
+                                    await apiRequest("POST", "/api/admin/blacklist", { phone: app.customerPhone, email: app.customerEmail, reason: `Faltou Ã  marcaÃ§Ã£o de ${format(parseISO(app.startTime), "dd/MM/yyyy HH:mm")}` });
+                                    toast({ title: "Sucesso", description: "Cliente adicionado Ã  blacklist." });
                                     queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
                                   }
                                 }}><User className="w-4 h-4 text-red-500" /></Button>
@@ -504,7 +505,7 @@ export default function Admin() {
                                     <Button size="icon" variant="ghost" className="text-primary hover:text-primary/80 h-8 w-8"><Settings className="w-4 h-4" /></Button>
                                   </DialogTrigger>
                                   <DialogContent className="bg-card border-white/10 text-white">
-                                    <DialogHeader><DialogTitle>Editar Marcação</DialogTitle></DialogHeader>
+                                    <DialogHeader><DialogTitle>Editar MarcaÃ§Ã£o</DialogTitle></DialogHeader>
                                     <div className="space-y-4 pt-4">
                                       <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
@@ -537,14 +538,14 @@ export default function Admin() {
                                         const newStartTime = new Date(`${dateVal}T${timeVal}`);
                                         await apiRequest("PATCH", `/api/appointments/${app.id}`, { startTime: newStartTime, barberId: Number(barberId) });
                                         queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-                                        toast({ title: "Sucesso", description: "Marcação atualizada." });
-                                      }}>Guardar Alterações</Button>
+                                        toast({ title: "Sucesso", description: "MarcaÃ§Ã£o atualizada." });
+                                      }}>Guardar AlteraÃ§Ãµes</Button>
                                     </div>
                                   </DialogContent>
                                 </Dialog>
                               </div>
                             )}
-                            {(app.customerName === "BLOQUEIO MANUAL" || app.customerName.includes("AUSÊNCIA") || app.customerName.includes("FÉRIAS")) && (
+                            {(app.customerName === "BLOQUEIO MANUAL" || app.customerName.includes("AUSÃŠNCIA") || app.customerName.includes("FÃ‰RIAS")) && (
                               <Button size="icon" variant="ghost" onClick={() => updateStatus.mutate({ id: app.id, status: 'cancelled' })} className="text-gray-400 hover:text-white h-8 w-8" title="Remover Bloqueio">
                                 <LogOut className="w-4 h-4 rotate-180" />
                               </Button>
@@ -570,7 +571,7 @@ export default function Admin() {
                 </DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white">
                   <DialogHeader>
-                    <DialogTitle>Adicionar Membro à Equipa</DialogTitle>
+                    <DialogTitle>Adicionar Membro Ã  Equipa</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4 pt-4">
                     <div>
@@ -624,7 +625,16 @@ export default function Admin() {
                 <Card key={barber.id} className="bg-card border-white/10 overflow-hidden text-white">
                   <div className="aspect-square bg-muted relative">
                     <img src={barber.avatar || "/images/logo.jpg"} className="w-full h-full object-cover" />
-                    <Button variant="destructive" size="icon" className="absolute top-2 right-2 h-8 w-8" onClick={async () => { if (confirm(`Remover ${barber.name}?`)) { await apiRequest("DELETE", `/api/barbers/${barber.id}`); queryClient.invalidateQueries({ queryKey: ["/api/barbers"] }); } }}><XCircle className="w-4 h-4" /></Button>
+                    <Button variant="destructive" size="icon" className="absolute top-2 right-2 h-8 w-8" onClick={async () => {
+                      if (!confirm(`Remover ${barber.name}?`)) return;
+                      try {
+                        await apiRequest("DELETE", `/api/barbers/${barber.id}`);
+                        queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                        toast({ title: "Sucesso", description: "Barbeiro removido." });
+                      } catch (err: any) {
+                        toast({ title: "Erro", description: err.message || "NÃ£o foi possÃ­vel remover o barbeiro.", variant: "destructive" });
+                      }
+                    }}><XCircle className="w-4 h-4" /></Button>
                   </div>
                   <CardContent className="p-4">
                     <h3 className="font-bold text-lg">{barber.name}</h3>
@@ -654,16 +664,36 @@ export default function Admin() {
                         size="sm" 
                         className="flex-1 h-8 text-[10px] border-red-500/20 text-red-400 hover:bg-red-500/10"
                         onClick={async () => {
-                          if (confirm(`Deseja repor a password de ${barber.name}? No próximo login ele terá de definir uma nova.`)) {
+                          if (confirm(`Deseja repor a password de ${barber.name}? No prÃ³ximo login ele terÃ¡ de definir uma nova.`)) {
                             await apiRequest("PATCH", `/api/barbers/${barber.id}/reset-password`, {});
-                            toast({ title: "Sucesso", description: "Password removida. O barbeiro já pode definir uma nova no próximo login." });
+                            toast({ title: "Sucesso", description: "Password removida. O barbeiro jÃ¡ pode definir uma nova no prÃ³ximo login." });
                           }
                         }}
                       >
                         Repor Pass
                       </Button>
-                      <Button variant="outline" size="sm" className="h-8 text-[10px] text-gray-400 border-white/5">
-                        {barber.isVisible ? "Visível" : "Oculto"}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-[10px] text-gray-400 border-white/5"
+                        onClick={async () => {
+                          try {
+                            await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible: !barber.isVisible });
+                            queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                            toast({
+                              title: "Sucesso",
+                              description: barber.isVisible ? "Barbeiro ocultado." : "Barbeiro visÃ­vel no site.",
+                            });
+                          } catch (err: any) {
+                            toast({
+                              title: "Erro",
+                              description: err.message || "NÃ£o foi possÃ­vel atualizar a visibilidade do barbeiro.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        {barber.isVisible ? "VisÃ­vel" : "Oculto"}
                       </Button>
                     </div>
                   </CardContent>
@@ -678,13 +708,13 @@ export default function Admin() {
                 <CardTitle className="flex items-center gap-2 text-red-400">
                   <User className="w-5 h-5" /> Clientes Bloqueados
                 </CardTitle>
-                <p className="text-sm text-gray-400">Clientes nesta lista não conseguirão fazer marcações online através do site.</p>
+                <p className="text-sm text-gray-400">Clientes nesta lista nÃ£o conseguirÃ£o fazer marcaÃ§Ãµes online atravÃ©s do site.</p>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
                     <div className="space-y-2">
-                      <Label className="text-xs">Telemóvel (Obrigatório)</Label>
+                      <Label className="text-xs">TelemÃ³vel (ObrigatÃ³rio)</Label>
                       <Input id="bl-phone" className="bg-background border-white/10" placeholder="912345678" />
                     </div>
                     <div className="space-y-2">
@@ -695,12 +725,12 @@ export default function Admin() {
                       <Button variant="destructive" className="w-full" onClick={async () => {
                         const phone = (document.getElementById("bl-phone") as HTMLInputElement).value;
                         const email = (document.getElementById("bl-email") as HTMLInputElement).value;
-                        if (!phone) { toast({ title: "Erro", description: "O telemóvel é obrigatório.", variant: "destructive" }); return; }
+                        if (!phone) { toast({ title: "Erro", description: "O telemÃ³vel Ã© obrigatÃ³rio.", variant: "destructive" }); return; }
                         await apiRequest("POST", "/api/admin/blacklist", { phone, email, reason: "Bloqueio manual pelo administrador" });
                         queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
                         (document.getElementById("bl-phone") as HTMLInputElement).value = "";
                         (document.getElementById("bl-email") as HTMLInputElement).value = "";
-                        toast({ title: "Sucesso", description: "Cliente adicionado à blacklist." });
+                        toast({ title: "Sucesso", description: "Cliente adicionado Ã  blacklist." });
                       }}>Bloquear Cliente</Button>
                     </div>
                   </div>
@@ -709,10 +739,10 @@ export default function Admin() {
                     <table className="w-full text-left text-sm">
                       <thead className="bg-white/5 uppercase text-xs font-bold text-gray-400">
                         <tr>
-                          <th className="px-6 py-4">Telemóvel</th>
+                          <th className="px-6 py-4">TelemÃ³vel</th>
                           <th className="px-6 py-4">Email</th>
                           <th className="px-6 py-4">Data Bloqueio</th>
-                          <th className="px-6 py-4 text-right">Ação</th>
+                          <th className="px-6 py-4 text-right">AÃ§Ã£o</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -723,9 +753,13 @@ export default function Admin() {
                             <td className="px-6 py-4 text-gray-400">{format(parseISO(entry.createdAt), "dd/MM/yyyy")}</td>
                             <td className="px-6 py-4 text-right">
                               <Button variant="ghost" size="sm" className="text-gray-400 hover:text-white" onClick={async () => {
-                                await apiRequest("DELETE", `/api/admin/blacklist/${entry.id}`);
-                                queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
-                                toast({ title: "Sucesso", description: "Cliente removido da blacklist." });
+                                try {
+                                  await apiRequest("DELETE", `/api/admin/blacklist/${entry.id}`);
+                                  queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
+                                  toast({ title: "Sucesso", description: "Cliente removido da blacklist." });
+                                } catch (err: any) {
+                                  toast({ title: "Erro", description: err.message || "NÃ£o foi possÃ­vel remover o cliente da blacklist.", variant: "destructive" });
+                                }
                               }}>Remover</Button>
                             </td>
                           </tr>
@@ -743,16 +777,16 @@ export default function Admin() {
 
           <TabsContent value="services" className="outline-none">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-white">Serviços Disponíveis</h2>
+              <h2 className="text-xl font-bold text-white">ServiÃ§os DisponÃ­veis</h2>
               <Dialog open={isAddingService} onOpenChange={setIsAddingService}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="gap-2">
-                    <Plus className="w-4 h-4" /> Adicionar Serviço
+                    <Plus className="w-4 h-4" /> Adicionar ServiÃ§o
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white">
                   <DialogHeader>
-                    <DialogTitle>Novo Serviço</DialogTitle>
+                    <DialogTitle>Novo ServiÃ§o</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4 pt-4">
                     <div>
@@ -765,7 +799,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Descrição</Label>
+                      <Label>DescriÃ§Ã£o</Label>
                       <Input 
                         value={serviceFormData.description} 
                         onChange={e => setServiceFormData({...serviceFormData, description: e.target.value})} 
@@ -773,7 +807,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Preço (€) *</Label>
+                      <Label>PreÃ§o (â‚¬) *</Label>
                       <Input 
                         type="number" 
                         step="0.01" 
@@ -784,7 +818,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Duração (Min) *</Label>
+                      <Label>DuraÃ§Ã£o (Min) *</Label>
                       <Input 
                         type="number" 
                         value={serviceFormData.duration} 
@@ -798,7 +832,7 @@ export default function Admin() {
                       className="w-full" 
                       onClick={handleAddService}
                     >
-                      Criar Serviço
+                      Criar ServiÃ§o
                     </Button>
                   </div>
                 </DialogContent>
@@ -807,7 +841,7 @@ export default function Admin() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {services?.map(service => (
                 <Card key={service.id} className="bg-card border-white/10 text-white">
-                  <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-lg font-bold">{service.name}</CardTitle><span className="text-primary font-bold">{(service.price / 100).toFixed(2)}€</span></CardHeader>
+                  <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-lg font-bold">{service.name}</CardTitle><span className="text-primary font-bold">{(service.price / 100).toFixed(2)}â‚¬</span></CardHeader>
                   <CardContent><p className="text-sm text-gray-400 mb-4">{service.duration} min</p>
                     <div className="flex gap-2">
                       <Dialog>
@@ -815,23 +849,46 @@ export default function Admin() {
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
                         <DialogContent className="bg-card border-white/10 text-white">
-                          <DialogHeader><DialogTitle>Editar Serviço</DialogTitle></DialogHeader>
+                          <DialogHeader><DialogTitle>Editar ServiÃ§o</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4">
                             <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>
-                            <div><Label>Preço (€)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
-                            <div><Label>Duração (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
+                            <div><Label>PreÃ§o (â‚¬)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
+                            <div><Label>DuraÃ§Ã£o (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
                             <Button variant="gold" className="w-full" onClick={async () => {
                               const name = (document.getElementById(`edit-service-name-${service.id}`) as HTMLInputElement).value;
                               const price = Math.round(Number((document.getElementById(`edit-service-price-${service.id}`) as HTMLInputElement).value) * 100);
                               const duration = Number((document.getElementById(`edit-service-dur-${service.id}`) as HTMLInputElement).value);
                               await apiRequest("PATCH", `/api/services/${service.id}`, { name, price, duration });
                               queryClient.invalidateQueries({ queryKey: ["/api/services"] });
-                              toast({ title: "Sucesso", description: "Serviço atualizado." });
+                              toast({ title: "Sucesso", description: "ServiÃ§o atualizado." });
                             }}>Guardar</Button>
                           </div>
                         </DialogContent>
                       </Dialog>
-                      <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400" onClick={async () => { if (confirm(`Remover ${service.name}?`)) { try { await apiRequest("DELETE", `/api/services/${service.id}`); queryClient.invalidateQueries({ queryKey: ["/api/services"] }); toast({ title: "Sucesso", description: "Serviço removido." }); } catch (e) { toast({ title: "Erro", description: "Não foi possível remover o serviço. Verifique se existem marcações associadas.", variant: "destructive" }); } } }}>Remover</Button>
+                      <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400" onClick={async () => { if (confirm(`Remover ${service.name}?`)) { try { await apiRequest("DELETE", `/api/services/${service.id}`); queryClient.invalidateQueries({ queryKey: ["/api/services"] }); toast({ title: "Sucesso", description: "ServiÃ§o removido." }); } catch (e) { toast({ title: "Erro", description: "NÃ£o foi possÃ­vel remover o serviÃ§o. Verifique se existem marcaÃ§Ãµes associadas.", variant: "destructive" }); } } }}>Remover</Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-[10px] text-gray-400 border-white/5"
+                        onClick={async () => {
+                          try {
+                            await apiRequest("PATCH", `/api/services/${service.id}`, { isVisible: !service.isVisible });
+                            queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                            toast({
+                              title: "Sucesso",
+                              description: service.isVisible ? "ServiÃ§o ocultado." : "ServiÃ§o visÃ­vel no site.",
+                            });
+                          } catch (err: any) {
+                            toast({
+                              title: "Erro",
+                              description: err.message || "NÃ£o foi possÃ­vel atualizar a visibilidade do serviÃ§o.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        {service.isVisible ? "VisÃ­vel" : "Oculto"}
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -842,13 +899,13 @@ export default function Admin() {
           <TabsContent value="reports" className="outline-none">
             <Card className="bg-card border-white/10 max-w-2xl mx-auto">
               <CardHeader>
-                <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
-                <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com o resumo e detalhes das marcações concluídas.</p>
+                <CardTitle className="text-xl font-display font-bold text-primary">Exportar RelatÃ³rio Excel</CardTitle>
+                <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com o resumo e detalhes das marcaÃ§Ãµes concluÃ­das.</p>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label className="text-white">Data Início</Label>
+                    <Label className="text-white">Data InÃ­cio</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
@@ -892,7 +949,7 @@ export default function Admin() {
 
                 <Button variant="gold" className="w-full h-12 text-base font-bold gap-2" onClick={handleExport} disabled={isExporting}>
                   {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileDown className="w-5 h-5" />}
-                  Gerar Relatório Excel
+                  Gerar RelatÃ³rio Excel
                 </Button>
               </CardContent>
             </Card>

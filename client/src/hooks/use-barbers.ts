@@ -1,11 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateBarberRequest } from "@shared/routes";
 
-export function useBarbers() {
+export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolean }) {
   return useQuery({
-    queryKey: [api.barbers.list.path],
+    queryKey: [api.barbers.list.path, { includeHidden: options?.includeHidden ?? false }],
+    enabled: options?.enabled ?? true,
     queryFn: async () => {
-      const res = await fetch(api.barbers.list.path);
+      const url = options?.includeHidden
+        ? `${api.barbers.list.path}?includeHidden=true`
+        : api.barbers.list.path;
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch barbers");
       return api.barbers.list.responses[200].parse(await res.json());
     },

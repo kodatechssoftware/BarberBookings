@@ -71,6 +71,8 @@ export default function Booking() {
   const { data: services, isLoading: loadingServices } = useServices();
   const createAppointment = useCreateAppointment();
   const cancelAppointment = useCancelAppointment();
+  const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
+  const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
 
   // Fetch appointments for selected date/barber to block slots
   const { data: existingAppointments } = useAppointments({ 
@@ -79,8 +81,9 @@ export default function Booking() {
     public: true
   } as any);
 
-  const selectedBarber = barbers?.find(b => b.id === selectedBarberId);
-  const selectedService = services?.find(s => s.id === selectedServiceId);
+  const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
+  const selectedService = visibleServices.find((service) => service.id === selectedServiceId);
+  const selectedBarberLabel = selectedBarberId === 0 ? "Sem preferência" : selectedBarber?.name;
 
   // Generate Time Slots
   const timeSlots = useMemo(() => {
@@ -120,33 +123,26 @@ export default function Booking() {
             return slotDateTime.getHours() >= p.start && endDateTime <= periodEnd;
           });
 
-          const isTaken = existingAppointments.filter((app: any) => app.status !== 'cancelled').some((app: any) => {
+          const isTaken = existingAppointments.some((app: any) => {
             const appTime = new Date(app.startTime);
-            const isSameTime = appTime.getHours() === h && appTime.getMinutes() === m;
-            
-            // Check if service duration overlaps with this appointment
-            const appService = services?.find(s => s.id === app.serviceId);
-            const appDuration = appService?.duration || 30;
+            const appDuration = app.duration || 30;
             const appEndTime = new Date(appTime.getTime() + appDuration * 60000);
-            
             const overlaps = slotDateTime < appEndTime && endDateTime > appTime;
 
             if (selectedBarberId === 0) {
-              const busyBarbersCount = existingAppointments
-                .filter((a: any) => {
-                  if (a.status === 'cancelled') return false;
-                  const aTime = new Date(a.startTime);
-                  const aService = services?.find(s => s.id === a.serviceId);
-                  const aDuration = aService?.duration || 30;
-                  const aEndTime = new Date(aTime.getTime() + aDuration * 60000);
-                  return slotDateTime < aEndTime && endDateTime > aTime;
-                })
-                .map((a: any) => a.barberId);
-              
-              const totalBarbersCount = barbers?.length || 0;
-              const uniqueBusyBarbers = new Set(busyBarbersCount).size;
-              
-              return uniqueBusyBarbers >= totalBarbersCount;
+              const busyBarbersCount = new Set(
+                existingAppointments
+                  .filter((appointment: any) => {
+                    const appointmentStart = new Date(appointment.startTime);
+                    const appointmentEnd = new Date(
+                      appointmentStart.getTime() + (appointment.duration || 30) * 60000,
+                    );
+                    return slotDateTime < appointmentEnd && endDateTime > appointmentStart;
+                  })
+                  .map((appointment: any) => appointment.barberId),
+              ).size;
+
+              return busyBarbersCount >= visibleBarbers.length;
             }
             
             return overlaps;
@@ -158,7 +154,7 @@ export default function Booking() {
     });
 
     return slots;
-  }, [selectedService, existingAppointments, selectedDate]);
+  }, [existingAppointments, selectedBarberId, selectedDate, selectedService, visibleBarbers.length]);
 
   const handleNext = () => {
     if (step === 3 && !selectedTime) {
@@ -178,7 +174,7 @@ export default function Booking() {
   const handleBack = () => setStep(prev => prev - 1);
 
   const handleSubmit = async () => {
-    if (!selectedBarberId || !selectedServiceId || !selectedDate || !selectedTime || !customerDetails.name || !customerDetails.phone) {
+    if (selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime || !customerDetails.name || !customerDetails.phone) {
       toast({ title: "Erro", description: "Por favor preencha todos os campos obrigatórios.", variant: "destructive" });
       return;
     }
@@ -357,7 +353,7 @@ export default function Booking() {
                       )}
                     </motion.div>
 
-                    {barbers?.map((barber) => {
+                    {visibleBarbers.map((barber) => {
                       const avatarSrc = barber.name === "Fábio Baptista" ? fabioAvatar : 
                                       barber.name === "Bruno Santos" ? brunoAvatar : 
                                       barber.avatar;
@@ -431,7 +427,7 @@ export default function Booking() {
                   </div>
                 ) : (
                   <div className="space-y-3 md:space-y-4 max-w-2xl mx-auto px-1">
-                    {services?.map((service) => (
+                    {visibleServices.map((service) => (
                       <div
                         key={service.id}
                         onClick={() => setSelectedServiceId(service.id)}
@@ -558,7 +554,7 @@ export default function Booking() {
                   <h3 className="font-bold text-lg mb-4 border-b border-white/10 pb-2">Resumo da Marcação</h3>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-400">Profissional:</span>
-                    <span className="font-medium">{selectedBarber?.name}</span>
+                    <span className="font-medium">{selectedBarberLabel}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-400">Serviço:</span>

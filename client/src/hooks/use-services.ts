@@ -1,11 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type CreateServiceRequest } from "@shared/routes";
 
-export function useServices() {
+export function useServices(options?: { enabled?: boolean; includeHidden?: boolean }) {
   return useQuery({
-    queryKey: [api.services.list.path],
+    queryKey: [api.services.list.path, { includeHidden: options?.includeHidden ?? false }],
+    enabled: options?.enabled ?? true,
     queryFn: async () => {
-      const res = await fetch(api.services.list.path);
+      const url = options?.includeHidden
+        ? `${api.services.list.path}?includeHidden=true`
+        : api.services.list.path;
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch services");
       return api.services.list.responses[200].parse(await res.json());
     },

@@ -5,6 +5,7 @@ import {
   appointments,
   admins,
   blacklist,
+  verificationCodes,
   type Barber,
   type Service,
   type Appointment,

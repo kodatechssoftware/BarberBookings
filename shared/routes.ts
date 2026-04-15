@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { insertBarberSchema, insertServiceSchema, insertAppointmentSchema, barbers, services, appointments } from './schema';
 
+export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
+export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
 
 // ============================================

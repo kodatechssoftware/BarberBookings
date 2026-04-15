@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateAppointmentRequest } from "@shared/routes";
 
-export function useAppointments(params?: { barberId?: string; date?: string; public?: boolean }) {
+export function useAppointments(params?: { barberId?: string; date?: string; public?: boolean; enabled?: boolean }) {
   return useQuery({
     queryKey: [params?.public ? '/api/appointments/public' : api.appointments.list.path, params],
+    enabled: params?.enabled ?? true,
     queryFn: async () => {
       let url = params?.public ? '/api/appointments/public' : api.appointments.list.path;
       if (params) {

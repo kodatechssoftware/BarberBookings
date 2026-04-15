@@ -1,7 +1,9 @@
 import { Resend } from 'resend';
 import 'dotenv/config';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 interface SendConfirmationParams {
   customerName: string;
@@ -20,7 +22,7 @@ export async function sendBookingConfirmation({
   startTime,
   cancelToken,
 }: SendConfirmationParams) {
-  if (!process.env.RESEND_API_KEY) {
+  if (!resend) {
     console.error('RESEND_API_KEY not found');
     return;
   }
