@@ -17,6 +17,17 @@ import { eq, and } from "drizzle-orm";
 const PostgresSessionStore = connectPg(session);
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
+const isProduction = process.env.NODE_ENV === "production";
+
+function getSessionSameSite(): "lax" | "strict" | "none" {
+  const value = (process.env.SESSION_SAME_SITE || "lax").toLowerCase();
+
+  if (value === "strict" || value === "none") {
+    return value;
+  }
+
+  return "lax";
+}
 
 type AppointmentLike = {
   id?: number;
@@ -80,7 +91,13 @@ export async function registerRoutes(
     secret: process.env.SESSION_SECRET || "baptista-barber-shop-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false } // Set to true in production with HTTPS
+    proxy: isProduction,
+    cookie: {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: getSessionSameSite(),
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+    },
   }));
 
   // === AUTH ===

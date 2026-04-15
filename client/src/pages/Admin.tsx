@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiFetch, buildApiUrl } from "@/lib/api";
 
 export default function Admin() {
   const [user, setUser] = useState<{ authorized: boolean; role: string; name?: string } | null>(null);
@@ -114,7 +115,7 @@ export default function Admin() {
     setIsExporting(true);
     try {
       const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportDates.barberId}`;
-      window.open(url, '_blank');
+      window.open(buildApiUrl(url), '_blank');
       toast({ title: "Sucesso", description: "O relatÃ³rio estÃ¡ a ser gerado." });
     } catch (err) {
       toast({ title: "Erro", description: "Falha ao gerar o relatÃ³rio.", variant: "destructive" });
@@ -125,7 +126,7 @@ export default function Admin() {
 
   const checkAuth = async () => {
     try {
-      const res = await fetch("/api/admin/me");
+      const res = await apiFetch("/api/admin/me");
       if (res.ok) {
         const data = await res.json();
         setUser(data);
@@ -141,7 +142,7 @@ export default function Admin() {
     e.preventDefault();
     setIsLoggingIn(true);
     try {
-      const res = await fetch("/api/admin/login", {
+      const res = await apiFetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loginData),
@@ -161,7 +162,7 @@ export default function Admin() {
   };
 
   const handleLogout = async () => {
-    await fetch("/api/admin/logout", { method: "POST" });
+    await apiFetch("/api/admin/logout", { method: "POST" });
     setUser({ authorized: false, role: "" });
   };
 

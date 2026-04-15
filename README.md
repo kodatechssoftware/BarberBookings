@@ -49,3 +49,22 @@ npm run dev
 - Password inicial: `baptista2026`
 
 `RESEND_API_KEY` e opcional. Se ficar vazio, a app continua a funcionar sem envio de emails.
+
+## Deploy separado
+
+Para publicar o frontend na Cloudflare e a API no Render:
+
+- Cloudflare Pages
+  - Build command: `npm run build:client`
+  - Output directory: `dist/public`
+  - Environment variable: `VITE_API_URL=https://api.teudominio.com`
+- Render Web Service
+  - Build command: `npm run build:server`
+  - Start command: `npm start`
+  - Environment variables:
+    - `PUBLIC_URL=https://app.teudominio.com`
+    - `ALLOWED_ORIGINS=https://app.teudominio.com`
+    - `SESSION_SAME_SITE=lax`
+
+Se precisares de aceitar mais do que uma origem no backend, usa `ALLOWED_ORIGINS` com valores separados por virgula.
+Se estiveres a testar com dominios diferentes do fornecedor, como `pages.dev` e `onrender.com`, usa `SESSION_SAME_SITE=none`.

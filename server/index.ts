@@ -1,16 +1,67 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { serveStatic } from "./static";
+import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 
 const app = express();
 const httpServer = createServer(app);
+const isProduction = process.env.NODE_ENV === "production";
+
+function normalizeOrigin(origin: string) {
+  return origin.trim().replace(/\/+$/, "");
+}
+
+function getAllowedOrigins() {
+  const rawOrigins = process.env.ALLOWED_ORIGINS || process.env.PUBLIC_URL || "";
+
+  return new Set(
+    rawOrigins
+      .split(",")
+      .map((origin) => normalizeOrigin(origin))
+      .filter(Boolean),
+  );
+}
+
+const allowedOrigins = getAllowedOrigins();
+
+if (isProduction) {
+  app.set("trust proxy", 1);
+}
 
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
   }
 }
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const normalizedOrigin = origin ? normalizeOrigin(origin) : "";
+  const isAllowedOrigin = normalizedOrigin
+    ? allowedOrigins.has(normalizedOrigin)
+    : false;
+
+  if (origin && isAllowedOrigin) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      req.headers["access-control-request-headers"] || "Content-Type, Authorization",
+    );
+    res.append("Vary", "Origin");
+  }
+
+  if (req.method === "OPTIONS") {
+    if (origin && !isAllowedOrigin) {
+      return res.sendStatus(403);
+    }
+
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 
 app.use(
   express.json({
@@ -73,8 +124,12 @@ app.use((req, res, next) => {
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
+  if (isProduction) {
+    if (hasStaticBuild()) {
+      serveStatic(app);
+    } else {
+      log("static client build not found, serving API only");
+    }
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
@@ -85,7 +140,7 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-httpServer.listen(port, () => {
-  log(`serving on http://localhost:${port}`);
-    });
+  httpServer.listen(port, () => {
+    log(`serving on http://localhost:${port}`);
+  });
 })();

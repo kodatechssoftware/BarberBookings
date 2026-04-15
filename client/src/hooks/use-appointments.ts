@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateAppointmentRequest } from "@shared/routes";
+import { apiFetch } from "@/lib/api";
 
 export function useAppointments(params?: { barberId?: string; date?: string; public?: boolean; enabled?: boolean }) {
   return useQuery({
@@ -13,7 +14,7 @@ export function useAppointments(params?: { barberId?: string; date?: string; pub
         if (params.date) queryParams.append("date", params.date);
         url += `?${queryParams.toString()}`;
       }
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (!res.ok) throw new Error("Failed to fetch appointments");
       return res.json();
     },
@@ -24,7 +25,7 @@ export function useCreateAppointment() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (data: CreateAppointmentRequest) => {
-      const res = await fetch(api.appointments.create.path, {
+      const res = await apiFetch(api.appointments.create.path, {
         method: api.appointments.create.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -48,7 +49,7 @@ export function useUpdateAppointmentStatus() {
   return useMutation({
     mutationFn: async ({ id, status }: { id: number; status: "booked" | "completed" | "cancelled" }) => {
       const url = buildUrl(api.appointments.updateStatus.path, { id });
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: api.appointments.updateStatus.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
@@ -65,7 +66,7 @@ export function useCancelAppointment() {
   return useMutation({
     mutationFn: async (token: string) => {
       const url = `/api/appointments/cancel/${token}`;
-      const res = await fetch(url, { method: 'POST' });
+      const res = await apiFetch(url, { method: 'POST' });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.message || "Falha ao cancelar marcação");
