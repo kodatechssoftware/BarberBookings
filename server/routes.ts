@@ -18,6 +18,9 @@ const PostgresSessionStore = connectPg(session);
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const isProduction = process.env.NODE_ENV === "production";
+const databaseSchema = process.env.DATABASE_SCHEMA?.trim();
+const sessionSchemaName =
+  databaseSchema && databaseSchema !== "public" ? databaseSchema : undefined;
 
 function getSessionSameSite(): "lax" | "strict" | "none" {
   const value = (process.env.SESSION_SAME_SITE || "lax").toLowerCase();
@@ -86,6 +89,7 @@ export async function registerRoutes(
   app.use(session({
     store: new PostgresSessionStore({
       conObject: { connectionString: process.env.DATABASE_URL },
+      schemaName: sessionSchemaName,
       createTableIfMissing: true,
     }),
     secret: process.env.SESSION_SECRET || "baptista-barber-shop-secret",

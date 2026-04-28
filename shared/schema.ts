@@ -1,12 +1,35 @@
-import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
+
+const databaseSchema =
+  typeof process !== "undefined" ? process.env.DATABASE_SCHEMA?.trim() : undefined;
+export const appPgSchema =
+  databaseSchema && databaseSchema !== "public" ? pgSchema(databaseSchema) : undefined;
+const appPgTable = (appPgSchema ? appPgSchema.table : pgTable) as typeof pgTable;
+
+export const barbersIdSeq = appPgSchema?.sequence("barbers_id_seq");
+export const servicesIdSeq = appPgSchema?.sequence("services_id_seq");
+export const appointmentsIdSeq = appPgSchema?.sequence("appointments_id_seq");
+export const adminsIdSeq = appPgSchema?.sequence("admins_id_seq");
+export const blacklistIdSeq = appPgSchema?.sequence("blacklist_id_seq");
+export const verificationCodesIdSeq = appPgSchema?.sequence("verification_codes_id_seq");
+
+function idColumn(sequenceName: string) {
+  if (databaseSchema && databaseSchema !== "public") {
+    return integer("id")
+      .primaryKey()
+      .default(sql.raw(`nextval('${databaseSchema}.${sequenceName}'::regclass)`));
+  }
+
+  return serial("id").primaryKey();
+}
 
 // === TABLE DEFINITIONS ===
 
-export const barbers = pgTable("barbers", {
-  id: serial("id").primaryKey(),
+export const barbers = appPgTable("barbers", {
+  id: idColumn("barbers_id_seq"),
   name: text("name").notNull(),
   specialty: text("specialty").notNull(),
   bio: text("bio"),
@@ -16,8 +39,8 @@ export const barbers = pgTable("barbers", {
   isVisible: boolean("is_visible").default(true),
 });
 
-export const services = pgTable("services", {
-  id: serial("id").primaryKey(),
+export const services = appPgTable("services", {
+  id: idColumn("services_id_seq"),
   name: text("name").notNull(),
   description: text("description"),
   price: integer("price").notNull(),
@@ -25,8 +48,8 @@ export const services = pgTable("services", {
   isVisible: boolean("is_visible").default(true),
 });
 
-export const appointments = pgTable("appointments", {
-  id: serial("id").primaryKey(),
+export const appointments = appPgTable("appointments", {
+  id: idColumn("appointments_id_seq"),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
   serviceId: integer("service_id").references(() => services.id),
   startTime: timestamp("start_time").notNull(),
@@ -38,23 +61,23 @@ export const appointments = pgTable("appointments", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const admins = pgTable("admins", {
-  id: serial("id").primaryKey(),
+export const admins = appPgTable("admins", {
+  id: idColumn("admins_id_seq"),
   username: text("username").notNull().unique(),
   email: text("email").unique(),
   password: text("password").notNull(),
 });
 
-export const blacklist = pgTable("blacklist", {
-  id: serial("id").primaryKey(),
+export const blacklist = appPgTable("blacklist", {
+  id: idColumn("blacklist_id_seq"),
   email: text("email"),
   phone: text("phone").notNull(),
   reason: text("reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const verificationCodes = pgTable("verification_codes", {
-  id: serial("id").primaryKey(),
+export const verificationCodes = appPgTable("verification_codes", {
+  id: idColumn("verification_codes_id_seq"),
   phone: text("phone").notNull(),
   code: text("code").notNull(),
   expiresAt: timestamp("expires_at").notNull(),

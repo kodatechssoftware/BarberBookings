@@ -62,6 +62,8 @@ Para publicar o frontend na Cloudflare e a API no Render:
   - Build command: `npm run build:server`
   - Start command: `npm start`
   - Environment variables:
+    - `DATABASE_URL=postgresql://...`
+    - `DATABASE_SCHEMA=public` ou o schema usado na BD, por exemplo `barberbooking`
     - `PUBLIC_URL=https://app.teudominio.com`
     - `ALLOWED_ORIGINS=https://app.teudominio.com`
     - `SESSION_SAME_SITE=lax`
