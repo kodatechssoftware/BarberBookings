@@ -1,0 +1,250 @@
+﻿import { useEffect, useMemo, useState } from "react";
+import { Link, useRoute } from "wouter";
+import { addDays, format, isSameDay, parseISO, startOfToday } from "date-fns";
+import { pt } from "date-fns/locale";
+import { Calendar as CalendarIcon, Check, Clock, Loader2, XCircle } from "lucide-react";
+import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button-custom";
+import { Calendar } from "@/components/ui/calendar";
+import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
+import { useBarberAvailability } from "@/hooks/use-barbers";
+import { buildGoogleCalendarUrl, buildIcsDataUri } from "@/lib/calendar";
+
+type AvailabilityRow = {
+  barberId: number;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  isWorking: boolean;
+};
+
+const defaultPeriodsForDay = (day: number) => {
+  if (day === 1) return [{ start: 14 * 60, end: 20 * 60 }];
+  if (day >= 2 && day <= 5) return [{ start: 9 * 60, end: 13 * 60 }, { start: 14 * 60, end: 20 * 60 }];
+  if (day === 6) return [{ start: 9 * 60, end: 13 * 60 }, { start: 14 * 60, end: 19 * 60 }];
+  return [];
+};
+
+const timeToMinutes = (time: string) => {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+export default function Reschedule() {
+  const [, params] = useRoute("/reschedule/:token");
+  const token = params?.token;
+  const { toast } = useToast();
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(startOfToday());
+  const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [rescheduledStart, setRescheduledStart] = useState<Date | null>(null);
+
+  const { data: appointment, isLoading: loadingAppointment } = useAppointmentByToken(token);
+  const { data: availabilityRows } = useBarberAvailability();
+  const rescheduleAppointment = useRescheduleAppointment();
+
+  useEffect(() => {
+    if (appointment?.startTime) {
+      setSelectedDate(parseISO(appointment.startTime));
+    }
+  }, [appointment?.startTime]);
+
+  const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
+    barberId: appointment?.barberId ? String(appointment.barberId) : undefined,
+    date: selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined,
+    enabled: Boolean(appointment?.barberId && selectedDate),
+  });
+
+  const periodsForSelectedDay = useMemo(() => {
+    if (!appointment?.barberId || !selectedDate) return [];
+
+    const day = selectedDate.getDay();
+    const rows = (availabilityRows as AvailabilityRow[] | undefined)?.filter(
+      (row) => row.barberId === appointment.barberId,
+    ) ?? [];
+
+    if (rows.length === 0) return defaultPeriodsForDay(day);
+
+    return rows
+      .filter((row) => row.dayOfWeek === day && row.isWorking)
+      .map((row) => ({ start: timeToMinutes(row.startTime), end: timeToMinutes(row.endTime) }))
+      .filter((period) => period.end > period.start);
+  }, [appointment?.barberId, availabilityRows, selectedDate]);
+
+  const timeSlots = useMemo(() => {
+    if (!appointment || !existingAppointments || !selectedDate) return [];
+
+    const slots: { time: string; available: boolean }[] = [];
+    const duration = appointment.duration || 30;
+
+    periodsForSelectedDay.forEach((period) => {
+      for (let minutesFromDayStart = period.start; minutesFromDayStart < period.end; minutesFromDayStart += 30) {
+        const hours = Math.floor(minutesFromDayStart / 60);
+        const minutes = minutesFromDayStart % 60;
+        const time = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+        const endMinutes = minutesFromDayStart + duration;
+        const fitsPeriod = endMinutes <= period.end;
+
+        const slotDateTime = new Date(selectedDate);
+        slotDateTime.setHours(hours, minutes, 0, 0);
+        const endDateTime = new Date(slotDateTime.getTime() + duration * 60000);
+        const now = new Date();
+        const isPast = isSameDay(selectedDate, now) && slotDateTime <= now;
+        const isTaken = existingAppointments.some((existing) => {
+          if (existing.id === appointment.id) return false;
+          const existingStart = new Date(existing.startTime);
+          const existingEnd = new Date(existingStart.getTime() + (existing.duration || 30) * 60000);
+          return slotDateTime < existingEnd && endDateTime > existingStart;
+        });
+
+        slots.push({ time, available: fitsPeriod && !isPast && !isTaken });
+      }
+    });
+
+    return slots;
+  }, [appointment, existingAppointments, periodsForSelectedDay, selectedDate]);
+
+  const handleSubmit = async () => {
+    if (!token || !selectedDate || !selectedTime) return;
+
+    const [hours, minutes] = selectedTime.split(":").map(Number);
+    const startTime = new Date(selectedDate);
+    startTime.setHours(hours, minutes, 0, 0);
+
+    try {
+      await rescheduleAppointment.mutateAsync({ token, startTime });
+      setRescheduledStart(startTime);
+      setSuccess(true);
+    } catch (error: any) {
+      toast({
+        title: "Erro",
+        description: error.message || "Não foi possível reagendar a marcação.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  if (loadingAppointment) {
+    return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+  }
+
+  if (!appointment) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
+        <div className="max-w-md">
+          <XCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h1 className="text-3xl font-display mb-4">Marcação não encontrada</h1>
+          <p className="text-gray-400 mb-6">O link pode estar incorreto ou a marcação já não existir.</p>
+          <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (appointment.status !== "booked" || success) {
+    const calendarStart = rescheduledStart || new Date(appointment.startTime);
+    const calendarEvent = {
+      title: `Baptista Barber Shop - ${appointment.serviceName}`,
+      start: calendarStart,
+      durationMinutes: appointment.duration || 30,
+      details: `${appointment.serviceName} com ${appointment.barberName}.`,
+      location: "Rua Comandante Agatão Lança Nº28",
+    };
+
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
+        <div className="max-w-md">
+          <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-20 h-20 bg-primary rounded-full flex items-center justify-center mx-auto mb-6">
+            <Check className="w-10 h-10 text-background" />
+          </motion.div>
+          <h1 className="text-3xl font-display mb-4">{success ? "Marcação reagendada" : "Marcação já não pode ser reagendada"}</h1>
+          <p className="text-gray-400 mb-6">
+            {success ? "A nova data ficou guardada com sucesso." : "Esta marcação já foi cancelada, concluída ou alterada."}
+          </p>
+          {success && (
+            <div className="mb-4 grid grid-cols-1 gap-3">
+              <a href={buildGoogleCalendarUrl(calendarEvent)} target="_blank" rel="noreferrer">
+                <Button variant="outline" className="w-full">Adicionar ao Google Calendar</Button>
+              </a>
+              <a href={buildIcsDataUri(calendarEvent)} download="marcacao-baptista-barber-shop.ics">
+                <Button variant="outline" className="w-full">Adicionar ao Apple Calendar</Button>
+              </a>
+            </div>
+          )}
+          <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background text-foreground font-body">
+      <div className="container mx-auto px-4 py-8 max-w-3xl">
+        <div className="mb-8 text-center">
+          <h1 className="text-3xl md:text-5xl font-display mb-3">Reagendar marcação</h1>
+          <p className="text-gray-400">
+            {appointment.serviceName} com {appointment.barberName}
+          </p>
+          <p className="text-sm text-gray-500 mt-2">
+            Atual: {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-card border border-white/10 rounded-xl p-4">
+            <h2 className="font-bold mb-4 flex items-center gap-2"><CalendarIcon className="w-5 h-5 text-primary" /> Nova data</h2>
+            <Calendar
+              mode="single"
+              selected={selectedDate}
+              onSelect={(date) => {
+                setSelectedDate(date);
+                setSelectedTime(null);
+              }}
+              disabled={(date) => date < addDays(new Date(), -1)}
+              locale={pt}
+              className="rounded-md mx-auto"
+            />
+          </div>
+
+          <div className="bg-card border border-white/10 rounded-xl p-4">
+            <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" /> Nova hora</h2>
+            {loadingAppointments ? (
+              <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
+            ) : timeSlots.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center py-10">Não existem horários disponíveis para esta data.</p>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                {timeSlots.map(({ time, available }) => (
+                  <button
+                    key={time}
+                    disabled={!available}
+                    onClick={() => setSelectedTime(time)}
+                    className={cn(
+                      "py-3 rounded-lg text-sm border transition-colors",
+                      !available ? "bg-white/5 text-gray-600 border-transparent cursor-not-allowed" :
+                        selectedTime === time ? "bg-primary text-background border-primary" :
+                          "border-white/10 text-gray-300 hover:border-primary/50",
+                    )}
+                  >
+                    {time}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+          <Button variant="gold" disabled={!selectedTime || rescheduleAppointment.isPending} onClick={handleSubmit}>
+            {rescheduleAppointment.isPending ? "A reagendar..." : "Confirmar nova data"}
+          </Button>
+          <Link href={`/cancel/${token}`}>
+            <Button variant="outline" className="border-white/10">Cancelar marcação</Button>
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

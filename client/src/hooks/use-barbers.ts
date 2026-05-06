@@ -31,6 +31,17 @@ export function useBarber(id: number) {
   });
 }
 
+export function useBarberAvailability() {
+  return useQuery({
+    queryKey: ["/api/barbers/availability"],
+    queryFn: async () => {
+      const res = await apiFetch("/api/barbers/availability");
+      if (!res.ok) throw new Error("Failed to fetch barber availability");
+      return res.json();
+    },
+  });
+}
+
 export function useCreateBarber() {
   const queryClient = useQueryClient();
   return useMutation({

@@ -84,10 +84,19 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+function getErrorLogPayload(body: unknown) {
+  if (!body || typeof body !== "object" || !("message" in body)) return "";
+
+  const message = (body as { message?: unknown }).message;
+  if (typeof message !== "string") return "";
+
+  return ` :: ${JSON.stringify({ message })}`;
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  let capturedJsonResponse: unknown;
 
   const originalResJson = res.json;
   res.json = function (bodyJson, ...args) {
@@ -99,8 +108,8 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      if (res.statusCode >= 400) {
+        logLine += getErrorLogPayload(capturedJsonResponse);
       }
 
       log(logLine);
@@ -131,7 +140,8 @@ app.use((req, res, next) => {
       log("static client build not found, serving API only");
     }
   } else {
-    const { setupVite } = await import("./vite");
+    const viteDevServerModule = "./vite";
+    const { setupVite } = await import(viteDevServerModule);
     await setupVite(httpServer, app);
   }
 

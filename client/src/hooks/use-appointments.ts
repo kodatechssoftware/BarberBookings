@@ -1,22 +1,92 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateAppointmentRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 
-export function useAppointments(params?: { barberId?: string; date?: string; public?: boolean; enabled?: boolean }) {
-  return useQuery({
-    queryKey: [params?.public ? '/api/appointments/public' : api.appointments.list.path, params],
+export type AppointmentStatus = "booked" | "completed" | "cancelled" | "late_cancelled" | "no_show";
+
+export type AppointmentRecord = {
+  id: number;
+  barberId: number;
+  serviceId: number | null;
+  startTime: string;
+  customerName: string;
+  customerEmail: string | null;
+  customerPhone: string;
+  status: AppointmentStatus;
+  cancelToken: string;
+  cancelledAt: string | null;
+  depositRequired: boolean;
+  depositReason: string | null;
+  createdAt: string | null;
+};
+
+export type PublicAppointment = {
+  id: number;
+  barberId: number;
+  serviceId: number | null;
+  startTime: string;
+  duration: number;
+};
+
+export type AppointmentByToken = {
+  id: number;
+  barberId: number;
+  serviceId: number | null;
+  startTime: string;
+  status: AppointmentStatus;
+  customerName: string;
+  depositRequired: boolean;
+  depositReason: string | null;
+  cancellationPolicyHours: number;
+  isLateCancellation: boolean;
+  barberName: string;
+  serviceName: string;
+  duration: number;
+  price: number;
+};
+
+type AppointmentQueryParams = {
+  barberId?: string;
+  date?: string;
+  enabled?: boolean;
+  refetchInterval?: number | false;
+};
+
+const PUBLIC_APPOINTMENTS_PATH = "/api/appointments/public";
+
+function appendAppointmentQuery(path: string, params?: AppointmentQueryParams) {
+  if (!params?.barberId && !params?.date) return path;
+
+  const queryParams = new URLSearchParams();
+  if (params.barberId) queryParams.append("barberId", params.barberId);
+  if (params.date) queryParams.append("date", params.date);
+  return `${path}?${queryParams.toString()}`;
+}
+
+export function useAppointments(params?: AppointmentQueryParams) {
+  return useQuery<AppointmentRecord[]>({
+    queryKey: [api.appointments.list.path, params],
     enabled: params?.enabled ?? true,
+    refetchInterval: params?.refetchInterval,
     queryFn: async () => {
-      let url = params?.public ? '/api/appointments/public' : api.appointments.list.path;
-      if (params) {
-        const queryParams = new URLSearchParams();
-        if (params.barberId) queryParams.append("barberId", params.barberId);
-        if (params.date) queryParams.append("date", params.date);
-        url += `?${queryParams.toString()}`;
-      }
+      const url = appendAppointmentQuery(api.appointments.list.path, params);
       const res = await apiFetch(url);
       if (!res.ok) throw new Error("Failed to fetch appointments");
-      return res.json();
+      return await res.json() as AppointmentRecord[];
+    },
+  });
+}
+
+export function usePublicAppointments(params?: AppointmentQueryParams) {
+  return useQuery<PublicAppointment[]>({
+    queryKey: [PUBLIC_APPOINTMENTS_PATH, params],
+    enabled: params?.enabled ?? true,
+    refetchInterval: params?.refetchInterval,
+    queryFn: async () => {
+      const url = appendAppointmentQuery(PUBLIC_APPOINTMENTS_PATH, params);
+      const res = await apiFetch(url);
+      if (!res.ok) throw new Error("Failed to fetch public appointments");
+      return await res.json() as PublicAppointment[];
     },
   });
 }
@@ -30,7 +100,7 @@ export function useCreateAppointment() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      
+
       if (!res.ok) {
         const err = await res.json();
         if (res.status === 409) {
@@ -38,16 +108,20 @@ export function useCreateAppointment() {
         }
         throw new Error(err.message || "Falha ao criar marcação");
       }
-      return api.appointments.create.responses[201].parse(await res.json());
+
+      return await res.json() as AppointmentRecord;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
+      queryClient.invalidateQueries({ queryKey: [PUBLIC_APPOINTMENTS_PATH] });
+    },
   });
 }
 
 export function useUpdateAppointmentStatus() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, status }: { id: number; status: "booked" | "completed" | "cancelled" }) => {
+    mutationFn: async ({ id, status }: { id: number; status: AppointmentStatus }) => {
       const url = buildUrl(api.appointments.updateStatus.path, { id });
       const res = await apiFetch(url, {
         method: api.appointments.updateStatus.method,
@@ -55,9 +129,44 @@ export function useUpdateAppointmentStatus() {
         body: JSON.stringify({ status }),
       });
       if (!res.ok) throw new Error("Failed to update status");
-      return api.appointments.updateStatus.responses[200].parse(await res.json());
+      return await res.json() as AppointmentRecord;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] }),
+  });
+}
+
+export function useAppointmentByToken(token?: string) {
+  return useQuery<AppointmentByToken | null>({
+    queryKey: ["/api/appointments/token", token],
+    enabled: !!token,
+    queryFn: async () => {
+      const res = await apiFetch(`/api/appointments/token/${token}`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("Falha ao carregar marcação");
+      return await res.json() as AppointmentByToken;
+    },
+  });
+}
+
+export function useRescheduleAppointment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ token, startTime }: { token: string; startTime: Date }) => {
+      const res = await apiFetch(`/api/appointments/reschedule/${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startTime }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Falha ao reagendar marcação");
+      }
+      return await res.json() as AppointmentRecord;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
+      queryClient.invalidateQueries({ queryKey: [PUBLIC_APPOINTMENTS_PATH] });
+    },
   });
 }
 
@@ -66,13 +175,16 @@ export function useCancelAppointment() {
   return useMutation({
     mutationFn: async (token: string) => {
       const url = `/api/appointments/cancel/${token}`;
-      const res = await apiFetch(url, { method: 'POST' });
+      const res = await apiFetch(url, { method: "POST" });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.message || "Falha ao cancelar marcação");
       }
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
+      queryClient.invalidateQueries({ queryKey: [PUBLIC_APPOINTMENTS_PATH] });
+    },
   });
 }

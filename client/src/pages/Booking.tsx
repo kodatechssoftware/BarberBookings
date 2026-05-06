@@ -1,26 +1,154 @@
 import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { useBarbers } from "@/hooks/use-barbers";
+import { useBarberAvailability, useBarbers } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
-import { useAppointments, useCreateAppointment, useCancelAppointment } from "@/hooks/use-appointments";
+import { type AppointmentRecord, useCancelAppointment, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
-import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, XCircle } from "lucide-react";
+import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, XCircle, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { format, addDays, startOfToday, isSameDay, parseISO } from "date-fns";
+import { format, addDays, startOfToday, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type Appointment } from "@shared/schema";
+import { buildGoogleCalendarUrl, buildIcsDataUri } from "@/lib/calendar";
+import { type AvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 
-import fabioAvatar from "@assets/image_1768576079386.png";
-import brunoAvatar from "@assets/image_1768576179876.png";
+import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
+import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
+
+type BookingPreference = {
+  step: number;
+  barberId: number | null;
+  serviceId: number | null;
+  selectedDate: Date;
+  selectedTime: string | null;
+  customerDetails: {
+    name: string;
+    email: string;
+    phone: string;
+  };
+};
+
+const lastBookingStorageKey = "baptista:lastBooking";
+
+const parseNumericParam = (value: string | null) => {
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const parseDateParam = (value: string | null) => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const parseTimeParam = (value: string | null) => {
+  if (!value || !/^\d{2}:\d{2}$/.test(value)) return null;
+  const [hours, minutes] = value.split(":").map(Number);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return value;
+};
+
+const readLastBookingPreference = () => {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.localStorage.getItem(lastBookingStorageKey);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as Partial<{
+      barberId: number;
+      serviceId: number;
+      customerName: string;
+      customerEmail: string;
+      customerPhone: string;
+    }>;
+
+    return {
+      barberId: typeof parsed.barberId === "number" ? parsed.barberId : null,
+      serviceId: typeof parsed.serviceId === "number" ? parsed.serviceId : null,
+      customerName: parsed.customerName || "",
+      customerEmail: parsed.customerEmail || "",
+      customerPhone: parsed.customerPhone || "",
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getInitialBookingPreference = (): BookingPreference => {
+  const emptyPreference = {
+    step: 1,
+    barberId: null,
+    serviceId: null,
+    selectedDate: startOfToday(),
+    selectedTime: null,
+    customerDetails: { name: "", email: "", phone: "" },
+  };
+
+  if (typeof window === "undefined") return emptyPreference;
+
+  const params = new URLSearchParams(window.location.search);
+  const lastBooking = params.get("repeat") === "last" ? readLastBookingPreference() : null;
+  const barberId = parseNumericParam(params.get("barberId")) ?? lastBooking?.barberId ?? null;
+  const serviceId = parseNumericParam(params.get("serviceId")) ?? lastBooking?.serviceId ?? null;
+  const selectedDate = parseDateParam(params.get("date")) ?? startOfToday();
+  const selectedTime = parseTimeParam(params.get("time"));
+
+  return {
+    step: barberId !== null && serviceId !== null && selectedTime ? 4 : barberId !== null && serviceId !== null ? 3 : barberId !== null ? 2 : 1,
+    barberId,
+    serviceId,
+    selectedDate,
+    selectedTime,
+    customerDetails: {
+      name: lastBooking?.customerName || "",
+      email: lastBooking?.customerEmail || "",
+      phone: lastBooking?.customerPhone || "",
+    },
+  };
+};
+
+const saveLastBookingPreference = ({
+  barberId,
+  serviceId,
+  customerName,
+  customerEmail,
+  customerPhone,
+}: {
+  barberId: number;
+  serviceId: number;
+  customerName: string;
+  customerEmail?: string;
+  customerPhone: string;
+}) => {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(
+      lastBookingStorageKey,
+      JSON.stringify({
+        barberId,
+        serviceId,
+        customerName,
+        customerEmail: customerEmail || "",
+        customerPhone,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  } catch {
+    // Falhas de localStorage não devem impedir uma marcação confirmada.
+  }
+};
 
 // Step components
 const StepIndicator = ({ currentStep }: { currentStep: number }) => {
-  const steps = ["Profissional", "Serviço", "Data & Hora", "Detalhes"];
+  const steps = ["Barbeiro", "Serviço", "Data e hora", "Detalhes"];
   return (
     <div className="w-full py-4 md:py-6 mb-4 md:mb-8">
       <div className="flex justify-between items-center relative z-10">
@@ -56,30 +184,31 @@ const StepIndicator = ({ currentStep }: { currentStep: number }) => {
 };
 
 export default function Booking() {
-  const [step, setStep] = useState(1);
-  const [selectedBarberId, setSelectedBarberId] = useState<number | null>(null);
-  const [selectedServiceId, setSelectedServiceId] = useState<number | null>(null);
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(startOfToday());
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [initialPreference] = useState(getInitialBookingPreference);
+  const [step, setStep] = useState(initialPreference.step);
+  const [selectedBarberId, setSelectedBarberId] = useState<number | null>(initialPreference.barberId);
+  const [selectedServiceId, setSelectedServiceId] = useState<number | null>(initialPreference.serviceId);
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(initialPreference.selectedDate);
+  const [selectedTime, setSelectedTime] = useState<string | null>(initialPreference.selectedTime);
   const [showTimeError, setShowTimeError] = useState(false);
-  const [customerDetails, setCustomerDetails] = useState({ name: "", email: "", phone: "" });
-  const [createdAppointment, setCreatedAppointment] = useState<Appointment | null>(null);
+  const [customerDetails, setCustomerDetails] = useState(initialPreference.customerDetails);
+  const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
   const { data: barbers, isLoading: loadingBarbers } = useBarbers();
   const { data: services, isLoading: loadingServices } = useServices();
+  const { data: availabilityRows } = useBarberAvailability();
   const createAppointment = useCreateAppointment();
   const cancelAppointment = useCancelAppointment();
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
 
   // Fetch appointments for selected date/barber to block slots
-  const { data: existingAppointments } = useAppointments({ 
+  const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
     date: selectedDate ? format(selectedDate, 'yyyy-MM-dd') : undefined,
-    public: true
-  } as any);
+  });
 
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
   const selectedService = visibleServices.find((service) => service.id === selectedServiceId);
@@ -87,74 +216,15 @@ export default function Booking() {
 
   // Generate Time Slots
   const timeSlots = useMemo(() => {
-    if (!selectedService || !existingAppointments || !selectedDate) return [];
-    
-    const slots: { time: string; available: boolean }[] = [];
-    const dayOfWeek = selectedDate.getDay();
-
-    let schedule: {start: number, end: number}[] = [];
-    if (dayOfWeek === 1) { // Monday
-      schedule = [{ start: 14, end: 20 }];
-    } else if (dayOfWeek >= 2 && dayOfWeek <= 5) { // Tue-Fri
-      schedule = [{ start: 9, end: 13 }, { start: 14, end: 20 }];
-    } else if (dayOfWeek === 6) { // Saturday
-      schedule = [{ start: 9, end: 13 }, { start: 14, end: 19 }];
-    }
-
-    const interval = 30; // 30 mins
-
-    schedule.forEach(period => {
-      for (let h = period.start; h < period.end; h++) {
-        for (let m = 0; m < 60; m += interval) {
-          const timeString = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-          
-          // Check if slot is in the past (only for today)
-          const now = new Date();
-          const isPast = isSameDay(selectedDate, now) && (h < now.getHours() || (h === now.getHours() && m < now.getMinutes()));
-
-          // Check if service fits before closing (or break in schedule)
-          const slotDateTime = new Date(selectedDate);
-          slotDateTime.setHours(h, m, 0, 0);
-          const endDateTime = new Date(slotDateTime.getTime() + selectedService.duration * 60000);
-          
-          const fitsInSchedule = schedule.some(p => {
-            const periodEnd = new Date(selectedDate);
-            periodEnd.setHours(p.end, 0, 0, 0);
-            return slotDateTime.getHours() >= p.start && endDateTime <= periodEnd;
-          });
-
-          const isTaken = existingAppointments.some((app: any) => {
-            const appTime = new Date(app.startTime);
-            const appDuration = app.duration || 30;
-            const appEndTime = new Date(appTime.getTime() + appDuration * 60000);
-            const overlaps = slotDateTime < appEndTime && endDateTime > appTime;
-
-            if (selectedBarberId === 0) {
-              const busyBarbersCount = new Set(
-                existingAppointments
-                  .filter((appointment: any) => {
-                    const appointmentStart = new Date(appointment.startTime);
-                    const appointmentEnd = new Date(
-                      appointmentStart.getTime() + (appointment.duration || 30) * 60000,
-                    );
-                    return slotDateTime < appointmentEnd && endDateTime > appointmentStart;
-                  })
-                  .map((appointment: any) => appointment.barberId),
-              ).size;
-
-              return busyBarbersCount >= visibleBarbers.length;
-            }
-            
-            return overlaps;
-          });
-
-          slots.push({ time: timeString, available: !isTaken && !isPast && fitsInSchedule });
-        }
-      }
+    return getAvailableTimeSlots({
+      selectedService,
+      selectedDate,
+      selectedBarberId,
+      visibleBarbers,
+      availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
+      existingAppointments,
     });
-
-    return slots;
-  }, [existingAppointments, selectedBarberId, selectedDate, selectedService, visibleBarbers.length]);
+  }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, visibleBarbers]);
 
   const handleNext = () => {
     if (step === 3 && !selectedTime) {
@@ -192,6 +262,13 @@ export default function Booking() {
         customerEmail: customerDetails.email || undefined,
         customerPhone: customerDetails.phone,
       });
+      saveLastBookingPreference({
+        barberId: selectedBarberId,
+        serviceId: selectedServiceId,
+        customerName: customerDetails.name,
+        customerEmail: customerDetails.email,
+        customerPhone: customerDetails.phone,
+      });
       setCreatedAppointment(result);
       setStep(5);
     } catch (error: any) {
@@ -206,8 +283,8 @@ export default function Booking() {
   const handleCancel = async () => {
     if (!createdAppointment) return;
     try {
-      await cancelAppointment.mutateAsync(createdAppointment.cancelToken);
-      toast({ title: "Sucesso", description: "Marcação cancelada com sucesso." });
+      const result = await cancelAppointment.mutateAsync(createdAppointment.cancelToken);
+      toast({ title: "Sucesso", description: result.message || "Marcação cancelada com sucesso." });
       setStep(6); // Cancelled success step
     } catch (error: any) {
       toast({ title: "Erro", description: error.message, variant: "destructive" });
@@ -215,6 +292,22 @@ export default function Booking() {
   };
 
   if (step === 5) {
+    const appointmentStart = createdAppointment?.startTime
+      ? new Date(createdAppointment.startTime)
+      : (() => {
+          const fallback = new Date(selectedDate!);
+          const [hours, minutes] = selectedTime!.split(":").map(Number);
+          fallback.setHours(hours, minutes, 0, 0);
+          return fallback;
+        })();
+    const calendarEvent = {
+      title: `Baptista Barber Shop - ${selectedService?.name || "Marcação"}`,
+      start: appointmentStart,
+      durationMinutes: selectedService?.duration || 30,
+      details: `${selectedService?.name || "Serviço"} com ${selectedBarberLabel || "barbeiro"}.`,
+      location: "Rua Comandante Agatão Lança Nº28",
+    };
+
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <div className="max-w-md w-full text-center">
@@ -230,7 +323,22 @@ export default function Booking() {
             Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
           </p>
           
+          {createdAppointment?.depositRequired && (
+            <div className="mb-6 rounded-xl border border-primary/20 bg-primary/10 p-4 text-left text-sm text-primary">
+              <p className="font-bold">Depósito recomendado para esta marcação</p>
+              <p className="mt-1 text-primary/80">
+                Motivo: {createdAppointment.depositReason || "regra operacional da barbearia"}. A equipa poderá entrar em contacto para confirmar.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-4">
+            <a href={buildGoogleCalendarUrl(calendarEvent)} target="_blank" rel="noreferrer">
+              <Button variant="outline" className="w-full">Adicionar ao Google Calendar</Button>
+            </a>
+            <a href={buildIcsDataUri(calendarEvent)} download="marcacao-baptista-barber-shop.ics">
+              <Button variant="outline" className="w-full">Adicionar ao Apple Calendar</Button>
+            </a>
             <Link href="/">
               <Button variant="gold" className="w-full">Voltar ao Início</Button>
             </Link>
@@ -262,7 +370,7 @@ export default function Booking() {
           </motion.div>
           <h2 className="text-3xl font-display font-bold mb-4 text-white">Marcação Cancelada</h2>
           <p className="text-gray-400 mb-8">
-            A sua marcação foi cancelada com sucesso. O horário está agora disponível para outros clientes.
+            A sua marcação foi cancelada. Se foi em cima da hora, pode ficar registada como cancelamento tardio.
           </p>
           <Link href="/">
             <Button variant="gold" className="w-full">Voltar ao Início</Button>
@@ -273,9 +381,9 @@ export default function Booking() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col font-body">
+    <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col font-body">
       <nav className="border-b border-white/10 py-4 bg-background sticky top-0 z-50">
-        <div className="container mx-auto px-4 flex items-center gap-4">
+        <div className="mx-auto flex w-full max-w-4xl items-center gap-4 px-4">
           <Button 
             variant="ghost" 
             size="icon" 
@@ -291,7 +399,7 @@ export default function Booking() {
         </div>
       </nav>
 
-      <div className="flex-1 container mx-auto px-4 py-8 max-w-4xl">
+      <div className="mx-auto flex-1 w-full max-w-4xl px-4 pt-8 pb-28 md:py-8">
         <StepIndicator currentStep={step} />
 
         <AnimatePresence mode="wait">
@@ -307,22 +415,22 @@ export default function Booking() {
             {step === 1 && (
               <div className="space-y-6">
                 <div className="text-center mb-8">
-                  <h2 className="text-2xl font-display font-bold mb-2">Escolha o Profissional</h2>
-                  <p className="text-gray-400">Selecione quem irá cuidar do seu visual hoje.</p>
+                  <h2 className="text-2xl font-display font-bold mb-2">Seleciona o barbeiro</h2>
+                  <p className="text-gray-400">Escolhe com quem queres marcar.</p>
                 </div>
                 
                 {loadingBarbers ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-pulse">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 animate-pulse">
                     {[1,2,3].map(i => <div key={i} className="h-64 bg-card rounded-xl"></div>)}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
                     <motion.div 
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => setSelectedBarberId(0)}
                       className={cn(
-                        "cursor-pointer group relative overflow-hidden rounded-xl bg-card border transition-all duration-300 flex flex-col justify-center items-center text-center p-4 md:p-6",
+                        "min-h-44 cursor-pointer group relative overflow-hidden rounded-xl bg-card border transition-all duration-300 flex flex-col justify-center items-center text-center p-4 md:min-h-0 md:p-6",
                         selectedBarberId === 0 
                           ? "border-primary shadow-[0_0_20px_rgba(212,175,55,0.3)] bg-primary/5" 
                           : "border-white/5 hover:border-primary/50"
@@ -354,8 +462,9 @@ export default function Booking() {
                     </motion.div>
 
                     {visibleBarbers.map((barber) => {
-                      const avatarSrc = barber.name === "Fábio Baptista" ? fabioAvatar : 
-                                      barber.name === "Bruno Santos" ? brunoAvatar : 
+                      const barberName = barber.name.toLowerCase();
+                      const avatarSrc = barberName.includes("baptista") ? fabioAvatar :
+                                      barberName.includes("bruno") ? brunoAvatar :
                                       barber.avatar;
                       return (
                         <motion.div 
@@ -370,7 +479,7 @@ export default function Booking() {
                               : "border-white/5 hover:border-primary/50"
                           )}
                         >
-                          <div className="aspect-[4/5] bg-muted relative overflow-hidden">
+                          <div className="aspect-[4/3] sm:aspect-[4/5] bg-muted relative overflow-hidden">
                              <img 
                                src={avatarSrc || `https://images.unsplash.com/photo-${barber.id % 2 === 0 ? '1582234057037-9755b3c4342a' : '1562947262-6718d0979e2c'}?w=500&h=600&fit=crop`} 
                                alt={barber.name} 
@@ -499,7 +608,7 @@ export default function Booking() {
 
                 <div className="w-full">
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-primary" /> Horários Disponíveis
+                    <Clock className="w-5 h-5 text-primary" /> Horários disponíveis
                   </h3>
                   <div className={cn(
                     "bg-card border rounded-xl p-4 md:p-6 min-h-[200px] transition-all duration-300",
@@ -507,6 +616,14 @@ export default function Booking() {
                   )}>
                     {!selectedDate ? (
                       <p className="text-gray-500 text-center mt-10">Selecione uma data primeiro.</p>
+                    ) : loadingAppointments ? (
+                      <div className="flex justify-center mt-10">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : timeSlots.length === 0 ? (
+                      <p className="text-gray-500 text-center mt-10">
+                        Não existem horários disponíveis para esta data. Escolha outro dia.
+                      </p>
                     ) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 md:gap-3">
@@ -561,7 +678,7 @@ export default function Booking() {
                     <span className="font-medium">{selectedService?.name}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Data & Hora:</span>
+                    <span className="text-gray-400">Data e hora:</span>
                     <span className="font-medium">
                       {selectedDate && format(selectedDate, "dd/MM/yyyy")} às {selectedTime}
                     </span>
@@ -602,7 +719,7 @@ export default function Booking() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="email">Email (Opcional)</Label>
+                    <Label htmlFor="email">Email (opcional)</Label>
                     <Input 
                       id="email" 
                       type="email" 
@@ -620,7 +737,7 @@ export default function Booking() {
 
         {/* Footer Actions */}
         <div className="fixed bottom-0 left-0 w-full bg-card border-t border-white/10 p-4 md:static md:bg-transparent md:border-0 md:mt-12">
-          <div className="container mx-auto flex justify-between max-w-4xl">
+          <div className="mx-auto flex w-full max-w-4xl justify-between">
             <Button 
               variant="outline" 
               onClick={() => {

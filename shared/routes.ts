@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertBarberSchema, insertServiceSchema, insertAppointmentSchema, barbers, services, appointments } from './schema';
+import { insertBarberSchema, insertServiceSchema, insertAppointmentSchema, appointmentStatuses, barbers, services, appointments } from './schema';
 
 export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
@@ -97,7 +97,7 @@ export const api = {
     updateStatus: {
       method: 'PATCH' as const,
       path: '/api/appointments/:id/status',
-      input: z.object({ status: z.enum(["booked", "completed", "cancelled"]) }),
+      input: z.object({ status: z.enum(appointmentStatuses) }),
       responses: {
         200: z.custom<typeof appointments.$inferSelect>(),
         404: errorSchemas.notFound,

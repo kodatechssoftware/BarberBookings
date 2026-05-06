@@ -15,6 +15,9 @@ export const appointmentsIdSeq = appPgSchema?.sequence("appointments_id_seq");
 export const adminsIdSeq = appPgSchema?.sequence("admins_id_seq");
 export const blacklistIdSeq = appPgSchema?.sequence("blacklist_id_seq");
 export const verificationCodesIdSeq = appPgSchema?.sequence("verification_codes_id_seq");
+export const barberAvailabilityIdSeq = appPgSchema?.sequence("barber_availability_id_seq");
+export const barberInvitesIdSeq = appPgSchema?.sequence("barber_invites_id_seq");
+export const customerNotesIdSeq = appPgSchema?.sequence("customer_notes_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -27,6 +30,14 @@ function idColumn(sequenceName: string) {
 }
 
 // === TABLE DEFINITIONS ===
+
+export const appointmentStatuses = [
+  "booked",
+  "completed",
+  "cancelled",
+  "late_cancelled",
+  "no_show",
+] as const;
 
 export const barbers = appPgTable("barbers", {
   id: idColumn("barbers_id_seq"),
@@ -56,8 +67,11 @@ export const appointments = appPgTable("appointments", {
   customerName: text("customer_name").notNull(),
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone").notNull(),
-  status: text("status", { enum: ["booked", "completed", "cancelled"] }).default("booked").notNull(),
+  status: text("status", { enum: appointmentStatuses }).default("booked").notNull(),
   cancelToken: text("cancel_token").notNull(),
+  cancelledAt: timestamp("cancelled_at"),
+  depositRequired: boolean("deposit_required").default(false).notNull(),
+  depositReason: text("deposit_reason"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -82,6 +96,33 @@ export const verificationCodes = appPgTable("verification_codes", {
   code: text("code").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
   used: boolean("used").default(false).notNull(),
+});
+
+export const barberAvailability = appPgTable("barber_availability", {
+  id: idColumn("barber_availability_id_seq"),
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  dayOfWeek: integer("day_of_week").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  isWorking: boolean("is_working").default(true).notNull(),
+});
+
+export const barberInvites = appPgTable("barber_invites", {
+  id: idColumn("barber_invites_id_seq"),
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const customerNotes = appPgTable("customer_notes", {
+  id: idColumn("customer_notes_id_seq"),
+  phone: text("phone").notNull().unique(),
+  email: text("email"),
+  notes: text("notes").notNull().default(""),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // === RELATIONS ===
@@ -109,23 +150,45 @@ export const servicesRelations = relations(services, ({ many }) => ({
 
 export const insertBarberSchema = createInsertSchema(barbers).omit({ id: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true });
-export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true, createdAt: true, status: true, cancelToken: true });
+export const insertAppointmentSchema = createInsertSchema(appointments).omit({
+  id: true,
+  createdAt: true,
+  status: true,
+  cancelToken: true,
+  cancelledAt: true,
+  depositRequired: true,
+  depositReason: true,
+});
 export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });
 export const insertBlacklistSchema = createInsertSchema(blacklist).omit({ id: true, createdAt: true });
+export const insertBarberAvailabilitySchema = createInsertSchema(barberAvailability).omit({ id: true });
+export const insertBarberInviteSchema = createInsertSchema(barberInvites).omit({ id: true, createdAt: true });
+export const insertCustomerNoteSchema = createInsertSchema(customerNotes).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
 
 // === EXPLICIT API CONTRACT TYPES ===
 
 export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Appointment = typeof appointments.$inferSelect;
+export type AppointmentStatus = typeof appointmentStatuses[number];
 export type Admin = typeof admins.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
+export type BarberAvailability = typeof barberAvailability.$inferSelect;
+export type BarberInvite = typeof barberInvites.$inferSelect;
+export type CustomerNote = typeof customerNotes.$inferSelect;
 
 export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
 export type CreateAdminRequest = z.infer<typeof insertAdminSchema>;
 export type InsertBlacklist = z.infer<typeof insertBlacklistSchema>;
+export type CreateBarberAvailabilityRequest = z.infer<typeof insertBarberAvailabilitySchema>;
+export type CreateBarberInviteRequest = z.infer<typeof insertBarberInviteSchema>;
+export type CreateCustomerNoteRequest = z.infer<typeof insertCustomerNoteSchema>;
 
 export type AppointmentWithDetails = Appointment & {
   barber: Barber;
