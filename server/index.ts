@@ -7,6 +7,37 @@ const app = express();
 const httpServer = createServer(app);
 const isProduction = process.env.NODE_ENV === "production";
 
+function getSafeDatabaseTarget() {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) return "DATABASE_URL is not set";
+
+  try {
+    const databaseUrl = new URL(rawUrl);
+    const username = decodeURIComponent(databaseUrl.username || "");
+    const projectRef = username.includes(".") ? username.split(".").pop() : "";
+    const sslMode = databaseUrl.searchParams.get("sslmode") || "not set";
+
+    return [
+      `host=${databaseUrl.hostname}`,
+      `port=${databaseUrl.port || "default"}`,
+      `db=${databaseUrl.pathname.replace(/^\//, "") || "default"}`,
+      projectRef ? `projectRef=${projectRef}` : null,
+      `schema=${process.env.DATABASE_SCHEMA || "public"}`,
+      `sslmode=${sslMode}`,
+    ].filter(Boolean).join(" ");
+  } catch {
+    return "DATABASE_URL is set but could not be parsed";
+  }
+}
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "barberbookings-api",
+    uptime: process.uptime(),
+  });
+});
+
 function normalizeOrigin(origin: string) {
   return origin.trim().replace(/\/+$/, "");
 }
@@ -120,6 +151,8 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  log(`starting BarberBookings API (${getSafeDatabaseTarget()})`);
+
   const server = await registerRoutes(app, httpServer);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -153,4 +186,8 @@ app.use((req, res, next) => {
   httpServer.listen(port, () => {
     log(`serving on http://localhost:${port}`);
   });
-})();
+})().catch((error) => {
+  console.error("Failed to start BarberBookings API");
+  console.error(error);
+  process.exit(1);
+});
