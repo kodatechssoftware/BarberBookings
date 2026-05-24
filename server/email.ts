@@ -99,7 +99,6 @@ export async function sendBookingConfirmation({
             <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
             <p style="margin: 6px 0;"><strong>Morada:</strong> Rua Comandante Agatão Lança Nº28</p>
           </div>
-          ${depositRequired ? `<div style="background-color: #fff7df; border: 1px solid #f0d37a; padding: 12px; border-radius: 10px; margin-bottom: 18px;"><strong>Depósito recomendado:</strong> ${escapeHtml(depositReason || "regra operacional da barbearia")}. A equipa poderá entrar em contacto para confirmar.</div>` : ""}
           <p style="font-size: 0.92em; color: #555;">
             Pode reagendar ou cancelar através dos links abaixo. Cancelamentos a menos de ${cancellationPolicyHours} horas da marcação podem ficar registados como cancelamento tardio.
           </p>

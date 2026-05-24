@@ -323,15 +323,6 @@ export default function Booking() {
             Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
           </p>
           
-          {createdAppointment?.depositRequired && (
-            <div className="mb-6 rounded-xl border border-primary/20 bg-primary/10 p-4 text-left text-sm text-primary">
-              <p className="font-bold">Depósito recomendado para esta marcação</p>
-              <p className="mt-1 text-primary/80">
-                Motivo: {createdAppointment.depositReason || "regra operacional da barbearia"}. A equipa poderá entrar em contacto para confirmar.
-              </p>
-            </div>
-          )}
-
           <div className="space-y-4">
             <a href={buildGoogleCalendarUrl(calendarEvent)} target="_blank" rel="noreferrer">
               <Button variant="outline" className="w-full">Adicionar ao Google Calendar</Button>
