@@ -12,6 +12,7 @@ export type AppointmentRecord = {
   customerName: string;
   customerEmail: string | null;
   customerPhone: string;
+  durationMinutes: number;
   status: AppointmentStatus;
   cancelToken: string;
   cancelledAt: string | null;

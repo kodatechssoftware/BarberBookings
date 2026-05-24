@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { CalendarDays, Clock, ExternalLink, MapPin, Scissors } from "lucide-react";
+import { Clock, ExternalLink, MapPin, Scissors } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
 import { useBarbers } from "@/hooks/use-barbers";
@@ -47,7 +47,7 @@ function getTodayOpeningStatus() {
   if (periods.length === 0) {
     return {
       title: "Fechado hoje",
-      detail: "Podes marcar online para outro dia.",
+      detail: "Atendimento por hora marcada nos restantes dias.",
     };
   }
 
@@ -61,7 +61,7 @@ function getTodayOpeningStatus() {
   if (activePeriod) {
     return {
       title: `Aberto hoje até às ${formatScheduleHour(activePeriod.end)}`,
-      detail: "Marca a tua hora e evita esperas.",
+      detail: "Atendimento em curso na barbearia.",
     };
   }
 
@@ -69,28 +69,22 @@ function getTodayOpeningStatus() {
   if (nextPeriod) {
     return {
       title: `${currentMinutes > timeToMinutes(periods[0].end) ? "Reabre" : "Abre"} hoje às ${formatScheduleHour(nextPeriod.start)}`,
-      detail: "A marcação online está disponível.",
+      detail: "Atendimento por hora marcada.",
     };
   }
 
   return {
     title: "Fechado agora",
-    detail: "Podes marcar online para o próximo horário.",
+    detail: "Atendimento por hora marcada no próximo horário.",
   };
 }
 
 function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
+  if (barber.avatar) return barber.avatar;
   const name = barber.name.toLowerCase();
   if (name.includes("baptista")) return fabioAvatar;
   if (name.includes("bruno")) return brunoAvatar;
-  return barber.avatar || "/images/logo.jpg";
-}
-
-function getBookingUrl(barberId?: number) {
-  if (!barberId) return "/book";
-
-  const params = new URLSearchParams({ barberId: String(barberId) });
-  return `/book?${params.toString()}`;
+  return "/images/logo.jpg";
 }
 
 export default function Home() {
@@ -131,26 +125,19 @@ export default function Home() {
             <span className="hidden font-display text-lg font-bold text-white sm:inline">Baptista</span>
           </a>
 
-          <div className="flex min-w-0 items-center gap-3 md:gap-8">
-            <div className="hidden gap-7 text-xs font-semibold uppercase tracking-widest md:flex">
-              {navItems.map((item) => (
-                <a
-                  key={item.id}
-                  href={`#${item.id}`}
-                  className={cn(
-                    "transition-colors",
-                    activeSection === item.id ? "text-primary" : "text-gray-400 hover:text-primary",
-                  )}
-                >
-                  {item.label}
-                </a>
-              ))}
-            </div>
-            <div className="hidden sm:block">
-              <Button asChild variant="gold" size="sm" className="px-5 text-xs font-bold md:px-6 md:text-sm">
-                <a href="/book">Marcar</a>
-              </Button>
-            </div>
+          <div className="hidden gap-7 text-xs font-semibold uppercase tracking-widest md:flex">
+            {navItems.map((item) => (
+              <a
+                key={item.id}
+                href={`#${item.id}`}
+                className={cn(
+                  "transition-colors",
+                  activeSection === item.id ? "text-primary" : "text-gray-400 hover:text-primary",
+                )}
+              >
+                {item.label}
+              </a>
+            ))}
           </div>
         </div>
       </nav>
@@ -174,10 +161,19 @@ export default function Home() {
               Corte e barba com hora marcada
             </h1>
             <p className="mt-6 max-w-xl text-base leading-relaxed text-gray-300 md:text-lg">
-              Marca online, escolhe o barbeiro e chega à hora combinada sem esperas.
+              Serviços essenciais, acabamentos cuidados e atendimento sem pressa no centro da Charneca da Caparica.
             </p>
 
-            <div className="mt-6 max-w-md rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm">
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button asChild variant="gold" size="lg" className="h-12 w-full px-8 text-base sm:w-auto">
+                <a href="/book">Marcar agora</a>
+              </Button>
+              <Button asChild variant="outline" size="lg" className="h-12 w-full border-white/15 bg-black/30 px-8 text-base text-white hover:bg-white/10 hover:text-white sm:w-auto">
+                <a href="#services">Ver serviços</a>
+              </Button>
+            </div>
+
+            <div className="mt-6 max-w-sm rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm">
               <div className="flex items-start gap-3">
                 <Clock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                 <div className="min-w-0">
@@ -186,32 +182,17 @@ export default function Home() {
                 </div>
               </div>
             </div>
-
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button asChild variant="gold" size="lg" className="h-12 w-full px-8 text-base sm:w-auto">
-                <a href="/book">Marcar</a>
-              </Button>
-              <Button asChild variant="outline" size="lg" className="h-12 w-full border-white/15 bg-black/30 px-8 text-base text-white hover:bg-white/10 hover:text-white sm:w-auto">
-                <a href="#team">Ver equipa</a>
-              </Button>
-            </div>
           </div>
         </div>
       </section>
 
       <section id="services" className="scroll-mt-20 border-b border-white/5 bg-white/[0.02] py-14 md:py-20">
         <div className="container mx-auto px-4">
-          <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="mb-8 max-w-2xl">
             <div className="max-w-2xl">
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Serviços</p>
-              <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">O essencial, sem complicar</h2>
+              <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Serviços e preços</h2>
             </div>
-            <Button asChild variant="outline" className="w-full border-white/15 bg-card text-white hover:bg-white/10 md:w-auto">
-              <a href="/book">
-                Ver horários
-                <CalendarDays className="ml-2 h-4 w-4" />
-              </a>
-            </Button>
           </div>
 
           {isLoadingServices ? (
@@ -223,8 +204,8 @@ export default function Home() {
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               {visibleServices.map((service) => (
-                <article key={service.id} className="rounded-lg border border-white/10 bg-card p-5">
-                  <div className="flex items-start justify-between gap-4">
+                <article key={service.id} className="flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
+                  <div className="flex flex-1 items-start justify-between gap-4">
                     <div className="flex min-w-0 items-start gap-3">
                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
                         <Scissors className="h-5 w-5" />
@@ -238,7 +219,7 @@ export default function Home() {
                       {(service.price / 100).toFixed(0)}€
                     </p>
                   </div>
-                  <p className="mt-5 text-xs font-semibold uppercase tracking-widest text-gray-500">{service.duration} min</p>
+                  <p className="mt-auto pt-5 text-xs font-semibold uppercase tracking-widest text-gray-500">{service.duration} min</p>
                 </article>
               ))}
             </div>
@@ -248,14 +229,14 @@ export default function Home() {
 
       <section id="team" className="scroll-mt-20 bg-white/[0.03] py-16 md:py-24">
         <div className="container mx-auto px-4">
-          <div className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="mb-10 max-w-2xl">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Equipa</p>
-              <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Seleciona o barbeiro</h2>
+              <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Conhece a equipa</h2>
+              <p className="mt-4 text-sm leading-relaxed text-gray-400 md:text-base">
+                Dois estilos, o mesmo cuidado nos detalhes e no acabamento final.
+              </p>
             </div>
-            <Button asChild variant="gold" className="w-full md:w-auto">
-              <a href="/book">Marcar sem preferência</a>
-            </Button>
           </div>
 
           {isLoadingBarbers ? (
@@ -276,15 +257,12 @@ export default function Home() {
                       alt={barber.name}
                       className="h-full min-h-44 w-full bg-background object-cover object-top"
                     />
-                    <div className="flex min-w-0 flex-col justify-between p-4 sm:p-5">
+                    <div className="flex min-w-0 flex-col justify-center p-4 sm:p-5">
                       <div className="min-w-0">
                         <h3 className="truncate text-2xl font-bold text-white">{barber.name}</h3>
                         <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-primary">{barber.specialty}</p>
                         {barber.bio && <p className="mt-4 line-clamp-3 text-sm leading-relaxed text-gray-400">{barber.bio}</p>}
                       </div>
-                      <Button asChild variant="outline" className="mt-5 w-full border-white/15 bg-background text-white hover:bg-white/10">
-                        <a href={getBookingUrl(barber.id)}>Marcar</a>
-                      </Button>
                     </div>
                   </div>
                 </motion.article>
@@ -300,7 +278,7 @@ export default function Home() {
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Morada</p>
             <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Estamos à tua espera</h2>
             <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-gray-400">
-              Rua Comandante Agatão Lança Nº28. Marca online e chega à hora combinada.
+              Rua Comandante Agatão Lança Nº28, com acesso direto ao mapa para chegares sem voltas.
             </p>
             <div className="mt-5 flex flex-wrap justify-center gap-2">
               {["Estacionamento nas proximidades", "Fácil acesso"].map((item) => (
@@ -338,7 +316,6 @@ export default function Home() {
           <img src="/images/logo.jpg" alt="Baptista Barber Shop" className="h-10 w-10 rounded-full object-contain" />
           <p className="text-sm text-gray-500">© 2026 Baptista Barber Shop. Rua Comandante Agatão Lança Nº28.</p>
           <div className="flex flex-wrap justify-center gap-5 text-sm">
-            <a href="/book" className="text-gray-400 hover:text-primary">Marcar</a>
             {instagramUrl && (
               <a href={instagramUrl} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-primary">
                 Instagram

@@ -6,14 +6,16 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { sendBookingConfirmation } from "./email";
+import {
+  sendBookingWhatsAppCancellation,
+  sendBookingWhatsAppConfirmation,
+} from "./whatsapp";
 import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { db } from "./db";
 import { parseISO, format, isValid, startOfDay, endOfDay } from "date-fns";
 import ExcelJS from 'exceljs';
-import { appointmentStatuses, appointments as appointmentsTable, barbers as barbersTable, type Appointment } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { appointmentStatuses, type Appointment } from "@shared/schema";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -24,6 +26,7 @@ const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MIN
 const DEPOSIT_RISK_THRESHOLD = Number(process.env.DEPOSIT_RISK_THRESHOLD || 2);
 const BARBER_INVITE_EXPIRY_DAYS = Number(process.env.BARBER_INVITE_EXPIRY_DAYS || 7);
 const isProduction = process.env.NODE_ENV === "production";
+const useMemoryStorage = process.env.USE_MEMORY_STORAGE === "true";
 const databaseSchema = process.env.DATABASE_SCHEMA?.trim();
 const sessionSchemaName =
   databaseSchema && databaseSchema !== "public" ? databaseSchema : undefined;
@@ -66,15 +69,6 @@ function getAppSession(req: Request) {
   return req.session as AppSession;
 }
 
-function saveAppSession(req: Request) {
-  return new Promise<void>((resolve, reject) => {
-    req.session.save((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
-
 function getSessionSameSite(): "lax" | "strict" | "none" {
   const value = (process.env.SESSION_SAME_SITE || "lax").toLowerCase();
 
@@ -100,7 +94,9 @@ function getShopDateParts(date: Date) {
   };
 }
 
-function getShopWorkingPeriods(weekday: number) {
+type MinutePeriod = { start: number; end: number };
+
+function getDefaultShopWorkingPeriods(weekday: number): MinutePeriod[] {
   if (weekday === 1) {
     return [{ start: 14 * 60, end: 20 * 60 }];
   }
@@ -120,6 +116,30 @@ function getShopWorkingPeriods(weekday: number) {
   }
 
   return [];
+}
+
+function getDefaultShopAvailabilityRows() {
+  return [
+    { dayOfWeek: 0, startTime: "09:00", endTime: "13:00", isOpen: false },
+    { dayOfWeek: 1, startTime: "14:00", endTime: "20:00", isOpen: true },
+    { dayOfWeek: 2, startTime: "09:00", endTime: "13:00", isOpen: true },
+    { dayOfWeek: 2, startTime: "14:00", endTime: "20:00", isOpen: true },
+    { dayOfWeek: 3, startTime: "09:00", endTime: "13:00", isOpen: true },
+    { dayOfWeek: 3, startTime: "14:00", endTime: "20:00", isOpen: true },
+    { dayOfWeek: 4, startTime: "09:00", endTime: "13:00", isOpen: true },
+    { dayOfWeek: 4, startTime: "14:00", endTime: "20:00", isOpen: true },
+    { dayOfWeek: 5, startTime: "09:00", endTime: "13:00", isOpen: true },
+    { dayOfWeek: 5, startTime: "14:00", endTime: "20:00", isOpen: true },
+    { dayOfWeek: 6, startTime: "09:00", endTime: "13:00", isOpen: true },
+    { dayOfWeek: 6, startTime: "14:00", endTime: "19:00", isOpen: true },
+  ];
+}
+
+async function ensureDefaultShopAvailability() {
+  const availability = await storage.getShopAvailability();
+  if (availability.length === 0) {
+    await storage.replaceShopAvailability(getDefaultShopAvailabilityRows());
+  }
 }
 
 function parseTimeToMinutes(value: string) {
@@ -232,21 +252,53 @@ function buildPublicUrl(path: string) {
 }
 
 async function getBarberWorkingPeriods(barberId: number, weekday: number) {
-  const availability = await storage.getBarberAvailability(barberId);
+  const [shopAvailability, barberAvailability] = await Promise.all([
+    storage.getShopAvailability(),
+    storage.getBarberAvailability(barberId),
+  ]);
 
-  if (availability.length === 0) {
-    return getShopWorkingPeriods(weekday);
+  const shopPeriods = shopAvailability.length === 0
+    ? getDefaultShopWorkingPeriods(weekday)
+    : availabilityRowsToPeriods(
+        shopAvailability.filter((period) => period.dayOfWeek === weekday && period.isOpen),
+      );
+
+  if (shopPeriods.length === 0 || barberAvailability.length === 0) {
+    return shopPeriods;
   }
 
-  return availability
-    .filter((period) => period.dayOfWeek === weekday && period.isWorking)
+  const barberPeriods = availabilityRowsToPeriods(
+    barberAvailability.filter((period) => period.dayOfWeek === weekday && period.isWorking),
+  );
+
+  return intersectWorkingPeriods(shopPeriods, barberPeriods);
+}
+
+function availabilityRowsToPeriods(rows: Array<{ startTime: string; endTime: string }>): MinutePeriod[] {
+  return rows
     .map((period) => ({
       start: parseTimeToMinutes(period.startTime),
       end: parseTimeToMinutes(period.endTime),
     }))
-    .filter((period): period is { start: number; end: number } =>
+    .filter((period): period is MinutePeriod =>
       period.start !== null && period.end !== null && period.end > period.start,
     );
+}
+
+function intersectWorkingPeriods(primaryPeriods: MinutePeriod[], overridePeriods: MinutePeriod[]) {
+  const intersections: MinutePeriod[] = [];
+
+  for (const primary of primaryPeriods) {
+    for (const override of overridePeriods) {
+      const start = Math.max(primary.start, override.start);
+      const end = Math.min(primary.end, override.end);
+      if (end > start) {
+        intersections.push({ start, end });
+      }
+    }
+  }
+
+  return intersections;
 }
 
 function getScheduleValidationError(
@@ -273,7 +325,7 @@ function getScheduleValidationError(
     return "As marcações só podem começar de 30 em 30 minutos.";
   }
 
-  const periods = workingPeriods ?? getShopWorkingPeriods(start.weekday);
+  const periods = workingPeriods ?? getDefaultShopWorkingPeriods(start.weekday);
   if (periods.length === 0) {
     return "A barbearia está encerrada neste dia.";
   }
@@ -300,6 +352,7 @@ type AppointmentLike = {
   barberId: number;
   serviceId: number | null;
   startTime: Date | string;
+  durationMinutes?: number;
   status: string;
 };
 
@@ -320,7 +373,8 @@ function getAppointmentEndTime(
   serviceDurations: Map<number, number>,
 ) {
   const startTime = toDate(appointment.startTime);
-  const durationMinutes = getAppointmentDurationMinutes(appointment.serviceId, serviceDurations);
+  const durationMinutes = appointment.durationMinutes ??
+    getAppointmentDurationMinutes(appointment.serviceId, serviceDurations);
   return new Date(startTime.getTime() + durationMinutes * 60000);
 }
 
@@ -392,12 +446,7 @@ export async function registerRoutes(
   httpServer: Server
 ): Promise<Server> {
   // Session middleware
-  app.use(session({
-    store: new PostgresSessionStore({
-      conObject: { connectionString: process.env.DATABASE_URL },
-      schemaName: sessionSchemaName,
-      createTableIfMissing: true,
-    }),
+  const sessionConfig: session.SessionOptions = {
     secret: process.env.SESSION_SECRET || "baptista-barber-shop-secret",
     resave: false,
     saveUninitialized: false,
@@ -408,7 +457,17 @@ export async function registerRoutes(
       sameSite: getSessionSameSite(),
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
-  }));
+  };
+
+  if (!useMemoryStorage) {
+    sessionConfig.store = new PostgresSessionStore({
+      conObject: { connectionString: process.env.DATABASE_URL },
+      schemaName: sessionSchemaName,
+      createTableIfMissing: true,
+    });
+  }
+
+  app.use(session(sessionConfig));
 
   // === AUTH ===
   app.post("/api/admin/login", async (req, res) => {
@@ -421,7 +480,6 @@ export async function registerRoutes(
         const appSession = getAppSession(req);
         appSession.adminId = admin.id;
         appSession.role = "admin";
-        await saveAppSession(req);
         return res.json({ message: "Login efetuado com sucesso", role: "admin" });
       }
 
@@ -438,7 +496,6 @@ export async function registerRoutes(
           const appSession = getAppSession(req);
           appSession.barberId = barber.id;
           appSession.role = "barber";
-          await saveAppSession(req);
           return res.json({ message: "Login efetuado com sucesso", role: "barber" });
         }
       }
@@ -530,10 +587,7 @@ export async function registerRoutes(
 
   app.patch("/api/barbers/:id/reset-password", requireAdmin, async (req, res) => {
     try {
-      const [updated] = await db.update(barbersTable)
-        .set({ password: null })
-        .where(eq(barbersTable.id, Number(req.params.id)))
-        .returning();
+      const updated = await storage.updateBarber(Number(req.params.id), { password: null });
       if (!updated) return res.status(404).json({ message: "Barbeiro não encontrado" });
       res.json({ message: "Palavra-passe removida" });
     } catch (error) {
@@ -607,7 +661,6 @@ export async function registerRoutes(
       const appSession = getAppSession(req);
       appSession.barberId = barber.id;
       appSession.role = "barber";
-      await saveAppSession(req);
 
       res.json({ message: "Palavra-passe definida com sucesso.", role: "barber" });
     } catch (error) {
@@ -672,6 +725,45 @@ export async function registerRoutes(
       Boolean(appSession.adminId || appSession.barberId);
 
     res.json(includeHidden ? barbers : barbers.filter((barber) => barber.isVisible));
+  });
+
+  app.get("/api/shop/availability", async (_req, res) => {
+    const availability = await storage.getShopAvailability();
+    res.json(availability.length > 0 ? availability : getDefaultShopAvailabilityRows());
+  });
+
+  app.patch("/api/shop/availability", requireAdmin, async (req, res) => {
+    const inputSchema = z.array(z.object({
+      dayOfWeek: z.number().int().min(0).max(6),
+      startTime: z.string().regex(/^\d{2}:\d{2}$/),
+      endTime: z.string().regex(/^\d{2}:\d{2}$/),
+      isOpen: z.boolean().optional(),
+    }));
+
+    const parsed = inputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Disponibilidade inválida." });
+    }
+
+    const rows = parsed.data.map((row) => {
+      const start = parseTimeToMinutes(row.startTime);
+      const end = parseTimeToMinutes(row.endTime);
+      if (start === null || end === null || end <= start) {
+        return null;
+      }
+
+      return {
+        ...row,
+        isOpen: row.isOpen ?? true,
+      };
+    });
+
+    if (rows.some((row) => row === null)) {
+      return res.status(400).json({ message: "Horário inválido." });
+    }
+
+    const availability = await storage.replaceShopAvailability(rows.filter((row) => row !== null));
+    res.json(availability);
   });
 
   app.get("/api/barbers/availability", async (_req, res) => {
@@ -848,16 +940,16 @@ export async function registerRoutes(
         ...input,
         barberId: finalBarberId,
         cancelToken,
+        durationMinutes: requestedDuration,
         depositRequired: depositRecommendation.required,
         depositReason: depositRecommendation.reason,
       });
 
+      const barber = await storage.getBarber(finalBarberId);
+      const service = services.find(s => s.id === input.serviceId);
+
       // Send email if address is provided
-      if (input.customerEmail) {
-        const barber = await storage.getBarber(finalBarberId);
-        const service = services.find(s => s.id === input.serviceId);
-        
-        if (barber && service) {
+      if (input.customerEmail && barber && service) {
           // Fire and forget email sending
           sendBookingConfirmation({
             customerName: input.customerName,
@@ -866,13 +958,21 @@ export async function registerRoutes(
             serviceName: service.name,
             startTime: input.startTime,
             cancelToken,
-            durationMinutes: service.duration,
+            durationMinutes: appointment.durationMinutes,
             depositRequired: appointment.depositRequired,
             depositReason: appointment.depositReason,
             cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
           }).catch(console.error);
-        }
       }
+
+      sendBookingWhatsAppConfirmation({
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        barberName: barber?.name,
+        serviceName: service?.name || "Serviço indisponível",
+        startTime: input.startTime,
+        cancelUrl: buildPublicUrl(`/cancel/${cancelToken}`),
+      }).catch(console.error);
 
       res.status(201).json(appointment);
     } catch (err) {
@@ -946,6 +1046,7 @@ export async function registerRoutes(
           customerName: isManualBooking ? name : (occurrences > 1 ? `RECORRENTE: ${name}` : (name || "BLOQUEIO MANUAL")),
           customerPhone: phone || "",
           customerEmail: "",
+          durationMinutes: duration,
           status: "booked",
           cancelToken: randomUUID(),
           depositRequired: depositRecommendation.required,
@@ -993,7 +1094,7 @@ export async function registerRoutes(
         startTime: app.startTime,
         barberId: app.barberId,
         serviceId: app.serviceId,
-        duration: getAppointmentDurationMinutes(app.serviceId, serviceDurations),
+        duration: app.durationMinutes ?? getAppointmentDurationMinutes(app.serviceId, serviceDurations),
       }));
     res.json(publicAppointments);
   });
@@ -1002,9 +1103,7 @@ export async function registerRoutes(
     try {
       const { startTime, barberId, status } = req.body;
       const appointmentId = Number(req.params.id);
-      const currentApp = await db.query.appointments.findFirst({
-        where: eq(appointmentsTable.id, appointmentId)
-      });
+      const currentApp = await storage.getAppointment(appointmentId);
 
       if (!currentApp) return res.status(404).json({ message: "Marcação não encontrada" });
 
@@ -1016,7 +1115,7 @@ export async function registerRoutes(
 
       // Conflict check for re-scheduling
       if (startTime || barberId) {
-        const duration = getAppointmentDurationMinutes(currentApp.serviceId, serviceDurations);
+        const duration = currentApp.durationMinutes ?? getAppointmentDurationMinutes(currentApp.serviceId, serviceDurations);
         const workingPeriods = await getBarberWorkingPeriods(newBarberId, getShopDateParts(newStartTime).weekday);
         const scheduleError = getScheduleValidationError(newStartTime, duration, workingPeriods);
         if (scheduleError) {
@@ -1051,10 +1150,7 @@ export async function registerRoutes(
         Object.assign(updateData, getStatusPatch(status));
       }
 
-      const [updated] = await db.update(appointmentsTable)
-        .set(updateData)
-        .where(eq(appointmentsTable.id, appointmentId))
-        .returning();
+      const updated = await storage.updateAppointment(appointmentId, updateData);
 
       res.json(updated);
     } catch (error) {
@@ -1070,9 +1166,7 @@ export async function registerRoutes(
      }
 
      const appointmentId = Number(req.params.id);
-     const currentApp = await db.query.appointments.findFirst({
-       where: eq(appointmentsTable.id, appointmentId),
-     });
+     const currentApp = await storage.getAppointment(appointmentId);
      if (!currentApp) return res.status(404).json({ message: "Marcação não encontrada" });
 
      const appSession = getAppSession(req);
@@ -1109,7 +1203,7 @@ export async function registerRoutes(
       isLateCancellation: isLateCancellation(appointment.startTime),
       barberName: barber?.name || "Desconhecido",
       serviceName: service?.name || "Serviço indisponível",
-      duration: service?.duration || DEFAULT_APPOINTMENT_DURATION_MINUTES,
+      duration: appointment.durationMinutes ?? service?.duration ?? DEFAULT_APPOINTMENT_DURATION_MINUTES,
       price: service?.price || 0,
     });
   });
@@ -1131,7 +1225,7 @@ export async function registerRoutes(
 
     const services = await storage.getServices();
     const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
-    const duration = getAppointmentDurationMinutes(appointment.serviceId, serviceDurations);
+    const duration = appointment.durationMinutes ?? getAppointmentDurationMinutes(appointment.serviceId, serviceDurations);
     const workingPeriods = await getBarberWorkingPeriods(appointment.barberId, getShopDateParts(startTime).weekday);
     const scheduleError = getScheduleValidationError(startTime, duration, workingPeriods);
     if (scheduleError) {
@@ -1154,10 +1248,7 @@ export async function registerRoutes(
       return res.status(409).json({ message: "Este horário já está reservado." });
     }
 
-    const [updated] = await db.update(appointmentsTable)
-      .set({ startTime })
-      .where(eq(appointmentsTable.id, appointment.id))
-      .returning();
+    const updated = await storage.updateAppointment(appointment.id, { startTime });
 
     res.json(updated);
   });
@@ -1175,6 +1266,18 @@ export async function registerRoutes(
     const lateCancellation = isLateCancellation(appointment.startTime);
     const status = lateCancellation ? "late_cancelled" : "cancelled";
     await storage.updateAppointmentStatus(appointment.id, status);
+
+    const [barber, service] = await Promise.all([
+      storage.getBarber(appointment.barberId),
+      appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
+    ]);
+    sendBookingWhatsAppCancellation({
+      customerName: appointment.customerName,
+      customerPhone: appointment.customerPhone,
+      barberName: barber?.name,
+      serviceName: service?.name || "Serviço indisponível",
+      startTime: toDate(appointment.startTime),
+    }).catch(console.error);
 
     res.json({
       message: lateCancellation
@@ -1670,6 +1773,7 @@ async function seedDatabase() {
       const hashedPassword = await bcrypt.hash("baptista2026", 10);
       await storage.createAdmin({ username: "admin", password: hashedPassword });
     }
+    await ensureDefaultShopAvailability();
     return;
   }
 
@@ -1690,31 +1794,48 @@ async function seedDatabase() {
   });
 
   await storage.createService({
-    name: "Corte de Cabelo",
-    description: "Corte completo com lavagem e finalização.",
-    price: 1500, // 15.00
+    name: "Corte de Cabelo (Degradê)",
+    description: "Corte moderno com acabamento preciso e estilo personalizado.",
+    price: 1200,
+    duration: 60,
+    isVisible: true
+  });
+
+  await storage.createService({
+    name: "Corte simples",
+    description: "Corte clássico e prático para o dia a dia.",
+    price: 1000,
+    duration: 60,
+    isVisible: true
+  });
+
+  await storage.createService({
+    name: "Barba",
+    description: "Desenho, alinhamento e acabamento profissional da barba.",
+    price: 500,
     duration: 30,
     isVisible: true
   });
 
   await storage.createService({
-    name: "Barba Completa",
-    description: "Barba modelada com toalha quente.",
-    price: 1200, // 12.00
-    duration: 20,
+    name: "Corte Degradê + Barba",
+    description: "Corte degradê com desenho e acabamento profissional da barba.",
+    price: 1500,
+    duration: 60,
     isVisible: true
   });
 
   await storage.createService({
-    name: "Combo Corte + Barba",
-    description: "Serviço completo para o visual perfeito.",
-    price: 2500, // 25.00
-    duration: 50,
+    name: "Corte Simples + Barba",
+    description: "Corte simples com desenho e acabamento profissional da barba.",
+    price: 1200,
+    duration: 60,
     isVisible: true
   });
 
   const hashedPassword = await bcrypt.hash("baptista2026", 10);
   await storage.createAdmin({ username: "admin", password: hashedPassword });
+  await ensureDefaultShopAvailability();
 
   console.log("Database seeded!");
 }

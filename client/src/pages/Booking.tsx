@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
-import { useBarberAvailability, useBarbers } from "@/hooks/use-barbers";
+import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { type AppointmentRecord, useCancelAppointment, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildGoogleCalendarUrl, buildIcsDataUri } from "@/lib/calendar";
-import { type AvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
+import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -199,6 +199,7 @@ export default function Booking() {
   const { data: barbers, isLoading: loadingBarbers } = useBarbers();
   const { data: services, isLoading: loadingServices } = useServices();
   const { data: availabilityRows } = useBarberAvailability();
+  const { data: shopAvailabilityRows } = useShopAvailability();
   const createAppointment = useCreateAppointment();
   const cancelAppointment = useCancelAppointment();
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
@@ -222,9 +223,10 @@ export default function Booking() {
       selectedBarberId,
       visibleBarbers,
       availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
+      shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
       existingAppointments,
     });
-  }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, visibleBarbers]);
+  }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
 
   const handleNext = () => {
     if (step === 3 && !selectedTime) {
@@ -454,9 +456,10 @@ export default function Booking() {
 
                     {visibleBarbers.map((barber) => {
                       const barberName = barber.name.toLowerCase();
-                      const avatarSrc = barberName.includes("baptista") ? fabioAvatar :
+                      const avatarSrc = barber.avatar ||
+                                      (barberName.includes("baptista") ? fabioAvatar :
                                       barberName.includes("bruno") ? brunoAvatar :
-                                      barber.avatar;
+                                      null);
                       return (
                         <motion.div 
                           key={barber.id}
@@ -532,26 +535,26 @@ export default function Booking() {
                         key={service.id}
                         onClick={() => setSelectedServiceId(service.id)}
                         className={cn(
-                          "flex items-center justify-between p-4 md:p-6 rounded-xl border bg-card cursor-pointer transition-all duration-200",
+                          "flex min-h-[112px] items-stretch justify-between p-4 md:p-6 rounded-xl border bg-card cursor-pointer transition-all duration-200",
                           selectedServiceId === service.id
                             ? "border-primary bg-primary/5"
                             : "border-white/5 hover:border-white/20 hover:bg-white/5"
                         )}
                       >
-                        <div className="flex items-start gap-3 md:gap-4">
+                        <div className="flex min-w-0 flex-1 items-start gap-3 md:gap-4">
                           <div className={cn(
                             "w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center border shrink-0",
                             selectedServiceId === service.id ? "border-primary text-primary" : "border-white/20 text-gray-400"
                           )}>
                             <Scissors className="w-4 h-4 md:w-5 md:h-5" />
                           </div>
-                          <div>
+                          <div className="flex min-h-full min-w-0 flex-col justify-between">
                             <h3 className="font-bold text-sm md:text-lg text-white leading-tight">{service.name}</h3>
-                            <p className="text-xs md:text-sm text-gray-400 line-clamp-2">{service.description}</p>
-                            <p className="text-[10px] md:text-xs text-gray-500 mt-1">{service.duration} min</p>
+                            <p className="mt-1 text-xs md:text-sm text-gray-400 line-clamp-2">{service.description}</p>
+                            <p className="mt-3 text-[10px] md:text-xs text-gray-500">{service.duration} min</p>
                           </div>
                         </div>
-                        <div className="text-right pl-2">
+                        <div className="self-center text-right pl-2">
                           <span className="block text-base md:text-xl font-bold text-primary font-display whitespace-nowrap">
                             {(service.price / 100).toFixed(2)}€
                           </span>

@@ -50,6 +50,50 @@ npm run dev
 
 `RESEND_API_KEY` e opcional. Se ficar vazio, a app continua a funcionar sem envio de emails.
 
+## WhatsApp com Evolution API
+
+As mensagens de WhatsApp ficam inativas enquanto a Evolution API nao estiver configurada. A integracao usa o endpoint `POST /message/sendText/{instance}` da Evolution API, com a chave no header `apikey`.
+
+Para ativar no Railway, define:
+
+- `EVOLUTION_API_URL`: URL publica da tua Evolution API, sem barra final
+- `EVOLUTION_API_KEY`: chave da Evolution API
+- `EVOLUTION_API_INSTANCE`: nome da instancia ligada ao telemovel da barbearia
+- `PUBLIC_URL`: URL publica desta app, usada para gerar o link de cancelamento
+- `WHATSAPP_DEFAULT_COUNTRY_CODE=351`
+- `SHOP_NAME=Baptista Barber Shop`
+- `SHOP_TIME_ZONE=Europe/Lisbon`
+
+Quando estas variaveis existem, a app envia confirmacao de marcacao com link de cancelamento e confirmacao quando o cliente cancela pelo link.
+
+## Deploy no Railway
+
+O repositorio inclui `railway.json` para deixar o deploy explicito:
+
+- Build command: `npm run build`
+- Start command: `npm start`
+- Healthcheck: `/health`
+
+A app ja usa `process.env.PORT`, que o Railway injeta automaticamente. Se usares o dominio automatico do Railway, podes definir:
+
+```env
+PUBLIC_URL=https://${{ RAILWAY_PUBLIC_DOMAIN }}
+ALLOWED_ORIGINS=https://${{ RAILWAY_PUBLIC_DOMAIN }}
+```
+
+Variaveis minimas para a app no Railway:
+
+- `DATABASE_URL`: URL do Postgres
+- `DATABASE_SCHEMA=public`
+- `SESSION_SECRET`: segredo forte para sessoes
+- `PUBLIC_URL`: dominio publico da app
+- `ALLOWED_ORIGINS`: mesmo dominio publico da app
+- `EVOLUTION_API_URL`
+- `EVOLUTION_API_KEY`
+- `EVOLUTION_API_INSTANCE`
+
+Depois de ligares a base de dados, executa `npm run db:push` uma vez para criar/atualizar as tabelas.
+
 ## Deploy separado
 
 Para publicar o frontend na Cloudflare e a API no Render:

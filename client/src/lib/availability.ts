@@ -9,6 +9,13 @@ export type AvailabilityRow = {
   isWorking: boolean;
 };
 
+export type ShopAvailabilityRow = {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  isOpen: boolean;
+};
+
 export type BarberOption = {
   id: number;
 };
@@ -39,22 +46,62 @@ export function timeToMinutes(time: string) {
   return hours * 60 + minutes;
 }
 
-function periodsForBarber({
+function rowsToPeriods(rows: Array<{ startTime: string; endTime: string }>): MinutePeriod[] {
+  return rows
+    .map((row) => ({ start: timeToMinutes(row.startTime), end: timeToMinutes(row.endTime) }))
+    .filter((period) => period.end > period.start);
+}
+
+function intersectPeriods(primaryPeriods: MinutePeriod[], overridePeriods: MinutePeriod[]) {
+  const intersections: MinutePeriod[] = [];
+
+  primaryPeriods.forEach((primary) => {
+    overridePeriods.forEach((override) => {
+      const start = Math.max(primary.start, override.start);
+      const end = Math.min(primary.end, override.end);
+      if (end > start) intersections.push({ start, end });
+    });
+  });
+
+  return intersections;
+}
+
+export function periodsForShop({
+  dayOfWeek,
+  shopAvailabilityRows,
+}: {
+  dayOfWeek: number;
+  shopAvailabilityRows: ShopAvailabilityRow[];
+}) {
+  if (shopAvailabilityRows.length === 0) return defaultPeriodsForDay(dayOfWeek);
+
+  return rowsToPeriods(
+    shopAvailabilityRows.filter((row) => row.dayOfWeek === dayOfWeek && row.isOpen),
+  );
+}
+
+export function getEffectivePeriodsForBarber({
   barberId,
   dayOfWeek,
+  shopAvailabilityRows,
   availabilityRows,
 }: {
   barberId: number;
   dayOfWeek: number;
+  shopAvailabilityRows: ShopAvailabilityRow[];
   availabilityRows: AvailabilityRow[];
 }) {
-  const barberRows = availabilityRows.filter((row) => row.barberId === barberId);
-  if (barberRows.length === 0) return defaultPeriodsForDay(dayOfWeek);
+  const shopPeriods = periodsForShop({ dayOfWeek, shopAvailabilityRows });
+  if (shopPeriods.length === 0) return [];
 
-  return barberRows
-    .filter((row) => row.dayOfWeek === dayOfWeek && row.isWorking)
-    .map((row) => ({ start: timeToMinutes(row.startTime), end: timeToMinutes(row.endTime) }))
-    .filter((period) => period.end > period.start);
+  const barberRows = availabilityRows.filter((row) => row.barberId === barberId);
+  if (barberRows.length === 0) return shopPeriods;
+
+  const barberPeriods = rowsToPeriods(
+    barberRows.filter((row) => row.dayOfWeek === dayOfWeek && row.isWorking),
+  );
+
+  return intersectPeriods(shopPeriods, barberPeriods);
 }
 
 export function getAvailableTimeSlots({
@@ -63,6 +110,7 @@ export function getAvailableTimeSlots({
   selectedBarberId,
   visibleBarbers,
   availabilityRows,
+  shopAvailabilityRows,
   existingAppointments,
   now = new Date(),
 }: {
@@ -71,6 +119,7 @@ export function getAvailableTimeSlots({
   selectedBarberId: number | null;
   visibleBarbers: BarberOption[];
   availabilityRows?: AvailabilityRow[] | null;
+  shopAvailabilityRows?: ShopAvailabilityRow[] | null;
   existingAppointments?: PublicAppointment[] | null;
   now?: Date;
 }): TimeSlot[] {
@@ -79,13 +128,19 @@ export function getAvailableTimeSlots({
   const slotsByTime = new Map<string, TimeSlot>();
   const dayOfWeek = selectedDate.getDay();
   const availability = availabilityRows ?? [];
+  const shopAvailability = shopAvailabilityRows ?? [];
   const targetBarbers = selectedBarberId === 0
     ? visibleBarbers
     : visibleBarbers.filter((barber) => barber.id === selectedBarberId);
 
   const candidateStartMinutes = new Set<number>();
   targetBarbers.forEach((barber) => {
-    periodsForBarber({ barberId: barber.id, dayOfWeek, availabilityRows: availability }).forEach((period) => {
+    getEffectivePeriodsForBarber({
+      barberId: barber.id,
+      dayOfWeek,
+      shopAvailabilityRows: shopAvailability,
+      availabilityRows: availability,
+    }).forEach((period) => {
       for (let minutes = period.start; minutes < period.end; minutes += 30) {
         if (minutes + selectedService.duration <= period.end) {
           candidateStartMinutes.add(minutes);
@@ -116,7 +171,12 @@ export function getAvailableTimeSlots({
     );
 
     const hasAvailableBarber = targetBarbers.some((barber) => {
-      const fitsBarberSchedule = periodsForBarber({ barberId: barber.id, dayOfWeek, availabilityRows: availability }).some(
+      const fitsBarberSchedule = getEffectivePeriodsForBarber({
+        barberId: barber.id,
+        dayOfWeek,
+        shopAvailabilityRows: shopAvailability,
+        availabilityRows: availability,
+      }).some(
         (period) => minutesFromDayStart >= period.start &&
           minutesFromDayStart + selectedService.duration <= period.end,
       );

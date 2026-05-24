@@ -4,11 +4,11 @@ import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus, us
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Settings, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
-import { useBarbers } from "@/hooks/use-barbers";
+import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -32,6 +33,14 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch, buildApiUrl } from "@/lib/api";
+import {
+  getEffectivePeriodsForBarber,
+  periodsForShop,
+  type AvailabilityRow,
+  type ShopAvailabilityRow,
+} from "@/lib/availability";
+import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
+import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -144,6 +153,148 @@ function DashboardChartFallback({
   );
 }
 
+function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
+  if (barber.avatar) return barber.avatar;
+  const name = barber.name.toLowerCase();
+  if (name.includes("baptista")) return fabioAvatar;
+  if (name.includes("bruno")) return brunoAvatar;
+  return "/images/logo.jpg";
+}
+
+const MAX_BARBER_PHOTO_INPUT_BYTES = 10 * 1024 * 1024;
+const BARBER_PHOTO_MAX_SIDE = 1200;
+const BARBER_PHOTO_QUALITY = 0.82;
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Não foi possível preparar a imagem."));
+    image.src = src;
+  });
+}
+
+async function fileToBarberAvatar(file: File) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Escolha um ficheiro de imagem.");
+  }
+
+  if (file.size > MAX_BARBER_PHOTO_INPUT_BYTES) {
+    throw new Error("A imagem deve ter no máximo 10 MB.");
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const scale = Math.min(1, BARBER_PHOTO_MAX_SIDE / image.width, BARBER_PHOTO_MAX_SIDE / image.height);
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) return dataUrl;
+
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", BARBER_PHOTO_QUALITY);
+}
+
+type ToastFn = ReturnType<typeof useToast>["toast"];
+
+async function handleBarberPhotoFile(file: File | undefined, onChange: (avatar: string) => void, toast: ToastFn) {
+  if (!file) return;
+
+  try {
+    onChange(await fileToBarberAvatar(file));
+  } catch (err: any) {
+    toast({
+      title: "Erro",
+      description: err.message || "Não foi possível carregar a foto.",
+      variant: "destructive",
+    });
+  }
+}
+
+function BarberPhotoPicker({
+  inputId,
+  value,
+  fallbackSrc,
+  onChange,
+  onRemove,
+  toast,
+}: {
+  inputId: string;
+  value: string;
+  fallbackSrc: string;
+  onChange: (avatar: string) => void;
+  onRemove: () => void;
+  toast: ToastFn;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label>Foto</Label>
+      <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-background/60 p-3">
+        <img
+          src={value || fallbackSrc}
+          alt=""
+          className="h-20 w-20 shrink-0 rounded-md object-cover"
+        />
+        <div className="flex min-w-0 flex-1 flex-wrap gap-2">
+          <Input
+            id={inputId}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={async (event) => {
+              await handleBarberPhotoFile(event.target.files?.[0], onChange, toast);
+              event.target.value = "";
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => document.getElementById(inputId)?.click()}
+          >
+            <Upload className="h-4 w-4" /> Carregar foto
+          </Button>
+          {value && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-red-400 hover:text-red-300"
+              onClick={onRemove}
+            >
+              <Trash2 className="h-4 w-4" /> Remover foto
+            </Button>
+          )}
+          <p className="w-full text-xs text-gray-400">JPG, PNG ou WebP. A imagem é otimizada automaticamente.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getEditedBarberAvatar(
+  drafts: Record<number, string | null>,
+  barber: { id: number; avatar?: string | null },
+) {
+  return Object.prototype.hasOwnProperty.call(drafts, barber.id)
+    ? drafts[barber.id] || ""
+    : barber.avatar || "";
+}
+
 const weekDays = [
   { id: 1, label: "Segunda" },
   { id: 2, label: "Terça" },
@@ -214,6 +365,7 @@ export default function Admin() {
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
   const [barberFormData, setBarberFormData] = useState({ name: "", specialty: "", bio: "", avatar: "", email: "" });
+  const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
   const [serviceFormData, setServiceFormData] = useState({ name: "", description: "", price: 0, duration: 30 });
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
@@ -236,6 +388,7 @@ export default function Admin() {
     queryKey: ["/api/barbers/availability"],
     enabled: user?.authorized === true,
   });
+  const { data: shopAvailabilityRows } = useShopAvailability();
   const { data: dashboardData, isLoading: isLoadingDashboard } = useQuery<DashboardData>({
     queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.id],
     enabled: user?.authorized === true,
@@ -300,7 +453,10 @@ export default function Admin() {
   });
   const [availabilityBarber, setAvailabilityBarber] = useState<any | null>(null);
   const [availabilityForm, setAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
+  const [shopAvailabilityForm, setShopAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
+  const [barberAvailabilityMode, setBarberAvailabilityMode] = useState<"shop" | "custom">("shop");
   const [isSavingAvailability, setIsSavingAvailability] = useState(false);
+  const [isSavingShopAvailability, setIsSavingShopAvailability] = useState(false);
   const [customerHistory, setCustomerHistory] = useState<any | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -312,7 +468,10 @@ export default function Admin() {
   const handleAddBarber = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await apiRequest("POST", "/api/barbers", barberFormData);
+      await apiRequest("POST", "/api/barbers", {
+        ...barberFormData,
+        avatar: barberFormData.avatar || null,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
       setIsAddingBarber(false);
       setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "" });
@@ -391,12 +550,22 @@ export default function Admin() {
     setUser({ authorized: false, role: "" });
   };
 
-  const availabilityRowsToForm = (rows: any[]) => {
+  const availabilityRowsToForm = (rows: any[], openField: "isWorking" | "isOpen" = "isWorking") => {
     if (!rows || rows.length === 0) return createDefaultAvailabilityForm();
 
     const form = createBlankAvailabilityForm();
     rows.forEach((row) => {
       if (!form[row.dayOfWeek]) return;
+
+      if (row[openField] === false) {
+        form[row.dayOfWeek].isWorking = false;
+        form[row.dayOfWeek].periods = [{
+          startTime: row.startTime || "09:00",
+          endTime: row.endTime || "13:00",
+        }];
+        return;
+      }
+
       form[row.dayOfWeek].isWorking = true;
       if (form[row.dayOfWeek].periods.length === 1 && form[row.dayOfWeek].periods[0].startTime === "09:00" && form[row.dayOfWeek].periods[0].endTime === "13:00") {
         form[row.dayOfWeek].periods = [];
@@ -407,34 +576,114 @@ export default function Admin() {
     return form;
   };
 
+  const buildAvailabilityRows = (form: AvailabilityForm) => {
+    const rows = [];
+
+    for (const day of weekDays) {
+      const dayConfig = form[day.id] || {
+        isWorking: false,
+        periods: [{ startTime: "09:00", endTime: "13:00" }],
+      };
+
+      if (!dayConfig.isWorking) {
+        rows.push({
+          dayOfWeek: day.id,
+          startTime: "09:00",
+          endTime: "13:00",
+          isWorking: false,
+        });
+        continue;
+      }
+
+      const validPeriods = dayConfig.periods.filter(
+        (period) => period.startTime && period.endTime && period.endTime > period.startTime,
+      );
+
+      if (validPeriods.length !== dayConfig.periods.length || validPeriods.length === 0) {
+        throw new Error(`Verifique os horários de ${day.label}.`);
+      }
+
+      rows.push(...validPeriods.map((period) => ({
+        dayOfWeek: day.id,
+        startTime: period.startTime,
+        endTime: period.endTime,
+        isWorking: true,
+      })));
+    }
+
+    return rows;
+  };
+
+  useEffect(() => {
+    if (shopAvailabilityRows) {
+      setShopAvailabilityForm(availabilityRowsToForm(shopAvailabilityRows, "isOpen"));
+    }
+  }, [shopAvailabilityRows]);
+
   const openAvailabilityEditor = async (barber: any) => {
     try {
-      const res = await apiFetch(`/api/barbers/${barber.id}/availability`);
-      if (!res.ok) throw new Error("Não foi possível carregar os horários.");
-      const rows = await res.json();
-      setAvailabilityForm(availabilityRowsToForm(rows));
+      const [barberRes, shopRes] = await Promise.all([
+        apiFetch(`/api/barbers/${barber.id}/availability`),
+        apiFetch("/api/shop/availability"),
+      ]);
+      if (!barberRes.ok || !shopRes.ok) throw new Error("Não foi possível carregar os horários.");
+      const rows = await barberRes.json();
+      const shopRows = await shopRes.json();
+      setBarberAvailabilityMode(rows.length === 0 ? "shop" : "custom");
+      setAvailabilityForm(availabilityRowsToForm(rows.length === 0 ? shopRows : rows, rows.length === 0 ? "isOpen" : "isWorking"));
       setAvailabilityBarber(barber);
     } catch (err: any) {
       toast({ title: "Erro", description: err.message, variant: "destructive" });
     }
   };
 
+  const handleSaveShopAvailability = async () => {
+    setIsSavingShopAvailability(true);
+    try {
+      const rows = buildAvailabilityRows(shopAvailabilityForm).map((row) => ({
+        dayOfWeek: row.dayOfWeek,
+        startTime: row.startTime,
+        endTime: row.endTime,
+        isOpen: row.isWorking,
+      }));
+
+      await apiRequest("PATCH", "/api/shop/availability", rows);
+      queryClient.invalidateQueries({ queryKey: ["/api/shop/availability"] });
+      toast({ title: "Sucesso", description: "Horário da barbearia atualizado." });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message || "Não foi possível guardar o horário da barbearia.", variant: "destructive" });
+    } finally {
+      setIsSavingShopAvailability(false);
+    }
+  };
+
+  const updateShopDay = (
+    dayId: number,
+    updater: (dayConfig: { isWorking: boolean; periods: AvailabilityPeriod[] }) => { isWorking: boolean; periods: AvailabilityPeriod[] },
+  ) => {
+    const dayConfig = shopAvailabilityForm[dayId] || {
+      isWorking: false,
+      periods: [{ startTime: "09:00", endTime: "13:00" }],
+    };
+    setShopAvailabilityForm({
+      ...shopAvailabilityForm,
+      [dayId]: updater(dayConfig),
+    });
+  };
+
+  const updateShopPeriod = (dayId: number, periodIndex: number, patch: Partial<AvailabilityPeriod>) => {
+    updateShopDay(dayId, (dayConfig) => {
+      const periods = [...dayConfig.periods];
+      periods[periodIndex] = { ...periods[periodIndex], ...patch };
+      return { ...dayConfig, periods };
+    });
+  };
+
   const handleSaveAvailability = async () => {
     if (!availabilityBarber) return;
     setIsSavingAvailability(true);
     try {
-      const rows = weekDays.flatMap((day) => {
-        const dayConfig = availabilityForm[day.id];
-        if (!dayConfig?.isWorking) return [];
-        return dayConfig.periods
-          .filter((period) => period.startTime && period.endTime && period.endTime > period.startTime)
-          .map((period) => ({
-            dayOfWeek: day.id,
-            startTime: period.startTime,
-            endTime: period.endTime,
-            isWorking: true,
-          }));
-      });
+      const rows = barberAvailabilityMode === "shop" ? [] : buildAvailabilityRows(availabilityForm);
 
       await apiRequest("PATCH", `/api/barbers/${availabilityBarber.id}/availability`, rows);
       queryClient.invalidateQueries({ queryKey: ["/api/barbers/availability"] });
@@ -601,7 +850,10 @@ export default function Admin() {
 
   const isDayClosed = (date: Date) => {
     const day = date.getDay();
-    return day === 0;
+    return periodsForShop({
+      dayOfWeek: day,
+      shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+    }).length === 0;
   };
 
   const isTimeAvailableForDay = (date: Date, timeStr: string, duration = 30, barberId?: string) => {
@@ -610,22 +862,17 @@ export default function Admin() {
     const startMinutes = hours * 60 + minutes;
     const endMinutes = startMinutes + duration;
 
-    const barberRows = barberId
-      ? (allAvailabilityRows || []).filter((row: any) => String(row.barberId) === barberId)
-      : [];
-    const periods = barberRows.length > 0
-      ? barberRows
-          .filter((row: any) => row.dayOfWeek === day && row.isWorking)
-          .map((row: any) => ({
-            start: row.startTime.split(":").map(Number)[0] * 60 + row.startTime.split(":").map(Number)[1],
-            end: row.endTime.split(":").map(Number)[0] * 60 + row.endTime.split(":").map(Number)[1],
-          }))
-      : (() => {
-          if (day === 1) return [{ start: 14 * 60, end: 20 * 60 }];
-          if (day >= 2 && day <= 5) return [{ start: 9 * 60, end: 13 * 60 }, { start: 14 * 60, end: 20 * 60 }];
-          if (day === 6) return [{ start: 9 * 60, end: 13 * 60 }, { start: 14 * 60, end: 19 * 60 }];
-          return [];
-        })();
+    const periods = barberId
+      ? getEffectivePeriodsForBarber({
+          barberId: Number(barberId),
+          dayOfWeek: day,
+          shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+          availabilityRows: (allAvailabilityRows as AvailabilityRow[] | undefined) ?? [],
+        })
+      : periodsForShop({
+          dayOfWeek: day,
+          shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+        });
 
     return periods.some((period: any) => startMinutes >= period.start && endMinutes <= period.end);
   };
@@ -843,18 +1090,44 @@ export default function Admin() {
           <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Horários de {availabilityBarber?.name}</DialogTitle>
+              <DialogDescription>
+                Estes horários controlam novas marcações. Marcações já agendadas fora de um novo horário continuam no calendário.
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-2 rounded-xl border border-white/10 bg-background/50 p-3 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant={barberAvailabilityMode === "shop" ? "gold" : "outline"}
+                  className="h-auto min-h-11 whitespace-normal px-3 py-2 text-sm"
+                  onClick={() => {
+                    setBarberAvailabilityMode("shop");
+                    setAvailabilityForm(shopAvailabilityForm);
+                  }}
+                >
+                  Seguir horário da barbearia
+                </Button>
+                <Button
+                  type="button"
+                  variant={barberAvailabilityMode === "custom" ? "gold" : "outline"}
+                  className="h-auto min-h-11 whitespace-normal px-3 py-2 text-sm"
+                  onClick={() => setBarberAvailabilityMode("custom")}
+                >
+                  Definir horário próprio
+                </Button>
+              </div>
               {weekDays.map((day) => {
                 const dayConfig = availabilityForm[day.id];
+                const usesShopHours = barberAvailabilityMode === "shop";
                 return (
-                  <div key={day.id} className="rounded-xl border border-white/10 p-4 space-y-3">
+                  <div key={day.id} className={cn("rounded-xl border border-white/10 p-4 space-y-3", usesShopHours && "opacity-70")}>
                     <div className="flex items-center justify-between gap-3">
                       <Label className="font-bold text-white">{day.label}</Label>
                       <label className="flex items-center gap-2 text-sm text-gray-300">
                         <input
                           type="checkbox"
                           checked={dayConfig?.isWorking || false}
+                          disabled={usesShopHours}
                           onChange={(e) => setAvailabilityForm({
                             ...availabilityForm,
                             [day.id]: {
@@ -876,6 +1149,7 @@ export default function Admin() {
                               <Input
                                 type="time"
                                 value={period.startTime}
+                                disabled={usesShopHours}
                                 onChange={(e) => {
                                   const periods = [...dayConfig.periods];
                                   periods[index] = { ...period, startTime: e.target.value };
@@ -889,6 +1163,7 @@ export default function Admin() {
                               <Input
                                 type="time"
                                 value={period.endTime}
+                                disabled={usesShopHours}
                                 onChange={(e) => {
                                   const periods = [...dayConfig.periods];
                                   periods[index] = { ...period, endTime: e.target.value };
@@ -901,7 +1176,7 @@ export default function Admin() {
                               variant="ghost"
                               size="sm"
                               className="text-red-400"
-                              disabled={dayConfig.periods.length === 1}
+                              disabled={usesShopHours || dayConfig.periods.length === 1}
                               onClick={() => setAvailabilityForm({
                                 ...availabilityForm,
                                 [day.id]: { ...dayConfig, periods: dayConfig.periods.filter((_, periodIndex) => periodIndex !== index) },
@@ -915,6 +1190,7 @@ export default function Admin() {
                           variant="outline"
                           size="sm"
                           className="border-white/10"
+                          disabled={usesShopHours}
                           onClick={() => setAvailabilityForm({
                             ...availabilityForm,
                             [day.id]: {
@@ -945,6 +1221,7 @@ export default function Admin() {
               <>
                 <TabsTrigger value="barbers" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><Users className="w-4 h-4" /> Equipa</TabsTrigger>
                 <TabsTrigger value="services" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
+                <TabsTrigger value="settings" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>
                 <TabsTrigger value="blacklist" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>
                 <TabsTrigger value="reports" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
               </>
@@ -1411,7 +1688,7 @@ export default function Admin() {
                                       <Dialog>
                                         <DialogTrigger asChild>
                                           <Button size="sm" variant="ghost" className="h-8 text-xs text-primary hover:text-primary/80">
-                                            <Settings className="mr-1 h-3.5 w-3.5" /> Editar
+                                            <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
                                           </Button>
                                         </DialogTrigger>
                                         <DialogContent className="bg-card border-white/10 text-white">
@@ -1522,6 +1799,14 @@ export default function Admin() {
                         className="bg-background border-white/10 text-white" 
                       />
                     </div>
+                    <BarberPhotoPicker
+                      inputId="new-barber-photo"
+                      value={barberFormData.avatar}
+                      fallbackSrc={getBarberAvatar({ name: barberFormData.name, avatar: null })}
+                      onChange={(avatar) => setBarberFormData({ ...barberFormData, avatar })}
+                      onRemove={() => setBarberFormData({ ...barberFormData, avatar: "" })}
+                      toast={toast}
+                    />
                     <Button 
                       variant="gold" 
                       className="w-full" 
@@ -1537,7 +1822,7 @@ export default function Admin() {
               {barbers?.map(barber => (
                 <Card key={barber.id} className="bg-card border-white/10 overflow-hidden text-white">
                   <div className="aspect-square bg-muted relative">
-                    <img src={barber.avatar || "/images/logo.jpg"} className="w-full h-full object-cover" />
+                    <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
                     <ConfirmAction
                       title={`Remover ${barber.name}?`}
                       description="O barbeiro só será removido se não tiver marcações associadas."
@@ -1571,11 +1856,25 @@ export default function Admin() {
                           <div className="space-y-4 pt-4">
                             <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>
+                            <BarberPhotoPicker
+                              inputId={`edit-barber-photo-${barber.id}`}
+                              value={getEditedBarberAvatar(barberAvatarDrafts, barber)}
+                              fallbackSrc={getBarberAvatar({ ...barber, avatar: null })}
+                              onChange={(avatar) => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: avatar }))}
+                              onRemove={() => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: null }))}
+                              toast={toast}
+                            />
                             <Button variant="gold" className="w-full" onClick={async () => {
                               const name = (document.getElementById(`edit-barber-name-${barber.id}`) as HTMLInputElement).value;
                               const specialty = (document.getElementById(`edit-barber-spec-${barber.id}`) as HTMLInputElement).value;
-                              await apiRequest("PATCH", `/api/barbers/${barber.id}`, { name, specialty });
+                              const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
+                              await apiRequest("PATCH", `/api/barbers/${barber.id}`, { name, specialty, avatar: avatar || null });
                               queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                              setBarberAvatarDrafts((current) => {
+                                const next = { ...current };
+                                delete next[barber.id];
+                                return next;
+                              });
                               toast({ title: "Sucesso", description: "Barbeiro atualizado." });
                             }}>Guardar</Button>
                           </div>
@@ -1784,13 +2083,15 @@ export default function Admin() {
                           <DialogHeader><DialogTitle>Editar Serviço</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4">
                             <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>
+                            <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Preço (€)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Duração (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
                             <Button variant="gold" className="w-full" onClick={async () => {
                               const name = (document.getElementById(`edit-service-name-${service.id}`) as HTMLInputElement).value;
+                              const description = (document.getElementById(`edit-service-desc-${service.id}`) as HTMLTextAreaElement).value;
                               const price = Math.round(Number((document.getElementById(`edit-service-price-${service.id}`) as HTMLInputElement).value) * 100);
                               const duration = Number((document.getElementById(`edit-service-dur-${service.id}`) as HTMLInputElement).value);
-                              await apiRequest("PATCH", `/api/services/${service.id}`, { name, price, duration });
+                              await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, price, duration });
                               queryClient.invalidateQueries({ queryKey: ["/api/services"] });
                               toast({ title: "Sucesso", description: "Serviço atualizado." });
                             }}>Guardar</Button>
@@ -1844,6 +2145,158 @@ export default function Admin() {
                 </Card>
               ))}
             </div>
+          </TabsContent>
+
+          <TabsContent value="settings" className="outline-none">
+            <Card className="bg-card border-white/10 text-white">
+              <CardHeader className="border-b border-white/10 pb-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-xl font-bold">
+                      <CalendarIcon className="h-5 w-5 text-primary" /> Horário da barbearia
+                    </CardTitle>
+                    <p className="mt-2 text-sm text-gray-400">
+                      O horário principal limita todas as marcações e os horários próprios dos barbeiros.
+                    </p>
+                  </div>
+                  <Button
+                    variant="gold"
+                    className="hidden gap-2 md:inline-flex"
+                    disabled={isSavingShopAvailability}
+                    onClick={handleSaveShopAvailability}
+                  >
+                    {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                    {isSavingShopAvailability ? "A guardar..." : "Guardar horário"}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-2 p-4">
+                {weekDays.map((day) => {
+                  const dayConfig = shopAvailabilityForm[day.id];
+                  return (
+                    <div
+                      key={day.id}
+                      className={cn(
+                        "grid gap-3 rounded-lg border border-white/10 px-4 py-3 transition-colors md:grid-cols-[140px_1fr_120px] md:items-center",
+                        dayConfig?.isWorking ? "bg-card hover:bg-white/[0.03]" : "bg-background/30",
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <Label className="font-bold text-white">{day.label}</Label>
+                          <p className={cn("mt-1 text-xs", dayConfig?.isWorking ? "text-primary" : "text-gray-500")}>
+                            {dayConfig?.isWorking ? `${dayConfig.periods.length} período${dayConfig.periods.length === 1 ? "" : "s"}` : "Encerrada"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 md:hidden">
+                          <span className="text-xs text-gray-400">{dayConfig?.isWorking ? "Aberta" : "Fechada"}</span>
+                          <Switch
+                            checked={dayConfig?.isWorking || false}
+                            onCheckedChange={(checked) => setShopAvailabilityForm({
+                              ...shopAvailabilityForm,
+                              [day.id]: {
+                                ...(dayConfig || { periods: [{ startTime: "09:00", endTime: "13:00" }] }),
+                                isWorking: checked,
+                              },
+                            })}
+                          />
+                        </div>
+                      </div>
+                      {dayConfig?.isWorking && (
+                        <div className="space-y-2">
+                          {dayConfig.periods.map((period, index) => (
+                            <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] items-end gap-2">
+                              <div className="min-w-0">
+                                <Label className="text-[11px] text-gray-400">Abertura</Label>
+                                <Input
+                                  type="time"
+                                  value={period.startTime}
+                                  onChange={(e) => {
+                                    const periods = [...dayConfig.periods];
+                                    periods[index] = { ...period, startTime: e.target.value };
+                                    setShopAvailabilityForm({ ...shopAvailabilityForm, [day.id]: { ...dayConfig, periods } });
+                                  }}
+                                  className="h-9 w-full bg-background border-white/10 px-2 text-white"
+                                />
+                              </div>
+                              <div className="min-w-0">
+                                <Label className="text-[11px] text-gray-400">Fecho</Label>
+                                <Input
+                                  type="time"
+                                  value={period.endTime}
+                                  onChange={(e) => {
+                                    const periods = [...dayConfig.periods];
+                                    periods[index] = { ...period, endTime: e.target.value };
+                                    setShopAvailabilityForm({ ...shopAvailabilityForm, [day.id]: { ...dayConfig, periods } });
+                                  }}
+                                  className="h-9 w-full bg-background border-white/10 px-2 text-white"
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9 text-red-400 hover:text-red-300"
+                                disabled={dayConfig.periods.length === 1}
+                                aria-label={`Remover período de ${day.label}`}
+                                onClick={() => setShopAvailabilityForm({
+                                  ...shopAvailabilityForm,
+                                  [day.id]: { ...dayConfig, periods: dayConfig.periods.filter((_, periodIndex) => periodIndex !== index) },
+                                })}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ))}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-2 border-white/10 text-xs"
+                            onClick={() => setShopAvailabilityForm({
+                              ...shopAvailabilityForm,
+                              [day.id]: {
+                                ...dayConfig,
+                                periods: [...dayConfig.periods, { startTime: "14:00", endTime: "18:00" }],
+                              },
+                            })}
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Período
+                          </Button>
+                        </div>
+                      )}
+                      {!dayConfig?.isWorking && (
+                        <div className="flex h-10 items-center rounded-md border border-dashed border-white/10 px-3 text-sm text-gray-500">
+                          Sem períodos ativos
+                        </div>
+                      )}
+                      <div className="hidden items-center justify-end gap-3 md:flex">
+                        <span className="text-sm text-gray-400">{dayConfig?.isWorking ? "Aberta" : "Fechada"}</span>
+                        <Switch
+                          checked={dayConfig?.isWorking || false}
+                          onCheckedChange={(checked) => setShopAvailabilityForm({
+                            ...shopAvailabilityForm,
+                            [day.id]: {
+                              ...(dayConfig || { periods: [{ startTime: "09:00", endTime: "13:00" }] }),
+                              isWorking: checked,
+                            },
+                          })}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                <Button
+                  variant="gold"
+                  className="mt-4 w-full gap-2 md:hidden"
+                  disabled={isSavingShopAvailability}
+                  onClick={handleSaveShopAvailability}
+                >
+                  {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  {isSavingShopAvailability ? "A guardar..." : "Guardar horário"}
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="reports" className="outline-none">

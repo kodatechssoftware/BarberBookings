@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { Link, useRoute } from "wouter";
-import { addDays, format, isSameDay, parseISO, startOfToday } from "date-fns";
+import { addDays, format, parseISO, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Calendar as CalendarIcon, Check, Clock, Loader2, XCircle } from "lucide-react";
 import { motion } from "framer-motion";
@@ -9,28 +9,9 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
-import { useBarberAvailability } from "@/hooks/use-barbers";
+import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
 import { buildGoogleCalendarUrl, buildIcsDataUri } from "@/lib/calendar";
-
-type AvailabilityRow = {
-  barberId: number;
-  dayOfWeek: number;
-  startTime: string;
-  endTime: string;
-  isWorking: boolean;
-};
-
-const defaultPeriodsForDay = (day: number) => {
-  if (day === 1) return [{ start: 14 * 60, end: 20 * 60 }];
-  if (day >= 2 && day <= 5) return [{ start: 9 * 60, end: 13 * 60 }, { start: 14 * 60, end: 20 * 60 }];
-  if (day === 6) return [{ start: 9 * 60, end: 13 * 60 }, { start: 14 * 60, end: 19 * 60 }];
-  return [];
-};
-
-const timeToMinutes = (time: string) => {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-};
+import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 
 export default function Reschedule() {
   const [, params] = useRoute("/reschedule/:token");
@@ -43,6 +24,7 @@ export default function Reschedule() {
 
   const { data: appointment, isLoading: loadingAppointment } = useAppointmentByToken(token);
   const { data: availabilityRows } = useBarberAvailability();
+  const { data: shopAvailabilityRows } = useShopAvailability();
   const rescheduleAppointment = useRescheduleAppointment();
 
   useEffect(() => {
@@ -57,54 +39,20 @@ export default function Reschedule() {
     enabled: Boolean(appointment?.barberId && selectedDate),
   });
 
-  const periodsForSelectedDay = useMemo(() => {
-    if (!appointment?.barberId || !selectedDate) return [];
-
-    const day = selectedDate.getDay();
-    const rows = (availabilityRows as AvailabilityRow[] | undefined)?.filter(
-      (row) => row.barberId === appointment.barberId,
-    ) ?? [];
-
-    if (rows.length === 0) return defaultPeriodsForDay(day);
-
-    return rows
-      .filter((row) => row.dayOfWeek === day && row.isWorking)
-      .map((row) => ({ start: timeToMinutes(row.startTime), end: timeToMinutes(row.endTime) }))
-      .filter((period) => period.end > period.start);
-  }, [appointment?.barberId, availabilityRows, selectedDate]);
-
   const timeSlots = useMemo(() => {
     if (!appointment || !existingAppointments || !selectedDate) return [];
 
-    const slots: { time: string; available: boolean }[] = [];
     const duration = appointment.duration || 30;
-
-    periodsForSelectedDay.forEach((period) => {
-      for (let minutesFromDayStart = period.start; minutesFromDayStart < period.end; minutesFromDayStart += 30) {
-        const hours = Math.floor(minutesFromDayStart / 60);
-        const minutes = minutesFromDayStart % 60;
-        const time = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-        const endMinutes = minutesFromDayStart + duration;
-        const fitsPeriod = endMinutes <= period.end;
-
-        const slotDateTime = new Date(selectedDate);
-        slotDateTime.setHours(hours, minutes, 0, 0);
-        const endDateTime = new Date(slotDateTime.getTime() + duration * 60000);
-        const now = new Date();
-        const isPast = isSameDay(selectedDate, now) && slotDateTime <= now;
-        const isTaken = existingAppointments.some((existing) => {
-          if (existing.id === appointment.id) return false;
-          const existingStart = new Date(existing.startTime);
-          const existingEnd = new Date(existingStart.getTime() + (existing.duration || 30) * 60000);
-          return slotDateTime < existingEnd && endDateTime > existingStart;
-        });
-
-        slots.push({ time, available: fitsPeriod && !isPast && !isTaken });
-      }
+    return getAvailableTimeSlots({
+      selectedService: { duration },
+      selectedDate,
+      selectedBarberId: appointment.barberId,
+      visibleBarbers: [{ id: appointment.barberId }],
+      availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
+      shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+      existingAppointments: existingAppointments.filter((existing) => existing.id !== appointment.id),
     });
-
-    return slots;
-  }, [appointment, existingAppointments, periodsForSelectedDay, selectedDate]);
+  }, [appointment, availabilityRows, existingAppointments, selectedDate, shopAvailabilityRows]);
 
   const handleSubmit = async () => {
     if (!token || !selectedDate || !selectedTime) return;

@@ -7,3 +7,7 @@ vite.config.ts.*
 .env
 migrations
 .dev-server.log
+.dev-server.err.log
+.local-postgres-data/
+.local-postgres.log
+.railway-local-test*.log

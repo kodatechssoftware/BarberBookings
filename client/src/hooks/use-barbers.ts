@@ -42,6 +42,17 @@ export function useBarberAvailability() {
   });
 }
 
+export function useShopAvailability() {
+  return useQuery({
+    queryKey: ["/api/shop/availability"],
+    queryFn: async () => {
+      const res = await apiFetch("/api/shop/availability");
+      if (!res.ok) throw new Error("Failed to fetch shop availability");
+      return res.json();
+    },
+  });
+}
+
 export function useCreateBarber() {
   const queryClient = useQueryClient();
   return useMutation({
