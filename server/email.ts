@@ -19,6 +19,16 @@ interface SendConfirmationParams {
   cancellationPolicyHours?: number;
 }
 
+interface SendCancellationParams {
+  customerName: string;
+  customerEmail: string;
+  barberName: string;
+  serviceName: string;
+  startTime: Date;
+  lateCancellation?: boolean;
+  cancellationPolicyHours?: number;
+}
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, "&amp;")
@@ -118,5 +128,67 @@ export async function sendBookingConfirmation({
     }
   } catch (error) {
     console.error("Error sending confirmation email:", error);
+  }
+}
+
+export async function sendBookingCancellationConfirmation({
+  customerName,
+  customerEmail,
+  barberName,
+  serviceName,
+  startTime,
+  lateCancellation = false,
+  cancellationPolicyHours = 4,
+}: SendCancellationParams) {
+  if (!resend) {
+    console.warn("RESEND_API_KEY not found; booking cancellation email was skipped.");
+    return;
+  }
+
+  const dateStr = startTime.toLocaleDateString("pt-PT", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  const timeStr = startTime.toLocaleTimeString("pt-PT", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  try {
+    const response = await resend.emails.send({
+      from: "Baptista Barber Shop <onboarding@resend.dev>",
+      to: customerEmail,
+      subject: "Cancelamento de marcação - Baptista Barber Shop",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">Baptista Barber Shop</h2>
+          <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+          <p>A sua marcação foi cancelada com sucesso.</p>
+          <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+            <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
+            <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
+            <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
+            <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
+          </div>
+          ${
+            lateCancellation
+              ? `<p style="font-size: 0.92em; color: #b45309;">Este cancelamento foi registado como tardio por estar a menos de ${cancellationPolicyHours} horas da marcação.</p>`
+              : ""
+          }
+          <p>Obrigado, Baptista Barber Shop</p>
+        </div>
+      `,
+    });
+
+    if (response.error) {
+      console.error("Resend error while sending booking cancellation:", response.error);
+    } else if (!isProduction) {
+      console.log("Booking cancellation email sent.");
+    }
+  } catch (error) {
+    console.error("Error sending cancellation email:", error);
   }
 }

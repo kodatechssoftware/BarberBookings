@@ -5,7 +5,10 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { sendBookingConfirmation } from "./email";
+import {
+  sendBookingCancellationConfirmation,
+  sendBookingConfirmation,
+} from "./email";
 import {
   sendBookingWhatsAppCancellation,
   sendBookingWhatsAppConfirmation,
@@ -249,6 +252,89 @@ function buildPublicUrl(path: string) {
       : "http://localhost:5000");
 
   return `${configuredUrl.replace(/\/$/, "")}${path}`;
+}
+
+type BookingCreatedNotificationParams = {
+  customerName: string;
+  customerEmail?: string | null;
+  customerPhone: string;
+  barberName?: string;
+  serviceName: string;
+  startTime: Date;
+  cancelToken: string;
+  durationMinutes: number;
+  depositRequired: boolean;
+  depositReason?: string | null;
+};
+
+async function sendBookingCreatedNotification(params: BookingCreatedNotificationParams) {
+  let whatsappSent = false;
+
+  try {
+    whatsappSent = await sendBookingWhatsAppConfirmation({
+      customerName: params.customerName,
+      customerPhone: params.customerPhone,
+      barberName: params.barberName,
+      serviceName: params.serviceName,
+      startTime: params.startTime,
+      cancelUrl: buildPublicUrl(`/cancel/${params.cancelToken}`),
+    });
+  } catch (error) {
+    console.error("WhatsApp booking confirmation failed; trying email fallback:", error);
+  }
+
+  if (whatsappSent || !params.customerEmail) return;
+
+  await sendBookingConfirmation({
+    customerName: params.customerName,
+    customerEmail: params.customerEmail,
+    barberName: params.barberName || "Barbeiro indisponível",
+    serviceName: params.serviceName,
+    startTime: params.startTime,
+    cancelToken: params.cancelToken,
+    durationMinutes: params.durationMinutes,
+    depositRequired: params.depositRequired,
+    depositReason: params.depositReason,
+    cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
+  });
+}
+
+type BookingCancelledNotificationParams = {
+  customerName: string;
+  customerEmail?: string | null;
+  customerPhone: string;
+  barberName?: string;
+  serviceName: string;
+  startTime: Date;
+  lateCancellation: boolean;
+};
+
+async function sendBookingCancelledNotification(params: BookingCancelledNotificationParams) {
+  let whatsappSent = false;
+
+  try {
+    whatsappSent = await sendBookingWhatsAppCancellation({
+      customerName: params.customerName,
+      customerPhone: params.customerPhone,
+      barberName: params.barberName,
+      serviceName: params.serviceName,
+      startTime: params.startTime,
+    });
+  } catch (error) {
+    console.error("WhatsApp booking cancellation failed; trying email fallback:", error);
+  }
+
+  if (whatsappSent || !params.customerEmail) return;
+
+  await sendBookingCancellationConfirmation({
+    customerName: params.customerName,
+    customerEmail: params.customerEmail,
+    barberName: params.barberName || "Barbeiro indisponível",
+    serviceName: params.serviceName,
+    startTime: params.startTime,
+    lateCancellation: params.lateCancellation,
+    cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
+  });
 }
 
 async function getBarberWorkingPeriods(barberId: number, weekday: number) {
@@ -948,30 +1034,17 @@ export async function registerRoutes(
       const barber = await storage.getBarber(finalBarberId);
       const service = services.find(s => s.id === input.serviceId);
 
-      // Send email if address is provided
-      if (input.customerEmail && barber && service) {
-          // Fire and forget email sending
-          sendBookingConfirmation({
-            customerName: input.customerName,
-            customerEmail: input.customerEmail,
-            barberName: barber.name,
-            serviceName: service.name,
-            startTime: input.startTime,
-            cancelToken,
-            durationMinutes: appointment.durationMinutes,
-            depositRequired: appointment.depositRequired,
-            depositReason: appointment.depositReason,
-            cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
-          }).catch(console.error);
-      }
-
-      sendBookingWhatsAppConfirmation({
+      sendBookingCreatedNotification({
         customerName: input.customerName,
+        customerEmail: input.customerEmail,
         customerPhone: input.customerPhone,
         barberName: barber?.name,
         serviceName: service?.name || "Serviço indisponível",
         startTime: input.startTime,
-        cancelUrl: buildPublicUrl(`/cancel/${cancelToken}`),
+        cancelToken,
+        durationMinutes: appointment.durationMinutes,
+        depositRequired: appointment.depositRequired,
+        depositReason: appointment.depositReason,
       }).catch(console.error);
 
       res.status(201).json(appointment);
@@ -1271,12 +1344,14 @@ export async function registerRoutes(
       storage.getBarber(appointment.barberId),
       appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
     ]);
-    sendBookingWhatsAppCancellation({
+    sendBookingCancelledNotification({
       customerName: appointment.customerName,
+      customerEmail: appointment.customerEmail,
       customerPhone: appointment.customerPhone,
       barberName: barber?.name,
       serviceName: service?.name || "Serviço indisponível",
       startTime: toDate(appointment.startTime),
+      lateCancellation,
     }).catch(console.error);
 
     res.json({

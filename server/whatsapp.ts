@@ -110,13 +110,13 @@ async function sendWhatsAppText(phone: string, text: string) {
     if (!isProduction) {
       console.log("WhatsApp notification skipped; Evolution API is not configured.");
     }
-    return;
+    return false;
   }
 
   const number = normalizeWhatsAppNumber(phone);
   if (!number) {
     console.warn("WhatsApp notification skipped; customer phone is empty.");
-    return;
+    return false;
   }
 
   const response = await fetch(
@@ -141,17 +141,19 @@ async function sendWhatsAppText(phone: string, text: string) {
       `Evolution API returned ${response.status}: ${(responseText || response.statusText).slice(0, 800)}`,
     );
   }
+
+  return true;
 }
 
 export async function sendBookingWhatsAppConfirmation(params: AppointmentMessageParams) {
-  await sendWhatsAppText(
+  return sendWhatsAppText(
     params.customerPhone,
     buildBookingConfirmationMessage(params),
   );
 }
 
 export async function sendBookingWhatsAppCancellation(params: AppointmentMessageParams) {
-  await sendWhatsAppText(
+  return sendWhatsAppText(
     params.customerPhone,
     buildBookingCancellationMessage(params),
   );

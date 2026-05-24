@@ -65,6 +65,7 @@ Para ativar no Railway, define:
 - `SHOP_TIME_ZONE=Europe/Lisbon`
 
 Quando estas variaveis existem, a app envia confirmacao de marcacao com link de cancelamento e confirmacao quando o cliente cancela pelo link.
+O WhatsApp e o canal principal; se o envio falhar ou a Evolution API nao estiver configurada, a app tenta enviar email como fallback quando o cliente indicou email.
 
 ## Deploy no Railway
 
