@@ -66,6 +66,15 @@ function getAppSession(req: Request) {
   return req.session as AppSession;
 }
 
+function saveAppSession(req: Request) {
+  return new Promise<void>((resolve, reject) => {
+    req.session.save((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 function getSessionSameSite(): "lax" | "strict" | "none" {
   const value = (process.env.SESSION_SAME_SITE || "lax").toLowerCase();
 
@@ -412,6 +421,7 @@ export async function registerRoutes(
         const appSession = getAppSession(req);
         appSession.adminId = admin.id;
         appSession.role = "admin";
+        await saveAppSession(req);
         return res.json({ message: "Login efetuado com sucesso", role: "admin" });
       }
 
@@ -428,6 +438,7 @@ export async function registerRoutes(
           const appSession = getAppSession(req);
           appSession.barberId = barber.id;
           appSession.role = "barber";
+          await saveAppSession(req);
           return res.json({ message: "Login efetuado com sucesso", role: "barber" });
         }
       }
@@ -596,6 +607,7 @@ export async function registerRoutes(
       const appSession = getAppSession(req);
       appSession.barberId = barber.id;
       appSession.role = "barber";
+      await saveAppSession(req);
 
       res.json({ message: "Palavra-passe definida com sucesso.", role: "barber" });
     } catch (error) {
