@@ -12,6 +12,7 @@ type AppointmentMessageParams = {
 const SHOP_NAME = process.env.SHOP_NAME || "Baptista Barber Shop";
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const DEFAULT_COUNTRY_CODE = (process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || "351").replace(/\D/g, "");
+const REQUEST_TIMEOUT_MS = Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000);
 const isProduction = process.env.NODE_ENV === "production";
 
 let warnedMissingConfig = false;
@@ -39,7 +40,7 @@ function getEvolutionConfig() {
 }
 
 function normalizeWhatsAppNumber(phone: string) {
-  const digits = phone.replace(/\D/g, "").replace(/^00/, "");
+  const digits = phone.replace(/\D/g, "").replace(/^00/, "").replace(/^0+/, "");
   if (!digits) return "";
 
   if (digits.startsWith(DEFAULT_COUNTRY_CODE)) {
@@ -47,6 +48,11 @@ function normalizeWhatsAppNumber(phone: string) {
   }
 
   return `${DEFAULT_COUNTRY_CODE}${digits}`;
+}
+
+function maskPhoneNumber(phone: string) {
+  if (phone.length <= 5) return phone;
+  return `${phone.slice(0, 3)}***${phone.slice(-3)}`;
 }
 
 function formatAppointmentDate(date: Date) {
@@ -123,6 +129,7 @@ async function sendWhatsAppText(phone: string, text: string) {
     `${config.apiUrl}/message/sendText/${encodeURIComponent(config.instance)}`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         apikey: config.apiKey,
@@ -142,6 +149,7 @@ async function sendWhatsAppText(phone: string, text: string) {
     );
   }
 
+  console.log(`WhatsApp notification accepted by Evolution API for ${maskPhoneNumber(number)}.`);
   return true;
 }
 

@@ -1042,7 +1042,7 @@ export async function registerRoutes(
       const barber = await storage.getBarber(finalBarberId);
       const service = services.find(s => s.id === input.serviceId);
 
-      sendBookingCreatedNotification({
+      const notificationChannel = await sendBookingCreatedNotification({
         customerName: input.customerName,
         customerEmail: input.customerEmail,
         customerPhone: input.customerPhone,
@@ -1053,9 +1053,13 @@ export async function registerRoutes(
         durationMinutes: appointment.durationMinutes,
         depositRequired: appointment.depositRequired,
         depositReason: appointment.depositReason,
-      }).catch(console.error);
+      });
 
-      res.status(201).json(appointment);
+      res.status(201).json({
+        ...appointment,
+        notificationChannel,
+        notificationSent: notificationChannel !== "none",
+      });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
