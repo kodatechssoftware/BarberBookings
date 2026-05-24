@@ -267,6 +267,8 @@ type BookingCreatedNotificationParams = {
   depositReason?: string | null;
 };
 
+type NotificationChannel = "whatsapp" | "email" | "none";
+
 async function sendBookingCreatedNotification(params: BookingCreatedNotificationParams) {
   let whatsappSent = false;
 
@@ -283,9 +285,10 @@ async function sendBookingCreatedNotification(params: BookingCreatedNotification
     console.error("WhatsApp booking confirmation failed; trying email fallback:", error);
   }
 
-  if (whatsappSent || !params.customerEmail) return;
+  if (whatsappSent) return "whatsapp";
+  if (!params.customerEmail) return "none";
 
-  await sendBookingConfirmation({
+  const emailSent = await sendBookingConfirmation({
     customerName: params.customerName,
     customerEmail: params.customerEmail,
     barberName: params.barberName || "Barbeiro indisponível",
@@ -297,6 +300,8 @@ async function sendBookingCreatedNotification(params: BookingCreatedNotification
     depositReason: params.depositReason,
     cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
   });
+
+  return emailSent ? "email" : "none";
 }
 
 type BookingCancelledNotificationParams = {
@@ -324,9 +329,10 @@ async function sendBookingCancelledNotification(params: BookingCancelledNotifica
     console.error("WhatsApp booking cancellation failed; trying email fallback:", error);
   }
 
-  if (whatsappSent || !params.customerEmail) return;
+  if (whatsappSent) return "whatsapp";
+  if (!params.customerEmail) return "none";
 
-  await sendBookingCancellationConfirmation({
+  const emailSent = await sendBookingCancellationConfirmation({
     customerName: params.customerName,
     customerEmail: params.customerEmail,
     barberName: params.barberName || "Barbeiro indisponível",
@@ -335,6 +341,8 @@ async function sendBookingCancelledNotification(params: BookingCancelledNotifica
     lateCancellation: params.lateCancellation,
     cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
   });
+
+  return emailSent ? "email" : "none";
 }
 
 async function getBarberWorkingPeriods(barberId: number, weekday: number) {
@@ -1332,6 +1340,16 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Marcação não encontrada" });
     }
     
+    if (appointment.status === "cancelled" || appointment.status === "late_cancelled") {
+      return res.json({
+        message: "Esta marcação já estava cancelada.",
+        status: appointment.status,
+        alreadyCancelled: true,
+        notificationChannel: "none" satisfies NotificationChannel,
+        notificationSent: false,
+      });
+    }
+
     if (appointment.status !== 'booked') {
       return res.status(409).json({ message: "Esta marcação já não pode ser cancelada." });
     }
@@ -1344,7 +1362,7 @@ export async function registerRoutes(
       storage.getBarber(appointment.barberId),
       appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
     ]);
-    sendBookingCancelledNotification({
+    const notificationChannel = await sendBookingCancelledNotification({
       customerName: appointment.customerName,
       customerEmail: appointment.customerEmail,
       customerPhone: appointment.customerPhone,
@@ -1352,7 +1370,7 @@ export async function registerRoutes(
       serviceName: service?.name || "Serviço indisponível",
       startTime: toDate(appointment.startTime),
       lateCancellation,
-    }).catch(console.error);
+    });
 
     res.json({
       message: lateCancellation
@@ -1361,6 +1379,8 @@ export async function registerRoutes(
       status,
       lateCancellation,
       policyHours: CANCELLATION_POLICY_HOURS,
+      notificationChannel,
+      notificationSent: notificationChannel !== "none",
     });
   });
 

@@ -46,6 +46,16 @@ export type AppointmentByToken = {
   price: number;
 };
 
+export type CancelAppointmentResponse = {
+  message: string;
+  status?: AppointmentStatus;
+  lateCancellation?: boolean;
+  policyHours?: number;
+  alreadyCancelled?: boolean;
+  notificationChannel?: "whatsapp" | "email" | "none";
+  notificationSent?: boolean;
+};
+
 type AppointmentQueryParams = {
   barberId?: string;
   date?: string;
@@ -181,11 +191,12 @@ export function useCancelAppointment() {
         const err = await res.json();
         throw new Error(err.message || "Falha ao cancelar marcação");
       }
-      return res.json();
+      return await res.json() as CancelAppointmentResponse;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
       queryClient.invalidateQueries({ queryKey: [PUBLIC_APPOINTMENTS_PATH] });
+      queryClient.invalidateQueries({ queryKey: ["/api/appointments/token"] });
     },
   });
 }

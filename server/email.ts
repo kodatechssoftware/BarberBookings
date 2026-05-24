@@ -64,7 +64,7 @@ export async function sendBookingConfirmation({
 }: SendConfirmationParams) {
   if (!resend) {
     console.warn("RESEND_API_KEY not found; booking confirmation email was skipped.");
-    return;
+    return false;
   }
 
   const dateStr = startTime.toLocaleDateString("pt-PT", {
@@ -123,11 +123,17 @@ export async function sendBookingConfirmation({
 
     if (response.error) {
       console.error("Resend error while sending booking confirmation:", response.error);
-    } else if (!isProduction) {
+      return false;
+    }
+
+    if (!isProduction) {
       console.log("Booking confirmation email sent.");
     }
+
+    return true;
   } catch (error) {
     console.error("Error sending confirmation email:", error);
+    return false;
   }
 }
 
@@ -142,7 +148,7 @@ export async function sendBookingCancellationConfirmation({
 }: SendCancellationParams) {
   if (!resend) {
     console.warn("RESEND_API_KEY not found; booking cancellation email was skipped.");
-    return;
+    return false;
   }
 
   const dateStr = startTime.toLocaleDateString("pt-PT", {
@@ -185,10 +191,16 @@ export async function sendBookingCancellationConfirmation({
 
     if (response.error) {
       console.error("Resend error while sending booking cancellation:", response.error);
-    } else if (!isProduction) {
+      return false;
+    }
+
+    if (!isProduction) {
       console.log("Booking cancellation email sent.");
     }
+
+    return true;
   } catch (error) {
     console.error("Error sending cancellation email:", error);
+    return false;
   }
 }
