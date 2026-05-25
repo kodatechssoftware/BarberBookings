@@ -137,7 +137,7 @@ async function sendWhatsAppText(phone: string, text: string) {
       body: JSON.stringify({
         number,
         text,
-        linkPreview: true,
+        linkPreview: false,
       }),
     },
   );
