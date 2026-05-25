@@ -63,6 +63,7 @@ type AdminAppointment = {
   depositRequired?: boolean;
   depositReason?: string | null;
 };
+type AppointmentStatusFilter = AppointmentStatus | "all";
 type DashboardData = {
   range: {
     startDate: string;
@@ -130,6 +131,15 @@ function formatCents(value: number) {
 }
 
 const DashboardChartCard = lazy(() => import("@/components/admin/DashboardChartCard"));
+
+const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; label: string }> = [
+  { value: "all", label: "Todos os estados" },
+  { value: "booked", label: "Marcadas" },
+  { value: "completed", label: "Concluídas" },
+  { value: "cancelled", label: "Canceladas" },
+  { value: "late_cancelled", label: "Cancelamentos tardios" },
+  { value: "no_show", label: "Faltas" },
+];
 
 function DashboardChartFallback({
   title,
@@ -370,6 +380,7 @@ export default function Admin() {
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<AppointmentStatusFilter>("all");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
@@ -408,6 +419,12 @@ export default function Admin() {
   const appointmentList = useMemo(
     () => (Array.isArray(appointments) ? (appointments as AdminAppointment[]) : []),
     [appointments],
+  );
+  const filteredAppointmentList = useMemo(
+    () => selectedStatusFilter === "all"
+      ? appointmentList
+      : appointmentList.filter((appointment) => appointment.status === selectedStatusFilter),
+    [appointmentList, selectedStatusFilter],
   );
   const updateStatus = useUpdateAppointmentStatus();
   const createAppointment = useCreateAppointment();
@@ -806,11 +823,11 @@ export default function Admin() {
   const appointmentsByBarber = useMemo(() => {
     return activeBarberColumns.map((barber) => ({
       barber,
-      appointments: appointmentList
+      appointments: filteredAppointmentList
         .filter((appointment) => appointment.barberId === barber.id)
         .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()),
     }));
-  }, [activeBarberColumns, appointmentList]);
+  }, [activeBarberColumns, filteredAppointmentList]);
 
   useEffect(() => {
     checkAuth();
@@ -973,8 +990,8 @@ export default function Admin() {
           <CardContent>
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label className="text-white">Email ou Utilizador</Label>
-                <Input value={loginData.username} onChange={(e) => setLoginData({...loginData, username: e.target.value})} className="bg-background border-white/10 text-white" placeholder="admin ou o seu email" required />
+                <Label className="text-white">Email ou nome de utilizador</Label>
+                <Input value={loginData.username} onChange={(e) => setLoginData({...loginData, username: e.target.value})} className="bg-background border-white/10 text-white" placeholder="Introduza o email ou nome de utilizador" required />
               </div>
               <div className="space-y-2">
                 <Label className="text-white">Palavra-passe</Label>
@@ -1451,6 +1468,19 @@ export default function Admin() {
                 </PopoverContent>
               </Popover>
 
+              <Select value={selectedStatusFilter} onValueChange={(value) => setSelectedStatusFilter(value as AppointmentStatusFilter)}>
+                <SelectTrigger className="border-white/10 h-11 sm:h-9 bg-card w-full sm:w-[210px] text-white">
+                  <SelectValue placeholder="Filtrar por estado" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-white/10 text-white">
+                  {appointmentStatusFilterOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Dialog open={isBlocking} onOpenChange={setIsBlocking}>
                 <DialogTrigger asChild><Button variant="gold" className="gap-2 h-11 sm:h-9 sm:ml-auto"><Plus className="w-4 h-4" /> Bloquear horário</Button></DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-md max-h-[90vh] overflow-y-auto rounded-2xl p-6 shadow-2xl backdrop-blur-md">
@@ -1603,7 +1633,9 @@ export default function Admin() {
                       </p>
                     </div>
                     <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
-                      {appointmentList.length} registos
+                      {selectedStatusFilter === "all"
+                        ? `${appointmentList.length} registos`
+                        : `${filteredAppointmentList.length} de ${appointmentList.length} registos`}
                     </span>
                   </div>
 
@@ -1737,7 +1769,7 @@ export default function Admin() {
 
                             {barberAppointments.length === 0 && (
                               <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
-                                Sem marcações neste dia.
+                                {selectedStatusFilter === "all" ? "Sem marcações neste dia." : "Sem marcações para este estado."}
                               </div>
                             )}
                           </div>
