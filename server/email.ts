@@ -110,7 +110,7 @@ export async function sendBookingConfirmation({
             <p style="margin: 6px 0;"><strong>Morada:</strong> Rua Comandante Agatão Lança Nº28</p>
           </div>
           <p style="font-size: 0.92em; color: #555;">
-            Pode reagendar ou cancelar através dos links abaixo. Cancelamentos a menos de ${cancellationPolicyHours} horas da marcação podem ficar registados como cancelamento tardio.
+            Caso não consiga comparecer, pode reagendar ou cancelar através dos links abaixo. Cancelamentos a menos de ${cancellationPolicyHours} horas da marcação podem ficar registados como cancelamento tardio.
           </p>
           <p style="text-align: center; margin-top: 20px;">
             <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
@@ -140,8 +140,6 @@ export async function sendBookingConfirmation({
 export async function sendBookingCancellationConfirmation({
   customerName,
   customerEmail,
-  barberName,
-  serviceName,
   startTime,
   lateCancellation = false,
   cancellationPolicyHours = 4,
@@ -174,8 +172,6 @@ export async function sendBookingCancellationConfirmation({
           <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
           <p>A sua marcação foi cancelada com sucesso.</p>
           <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
-            <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
-            <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
             <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
             <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
           </div>
@@ -184,6 +180,7 @@ export async function sendBookingCancellationConfirmation({
               ? `<p style="font-size: 0.92em; color: #b45309;">Este cancelamento foi registado como tardio por estar a menos de ${cancellationPolicyHours} horas da marcação.</p>`
               : ""
           }
+          <p>Se quiser voltar a marcar, estamos disponíveis para agendar uma nova data quando quiser.</p>
           <p>Obrigado, Baptista Barber Shop</p>
         </div>
       `,

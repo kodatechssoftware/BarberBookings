@@ -85,18 +85,21 @@ export function buildBookingConfirmationMessage({
 
   return [
     `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o na ${SHOP_NAME} est\u00e1 confirmada.`,
-    `Data: ${date} \u00e0s ${time}.`,
-    barberName ? `Barbeiro: ${barberName}.` : null,
-    `Servi\u00e7o: ${serviceName}.`,
-    cancelUrl ? `Se n\u00e3o puder comparecer, cancele aqui: ${cancelUrl}` : null,
-    `Obrigado, ${SHOP_NAME}`,
+    "",
+    `Data: ${date} \u00e0s ${time}`,
+    barberName ? `Barbeiro: ${barberName}` : null,
+    `Servi\u00e7o: ${serviceName}`,
+    "",
+    cancelUrl ? "Caso n\u00e3o consiga comparecer, pode cancelar a marca\u00e7\u00e3o aqui:" : null,
+    cancelUrl || null,
+    "",
+    "Obrigado,",
+    SHOP_NAME,
   ].filter(Boolean).join("\n");
 }
 
 export function buildBookingCancellationMessage({
   customerName,
-  barberName,
-  serviceName,
   startTime,
 }: Omit<AppointmentMessageParams, "customerPhone" | "cancelUrl">) {
   const date = formatAppointmentDate(startTime);
@@ -104,8 +107,7 @@ export function buildBookingCancellationMessage({
 
   return [
     `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o na ${SHOP_NAME} para ${date} \u00e0s ${time} foi cancelada com sucesso.`,
-    barberName ? `Barbeiro: ${barberName}.` : null,
-    `Servi\u00e7o: ${serviceName}.`,
+    "Se quiser voltar a marcar, estamos dispon\u00edveis para agendar uma nova data quando quiser.",
     `Obrigado, ${SHOP_NAME}`,
   ].filter(Boolean).join("\n");
 }

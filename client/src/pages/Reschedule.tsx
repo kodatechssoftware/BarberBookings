@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
-import { buildGoogleCalendarUrl, buildIcsDataUri } from "@/lib/calendar";
 import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 
 export default function Reschedule() {
@@ -92,15 +91,6 @@ export default function Reschedule() {
   }
 
   if (appointment.status !== "booked" || success) {
-    const calendarStart = rescheduledStart || new Date(appointment.startTime);
-    const calendarEvent = {
-      title: `Baptista Barber Shop - ${appointment.serviceName}`,
-      start: calendarStart,
-      durationMinutes: appointment.duration || 30,
-      details: `${appointment.serviceName} com ${appointment.barberName}.`,
-      location: "Rua Comandante Agatão Lança Nº28",
-    };
-
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">
@@ -111,15 +101,10 @@ export default function Reschedule() {
           <p className="text-gray-400 mb-6">
             {success ? "A nova data ficou guardada com sucesso." : "Esta marcação já foi cancelada, concluída ou alterada."}
           </p>
-          {success && (
-            <div className="mb-4 grid grid-cols-1 gap-3">
-              <a href={buildGoogleCalendarUrl(calendarEvent)} target="_blank" rel="noreferrer">
-                <Button variant="outline" className="w-full">Adicionar ao Google Calendar</Button>
-              </a>
-              <a href={buildIcsDataUri(calendarEvent)} download="marcacao-baptista-barber-shop.ics">
-                <Button variant="outline" className="w-full">Adicionar ao Apple Calendar</Button>
-              </a>
-            </div>
+          {success && rescheduledStart && (
+            <p className="mb-6 rounded-xl border border-white/10 bg-card px-4 py-3 text-sm text-gray-300">
+              {format(rescheduledStart, "dd 'de' MMMM", { locale: pt })} às {format(rescheduledStart, "HH:mm")}
+            </p>
           )}
           <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
         </div>

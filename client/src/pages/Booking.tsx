@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { buildGoogleCalendarUrl, buildIcsDataUri } from "@/lib/calendar";
 import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
@@ -294,22 +293,6 @@ export default function Booking() {
   };
 
   if (step === 5) {
-    const appointmentStart = createdAppointment?.startTime
-      ? new Date(createdAppointment.startTime)
-      : (() => {
-          const fallback = new Date(selectedDate!);
-          const [hours, minutes] = selectedTime!.split(":").map(Number);
-          fallback.setHours(hours, minutes, 0, 0);
-          return fallback;
-        })();
-    const calendarEvent = {
-      title: `Baptista Barber Shop - ${selectedService?.name || "Marcação"}`,
-      start: appointmentStart,
-      durationMinutes: selectedService?.duration || 30,
-      details: `${selectedService?.name || "Serviço"} com ${selectedBarberLabel || "barbeiro"}.`,
-      location: "Rua Comandante Agatão Lança Nº28",
-    };
-
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <div className="max-w-md w-full text-center">
@@ -321,17 +304,14 @@ export default function Booking() {
             <Check className="w-12 h-12 text-background" />
           </motion.div>
           <h2 className="text-3xl font-display font-bold mb-4 text-white">Marcação Confirmada!</h2>
-          <p className="text-gray-400 mb-8">
+          <p className="text-gray-400 mb-3">
             Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
+          </p>
+          <p className="mb-8 text-sm text-gray-500">
+            Enviámos a confirmação por WhatsApp com os detalhes da marcação e o link de cancelamento.
           </p>
           
           <div className="space-y-4">
-            <a href={buildGoogleCalendarUrl(calendarEvent)} target="_blank" rel="noreferrer">
-              <Button variant="outline" className="w-full">Adicionar ao Google Calendar</Button>
-            </a>
-            <a href={buildIcsDataUri(calendarEvent)} download="marcacao-baptista-barber-shop.ics">
-              <Button variant="outline" className="w-full">Adicionar ao Apple Calendar</Button>
-            </a>
             <Link href="/">
               <Button variant="gold" className="w-full">Voltar ao Início</Button>
             </Link>
