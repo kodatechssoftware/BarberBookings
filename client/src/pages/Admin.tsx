@@ -378,20 +378,6 @@ const blockTimeOptions = [
 const morningBlockTimes = blockTimeOptions.filter((time) => time < "13:00");
 const afternoonBlockTimes = blockTimeOptions.filter((time) => time >= "14:00");
 
-function cloneAvailabilityDay(dayConfig: { isWorking: boolean; periods: AvailabilityPeriod[] }) {
-  return {
-    isWorking: dayConfig.isWorking,
-    periods: dayConfig.periods.map((period) => ({ ...period })),
-  };
-}
-
-function cloneAvailabilityForm(form: AvailabilityForm) {
-  return weekDays.reduce((acc, day) => {
-    acc[day.id] = cloneAvailabilityDay(form[day.id] || { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] });
-    return acc;
-  }, {} as AvailabilityForm);
-}
-
 function formatAvailabilitySummary(dayConfig?: { isWorking: boolean; periods: AvailabilityPeriod[] }) {
   if (!dayConfig?.isWorking) return "Fechada";
   return dayConfig.periods.map((period) => `${period.startTime}-${period.endTime}`).join(" / ");
@@ -522,8 +508,6 @@ export default function Admin() {
     barberId: "all"
   });
   const [shopAvailabilityForm, setShopAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
-  const [copySourceDay, setCopySourceDay] = useState("2");
-  const [copyTargetDays, setCopyTargetDays] = useState<number[]>([3, 4, 5]);
   const [isSavingShopAvailability, setIsSavingShopAvailability] = useState(false);
   const [customerHistory, setCustomerHistory] = useState<any | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -756,18 +740,6 @@ export default function Admin() {
       isRecurring: false,
     }));
     setIsBlocking(true);
-  };
-
-  const applyDayToTargets = () => {
-    const sourceDay = Number(copySourceDay);
-    const sourceConfig = shopAvailabilityForm[sourceDay];
-    if (!sourceConfig || copyTargetDays.length === 0) return;
-
-    const nextForm = cloneAvailabilityForm(shopAvailabilityForm);
-    copyTargetDays.forEach((dayId) => {
-      if (dayId !== sourceDay) nextForm[dayId] = cloneAvailabilityDay(sourceConfig);
-    });
-    setShopAvailabilityForm(nextForm);
   };
 
   const handleCreateBarberInvite = async (barber: any) => {
@@ -2240,60 +2212,6 @@ export default function Admin() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-white/10 bg-background/40 p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <Copy className="h-4 w-4 text-primary" />
-                    <h3 className="font-bold text-white">Copiar horário entre dias</h3>
-                  </div>
-                  <div className="grid gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end">
-                    <div className="space-y-2">
-                      <Label className="text-xs text-gray-400">Copiar de</Label>
-                      <Select value={copySourceDay} onValueChange={setCopySourceDay}>
-                        <SelectTrigger className="bg-background border-white/10 text-white">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-card border-white/10 text-white">
-                          {weekDays.map((day) => (
-                            <SelectItem key={day.id} value={String(day.id)}>{day.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs text-gray-400">Aplicar a</Label>
-                      <div className="flex flex-wrap gap-2">
-                        {weekDays.map((day) => {
-                          const isSelected = copyTargetDays.includes(day.id);
-                          return (
-                            <Button
-                              key={day.id}
-                              type="button"
-                              variant={isSelected ? "gold" : "outline"}
-                              size="sm"
-                              className="h-9 min-w-12"
-                              disabled={String(day.id) === copySourceDay}
-                              onClick={() => setCopyTargetDays((current) =>
-                                isSelected ? current.filter((targetDayId) => targetDayId !== day.id) : [...current, day.id],
-                              )}
-                            >
-                              {day.short}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="gap-2 border-white/10"
-                      disabled={copyTargetDays.length === 0}
-                      onClick={applyDayToTargets}
-                    >
-                      <Copy className="h-4 w-4" /> Aplicar
-                    </Button>
-                  </div>
-                </div>
-
                 {shopAvailabilityIssues.length > 0 && (
                   <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
                     <div className="mb-2 flex items-center gap-2 font-bold">
@@ -2307,7 +2225,7 @@ export default function Admin() {
                   </div>
                 )}
 
-                <div className="space-y-3">
+                <div className="grid gap-3 xl:grid-cols-2">
                   {weekDays.map((day) => {
                     const dayConfig = shopAvailabilityForm[day.id];
                     const isWorking = dayConfig?.isWorking || false;
