@@ -308,7 +308,7 @@ export default function Booking() {
             Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
           </p>
           <p className="mb-8 text-sm text-gray-500">
-            Enviámos a confirmação por WhatsApp com os detalhes da marcação e o link de cancelamento.
+            Vai receber a confirmação por WhatsApp com os detalhes da marcação e o link de cancelamento.
           </p>
           
           <div className="space-y-4">

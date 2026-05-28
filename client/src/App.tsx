@@ -4,9 +4,10 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { preloadBookingPage } from "@/lib/page-preloads";
 
 const Home = lazy(() => import("@/pages/Home"));
-const Booking = lazy(() => import("@/pages/Booking"));
+const Booking = lazy(preloadBookingPage);
 const Admin = lazy(() => import("@/pages/Admin"));
 const Cancellation = lazy(() => import("@/pages/Cancellation"));
 const Reschedule = lazy(() => import("@/pages/Reschedule"));

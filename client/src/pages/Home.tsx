@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Clock, ExternalLink, MapPin, Scissors } from "lucide-react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/api";
+import { preloadBookingPage } from "@/lib/page-preloads";
+import { queryClient } from "@/lib/queryClient";
 import { useBarbers } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 
@@ -87,6 +91,24 @@ function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
   return "/images/logo.jpg";
 }
 
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function prefetchJsonQuery(queryKey: unknown[], path: string) {
+  void queryClient.prefetchQuery({
+    queryKey,
+    queryFn: async () => {
+      const response = await apiFetch(path);
+      if (!response.ok) throw new Error(`Failed to prefetch ${path}`);
+      return response.json();
+    },
+  });
+}
+
 export default function Home() {
   const [activeSection, setActiveSection] = useState("");
   const { data: services, isLoading: isLoadingServices } = useServices();
@@ -95,6 +117,17 @@ export default function Home() {
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const openingStatus = useMemo(() => getTodayOpeningStatus(), []);
+  const warmBookingFlow = useCallback(() => {
+    void preloadBookingPage();
+
+    const today = getLocalDateKey();
+    prefetchJsonQuery(["/api/shop/availability"], "/api/shop/availability");
+    prefetchJsonQuery(["/api/barbers/availability"], "/api/barbers/availability");
+    prefetchJsonQuery(
+      ["/api/appointments/public", { barberId: undefined, date: today }],
+      `/api/appointments/public?date=${today}`,
+    );
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -111,6 +144,21 @@ export default function Home() {
     handleScroll();
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  useEffect(() => {
+    const win = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (win.requestIdleCallback) {
+      const idleHandle = win.requestIdleCallback(warmBookingFlow, { timeout: 2000 });
+      return () => win.cancelIdleCallback?.(idleHandle);
+    }
+
+    const timeout = window.setTimeout(warmBookingFlow, 1200);
+    return () => window.clearTimeout(timeout);
+  }, [warmBookingFlow]);
 
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background text-foreground font-body">
@@ -165,8 +213,16 @@ export default function Home() {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button asChild variant="gold" size="lg" className="h-12 w-full px-8 text-base sm:w-auto">
-                <a href="/book">Marcar agora</a>
+              <Button
+                asChild
+                variant="gold"
+                size="lg"
+                className="h-12 w-full px-8 text-base sm:w-auto"
+                onFocus={warmBookingFlow}
+                onMouseEnter={warmBookingFlow}
+                onTouchStart={warmBookingFlow}
+              >
+                <Link href="/book">Marcar agora</Link>
               </Button>
               <Button asChild variant="outline" size="lg" className="h-12 w-full border-white/15 bg-black/30 px-8 text-base text-white hover:bg-white/10 hover:text-white sm:w-auto">
                 <a href="#services">Ver serviços</a>

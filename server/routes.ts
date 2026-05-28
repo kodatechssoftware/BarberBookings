@@ -269,6 +269,19 @@ type BookingCreatedNotificationParams = {
 
 type NotificationChannel = "whatsapp" | "email" | "none";
 
+function runNotificationJob(
+  label: string,
+  task: () => Promise<NotificationChannel>,
+) {
+  void task()
+    .then((channel) => {
+      console.log(`${label} notification finished via ${channel}.`);
+    })
+    .catch((error) => {
+      console.error(`${label} notification failed:`, error);
+    });
+}
+
 async function sendBookingCreatedNotification(params: BookingCreatedNotificationParams) {
   let whatsappSent = false;
 
@@ -1039,27 +1052,26 @@ export async function registerRoutes(
         depositReason: depositRecommendation.reason,
       });
 
-      const barber = await storage.getBarber(finalBarberId);
       const service = services.find(s => s.id === input.serviceId);
 
-      const notificationChannel = await sendBookingCreatedNotification({
-        customerName: input.customerName,
-        customerEmail: input.customerEmail,
-        customerPhone: input.customerPhone,
-        barberName: barber?.name,
-        serviceName: service?.name || "Serviço indisponível",
-        startTime: input.startTime,
-        cancelToken,
-        durationMinutes: appointment.durationMinutes,
-        depositRequired: appointment.depositRequired,
-        depositReason: appointment.depositReason,
+      runNotificationJob("Booking confirmation", async () => {
+        const barber = await storage.getBarber(finalBarberId);
+
+        return sendBookingCreatedNotification({
+          customerName: input.customerName,
+          customerEmail: input.customerEmail,
+          customerPhone: input.customerPhone,
+          barberName: barber?.name,
+          serviceName: service?.name || "Serviço indisponível",
+          startTime: input.startTime,
+          cancelToken,
+          durationMinutes: appointment.durationMinutes,
+          depositRequired: appointment.depositRequired,
+          depositReason: appointment.depositReason,
+        });
       });
 
-      res.status(201).json({
-        ...appointment,
-        notificationChannel,
-        notificationSent: notificationChannel !== "none",
-      });
+      res.status(201).json(appointment);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
@@ -1362,18 +1374,21 @@ export async function registerRoutes(
     const status = lateCancellation ? "late_cancelled" : "cancelled";
     await storage.updateAppointmentStatus(appointment.id, status);
 
-    const [barber, service] = await Promise.all([
-      storage.getBarber(appointment.barberId),
-      appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
-    ]);
-    const notificationChannel = await sendBookingCancelledNotification({
-      customerName: appointment.customerName,
-      customerEmail: appointment.customerEmail,
-      customerPhone: appointment.customerPhone,
-      barberName: barber?.name,
-      serviceName: service?.name || "Serviço indisponível",
-      startTime: toDate(appointment.startTime),
-      lateCancellation,
+    runNotificationJob("Booking cancellation", async () => {
+      const [barber, service] = await Promise.all([
+        storage.getBarber(appointment.barberId),
+        appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
+      ]);
+
+      return sendBookingCancelledNotification({
+        customerName: appointment.customerName,
+        customerEmail: appointment.customerEmail,
+        customerPhone: appointment.customerPhone,
+        barberName: barber?.name,
+        serviceName: service?.name || "Serviço indisponível",
+        startTime: toDate(appointment.startTime),
+        lateCancellation,
+      });
     });
 
     res.json({
@@ -1383,8 +1398,6 @@ export async function registerRoutes(
       status,
       lateCancellation,
       policyHours: CANCELLATION_POLICY_HOURS,
-      notificationChannel,
-      notificationSent: notificationChannel !== "none",
     });
   });
 
