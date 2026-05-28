@@ -1,10 +1,10 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
-import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus, useCreateAppointment } from "@/hooks/use-appointments";
+import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -306,13 +306,13 @@ function getEditedBarberAvatar(
 }
 
 const weekDays = [
-  { id: 1, label: "Segunda" },
-  { id: 2, label: "Terça" },
-  { id: 3, label: "Quarta" },
-  { id: 4, label: "Quinta" },
-  { id: 5, label: "Sexta" },
-  { id: 6, label: "Sábado" },
-  { id: 0, label: "Domingo" },
+  { id: 1, label: "Segunda", short: "Seg" },
+  { id: 2, label: "Terça", short: "Ter" },
+  { id: 3, label: "Quarta", short: "Qua" },
+  { id: 4, label: "Quinta", short: "Qui" },
+  { id: 5, label: "Sexta", short: "Sex" },
+  { id: 6, label: "Sábado", short: "Sáb" },
+  { id: 0, label: "Domingo", short: "Dom" },
 ];
 
 function ConfirmAction({
@@ -367,6 +367,75 @@ function createBlankAvailabilityForm(): AvailabilityForm {
     acc[day.id] = { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] };
     return acc;
   }, {} as AvailabilityForm);
+}
+
+const blockTimeOptions = [
+  "09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30",
+  "14:00", "14:30", "15:00", "15:30", "16:00", "16:30", "17:00", "17:30",
+  "18:00", "18:30", "19:00", "19:30",
+];
+
+const morningBlockTimes = blockTimeOptions.filter((time) => time < "13:00");
+const afternoonBlockTimes = blockTimeOptions.filter((time) => time >= "14:00");
+
+function cloneAvailabilityDay(dayConfig: { isWorking: boolean; periods: AvailabilityPeriod[] }) {
+  return {
+    isWorking: dayConfig.isWorking,
+    periods: dayConfig.periods.map((period) => ({ ...period })),
+  };
+}
+
+function cloneAvailabilityForm(form: AvailabilityForm) {
+  return weekDays.reduce((acc, day) => {
+    acc[day.id] = cloneAvailabilityDay(form[day.id] || { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] });
+    return acc;
+  }, {} as AvailabilityForm);
+}
+
+function createAfternoonAvailabilityForm(): AvailabilityForm {
+  return weekDays.reduce((acc, day) => {
+    acc[day.id] = day.id === 0
+      ? { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] }
+      : { isWorking: true, periods: [{ startTime: "14:00", endTime: day.id === 6 ? "19:00" : "20:00" }] };
+    return acc;
+  }, {} as AvailabilityForm);
+}
+
+function createWeekdayOnlyAvailabilityForm(): AvailabilityForm {
+  const form = createDefaultAvailabilityForm();
+  form[6] = { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] };
+  return form;
+}
+
+function formatAvailabilitySummary(dayConfig?: { isWorking: boolean; periods: AvailabilityPeriod[] }) {
+  if (!dayConfig?.isWorking) return "Fechada";
+  return dayConfig.periods.map((period) => `${period.startTime}-${period.endTime}`).join(" / ");
+}
+
+function validateAvailabilityForm(form: AvailabilityForm) {
+  const issues: string[] = [];
+
+  for (const day of weekDays) {
+    const dayConfig = form[day.id];
+    if (!dayConfig?.isWorking) continue;
+
+    const sortedPeriods = [...dayConfig.periods].sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    sortedPeriods.forEach((period) => {
+      if (!period.startTime || !period.endTime || period.endTime <= period.startTime) {
+        issues.push(`${day.label}: verifique a hora de abertura e fecho.`);
+      }
+    });
+
+    for (let index = 1; index < sortedPeriods.length; index += 1) {
+      if (sortedPeriods[index].startTime < sortedPeriods[index - 1].endTime) {
+        issues.push(`${day.label}: existem períodos sobrepostos.`);
+        break;
+      }
+    }
+  }
+
+  return issues;
 }
 
 export default function Admin() {
@@ -427,7 +496,6 @@ export default function Admin() {
     [appointmentList, selectedStatusFilter],
   );
   const updateStatus = useUpdateAppointmentStatus();
-  const createAppointment = useCreateAppointment();
   const { toast } = useToast();
 
   const [isBlocking, setIsBlocking] = useState(false);
@@ -468,11 +536,9 @@ export default function Admin() {
     end: startOfToday(),
     barberId: "all"
   });
-  const [availabilityBarber, setAvailabilityBarber] = useState<any | null>(null);
-  const [availabilityForm, setAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
   const [shopAvailabilityForm, setShopAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
-  const [barberAvailabilityMode, setBarberAvailabilityMode] = useState<"shop" | "custom">("shop");
-  const [isSavingAvailability, setIsSavingAvailability] = useState(false);
+  const [copySourceDay, setCopySourceDay] = useState("2");
+  const [copyTargetDays, setCopyTargetDays] = useState<number[]>([3, 4, 5]);
   const [isSavingShopAvailability, setIsSavingShopAvailability] = useState(false);
   const [customerHistory, setCustomerHistory] = useState<any | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -571,23 +637,25 @@ export default function Admin() {
     if (!rows || rows.length === 0) return createDefaultAvailabilityForm();
 
     const form = createBlankAvailabilityForm();
-    rows.forEach((row) => {
-      if (!form[row.dayOfWeek]) return;
+    weekDays.forEach((day) => {
+      const dayRows = rows.filter((row) => row.dayOfWeek === day.id);
+      if (dayRows.length === 0) return;
 
-      if (row[openField] === false) {
-        form[row.dayOfWeek].isWorking = false;
-        form[row.dayOfWeek].periods = [{
-          startTime: row.startTime || "09:00",
-          endTime: row.endTime || "13:00",
+      const openRows = dayRows.filter((row) => row[openField] !== false);
+      if (openRows.length === 0) {
+        form[day.id].isWorking = false;
+        form[day.id].periods = [{
+          startTime: dayRows[0]?.startTime || "09:00",
+          endTime: dayRows[0]?.endTime || "13:00",
         }];
         return;
       }
 
-      form[row.dayOfWeek].isWorking = true;
-      if (form[row.dayOfWeek].periods.length === 1 && form[row.dayOfWeek].periods[0].startTime === "09:00" && form[row.dayOfWeek].periods[0].endTime === "13:00") {
-        form[row.dayOfWeek].periods = [];
-      }
-      form[row.dayOfWeek].periods.push({ startTime: row.startTime, endTime: row.endTime });
+      form[day.id].isWorking = true;
+      form[day.id].periods = openRows.map((row) => ({
+        startTime: row.startTime || "09:00",
+        endTime: row.endTime || "13:00",
+      }));
     });
 
     return form;
@@ -637,26 +705,14 @@ export default function Admin() {
     }
   }, [shopAvailabilityRows]);
 
-  const openAvailabilityEditor = async (barber: any) => {
-    try {
-      const [barberRes, shopRes] = await Promise.all([
-        apiFetch(`/api/barbers/${barber.id}/availability`),
-        apiFetch("/api/shop/availability"),
-      ]);
-      if (!barberRes.ok || !shopRes.ok) throw new Error("Não foi possível carregar os horários.");
-      const rows = await barberRes.json();
-      const shopRows = await shopRes.json();
-      setBarberAvailabilityMode(rows.length === 0 ? "shop" : "custom");
-      setAvailabilityForm(availabilityRowsToForm(rows.length === 0 ? shopRows : rows, rows.length === 0 ? "isOpen" : "isWorking"));
-      setAvailabilityBarber(barber);
-    } catch (err: any) {
-      toast({ title: "Erro", description: err.message, variant: "destructive" });
-    }
-  };
-
   const handleSaveShopAvailability = async () => {
     setIsSavingShopAvailability(true);
     try {
+      const issues = validateAvailabilityForm(shopAvailabilityForm);
+      if (issues.length > 0) {
+        throw new Error(issues[0]);
+      }
+
       const rows = buildAvailabilityRows(shopAvailabilityForm).map((row) => ({
         dayOfWeek: row.dayOfWeek,
         startTime: row.startTime,
@@ -696,21 +752,44 @@ export default function Admin() {
     });
   };
 
-  const handleSaveAvailability = async () => {
-    if (!availabilityBarber) return;
-    setIsSavingAvailability(true);
-    try {
-      const rows = barberAvailabilityMode === "shop" ? [] : buildAvailabilityRows(availabilityForm);
+  const shopAvailabilityIssues = useMemo(
+    () => validateAvailabilityForm(shopAvailabilityForm),
+    [shopAvailabilityForm],
+  );
 
-      await apiRequest("PATCH", `/api/barbers/${availabilityBarber.id}/availability`, rows);
-      queryClient.invalidateQueries({ queryKey: ["/api/barbers/availability"] });
-      setAvailabilityBarber(null);
-      toast({ title: "Sucesso", description: "Horários do barbeiro atualizados." });
-    } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Não foi possível guardar os horários.", variant: "destructive" });
-    } finally {
-      setIsSavingAvailability(false);
-    }
+  const openExceptionDialog = (barberId?: string) => {
+    setActiveTab("appointments");
+    setBlockData((current) => ({
+      ...current,
+      barberId: barberId || current.barberId,
+      serviceId: "",
+      times: [],
+      name: "",
+      phone: "900000000",
+      isMultiDay: false,
+      isManualBooking: false,
+      isRecurring: false,
+    }));
+    setIsBlocking(true);
+  };
+
+  const applyShopPreset = (preset: "normal" | "afternoon" | "weekdays" | "closed") => {
+    if (preset === "normal") setShopAvailabilityForm(createDefaultAvailabilityForm());
+    if (preset === "afternoon") setShopAvailabilityForm(createAfternoonAvailabilityForm());
+    if (preset === "weekdays") setShopAvailabilityForm(createWeekdayOnlyAvailabilityForm());
+    if (preset === "closed") setShopAvailabilityForm(createBlankAvailabilityForm());
+  };
+
+  const applyDayToTargets = () => {
+    const sourceDay = Number(copySourceDay);
+    const sourceConfig = shopAvailabilityForm[sourceDay];
+    if (!sourceConfig || copyTargetDays.length === 0) return;
+
+    const nextForm = cloneAvailabilityForm(shopAvailabilityForm);
+    copyTargetDays.forEach((dayId) => {
+      if (dayId !== sourceDay) nextForm[dayId] = cloneAvailabilityDay(sourceConfig);
+    });
+    setShopAvailabilityForm(nextForm);
   };
 
   const handleCreateBarberInvite = async (barber: any) => {
@@ -894,6 +973,17 @@ export default function Admin() {
     return periods.some((period: any) => startMinutes >= period.start && endMinutes <= period.end);
   };
 
+  const selectedBlockDuration = blockData.isManualBooking && blockData.serviceId
+    ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
+    : 30;
+  const availableBlockTimes = blockTimeOptions.filter((time) =>
+    isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId),
+  );
+  const setQuickBlockTimes = (times: string[]) => {
+    const available = times.filter((time) => availableBlockTimes.includes(time));
+    setBlockData({ ...blockData, times: available });
+  };
+
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   const handleBlockTime = async () => {
@@ -949,18 +1039,14 @@ export default function Admin() {
             
             const payload = {
               barberId: Number(blockData.barberId),
-              serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : (services?.[0]?.id || 1),
+              serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
               startTime: startTime,
-              customerName: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
-              customerPhone: blockData.phone || "900000000",
+              name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
+              phone: blockData.phone || "900000000",
+              isManualBooking: blockData.isManualBooking,
             };
-            
-            // If it's a manual booking with a service, we use the block endpoint to ensure consistency
-            if (blockData.isManualBooking) {
-               promises.push(apiRequest("POST", "/api/appointments/block", { ...payload, isManualBooking: true }));
-            } else {
-               promises.push(createAppointment.mutateAsync(payload));
-            }
+
+            promises.push(apiRequest("POST", "/api/appointments/block", payload));
           }
         }
         await Promise.all(promises);
@@ -1100,133 +1186,6 @@ export default function Admin() {
                 </div>
               </div>
             ) : null}
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={!!availabilityBarber} onOpenChange={(open) => !open && setAvailabilityBarber(null)}>
-          <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Horários de {availabilityBarber?.name}</DialogTitle>
-              <DialogDescription>
-                Estes horários controlam novas marcações. Marcações já agendadas fora de um novo horário continuam no calendário.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-2 rounded-xl border border-white/10 bg-background/50 p-3 sm:grid-cols-2">
-                <Button
-                  type="button"
-                  variant={barberAvailabilityMode === "shop" ? "gold" : "outline"}
-                  className="h-auto min-h-11 whitespace-normal px-3 py-2 text-sm"
-                  onClick={() => {
-                    setBarberAvailabilityMode("shop");
-                    setAvailabilityForm(shopAvailabilityForm);
-                  }}
-                >
-                  Seguir horário da barbearia
-                </Button>
-                <Button
-                  type="button"
-                  variant={barberAvailabilityMode === "custom" ? "gold" : "outline"}
-                  className="h-auto min-h-11 whitespace-normal px-3 py-2 text-sm"
-                  onClick={() => setBarberAvailabilityMode("custom")}
-                >
-                  Definir horário próprio
-                </Button>
-              </div>
-              {weekDays.map((day) => {
-                const dayConfig = availabilityForm[day.id];
-                const usesShopHours = barberAvailabilityMode === "shop";
-                return (
-                  <div key={day.id} className={cn("rounded-xl border border-white/10 p-4 space-y-3", usesShopHours && "opacity-70")}>
-                    <div className="flex items-center justify-between gap-3">
-                      <Label className="font-bold text-white">{day.label}</Label>
-                      <label className="flex items-center gap-2 text-sm text-gray-300">
-                        <input
-                          type="checkbox"
-                          checked={dayConfig?.isWorking || false}
-                          disabled={usesShopHours}
-                          onChange={(e) => setAvailabilityForm({
-                            ...availabilityForm,
-                            [day.id]: {
-                              ...(dayConfig || { periods: [{ startTime: "09:00", endTime: "13:00" }] }),
-                              isWorking: e.target.checked,
-                            },
-                          })}
-                          className="accent-primary"
-                        />
-                        Trabalha
-                      </label>
-                    </div>
-                    {dayConfig?.isWorking && (
-                      <div className="space-y-2">
-                        {dayConfig.periods.map((period, index) => (
-                          <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
-                            <div>
-                              <Label className="text-xs text-gray-400">Entrada</Label>
-                              <Input
-                                type="time"
-                                value={period.startTime}
-                                disabled={usesShopHours}
-                                onChange={(e) => {
-                                  const periods = [...dayConfig.periods];
-                                  periods[index] = { ...period, startTime: e.target.value };
-                                  setAvailabilityForm({ ...availabilityForm, [day.id]: { ...dayConfig, periods } });
-                                }}
-                                className="bg-background border-white/10 text-white"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs text-gray-400">Saída</Label>
-                              <Input
-                                type="time"
-                                value={period.endTime}
-                                disabled={usesShopHours}
-                                onChange={(e) => {
-                                  const periods = [...dayConfig.periods];
-                                  periods[index] = { ...period, endTime: e.target.value };
-                                  setAvailabilityForm({ ...availabilityForm, [day.id]: { ...dayConfig, periods } });
-                                }}
-                                className="bg-background border-white/10 text-white"
-                              />
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-red-400"
-                              disabled={usesShopHours || dayConfig.periods.length === 1}
-                              onClick={() => setAvailabilityForm({
-                                ...availabilityForm,
-                                [day.id]: { ...dayConfig, periods: dayConfig.periods.filter((_, periodIndex) => periodIndex !== index) },
-                              })}
-                            >
-                              Remover
-                            </Button>
-                          </div>
-                        ))}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-white/10"
-                          disabled={usesShopHours}
-                          onClick={() => setAvailabilityForm({
-                            ...availabilityForm,
-                            [day.id]: {
-                              ...dayConfig,
-                              periods: [...dayConfig.periods, { startTime: "14:00", endTime: "18:00" }],
-                            },
-                          })}
-                        >
-                          Adicionar período
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <Button variant="gold" className="w-full" disabled={isSavingAvailability} onClick={handleSaveAvailability}>
-                {isSavingAvailability ? "A guardar..." : "Guardar horários"}
-              </Button>
-            </div>
           </DialogContent>
         </Dialog>
 
@@ -1482,25 +1441,62 @@ export default function Admin() {
               </Select>
 
               <Dialog open={isBlocking} onOpenChange={setIsBlocking}>
-                <DialogTrigger asChild><Button variant="gold" className="gap-2 h-11 sm:h-9 sm:ml-auto"><Plus className="w-4 h-4" /> Bloquear horário</Button></DialogTrigger>
-                <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-md max-h-[90vh] overflow-y-auto rounded-2xl p-6 shadow-2xl backdrop-blur-md">
-                  <DialogHeader><DialogTitle className="text-xl font-display font-bold text-primary">Gestão de horário</DialogTitle></DialogHeader>
+                <DialogTrigger asChild>
+                  <Button variant="gold" className="gap-2 h-11 sm:h-9 sm:ml-auto">
+                    <Plus className="w-4 h-4" /> Exceção / marcação
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 shadow-2xl backdrop-blur-md">
+                  <DialogHeader>
+                    <DialogTitle className="text-xl font-display font-bold text-primary">Exceções da agenda</DialogTitle>
+                    <DialogDescription className="text-sm text-gray-400">
+                      O horário da barbearia é a regra principal. Use isto para bloquear horas, férias ou criar uma marcação que chegou por telefone.
+                    </DialogDescription>
+                  </DialogHeader>
                   <div className="space-y-6">
-                    <div className="flex flex-col gap-3 p-3 bg-primary/5 rounded-xl border border-primary/10">
-                      <div className="flex items-center gap-2">
-                        <input type="checkbox" id="manualBooking" checked={blockData.isManualBooking} onChange={(e) => setBlockData({...blockData, isManualBooking: e.target.checked, isMultiDay: false})} className="w-4 h-4 rounded border-white/10 accent-primary" />
-                        <Label htmlFor="manualBooking" className="text-sm font-medium cursor-pointer">Nova marcação (cliente ligou)</Label>
-                      </div>
+                    <div className="grid gap-3 rounded-xl border border-primary/10 bg-primary/5 p-3 sm:grid-cols-2">
+                      <Button
+                        type="button"
+                        variant={!blockData.isManualBooking ? "gold" : "outline"}
+                        className="h-auto min-h-16 flex-col items-start rounded-xl p-4 text-left"
+                        onClick={() => setBlockData({ ...blockData, isManualBooking: false, isRecurring: false })}
+                      >
+                        <span className="text-sm font-bold">Bloqueio / ausência</span>
+                        <span className="text-xs font-normal opacity-80">Pausas, férias, almoço maior ou fecho excecional.</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={blockData.isManualBooking ? "gold" : "outline"}
+                        className="h-auto min-h-16 flex-col items-start rounded-xl p-4 text-left"
+                        onClick={() => setBlockData({ ...blockData, isManualBooking: true, isMultiDay: false })}
+                      >
+                        <span className="text-sm font-bold">Marcação manual</span>
+                        <span className="text-xs font-normal opacity-80">Para clientes que marcaram por chamada ou mensagem.</span>
+                      </Button>
                       {!blockData.isManualBooking && (
-                        <div className="flex items-center gap-2 pt-2 border-t border-primary/10">
-                          <input type="checkbox" id="multiDay" checked={blockData.isMultiDay} onChange={(e) => setBlockData({...blockData, isMultiDay: e.target.checked, isManualBooking: false, isRecurring: false})} className="w-4 h-4 rounded border-white/10 accent-primary" />
-                          <Label htmlFor="multiDay" className="text-sm font-medium cursor-pointer">Bloqueio de vários dias (férias/ausência)</Label>
+                        <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-2">
+                          <div>
+                            <Label htmlFor="multiDay" className="text-sm font-medium cursor-pointer">Bloquear vários dias</Label>
+                            <p className="text-xs text-gray-500">Ideal para férias ou ausências completas.</p>
+                          </div>
+                          <Switch
+                            id="multiDay"
+                            checked={blockData.isMultiDay}
+                            onCheckedChange={(checked) => setBlockData({ ...blockData, isMultiDay: checked, isManualBooking: false, isRecurring: false })}
+                          />
                         </div>
                       )}
                       {blockData.isManualBooking && (
-                        <div className="flex items-center gap-2 pt-2 border-t border-primary/10">
-                          <input type="checkbox" id="recurring" checked={blockData.isRecurring} onChange={(e) => setBlockData({...blockData, isRecurring: e.target.checked, isMultiDay: false})} className="w-4 h-4 rounded border-white/10 accent-primary" />
-                          <Label htmlFor="recurring" className="text-sm font-medium cursor-pointer">Marcação recorrente (repetir reserva)</Label>
+                        <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-2">
+                          <div>
+                            <Label htmlFor="recurring" className="text-sm font-medium cursor-pointer">Repetir marcação</Label>
+                            <p className="text-xs text-gray-500">Reserva automática para clientes fixos.</p>
+                          </div>
+                          <Switch
+                            id="recurring"
+                            checked={blockData.isRecurring}
+                            onCheckedChange={(checked) => setBlockData({ ...blockData, isRecurring: checked, isMultiDay: false })}
+                          />
                         </div>
                       )}
                     </div>
@@ -1556,7 +1552,7 @@ export default function Admin() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-3">
                         <Label className="text-sm font-medium text-gray-300">Barbeiro</Label>
-                        <Select onValueChange={(v) => setBlockData({...blockData, barberId: v})}>
+                        <Select value={blockData.barberId} onValueChange={(v) => setBlockData({...blockData, barberId: v})}>
                           <SelectTrigger className="bg-background/50 border-white/10 h-12 rounded-xl text-white"><SelectValue placeholder="Selecione" /></SelectTrigger>
                           <SelectContent className="bg-card border-white/10 text-white">{barbers?.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}</SelectContent>
                         </Select>
@@ -1564,7 +1560,7 @@ export default function Admin() {
                       {blockData.isManualBooking && (
                         <div className="space-y-3">
                           <Label className="text-sm font-medium text-gray-300">Serviço</Label>
-                          <Select onValueChange={(v) => setBlockData({...blockData, serviceId: v})}>
+                          <Select value={blockData.serviceId} onValueChange={(v) => setBlockData({...blockData, serviceId: v})}>
                             <SelectTrigger className="bg-background/50 border-white/10 h-12 rounded-xl text-white"><SelectValue placeholder="Selecione" /></SelectTrigger>
                             <SelectContent className="bg-card border-white/10 text-white">{services?.map(s => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
                           </Select>
@@ -1573,17 +1569,41 @@ export default function Admin() {
                     </div>
 
                     <div className="space-y-3">
-                      <Label className="text-sm font-medium text-gray-300">Horários</Label>
-                      <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin">
-                        {["09:00", "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "14:00", "14:30", "15:00", "15:30", "16:00", "16:30", "17:00", "17:30", "18:00", "18:30", "19:00", "19:30"].map((time) => {
-                          const duration = blockData.isManualBooking && blockData.serviceId
-                            ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
-                            : 30;
-                          const isAvailable = isTimeAvailableForDay(blockData.date, time, duration, blockData.barberId);
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <Label className="text-sm font-medium text-gray-300">Horas afetadas</Label>
+                          <p className="text-xs text-gray-500">
+                            {blockData.times.length > 0 ? `${blockData.times.length} horário${blockData.times.length === 1 ? "" : "s"} selecionado${blockData.times.length === 1 ? "" : "s"}` : "Escolha uma ou mais horas."}
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 sm:flex">
+                          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setQuickBlockTimes(morningBlockTimes)}>
+                            Manhã
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setQuickBlockTimes(afternoonBlockTimes)}>
+                            Tarde
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setQuickBlockTimes(blockTimeOptions)}>
+                            Dia inteiro
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-8 text-xs text-gray-400" onClick={() => setBlockData({ ...blockData, times: [] })}>
+                            Limpar
+                          </Button>
+                        </div>
+                      </div>
+                      {!blockData.barberId && (
+                        <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs text-primary">
+                          Escolha primeiro o barbeiro para ver apenas horas livres.
+                        </div>
+                      )}
+                      <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 scrollbar-thin sm:grid-cols-5">
+                        {blockTimeOptions.map((time) => {
+                          const isAvailable = availableBlockTimes.includes(time);
 
                           return (
                             <Button
                               key={time}
+                              type="button"
                               variant={blockData.times.includes(time) ? "gold" : "outline"}
                               size="sm"
                               className="h-10 text-xs rounded-lg disabled:opacity-30"
@@ -1600,6 +1620,11 @@ export default function Admin() {
                           );
                         })}
                       </div>
+                      {availableBlockTimes.length === 0 && blockData.barberId && (
+                        <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                          Não há horas disponíveis para este dia e barbeiro.
+                        </div>
+                      )}
                     </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1615,7 +1640,15 @@ export default function Admin() {
                         )}
                       </div>
 
-                      <Button variant="gold" className="w-full h-12 text-base font-bold rounded-xl mt-4" onClick={handleBlockTime}>Confirmar</Button>
+                      <Button
+                        type="button"
+                        variant="gold"
+                        className="w-full h-12 text-base font-bold rounded-xl mt-4"
+                        disabled={!blockData.barberId || blockData.times.length === 0 || (blockData.isManualBooking && !blockData.serviceId)}
+                        onClick={handleBlockTime}
+                      >
+                        {blockData.isManualBooking ? "Criar marcação" : "Guardar exceção"}
+                      </Button>
                     </div>
                   </DialogContent>
               </Dialog>
@@ -1916,9 +1949,9 @@ export default function Admin() {
                         variant="outline"
                         size="sm"
                         className="flex-1 h-8 text-xs"
-                        onClick={() => openAvailabilityEditor(barber)}
+                        onClick={() => openExceptionDialog(String(barber.id))}
                       >
-                        Horários
+                        Exceções
                       </Button>
                       <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
@@ -2185,143 +2218,248 @@ export default function Admin() {
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <CardTitle className="flex items-center gap-2 text-xl font-bold">
-                      <CalendarIcon className="h-5 w-5 text-primary" /> Horário da barbearia
+                      <CalendarIcon className="h-5 w-5 text-primary" /> Horário base da barbearia
                     </CardTitle>
-                    <p className="mt-2 text-sm text-gray-400">
-                      O horário principal limita todas as marcações e os horários próprios dos barbeiros.
+                    <p className="mt-2 max-w-2xl text-sm text-gray-400">
+                      Este horário define quando a loja aceita marcações. Ausências, férias e ajustes pontuais continuam nas exceções de cada barbeiro.
                     </p>
                   </div>
-                  <Button
-                    variant="gold"
-                    className="hidden gap-2 md:inline-flex"
-                    disabled={isSavingShopAvailability}
-                    onClick={handleSaveShopAvailability}
-                  >
-                    {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                    {isSavingShopAvailability ? "A guardar..." : "Guardar horário"}
-                  </Button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      variant="outline"
+                      className="gap-2 border-white/10"
+                      onClick={() => openExceptionDialog()}
+                    >
+                      <Plus className="h-4 w-4" /> Criar exceção
+                    </Button>
+                    <Button
+                      variant="gold"
+                      className="gap-2"
+                      disabled={isSavingShopAvailability || shopAvailabilityIssues.length > 0}
+                      onClick={handleSaveShopAvailability}
+                    >
+                      {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                      {isSavingShopAvailability ? "A guardar..." : "Guardar horário"}
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-2 p-4">
-                {weekDays.map((day) => {
-                  const dayConfig = shopAvailabilityForm[day.id];
-                  return (
-                    <div
-                      key={day.id}
-                      className={cn(
-                        "grid gap-3 rounded-lg border border-white/10 px-4 py-3 transition-colors md:grid-cols-[140px_1fr_120px] md:items-center",
-                        dayConfig?.isWorking ? "bg-card hover:bg-white/[0.03]" : "bg-background/30",
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <Label className="font-bold text-white">{day.label}</Label>
-                          <p className={cn("mt-1 text-xs", dayConfig?.isWorking ? "text-primary" : "text-gray-500")}>
-                            {dayConfig?.isWorking ? `${dayConfig.periods.length} período${dayConfig.periods.length === 1 ? "" : "s"}` : "Encerrada"}
-                          </p>
+              <CardContent className="space-y-4 p-4 md:p-5">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+                  <div className="rounded-xl border border-white/10 bg-background/40 p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <Wand2 className="h-4 w-4 text-primary" />
+                      <h3 className="font-bold text-white">Atalhos rápidos</h3>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left" onClick={() => applyShopPreset("normal")}>
+                        <span className="text-sm font-bold">Semana normal</span>
+                        <span className="text-xs text-gray-400">09-13 / 14-20</span>
+                      </Button>
+                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left" onClick={() => applyShopPreset("afternoon")}>
+                        <span className="text-sm font-bold">Só tardes</span>
+                        <span className="text-xs text-gray-400">14-20 todos os dias</span>
+                      </Button>
+                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left" onClick={() => applyShopPreset("weekdays")}>
+                        <span className="text-sm font-bold">Dias úteis</span>
+                        <span className="text-xs text-gray-400">Sábado fechado</span>
+                      </Button>
+                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left text-red-300" onClick={() => applyShopPreset("closed")}>
+                        <span className="text-sm font-bold">Fechar tudo</span>
+                        <span className="text-xs text-red-300/70">Sem marcações novas</span>
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-background/40 p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-primary" />
+                      <h3 className="font-bold text-white">Resumo semanal</h3>
+                    </div>
+                    <div className="space-y-2">
+                      {weekDays.map((day) => (
+                        <div key={day.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
+                          <span className="text-sm font-medium text-white">{day.short}</span>
+                          <span className={cn("text-right text-xs", shopAvailabilityForm[day.id]?.isWorking ? "text-gray-300" : "text-gray-500")}>
+                            {formatAvailabilitySummary(shopAvailabilityForm[day.id])}
+                          </span>
                         </div>
-                        <div className="flex items-center gap-2 md:hidden">
-                          <span className="text-xs text-gray-400">{dayConfig?.isWorking ? "Aberta" : "Fechada"}</span>
-                          <Switch
-                            checked={dayConfig?.isWorking || false}
-                            onCheckedChange={(checked) => setShopAvailabilityForm({
-                              ...shopAvailabilityForm,
-                              [day.id]: {
-                                ...(dayConfig || { periods: [{ startTime: "09:00", endTime: "13:00" }] }),
-                                isWorking: checked,
-                              },
-                            })}
-                          />
-                        </div>
-                      </div>
-                      {dayConfig?.isWorking && (
-                        <div className="space-y-2">
-                          {dayConfig.periods.map((period, index) => (
-                            <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] items-end gap-2">
-                              <div className="min-w-0">
-                                <Label className="text-[11px] text-gray-400">Abertura</Label>
-                                <Input
-                                  type="time"
-                                  value={period.startTime}
-                                  onChange={(e) => {
-                                    const periods = [...dayConfig.periods];
-                                    periods[index] = { ...period, startTime: e.target.value };
-                                    setShopAvailabilityForm({ ...shopAvailabilityForm, [day.id]: { ...dayConfig, periods } });
-                                  }}
-                                  className="h-9 w-full bg-background border-white/10 px-2 text-white"
-                                />
-                              </div>
-                              <div className="min-w-0">
-                                <Label className="text-[11px] text-gray-400">Fecho</Label>
-                                <Input
-                                  type="time"
-                                  value={period.endTime}
-                                  onChange={(e) => {
-                                    const periods = [...dayConfig.periods];
-                                    periods[index] = { ...period, endTime: e.target.value };
-                                    setShopAvailabilityForm({ ...shopAvailabilityForm, [day.id]: { ...dayConfig, periods } });
-                                  }}
-                                  className="h-9 w-full bg-background border-white/10 px-2 text-white"
-                                />
-                              </div>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-9 w-9 text-red-400 hover:text-red-300"
-                                disabled={dayConfig.periods.length === 1}
-                                aria-label={`Remover período de ${day.label}`}
-                                onClick={() => setShopAvailabilityForm({
-                                  ...shopAvailabilityForm,
-                                  [day.id]: { ...dayConfig, periods: dayConfig.periods.filter((_, periodIndex) => periodIndex !== index) },
-                                })}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-background/40 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Copy className="h-4 w-4 text-primary" />
+                    <h3 className="font-bold text-white">Copiar horário entre dias</h3>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-gray-400">Copiar de</Label>
+                      <Select value={copySourceDay} onValueChange={setCopySourceDay}>
+                        <SelectTrigger className="bg-background border-white/10 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card border-white/10 text-white">
+                          {weekDays.map((day) => (
+                            <SelectItem key={day.id} value={String(day.id)}>{day.label}</SelectItem>
                           ))}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-2 border-white/10 text-xs"
-                            onClick={() => setShopAvailabilityForm({
-                              ...shopAvailabilityForm,
-                              [day.id]: {
-                                ...dayConfig,
-                                periods: [...dayConfig.periods, { startTime: "14:00", endTime: "18:00" }],
-                              },
-                            })}
-                          >
-                            <Plus className="h-3.5 w-3.5" /> Período
-                          </Button>
-                        </div>
-                      )}
-                      {!dayConfig?.isWorking && (
-                        <div className="flex h-10 items-center rounded-md border border-dashed border-white/10 px-3 text-sm text-gray-500">
-                          Sem períodos ativos
-                        </div>
-                      )}
-                      <div className="hidden items-center justify-end gap-3 md:flex">
-                        <span className="text-sm text-gray-400">{dayConfig?.isWorking ? "Aberta" : "Fechada"}</span>
-                        <Switch
-                          checked={dayConfig?.isWorking || false}
-                          onCheckedChange={(checked) => setShopAvailabilityForm({
-                            ...shopAvailabilityForm,
-                            [day.id]: {
-                              ...(dayConfig || { periods: [{ startTime: "09:00", endTime: "13:00" }] }),
-                              isWorking: checked,
-                            },
-                          })}
-                        />
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-gray-400">Aplicar a</Label>
+                      <div className="flex flex-wrap gap-2">
+                        {weekDays.map((day) => {
+                          const isSelected = copyTargetDays.includes(day.id);
+                          return (
+                            <Button
+                              key={day.id}
+                              type="button"
+                              variant={isSelected ? "gold" : "outline"}
+                              size="sm"
+                              className="h-9 min-w-12"
+                              disabled={String(day.id) === copySourceDay}
+                              onClick={() => setCopyTargetDays((current) =>
+                                isSelected ? current.filter((targetDayId) => targetDayId !== day.id) : [...current, day.id],
+                              )}
+                            >
+                              {day.short}
+                            </Button>
+                          );
+                        })}
                       </div>
                     </div>
-                  );
-                })}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-2 border-white/10"
+                      disabled={copyTargetDays.length === 0}
+                      onClick={applyDayToTargets}
+                    >
+                      <Copy className="h-4 w-4" /> Aplicar
+                    </Button>
+                  </div>
+                </div>
+
+                {shopAvailabilityIssues.length > 0 && (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+                    <div className="mb-2 flex items-center gap-2 font-bold">
+                      <AlertTriangle className="h-4 w-4" /> Verifique o horário antes de guardar
+                    </div>
+                    <ul className="space-y-1">
+                      {shopAvailabilityIssues.map((issue) => (
+                        <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {weekDays.map((day) => {
+                    const dayConfig = shopAvailabilityForm[day.id];
+                    const isWorking = dayConfig?.isWorking || false;
+                    return (
+                      <div
+                        key={day.id}
+                        className={cn(
+                          "rounded-xl border border-white/10 p-4 transition-colors",
+                          isWorking ? "bg-card hover:bg-white/[0.03]" : "bg-background/30",
+                        )}
+                      >
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={cn(
+                              "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border text-sm font-bold",
+                              isWorking ? "border-primary/30 bg-primary/10 text-primary" : "border-white/10 bg-white/5 text-gray-500",
+                            )}>
+                              {day.short}
+                            </div>
+                            <div>
+                              <Label className="font-bold text-white">{day.label}</Label>
+                              <p className={cn("mt-1 text-xs", isWorking ? "text-gray-400" : "text-gray-500")}>
+                                {formatAvailabilitySummary(dayConfig)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 md:justify-end">
+                            <span className="text-sm text-gray-400">{isWorking ? "Aberta" : "Fechada"}</span>
+                            <Switch
+                              checked={isWorking}
+                              onCheckedChange={(checked) => updateShopDay(day.id, (current) => ({
+                                ...current,
+                                isWorking: checked,
+                              }))}
+                            />
+                          </div>
+                        </div>
+
+                        {isWorking ? (
+                          <div className="mt-4 space-y-2">
+                            {dayConfig.periods.map((period, index) => (
+                              <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_40px] items-end gap-2 sm:max-w-xl">
+                                <div className="min-w-0">
+                                  <Label className="text-[11px] text-gray-400">Abre</Label>
+                                  <Input
+                                    type="time"
+                                    value={period.startTime}
+                                    onChange={(e) => updateShopPeriod(day.id, index, { startTime: e.target.value })}
+                                    className="h-10 w-full bg-background border-white/10 px-2 text-white"
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <Label className="text-[11px] text-gray-400">Fecha</Label>
+                                  <Input
+                                    type="time"
+                                    value={period.endTime}
+                                    onChange={(e) => updateShopPeriod(day.id, index, { endTime: e.target.value })}
+                                    className="h-10 w-full bg-background border-white/10 px-2 text-white"
+                                  />
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-10 w-10 text-red-400 hover:text-red-300"
+                                  disabled={dayConfig.periods.length === 1}
+                                  aria-label={`Remover período de ${day.label}`}
+                                  onClick={() => updateShopDay(day.id, (current) => ({
+                                    ...current,
+                                    periods: current.periods.filter((_, periodIndex) => periodIndex !== index),
+                                  }))}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            ))}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-9 gap-2 border-white/10 text-xs"
+                              onClick={() => updateShopDay(day.id, (current) => ({
+                                ...current,
+                                periods: [...current.periods, { startTime: "14:00", endTime: "18:00" }],
+                              }))}
+                            >
+                              <Plus className="h-3.5 w-3.5" /> Adicionar período
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="mt-4 rounded-lg border border-dashed border-white/10 px-3 py-3 text-sm text-gray-500">
+                            Loja fechada neste dia.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
                 <Button
                   variant="gold"
-                  className="mt-4 w-full gap-2 md:hidden"
-                  disabled={isSavingShopAvailability}
+                  className="w-full gap-2 md:hidden"
+                  disabled={isSavingShopAvailability || shopAvailabilityIssues.length > 0}
                   onClick={handleSaveShopAvailability}
                 >
                   {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
