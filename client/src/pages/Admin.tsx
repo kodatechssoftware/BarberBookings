@@ -4,7 +4,7 @@ import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } f
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil, Wand2 } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -392,21 +392,6 @@ function cloneAvailabilityForm(form: AvailabilityForm) {
   }, {} as AvailabilityForm);
 }
 
-function createAfternoonAvailabilityForm(): AvailabilityForm {
-  return weekDays.reduce((acc, day) => {
-    acc[day.id] = day.id === 0
-      ? { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] }
-      : { isWorking: true, periods: [{ startTime: "14:00", endTime: day.id === 6 ? "19:00" : "20:00" }] };
-    return acc;
-  }, {} as AvailabilityForm);
-}
-
-function createWeekdayOnlyAvailabilityForm(): AvailabilityForm {
-  const form = createDefaultAvailabilityForm();
-  form[6] = { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] };
-  return form;
-}
-
 function formatAvailabilitySummary(dayConfig?: { isWorking: boolean; periods: AvailabilityPeriod[] }) {
   if (!dayConfig?.isWorking) return "Fechada";
   return dayConfig.periods.map((period) => `${period.startTime}-${period.endTime}`).join(" / ");
@@ -771,13 +756,6 @@ export default function Admin() {
       isRecurring: false,
     }));
     setIsBlocking(true);
-  };
-
-  const applyShopPreset = (preset: "normal" | "afternoon" | "weekdays" | "closed") => {
-    if (preset === "normal") setShopAvailabilityForm(createDefaultAvailabilityForm());
-    if (preset === "afternoon") setShopAvailabilityForm(createAfternoonAvailabilityForm());
-    if (preset === "weekdays") setShopAvailabilityForm(createWeekdayOnlyAvailabilityForm());
-    if (preset === "closed") setShopAvailabilityForm(createBlankAvailabilityForm());
   };
 
   const applyDayToTargets = () => {
@@ -2245,47 +2223,20 @@ export default function Admin() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4 p-4 md:p-5">
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-                  <div className="rounded-xl border border-white/10 bg-background/40 p-4">
-                    <div className="mb-3 flex items-center gap-2">
-                      <Wand2 className="h-4 w-4 text-primary" />
-                      <h3 className="font-bold text-white">Atalhos rápidos</h3>
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left" onClick={() => applyShopPreset("normal")}>
-                        <span className="text-sm font-bold">Semana normal</span>
-                        <span className="text-xs text-gray-400">09-13 / 14-20</span>
-                      </Button>
-                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left" onClick={() => applyShopPreset("afternoon")}>
-                        <span className="text-sm font-bold">Só tardes</span>
-                        <span className="text-xs text-gray-400">14-20 todos os dias</span>
-                      </Button>
-                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left" onClick={() => applyShopPreset("weekdays")}>
-                        <span className="text-sm font-bold">Dias úteis</span>
-                        <span className="text-xs text-gray-400">Sábado fechado</span>
-                      </Button>
-                      <Button type="button" variant="outline" className="h-auto min-h-14 flex-col items-start rounded-lg p-3 text-left text-red-300" onClick={() => applyShopPreset("closed")}>
-                        <span className="text-sm font-bold">Fechar tudo</span>
-                        <span className="text-xs text-red-300/70">Sem marcações novas</span>
-                      </Button>
-                    </div>
+                <div className="rounded-xl border border-white/10 bg-background/40 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-primary" />
+                    <h3 className="font-bold text-white">Resumo semanal</h3>
                   </div>
-
-                  <div className="rounded-xl border border-white/10 bg-background/40 p-4">
-                    <div className="mb-3 flex items-center gap-2">
-                      <Clock className="h-4 w-4 text-primary" />
-                      <h3 className="font-bold text-white">Resumo semanal</h3>
-                    </div>
-                    <div className="space-y-2">
-                      {weekDays.map((day) => (
-                        <div key={day.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
-                          <span className="text-sm font-medium text-white">{day.short}</span>
-                          <span className={cn("text-right text-xs", shopAvailabilityForm[day.id]?.isWorking ? "text-gray-300" : "text-gray-500")}>
-                            {formatAvailabilitySummary(shopAvailabilityForm[day.id])}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    {weekDays.map((day) => (
+                      <div key={day.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
+                        <span className="text-sm font-medium text-white">{day.short}</span>
+                        <span className={cn("text-right text-xs", shopAvailabilityForm[day.id]?.isWorking ? "text-gray-300" : "text-gray-500")}>
+                          {formatAvailabilitySummary(shopAvailabilityForm[day.id])}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
