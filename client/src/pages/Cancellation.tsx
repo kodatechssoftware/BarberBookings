@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useAppointmentByToken, useCancelAppointment } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
+import { preloadReschedulePage } from "@/lib/page-preloads";
 import {
   AlertTriangle,
   CalendarClock,
@@ -77,6 +78,12 @@ export default function Cancellation() {
   );
   const isCancelled = appointment?.status === "cancelled" || appointment?.status === "late_cancelled";
   const isUnavailable = appointment && appointment.status !== "booked" && !isCancelled;
+
+  useEffect(() => {
+    if (appointment?.status === "booked") {
+      void preloadReschedulePage();
+    }
+  }, [appointment?.status]);
 
   const handleCancel = async () => {
     if (!token) return;
@@ -174,7 +181,12 @@ export default function Cancellation() {
           )}
 
           <div className="mt-6 space-y-3">
-            <Link href={`/reschedule/${token}`}>
+            <Link
+              href={`/reschedule/${token}`}
+              onFocus={() => void preloadReschedulePage()}
+              onMouseEnter={() => void preloadReschedulePage()}
+              onTouchStart={() => void preloadReschedulePage()}
+            >
               <Button variant="gold" className="flex h-12 w-full items-center justify-center gap-2 text-base">
                 <RotateCcw className="h-4 w-4" /> Reagendar
               </Button>

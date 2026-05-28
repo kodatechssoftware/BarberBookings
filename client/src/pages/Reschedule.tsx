@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
+import { preloadCancellationPage } from "@/lib/page-preloads";
 import { useToast } from "@/hooks/use-toast";
 import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
@@ -31,6 +32,12 @@ export default function Reschedule() {
       setSelectedDate(parseISO(appointment.startTime));
     }
   }, [appointment?.startTime]);
+
+  useEffect(() => {
+    if (appointment?.status === "booked") {
+      void preloadCancellationPage();
+    }
+  }, [appointment?.status]);
 
   const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
     barberId: appointment?.barberId ? String(appointment.barberId) : undefined,
@@ -173,7 +180,12 @@ export default function Reschedule() {
           <Button variant="gold" disabled={!selectedTime || rescheduleAppointment.isPending} onClick={handleSubmit}>
             {rescheduleAppointment.isPending ? "A reagendar..." : "Confirmar nova data"}
           </Button>
-          <Link href={`/cancel/${token}`}>
+          <Link
+            href={`/cancel/${token}`}
+            onFocus={() => void preloadCancellationPage()}
+            onMouseEnter={() => void preloadCancellationPage()}
+            onTouchStart={() => void preloadCancellationPage()}
+          >
             <Button variant="outline" className="border-white/10">Cancelar marcação</Button>
           </Link>
         </div>

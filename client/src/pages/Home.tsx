@@ -5,7 +5,7 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
-import { preloadBookingPage } from "@/lib/page-preloads";
+import { preloadAdminPage, preloadBookingPage } from "@/lib/page-preloads";
 import { queryClient } from "@/lib/queryClient";
 import { useBarbers } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -377,7 +377,15 @@ export default function Home() {
                 Instagram
               </a>
             )}
-            <a href="/admin" className="text-gray-500 hover:text-primary">Acesso administrativo</a>
+            <Link
+              href="/admin"
+              className="text-gray-500 hover:text-primary"
+              onFocus={() => void preloadAdminPage()}
+              onMouseEnter={() => void preloadAdminPage()}
+              onTouchStart={() => void preloadAdminPage()}
+            >
+              Acesso administrativo
+            </Link>
           </div>
         </div>
       </footer>

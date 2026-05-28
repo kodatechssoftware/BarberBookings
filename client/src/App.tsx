@@ -4,13 +4,18 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { preloadBookingPage } from "@/lib/page-preloads";
+import {
+  preloadAdminPage,
+  preloadBookingPage,
+  preloadCancellationPage,
+  preloadReschedulePage,
+} from "@/lib/page-preloads";
 
 const Home = lazy(() => import("@/pages/Home"));
 const Booking = lazy(preloadBookingPage);
-const Admin = lazy(() => import("@/pages/Admin"));
-const Cancellation = lazy(() => import("@/pages/Cancellation"));
-const Reschedule = lazy(() => import("@/pages/Reschedule"));
+const Admin = lazy(preloadAdminPage);
+const Cancellation = lazy(preloadCancellationPage);
+const Reschedule = lazy(preloadReschedulePage);
 const BarberInvite = lazy(() => import("@/pages/BarberInvite"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
