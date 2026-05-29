@@ -84,7 +84,7 @@ export function buildBookingConfirmationMessage({
   const time = formatAppointmentTime(startTime);
 
   return [
-    `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o na ${SHOP_NAME} est\u00e1 confirmada.`,
+    `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o est\u00e1 confirmada.`,
     "",
     `Data: ${date} \u00e0s ${time}`,
     barberName ? `Barbeiro: ${barberName}` : null,
@@ -106,9 +106,10 @@ export function buildBookingCancellationMessage({
   const time = formatAppointmentTime(startTime);
 
   return [
-    `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o na ${SHOP_NAME} para ${date} \u00e0s ${time} foi cancelada com sucesso.`,
+    `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o para ${date} \u00e0s ${time} foi cancelada com sucesso.`,
     "Se quiser voltar a marcar, estamos dispon\u00edveis para agendar uma nova data quando quiser.",
-    `Obrigado, ${SHOP_NAME}`,
+    "Obrigado,",
+    SHOP_NAME,
   ].filter(Boolean).join("\n");
 }
 

@@ -181,7 +181,7 @@ export async function sendBookingCancellationConfirmation({
               : ""
           }
           <p>Se quiser voltar a marcar, estamos disponíveis para agendar uma nova data quando quiser.</p>
-          <p>Obrigado, Baptista Barber Shop</p>
+          <p>Obrigado,<br />Baptista Barber Shop</p>
         </div>
       `,
     });
