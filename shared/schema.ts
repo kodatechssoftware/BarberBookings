@@ -178,8 +178,8 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   depositRequired: true,
   depositReason: true,
 }).extend({
-  customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome nao pode ter mais de 80 caracteres."),
-  customerEmail: z.string().trim().email("Indique um email valido.").max(120, "O email nao pode ter mais de 120 caracteres.").optional().nullable(),
+  customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome não pode ter mais de 80 caracteres."),
+  customerEmail: z.string().trim().email("Indique um email válido.").max(120, "O email não pode ter mais de 120 caracteres.").optional().nullable(),
   customerPhone: bookingPhoneSchema,
 });
 export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });

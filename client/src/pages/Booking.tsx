@@ -370,8 +370,8 @@ export default function Booking() {
 
     if (!isValidBookingPhone(customerDetails.phone, selectedPhoneCountry)) {
       toast({
-        title: "Telemovel invalido",
-        description: "Escolha o pais e confirme que o numero tem o tamanho correto.",
+        title: "Telemóvel inválido",
+        description: "Escolha o país e confirme que o número tem o tamanho correto.",
         variant: "destructive",
       });
       return;
@@ -384,8 +384,8 @@ export default function Booking() {
     const customerEmail = customerDetails.email.trim();
     if (!isValidOptionalEmail(customerEmail)) {
       toast({
-        title: "Email invalido",
-        description: "Indique um email valido ou deixe o campo vazio.",
+        title: "Email inválido",
+        description: "Indique um email válido ou deixe o campo vazio.",
         variant: "destructive",
       });
       return;
@@ -438,7 +438,7 @@ export default function Booking() {
             Vai receber a confirmação por WhatsApp com os detalhes da marcação e o link de cancelamento.
           </p>
           <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
-            Se nao receber a mensagem em poucos minutos, contacte diretamente a barbearia para alterar ou cancelar a marcacao.
+            Se não receber a mensagem em poucos minutos, contacte diretamente a barbearia para alterar ou cancelar a marcação.
           </p>
           
           <div className="space-y-4">
@@ -829,7 +829,7 @@ export default function Booking() {
                       />
                     </div>
                     <p className="text-[11px] text-gray-500">
-                      Escolha o pais e escreva apenas o numero. O indicativo e adicionado automaticamente.
+                      Escolha o país e escreva apenas o número. O indicativo é adicionado automaticamente.
                     </p>
                   </div>
 
