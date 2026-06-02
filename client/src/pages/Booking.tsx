@@ -2,11 +2,11 @@ import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
-import { type AppointmentRecord, useCancelAppointment, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
+import { type AppointmentRecord, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
-import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, XCircle, Loader2 } from "lucide-react";
+import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { format, addDays, startOfToday, parseISO } from "date-fns";
+import { addDays, eachDayOfInterval, endOfMonth, format, parseISO, startOfMonth, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,7 @@ type BookingPreference = {
   serviceId: number | null;
   selectedDate: Date;
   selectedTime: string | null;
+  phoneCountryCode: PhoneCountryCode;
   customerDetails: {
     name: string;
     email: string;
@@ -32,6 +33,70 @@ type BookingPreference = {
 };
 
 const lastBookingStorageKey = "baptista:lastBooking";
+const MAX_NAME_LENGTH = 80;
+const MAX_PHONE_LENGTH = 16;
+const MAX_EMAIL_LENGTH = 120;
+const PHONE_COUNTRIES = [
+  { code: "PT", label: "Portugal", flag: "🇵🇹", dialCode: "+351", minDigits: 9, maxDigits: 9, placeholder: "912 345 678" },
+  { code: "ES", label: "Espanha", flag: "🇪🇸", dialCode: "+34", minDigits: 9, maxDigits: 9, placeholder: "612 345 678" },
+  { code: "DE", label: "Alemanha", flag: "🇩🇪", dialCode: "+49", minDigits: 7, maxDigits: 13, placeholder: "151 23456789" },
+  { code: "FR", label: "Franca", flag: "🇫🇷", dialCode: "+33", minDigits: 9, maxDigits: 9, placeholder: "6 12 34 56 78" },
+  { code: "GB", label: "Reino Unido", flag: "🇬🇧", dialCode: "+44", minDigits: 10, maxDigits: 10, placeholder: "7700 900123" },
+  { code: "BR", label: "Brasil", flag: "🇧🇷", dialCode: "+55", minDigits: 10, maxDigits: 11, placeholder: "11 91234 5678" },
+  { code: "AO", label: "Angola", flag: "🇦🇴", dialCode: "+244", minDigits: 9, maxDigits: 9, placeholder: "923 456 789" },
+  { code: "NL", label: "Holanda", flag: "🇳🇱", dialCode: "+31", minDigits: 9, maxDigits: 9, placeholder: "6 12345678" },
+  { code: "IT", label: "Italia", flag: "🇮🇹", dialCode: "+39", minDigits: 9, maxDigits: 11, placeholder: "312 345 6789" },
+] as const;
+
+type PhoneCountryCode = typeof PHONE_COUNTRIES[number]["code"];
+
+const DEFAULT_PHONE_COUNTRY = PHONE_COUNTRIES[0];
+
+const formatPhoneInput = (value: string) => {
+  return value.replace(/[^\d\s()-]/g, "").replace(/\s+/g, " ").trimStart().slice(0, MAX_PHONE_LENGTH);
+};
+
+const getPhoneCountry = (countryCode: PhoneCountryCode) => (
+  PHONE_COUNTRIES.find((country) => country.code === countryCode) ?? DEFAULT_PHONE_COUNTRY
+);
+
+const splitStoredPhone = (value: string) => {
+  const trimmed = value.trim();
+  const internationalValue = trimmed.startsWith("00")
+    ? `+${trimmed.replace(/\D/g, "").slice(2)}`
+    : trimmed.startsWith("+")
+      ? `+${trimmed.replace(/\D/g, "")}`
+      : trimmed;
+
+  const matchedCountry = PHONE_COUNTRIES.find((country) => internationalValue.startsWith(country.dialCode));
+  if (!matchedCountry) {
+    return {
+      countryCode: DEFAULT_PHONE_COUNTRY.code,
+      localPhone: formatPhoneInput(trimmed),
+    };
+  }
+
+  return {
+    countryCode: matchedCountry.code,
+    localPhone: formatPhoneInput(internationalValue.slice(matchedCountry.dialCode.length)),
+  };
+};
+
+const isValidBookingPhone = (value: string, countryCode: PhoneCountryCode) => {
+  const country = getPhoneCountry(countryCode);
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= country.minDigits && digits.length <= country.maxDigits;
+};
+
+const toStoredPhone = (value: string, countryCode: PhoneCountryCode) => {
+  const country = getPhoneCountry(countryCode);
+  return `${country.dialCode}${value.replace(/\D/g, "")}`;
+};
+
+const isValidOptionalEmail = (value: string) => {
+  if (!value.trim()) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+};
 
 const parseNumericParam = (value: string | null) => {
   if (value === null) return null;
@@ -87,6 +152,7 @@ const getInitialBookingPreference = (): BookingPreference => {
     serviceId: null,
     selectedDate: startOfToday(),
     selectedTime: null,
+    phoneCountryCode: DEFAULT_PHONE_COUNTRY.code,
     customerDetails: { name: "", email: "", phone: "" },
   };
 
@@ -98,6 +164,7 @@ const getInitialBookingPreference = (): BookingPreference => {
   const serviceId = parseNumericParam(params.get("serviceId")) ?? lastBooking?.serviceId ?? null;
   const selectedDate = parseDateParam(params.get("date")) ?? startOfToday();
   const selectedTime = parseTimeParam(params.get("time"));
+  const phonePreference = splitStoredPhone(lastBooking?.customerPhone || "");
 
   return {
     step: barberId !== null && serviceId !== null && selectedTime ? 4 : barberId !== null && serviceId !== null ? 3 : barberId !== null ? 2 : 1,
@@ -105,10 +172,11 @@ const getInitialBookingPreference = (): BookingPreference => {
     serviceId,
     selectedDate,
     selectedTime,
+    phoneCountryCode: phonePreference.countryCode,
     customerDetails: {
       name: lastBooking?.customerName || "",
       email: lastBooking?.customerEmail || "",
-      phone: lastBooking?.customerPhone || "",
+      phone: phonePreference.localPhone,
     },
   };
 };
@@ -188,7 +256,9 @@ export default function Booking() {
   const [selectedBarberId, setSelectedBarberId] = useState<number | null>(initialPreference.barberId);
   const [selectedServiceId, setSelectedServiceId] = useState<number | null>(initialPreference.serviceId);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(initialPreference.selectedDate);
+  const [visibleCalendarMonth, setVisibleCalendarMonth] = useState<Date>(initialPreference.selectedDate);
   const [selectedTime, setSelectedTime] = useState<string | null>(initialPreference.selectedTime);
+  const [selectedPhoneCountry, setSelectedPhoneCountry] = useState<PhoneCountryCode>(initialPreference.phoneCountryCode);
   const [showTimeError, setShowTimeError] = useState(false);
   const [customerDetails, setCustomerDetails] = useState(initialPreference.customerDetails);
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
@@ -200,7 +270,6 @@ export default function Booking() {
   const { data: availabilityRows } = useBarberAvailability();
   const { data: shopAvailabilityRows } = useShopAvailability();
   const createAppointment = useCreateAppointment();
-  const cancelAppointment = useCancelAppointment();
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
 
@@ -210,9 +279,15 @@ export default function Booking() {
     date: selectedDate ? format(selectedDate, 'yyyy-MM-dd') : undefined,
   });
 
+  const { data: calendarAppointments } = usePublicAppointments({
+    barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()),
+    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId),
+  });
+
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
   const selectedService = visibleServices.find((service) => service.id === selectedServiceId);
   const selectedBarberLabel = selectedBarberId === 0 ? "Sem preferência" : selectedBarber?.name;
+  const selectedPhoneCountryData = getPhoneCountry(selectedPhoneCountry);
 
   // Generate Time Slots
   const timeSlots = useMemo(() => {
@@ -226,6 +301,43 @@ export default function Booking() {
       existingAppointments,
     });
   }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
+
+  const availableDateKeys = useMemo(() => {
+    if (!selectedService || selectedBarberId === null) return new Set<string>();
+
+    const monthStart = startOfMonth(visibleCalendarMonth);
+    const monthEnd = endOfMonth(visibleCalendarMonth);
+    const appointments = calendarAppointments ?? [];
+    const availability = (availabilityRows as AvailabilityRow[] | undefined) ?? [];
+    const shopAvailability = (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [];
+    const availableKeys = new Set<string>();
+
+    eachDayOfInterval({ start: monthStart, end: monthEnd }).forEach((date) => {
+      const slots = getAvailableTimeSlots({
+        selectedService,
+        selectedDate: date,
+        selectedBarberId,
+        visibleBarbers,
+        availabilityRows: availability,
+        shopAvailabilityRows: shopAvailability,
+        existingAppointments: appointments,
+      });
+
+      if (slots.some((slot) => slot.available)) {
+        availableKeys.add(format(date, "yyyy-MM-dd"));
+      }
+    });
+
+    return availableKeys;
+  }, [
+    availabilityRows,
+    calendarAppointments,
+    selectedBarberId,
+    selectedService,
+    shopAvailabilityRows,
+    visibleBarbers,
+    visibleCalendarMonth,
+  ]);
 
   const handleNext = () => {
     if (step === 3 && !selectedTime) {
@@ -250,25 +362,50 @@ export default function Booking() {
       return;
     }
 
+    const customerName = customerDetails.name.trim();
+    if (!customerName) {
+      toast({ title: "Erro", description: "Por favor indique o seu nome.", variant: "destructive" });
+      return;
+    }
+
+    if (!isValidBookingPhone(customerDetails.phone, selectedPhoneCountry)) {
+      toast({
+        title: "Telemovel invalido",
+        description: "Escolha o pais e confirme que o numero tem o tamanho correto.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const normalizedPhone = toStoredPhone(customerDetails.phone, selectedPhoneCountry);
+
     const [hours, minutes] = selectedTime.split(':').map(Number);
     const appointmentDate = new Date(selectedDate);
     appointmentDate.setHours(hours, minutes, 0, 0);
+    const customerEmail = customerDetails.email.trim();
+    if (!isValidOptionalEmail(customerEmail)) {
+      toast({
+        title: "Email invalido",
+        description: "Indique um email valido ou deixe o campo vazio.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
       const result = await createAppointment.mutateAsync({
         barberId: selectedBarberId,
         serviceId: selectedServiceId,
         startTime: appointmentDate,
-        customerName: customerDetails.name,
-        customerEmail: customerDetails.email || undefined,
-        customerPhone: customerDetails.phone,
+        customerName,
+        customerEmail: customerEmail || undefined,
+        customerPhone: normalizedPhone,
       });
       saveLastBookingPreference({
         barberId: selectedBarberId,
         serviceId: selectedServiceId,
-        customerName: customerDetails.name,
-        customerEmail: customerDetails.email,
-        customerPhone: customerDetails.phone,
+        customerName,
+        customerEmail,
+        customerPhone: normalizedPhone,
       });
       setCreatedAppointment(result);
       setStep(5);
@@ -281,16 +418,6 @@ export default function Booking() {
     }
   };
 
-  const handleCancel = async () => {
-    if (!createdAppointment) return;
-    try {
-      const result = await cancelAppointment.mutateAsync(createdAppointment.cancelToken);
-      toast({ title: "Sucesso", description: result.message || "Marcação cancelada com sucesso." });
-      setStep(6); // Cancelled success step
-    } catch (error: any) {
-      toast({ title: "Erro", description: error.message, variant: "destructive" });
-    }
-  };
 
   if (step === 5) {
     return (
@@ -310,48 +437,20 @@ export default function Booking() {
           <p className="mb-8 text-sm text-gray-500">
             Vai receber a confirmação por WhatsApp com os detalhes da marcação e o link de cancelamento.
           </p>
+          <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
+            Se nao receber a mensagem em poucos minutos, contacte diretamente a barbearia para alterar ou cancelar a marcacao.
+          </p>
           
           <div className="space-y-4">
             <Link href="/">
               <Button variant="gold" className="w-full">Voltar ao Início</Button>
             </Link>
-            
-            <Button 
-              variant="outline" 
-              className="w-full border-red-500/50 text-red-500 hover:bg-red-500/10"
-              onClick={handleCancel}
-              disabled={cancelAppointment.isPending}
-            >
-              {cancelAppointment.isPending ? "A cancelar..." : "Cancelar Marcação"}
-            </Button>
           </div>
         </div>
       </div>
     );
   }
 
-  if (step === 6) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <div className="max-w-md w-full text-center">
-          <motion.div 
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="w-24 h-24 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6"
-          >
-            <XCircle className="w-12 h-12 text-red-500" />
-          </motion.div>
-          <h2 className="text-3xl font-display font-bold mb-4 text-white">Marcação Cancelada</h2>
-          <p className="text-gray-400 mb-8">
-            A sua marcação foi cancelada. Se foi em cima da hora, pode ficar registada como cancelamento tardio.
-          </p>
-          <Link href="/">
-            <Button variant="gold" className="w-full">Voltar ao Início</Button>
-          </Link>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col font-body">
@@ -557,26 +656,43 @@ export default function Booking() {
                     <Calendar
                       mode="single"
                       selected={selectedDate}
+                      month={visibleCalendarMonth}
+                      onMonthChange={setVisibleCalendarMonth}
                       onSelect={(date) => {
                         setSelectedDate(date);
+                        if (date) setVisibleCalendarMonth(date);
                         setSelectedTime(null);
                         setShowTimeError(false);
                       }}
                       disabled={(date) => date < addDays(new Date(), -1)}
                       initialFocus
-                      className="rounded-md mx-auto"
+                      className="w-full rounded-md px-1 py-2 md:px-3 md:py-3"
                       locale={pt}
+                      modifiers={{
+                        hasAvailability: (date) => availableDateKeys.has(format(date, "yyyy-MM-dd")),
+                      }}
+                      modifiersClassNames={{
+                        hasAvailability: "booking-day-available",
+                      }}
                       classNames={{
                         day_selected: "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
                         day_today: "bg-white/10 text-white",
-                        table: "w-full border-collapse space-y-1",
-                        head_cell: "text-muted-foreground rounded-md w-8 md:w-9 font-normal text-[0.8rem]",
-                        cell: "h-8 w-8 md:h-9 md:w-9 text-center text-sm p-0 relative",
+                        months: "w-full",
+                        month: "w-full space-y-4",
+                        table: "w-full border-collapse",
+                        head_row: "grid grid-cols-7",
+                        row: "grid grid-cols-7 w-full mt-2",
+                        head_cell: "text-muted-foreground rounded-md w-auto font-normal text-[0.8rem]",
+                        cell: "h-11 w-full text-center text-sm p-0 relative",
                         day: cn(
-                          "h-8 w-8 md:h-9 md:w-9 p-0 font-normal aria-selected:opacity-100 hover:bg-white/5 rounded-md transition-colors"
+                          "relative mx-auto h-10 w-10 p-0 pb-1 font-normal aria-selected:opacity-100 hover:bg-white/5 rounded-md transition-colors"
                         ),
                       }}
                     />
+                    <div className="mt-2 flex items-center justify-center gap-2 text-[11px] text-gray-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_0.45rem_hsl(var(--primary)/0.45)]" />
+                      <span>Dias com horários disponíveis</span>
+                    </div>
                   </div>
                 </div>
 
@@ -672,6 +788,7 @@ export default function Booking() {
                         id="name" 
                         placeholder="O seu nome" 
                         className="pl-10 bg-background border-white/10 focus:border-primary"
+                        maxLength={MAX_NAME_LENGTH}
                         value={customerDetails.name}
                         onChange={(e) => setCustomerDetails(prev => ({ ...prev, name: e.target.value }))}
                       />
@@ -680,16 +797,40 @@ export default function Booking() {
                   
                   <div className="space-y-2">
                     <Label htmlFor="phone">Telemóvel *</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-3 text-xs text-gray-500 font-bold">+351</span>
+                    <div className="flex rounded-md border border-white/10 bg-background focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+                      <div className="relative shrink-0 border-r border-white/10">
+                        <select
+                          aria-label="Pais do telemovel"
+                          className="h-12 w-[116px] appearance-none rounded-l-md bg-transparent px-3 pr-6 text-sm font-medium text-white outline-none"
+                          value={selectedPhoneCountry}
+                          onChange={(e) => {
+                            setSelectedPhoneCountry(e.target.value as PhoneCountryCode);
+                            setCustomerDetails(prev => ({ ...prev, phone: "" }));
+                          }}
+                        >
+                          {PHONE_COUNTRIES.map((country) => (
+                            <option key={country.code} value={country.code} className="bg-card text-white">
+                              {country.flag} {country.dialCode}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
+                      </div>
                       <Input 
                         id="phone" 
-                        placeholder="912 345 678" 
-                        className="pl-12 bg-background border-white/10 focus:border-primary"
+                        type="tel"
+                        inputMode="tel"
+                        autoComplete="tel"
+                        placeholder={selectedPhoneCountryData.placeholder}
+                        className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+                        maxLength={MAX_PHONE_LENGTH}
                         value={customerDetails.phone}
-                        onChange={(e) => setCustomerDetails(prev => ({ ...prev, phone: e.target.value }))}
+                        onChange={(e) => setCustomerDetails(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }))}
                       />
                     </div>
+                    <p className="text-[11px] text-gray-500">
+                      Escolha o pais e escreva apenas o numero. O indicativo e adicionado automaticamente.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -699,6 +840,7 @@ export default function Booking() {
                       type="email" 
                       placeholder="exemplo@email.com" 
                       className="bg-background border-white/10 focus:border-primary"
+                      maxLength={MAX_EMAIL_LENGTH}
                       value={customerDetails.email}
                       onChange={(e) => setCustomerDetails(prev => ({ ...prev, email: e.target.value }))}
                     />

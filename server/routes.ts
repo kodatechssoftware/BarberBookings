@@ -973,16 +973,25 @@ export async function registerRoutes(
       const requestedDuration = getAppointmentDurationMinutes(input.serviceId, serviceDurations);
       const requestedEndTime = new Date(input.startTime.getTime() + requestedDuration * 60000);
       const dateStr = getShopDateParts(input.startTime).dateKey;
+      const trimmedCustomerPhone = input.customerPhone.trim();
+      const customerPhoneDigits = normalizePhone(trimmedCustomerPhone);
+      const normalizedCustomerPhone = trimmedCustomerPhone.startsWith("+")
+        ? `+${customerPhoneDigits}`
+        : trimmedCustomerPhone.startsWith("00")
+          ? `+${customerPhoneDigits.slice(2)}`
+          : customerPhoneDigits.length === 9 && customerPhoneDigits.startsWith("9")
+            ? `+351${customerPhoneDigits}`
+            : customerPhoneDigits;
       const previousAppointments = await storage.getAppointments();
       const depositRecommendation = getDepositRecommendation({
         previousAppointments,
-        customerPhone: input.customerPhone,
+        customerPhone: normalizedCustomerPhone,
         customerEmail: input.customerEmail,
         serviceDurationMinutes: requestedDuration,
       });
 
       // Check for blacklist
-      const isBlacklisted = await storage.isBlacklisted(input.customerEmail || undefined, input.customerPhone);
+      const isBlacklisted = await storage.isBlacklisted(input.customerEmail || undefined, normalizedCustomerPhone);
       if (isBlacklisted) {
         return res.status(403).json({ message: "Não é possível realizar a marcação online. Por favor, contacte a barbearia." });
       }
@@ -1046,6 +1055,7 @@ export async function registerRoutes(
       const appointment = await storage.createAppointment({
         ...input,
         barberId: finalBarberId,
+        customerPhone: normalizedCustomerPhone,
         cancelToken,
         durationMinutes: requestedDuration,
         depositRequired: depositRecommendation.required,
@@ -1060,7 +1070,7 @@ export async function registerRoutes(
         return sendBookingCreatedNotification({
           customerName: input.customerName,
           customerEmail: input.customerEmail,
-          customerPhone: input.customerPhone,
+          customerPhone: normalizedCustomerPhone,
           barberName: barber?.name,
           serviceName: service?.name || "Serviço indisponível",
           startTime: input.startTime,

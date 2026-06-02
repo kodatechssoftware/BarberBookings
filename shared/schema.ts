@@ -160,6 +160,14 @@ export const servicesRelations = relations(services, ({ many }) => ({
 
 export const insertBarberSchema = createInsertSchema(barbers).omit({ id: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true });
+const bookingPhoneSchema = z.string().trim().refine((value) => {
+  const trimmed = value.trim();
+  const digits = value.replace(/\D/g, "");
+  if (!trimmed.startsWith("+") && !trimmed.startsWith("00") && digits.length === 9 && digits.startsWith("9")) {
+    return true;
+  }
+  return (trimmed.startsWith("+") || trimmed.startsWith("00")) && digits.length >= 7 && digits.length <= 15;
+}, "Indique um telemovel valido.");
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   id: true,
   createdAt: true,
@@ -169,6 +177,10 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   durationMinutes: true,
   depositRequired: true,
   depositReason: true,
+}).extend({
+  customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome nao pode ter mais de 80 caracteres."),
+  customerEmail: z.string().trim().email("Indique um email valido.").max(120, "O email nao pode ter mais de 120 caracteres.").optional().nullable(),
+  customerPhone: bookingPhoneSchema,
 });
 export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });
 export const insertBlacklistSchema = createInsertSchema(blacklist).omit({ id: true, createdAt: true });
