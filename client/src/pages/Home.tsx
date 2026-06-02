@@ -203,7 +203,7 @@ export default function Home() {
         </div>
 
         <div className="container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center px-4 pb-10 md:min-h-[calc(72vh-5rem)] md:pb-12">
-          <div className="w-full min-w-0 max-w-[22rem] sm:max-w-xl md:max-w-3xl">
+          <div className="w-full min-w-0 sm:max-w-xl md:max-w-3xl">
             <p className="mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">Baptista Barber Shop</p>
             <h1 className="font-display text-3xl font-bold leading-[0.98] text-white sm:text-5xl md:text-7xl">
               Corte e barba com hora marcada
