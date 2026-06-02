@@ -212,7 +212,7 @@ export default function Home() {
               Serviços essenciais, acabamentos cuidados e atendimento sem pressa no centro da Charneca da Caparica.
             </p>
 
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
               <Button
                 asChild
                 variant="gold"
@@ -229,7 +229,7 @@ export default function Home() {
               </Button>
             </div>
 
-            <div className="mt-6 max-w-sm rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm">
+            <div className="mt-6 w-full rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm sm:max-w-sm">
               <div className="flex items-start gap-3">
                 <Clock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                 <div className="min-w-0">
