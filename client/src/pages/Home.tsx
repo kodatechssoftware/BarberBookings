@@ -202,13 +202,13 @@ export default function Home() {
           <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-background to-transparent" />
         </div>
 
-        <div className="container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center px-4 pb-10 md:min-h-[calc(72vh-5rem)] md:pb-12">
-          <div className="w-full min-w-0 max-w-[22rem] sm:max-w-xl md:max-w-3xl">
+        <div className="container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center justify-center px-4 pb-10 text-center sm:justify-start sm:text-left md:min-h-[calc(72vh-5rem)] md:pb-12">
+          <div className="mx-auto w-full min-w-0 max-w-[22rem] sm:mx-0 sm:max-w-xl md:max-w-3xl">
             <p className="mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">Baptista Barber Shop</p>
             <h1 className="font-display text-3xl font-bold leading-[0.98] text-white sm:text-5xl md:text-7xl">
               Corte e barba com hora marcada
             </h1>
-            <p className="mt-6 max-w-xl text-base leading-relaxed text-gray-300 md:text-lg">
+            <p className="mx-auto mt-6 max-w-xl text-base leading-relaxed text-gray-300 sm:mx-0 md:text-lg">
               Serviços essenciais, acabamentos cuidados e atendimento sem pressa no centro da Charneca da Caparica.
             </p>
 
@@ -229,7 +229,7 @@ export default function Home() {
               </Button>
             </div>
 
-            <div className="mt-6 max-w-sm rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm">
+            <div className="mx-auto mt-6 max-w-sm rounded-lg border border-white/10 bg-black/30 p-4 text-left backdrop-blur-sm sm:mx-0">
               <div className="flex items-start gap-3">
                 <Clock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                 <div className="min-w-0">
