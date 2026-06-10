@@ -18,9 +18,11 @@ export type ShopAvailabilityRow = {
 
 export type BarberOption = {
   id: number;
+  serviceIds?: number[] | null;
 };
 
 export type ServiceOption = {
+  id: number;
   duration: number;
 };
 
@@ -28,6 +30,12 @@ export type TimeSlot = {
   time: string;
   available: boolean;
 };
+
+export function canBarberPerformService(barber: BarberOption | undefined | null, serviceId?: number | null) {
+  if (!barber || !serviceId) return true;
+  const serviceIds = barber.serviceIds ?? [];
+  return serviceIds.length === 0 || serviceIds.includes(serviceId);
+}
 
 type MinutePeriod = {
   start: number;
@@ -132,9 +140,12 @@ export function getAvailableTimeSlots({
   const targetBarbers = selectedBarberId === 0
     ? visibleBarbers
     : visibleBarbers.filter((barber) => barber.id === selectedBarberId);
+  const eligibleBarbers = targetBarbers.filter((barber) =>
+    canBarberPerformService(barber, selectedService.id),
+  );
 
   const candidateStartMinutes = new Set<number>();
-  targetBarbers.forEach((barber) => {
+  eligibleBarbers.forEach((barber) => {
     getEffectivePeriodsForBarber({
       barberId: barber.id,
       dayOfWeek,
@@ -170,7 +181,7 @@ export function getAvailableTimeSlots({
         .map((appointment) => appointment.barberId),
     );
 
-    const hasAvailableBarber = targetBarbers.some((barber) => {
+    const hasAvailableBarber = eligibleBarbers.some((barber) => {
       const fitsBarberSchedule = getEffectivePeriodsForBarber({
         barberId: barber.id,
         dayOfWeek,

@@ -2,9 +2,9 @@ import { lazy, Suspense, useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
 import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
-import { format, parseISO, startOfToday, subDays } from "date-fns";
+import { addDays, format, parseISO, startOfToday, startOfWeek, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, BarChart3, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Bell, Copy, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2, Pencil, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -34,11 +35,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch, buildApiUrl } from "@/lib/api";
 import {
+  canBarberPerformService,
   getEffectivePeriodsForBarber,
   periodsForShop,
   type AvailabilityRow,
   type ShopAvailabilityRow,
 } from "@/lib/availability";
+import {
+  emailValidationMessage,
+  isValidOptionalEmail,
+  isValidPortugueseMobile,
+  normalizeEmail,
+  normalizePortuguesePhone,
+  phoneValidationMessage,
+} from "@shared/customer-validation";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
@@ -56,6 +66,7 @@ type AdminAppointment = {
   barberId: number;
   serviceId: number | null;
   startTime: string;
+  durationMinutes: number;
   status: AppointmentStatus;
   customerName: string;
   customerPhone: string;
@@ -64,6 +75,7 @@ type AdminAppointment = {
   depositReason?: string | null;
 };
 type AppointmentStatusFilter = AppointmentStatus | "all";
+type AppointmentViewMode = "day" | "upcoming";
 type DashboardData = {
   range: {
     startDate: string;
@@ -305,6 +317,630 @@ function getEditedBarberAvatar(
     : barber.avatar || "";
 }
 
+type ServiceListItem = {
+  id: number;
+  name: string;
+  duration?: number;
+  isVisible?: boolean | null;
+};
+
+const barberColorPalette = ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
+const defaultBarberColor = "#D4AF37";
+
+function normalizeBarberColor(color?: string | null) {
+  return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : defaultBarberColor;
+}
+
+function colorWithAlpha(color: string | undefined | null, alpha: number) {
+  const normalized = normalizeBarberColor(color).replace("#", "");
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getAllServiceIds(services?: ServiceListItem[]) {
+  return (services || []).map((service) => service.id);
+}
+
+function normalizeServiceSelection(selectedServiceIds: number[], allServiceIds: number[]) {
+  const uniqueSelectedIds = Array.from(new Set(selectedServiceIds));
+  return uniqueSelectedIds.length >= allServiceIds.length ? [] : uniqueSelectedIds;
+}
+
+function getEffectiveServiceSelection(
+  explicitServiceIds: number[] | undefined,
+  services?: ServiceListItem[],
+) {
+  const allServiceIds = getAllServiceIds(services);
+  if (!explicitServiceIds || explicitServiceIds.length === 0) return allServiceIds;
+  return explicitServiceIds.filter((serviceId) => allServiceIds.includes(serviceId));
+}
+
+function formatBarberServicesSummary(
+  barber: { serviceIds?: number[] | null },
+  services?: ServiceListItem[],
+) {
+  const allServices = services || [];
+  const serviceIds = barber.serviceIds || [];
+  if (allServices.length === 0 || serviceIds.length === 0 || serviceIds.length >= allServices.length) {
+    return "Todos os serviços";
+  }
+
+  const names = allServices
+    .filter((service) => serviceIds.includes(service.id))
+    .map((service) => service.name);
+
+  return names.length > 0 ? names.join(", ") : "Sem serviços ativos";
+}
+
+function BarberServicesPicker({
+  services,
+  selectedServiceIds,
+  onChange,
+}: {
+  services?: ServiceListItem[];
+  selectedServiceIds: number[];
+  onChange: (serviceIds: number[]) => void;
+}) {
+  const allServices = services || [];
+
+  if (allServices.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-sm text-gray-500">
+        Crie serviços antes de limitar a equipa.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <Label>Serviços que executa</Label>
+        <p className="text-xs text-gray-500">Deixe todos ativos quando não há restrição.</p>
+      </div>
+      <div className="grid gap-2 rounded-lg border border-white/10 bg-background/50 p-3 sm:grid-cols-2">
+        {allServices.map((service) => {
+          const checked = selectedServiceIds.includes(service.id);
+          const isOnlySelected = checked && selectedServiceIds.length <= 1;
+
+          return (
+            <label
+              key={service.id}
+              className={cn(
+                "flex cursor-pointer items-start gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2 text-sm text-white transition-colors hover:bg-white/[0.06]",
+                checked && "border-primary/40 bg-primary/10",
+                isOnlySelected && "cursor-not-allowed opacity-70",
+              )}
+            >
+              <Checkbox
+                checked={checked}
+                disabled={isOnlySelected}
+                onCheckedChange={(value) => {
+                  const next = value
+                    ? Array.from(new Set([...selectedServiceIds, service.id]))
+                    : selectedServiceIds.filter((serviceId) => serviceId !== service.id);
+                  onChange(next);
+                }}
+                className="mt-0.5"
+              />
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{service.name}</span>
+                {service.isVisible === false && <span className="block text-[11px] text-gray-500">Oculto no site</span>}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BarberColorField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (color: string) => void;
+}) {
+  const selectedColor = normalizeBarberColor(value);
+
+  return (
+    <div className="space-y-2">
+      <Label>Cor na agenda</Label>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-background/50 p-3">
+        {barberColorPalette.map((color) => (
+          <button
+            key={color}
+            type="button"
+            aria-label={`Escolher ${color}`}
+            className={cn(
+              "h-8 w-8 rounded-full border-2 transition-transform hover:scale-105",
+              selectedColor === color ? "border-white" : "border-white/15",
+            )}
+            style={{ backgroundColor: color }}
+            onClick={() => onChange(color)}
+          />
+        ))}
+        <Input
+          type="color"
+          value={selectedColor}
+          onChange={(event) => onChange(normalizeBarberColor(event.target.value))}
+          className="h-8 w-12 cursor-pointer border-white/10 bg-transparent p-1"
+        />
+        <span className="text-xs text-gray-400">{selectedColor}</span>
+      </div>
+    </div>
+  );
+}
+
+const weeklyAgendaStartHour = 9;
+const weeklyAgendaEndHour = 20;
+const weeklyAgendaPixelsPerMinute = 1.12;
+const weeklyAgendaHeight = (weeklyAgendaEndHour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute;
+const weeklyAgendaHours = Array.from(
+  { length: weeklyAgendaEndHour - weeklyAgendaStartHour + 1 },
+  (_, index) => weeklyAgendaStartHour + index,
+);
+
+type WeeklyAgendaBarber = {
+  id: number;
+  name: string;
+  color?: string | null;
+};
+
+function getDateKey(date: Date) {
+  return format(date, "yyyy-MM-dd");
+}
+
+function getWeeklyAppointmentDuration(appointment: AdminAppointment) {
+  return Math.max(15, appointment.durationMinutes || 30);
+}
+
+function getWeeklyAppointmentEnd(appointment: AdminAppointment) {
+  const start = parseISO(appointment.startTime);
+  return new Date(start.getTime() + getWeeklyAppointmentDuration(appointment) * 60000);
+}
+
+function getAgendaMinutes(date: Date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function isAppointmentVisibleOnGrid(appointment: AdminAppointment) {
+  const start = parseISO(appointment.startTime);
+  const end = getWeeklyAppointmentEnd(appointment);
+  return getAgendaMinutes(end) > weeklyAgendaStartHour * 60 && getAgendaMinutes(start) < weeklyAgendaEndHour * 60;
+}
+
+function WeeklyAgenda({
+  weekStartDate,
+  appointments,
+  barbers,
+  services,
+  isLoading,
+  onPreviousWeek,
+  onNextWeek,
+  onToday,
+  onManualBooking,
+  onOpenCustomerHistory,
+  getStatusLabel,
+}: {
+  weekStartDate: Date;
+  appointments: AdminAppointment[];
+  barbers?: WeeklyAgendaBarber[];
+  services?: ServiceListItem[];
+  isLoading: boolean;
+  onPreviousWeek: () => void;
+  onNextWeek: () => void;
+  onToday: () => void;
+  onManualBooking: () => void;
+  onOpenCustomerHistory: (appointment: AdminAppointment) => void;
+  getStatusLabel: (status: string) => string;
+}) {
+  const calendarDays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => addDays(weekStartDate, index)),
+    [weekStartDate],
+  );
+  const barbersById = useMemo(
+    () => new Map((barbers || []).map((barber) => [barber.id, barber])),
+    [barbers],
+  );
+  const servicesById = useMemo(
+    () => new Map((services || []).map((service) => [service.id, service])),
+    [services],
+  );
+  const appointmentsByDay = useMemo(() => {
+    const grouped = new Map<string, AdminAppointment[]>();
+    for (const day of calendarDays) grouped.set(getDateKey(day), []);
+
+    appointments.forEach((appointment) => {
+      const key = getDateKey(parseISO(appointment.startTime));
+      const list = grouped.get(key);
+      if (list) list.push(appointment);
+    });
+
+    grouped.forEach((items) => {
+      items.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+    });
+
+    return grouped;
+  }, [appointments, calendarDays]);
+
+  const weekLabel = `${format(weekStartDate, "dd MMM", { locale: pt })} - ${format(addDays(weekStartDate, 6), "dd MMM yyyy", { locale: pt })}`;
+  const visibleBarbers = (barbers || []).filter((barber) =>
+    appointments.some((appointment) => appointment.barberId === barber.id),
+  );
+
+  const renderAppointmentSummary = (appointment: AdminAppointment, compact = false) => {
+    const start = parseISO(appointment.startTime);
+    const end = getWeeklyAppointmentEnd(appointment);
+    const barber = barbersById.get(appointment.barberId);
+    const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
+    const color = normalizeBarberColor(barber?.color);
+
+    return (
+      <button
+        key={appointment.id}
+        type="button"
+        onClick={() => onOpenCustomerHistory(appointment)}
+        className={cn(
+          "w-full rounded-lg border px-3 py-2 text-left transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+          appointment.status !== "booked" && "opacity-70",
+        )}
+        style={{
+          borderColor: colorWithAlpha(color, 0.55),
+          backgroundColor: colorWithAlpha(color, 0.13),
+        }}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-white">
+              {format(start, "HH:mm")} - {format(end, "HH:mm")}
+            </p>
+            <p className="mt-1 truncate text-sm font-semibold text-white">{appointment.customerName}</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-background/60 px-2 py-0.5 text-[10px] uppercase text-gray-300">
+            {getStatusLabel(appointment.status)}
+          </span>
+        </div>
+        {!compact && (
+          <div className="mt-1 min-w-0 text-xs text-gray-300">
+            <p className="truncate">{service?.name || "Sem serviço"}</p>
+            <p className="truncate" style={{ color }}>{barber?.name || "Barbeiro"}</p>
+          </div>
+        )}
+      </button>
+    );
+  };
+
+  return (
+    <Card className="border-white/10 bg-card text-white">
+      <CardHeader className="gap-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-widest text-primary">Agenda principal</p>
+            <CardTitle className="mt-1 text-xl font-bold">Agenda semanal</CardTitle>
+            <p className="mt-1 text-sm text-gray-400">{weekLabel}</p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="grid grid-cols-[44px_1fr_44px] gap-2 sm:flex">
+              <Button type="button" variant="outline" size="icon" className="h-10 border-white/10" onClick={onPreviousWeek} aria-label="Semana anterior">
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button type="button" variant="outline" className="h-10 border-white/10" onClick={onToday}>
+                Hoje
+              </Button>
+              <Button type="button" variant="outline" size="icon" className="h-10 border-white/10" onClick={onNextWeek} aria-label="Semana seguinte">
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+            <Button type="button" variant="gold" className="h-10 gap-2" onClick={onManualBooking}>
+              <Plus className="h-4 w-4" /> Marcação manual
+            </Button>
+          </div>
+        </div>
+
+        {visibleBarbers.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {visibleBarbers.map((barber) => (
+              <span key={barber.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: normalizeBarberColor(barber.color) }} />
+                {barber.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex min-h-[360px] items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-3 lg:hidden">
+              {calendarDays.map((day) => {
+                const key = getDateKey(day);
+                const dayAppointments = appointmentsByDay.get(key) || [];
+
+                return (
+                  <div key={key} className="rounded-xl border border-white/10 bg-background/60 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-bold text-white">{format(day, "EEEE", { locale: pt })}</p>
+                        <p className="text-xs text-gray-500">{format(day, "dd/MM/yyyy")}</p>
+                      </div>
+                      <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs text-gray-300">
+                        {dayAppointments.length}
+                      </span>
+                    </div>
+                    {dayAppointments.length > 0 ? (
+                      <div className="space-y-2">
+                        {dayAppointments.map((appointment) => renderAppointmentSummary(appointment))}
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-sm text-gray-500">
+                        Sem marcações.
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden overflow-x-auto lg:block">
+              <div className="min-w-[1040px]">
+                <div className="grid grid-cols-[64px_repeat(7,minmax(130px,1fr))]">
+                  <div />
+                  {calendarDays.map((day) => (
+                    <div key={getDateKey(day)} className="border-b border-white/10 px-3 pb-3 text-center">
+                      <p className="text-sm font-bold text-white">{format(day, "EEE", { locale: pt })}</p>
+                      <p className="text-xs text-gray-500">{format(day, "dd/MM")}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-[64px_repeat(7,minmax(130px,1fr))] overflow-hidden rounded-xl border border-white/10 bg-background/40">
+                  <div className="relative border-r border-white/10 bg-background/80" style={{ height: weeklyAgendaHeight }}>
+                    {weeklyAgendaHours.slice(0, -1).map((hour) => (
+                      <span
+                        key={hour}
+                        className="absolute right-3 -translate-y-2 text-xs text-gray-500"
+                        style={{ top: (hour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute }}
+                      >
+                        {String(hour).padStart(2, "0")}:00
+                      </span>
+                    ))}
+                  </div>
+
+                  {calendarDays.map((day) => {
+                    const key = getDateKey(day);
+                    const dayAppointments = (appointmentsByDay.get(key) || []).filter(isAppointmentVisibleOnGrid);
+
+                    return (
+                      <div key={key} className="relative border-r border-white/10 last:border-r-0" style={{ height: weeklyAgendaHeight }}>
+                        {weeklyAgendaHours.map((hour) => (
+                          <div
+                            key={hour}
+                            className="absolute left-0 right-0 border-t border-white/5"
+                            style={{ top: (hour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute }}
+                          />
+                        ))}
+                        {dayAppointments.map((appointment) => {
+                          const start = parseISO(appointment.startTime);
+                          const end = getWeeklyAppointmentEnd(appointment);
+                          const startMinutes = Math.max(
+                            weeklyAgendaStartHour * 60,
+                            getAgendaMinutes(start),
+                          );
+                          const endMinutes = Math.min(
+                            weeklyAgendaEndHour * 60,
+                            getAgendaMinutes(end),
+                          );
+                          const top = (startMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute + 4;
+                          const height = Math.max(44, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
+                          const slotKey = format(start, "HH:mm");
+                          const sameSlot = dayAppointments.filter((item) => format(parseISO(item.startTime), "HH:mm") === slotKey);
+                          const laneIndex = Math.max(0, sameSlot.findIndex((item) => item.id === appointment.id));
+                          const laneWidth = 100 / Math.max(1, sameSlot.length);
+                          const barber = barbersById.get(appointment.barberId);
+                          const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
+                          const color = normalizeBarberColor(barber?.color);
+
+                          return (
+                            <button
+                              key={appointment.id}
+                              type="button"
+                              onClick={() => onOpenCustomerHistory(appointment)}
+                              className={cn(
+                                "absolute overflow-hidden rounded-lg border px-2 py-1.5 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                                appointment.status !== "booked" && "opacity-70",
+                              )}
+                              style={{
+                                top,
+                                height,
+                                left: `calc(${laneIndex * laneWidth}% + 4px)`,
+                                width: `calc(${laneWidth}% - 8px)`,
+                                borderColor: colorWithAlpha(color, 0.65),
+                                backgroundColor: colorWithAlpha(color, 0.16),
+                                boxShadow: `0 12px 24px ${colorWithAlpha(color, 0.12)}`,
+                              }}
+                            >
+                              <span className="block text-[11px] font-bold text-white">
+                                {format(start, "HH:mm")} - {format(end, "HH:mm")}
+                              </span>
+                              <span className="block truncate text-xs font-semibold text-white">{appointment.customerName}</span>
+                              <span className="block truncate text-[11px] text-gray-300">{service?.name || "Sem serviço"}</span>
+                              <span className="block truncate text-[11px]" style={{ color }}>{barber?.name || "Barbeiro"}</span>
+                            </button>
+                          );
+                        })}
+                        {dayAppointments.length === 0 && (
+                          <div className="absolute inset-x-3 top-4 rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-gray-600">
+                            Sem marcações
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EditAppointmentDialog({
+  appointment,
+  barbers,
+  services,
+  toast,
+}: {
+  appointment: AdminAppointment;
+  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null }>;
+  services?: ServiceListItem[];
+  toast: ReturnType<typeof useToast>["toast"];
+}) {
+  const [open, setOpen] = useState(false);
+  const [dateValue, setDateValue] = useState(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
+  const [timeValue, setTimeValue] = useState(format(parseISO(appointment.startTime), "HH:mm"));
+  const [barberId, setBarberId] = useState(String(appointment.barberId));
+  const [serviceId, setServiceId] = useState(appointment.serviceId ? String(appointment.serviceId) : "none");
+  const [isSaving, setIsSaving] = useState(false);
+  const serviceList = services || [];
+  const selectedBarber = barbers?.find((barber) => String(barber.id) === barberId);
+  const compatibleServices = useMemo(
+    () => serviceList.filter((service) => canBarberPerformService(selectedBarber, service.id)),
+    [selectedBarber, serviceList],
+  );
+  const canUseNoService = appointment.serviceId === null;
+  const hasCompatibleService = serviceId !== "none" || canUseNoService;
+
+  useEffect(() => {
+    if (!open) return;
+    if (serviceId === "none") {
+      if (!canUseNoService && compatibleServices.length > 0) {
+        setServiceId(String(compatibleServices[0].id));
+      }
+      return;
+    }
+
+    if (!compatibleServices.some((service) => String(service.id) === serviceId)) {
+      setServiceId(compatibleServices[0] ? String(compatibleServices[0].id) : "none");
+    }
+  }, [canUseNoService, compatibleServices, open, serviceId]);
+
+  const resetForm = () => {
+    setDateValue(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
+    setTimeValue(format(parseISO(appointment.startTime), "HH:mm"));
+    setBarberId(String(appointment.barberId));
+    setServiceId(appointment.serviceId ? String(appointment.serviceId) : "none");
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) resetForm();
+    setOpen(nextOpen);
+  };
+
+  const handleSave = async () => {
+    const newStartTime = new Date(`${dateValue}T${timeValue}`);
+    const parsedBarberId = Number(barberId);
+    const parsedServiceId = serviceId === "none" ? null : Number(serviceId);
+
+    if (Number.isNaN(newStartTime.getTime()) || !Number.isFinite(parsedBarberId)) {
+      toast({ title: "Erro", description: "Verifique a data, hora e barbeiro.", variant: "destructive" });
+      return;
+    }
+
+    if (!hasCompatibleService) {
+      toast({ title: "Serviço inválido", description: "Escolha um serviço compatível com o barbeiro.", variant: "destructive" });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await apiRequest("PATCH", `/api/appointments/${appointment.id}`, {
+        startTime: newStartTime,
+        barberId: parsedBarberId,
+        serviceId: parsedServiceId,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
+      toast({ title: "Sucesso", description: "Marcação atualizada." });
+      setOpen(false);
+    } catch (err: any) {
+      toast({
+        title: "Erro",
+        description: err.message || "Não foi possível atualizar a marcação.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost" className="h-8 text-xs text-primary hover:text-primary/80">
+          <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="bg-card border-white/10 text-white">
+        <DialogHeader><DialogTitle>Editar marcação</DialogTitle></DialogHeader>
+        <div className="space-y-4 pt-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Data</Label>
+              <Input type="date" value={dateValue} onChange={(event) => setDateValue(event.target.value)} className="bg-background border-white/10 text-white" />
+            </div>
+            <div className="space-y-2">
+              <Label>Hora</Label>
+              <Input type="time" value={timeValue} onChange={(event) => setTimeValue(event.target.value)} className="bg-background border-white/10 text-white" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Barbeiro</Label>
+            <Select value={barberId} onValueChange={setBarberId}>
+              <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-white/10 text-white">
+                {barbers?.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Serviço</Label>
+            <Select value={serviceId} onValueChange={setServiceId}>
+              <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-card border-white/10 text-white">
+                {canUseNoService && <SelectItem value="none">Sem serviço</SelectItem>}
+                {compatibleServices.map((service) => (
+                  <SelectItem key={service.id} value={String(service.id)}>
+                    {service.name}{service.duration ? ` · ${service.duration} min` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {compatibleServices.length === 0 && !canUseNoService && (
+              <p className="text-xs text-red-300">Este barbeiro não tem serviços compatíveis.</p>
+            )}
+          </div>
+          <Button
+            variant="gold"
+            className="w-full"
+            disabled={isSaving || !hasCompatibleService}
+            onClick={handleSave}
+          >
+            {isSaving ? "A guardar..." : "Guardar alterações"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 const weekDays = [
   { id: 1, label: "Segunda", short: "Seg" },
   { id: 2, label: "Terça", short: "Ter" },
@@ -414,19 +1050,30 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
-  const [barberFormData, setBarberFormData] = useState({ name: "", specialty: "", bio: "", avatar: "", email: "" });
+  const [barberFormData, setBarberFormData] = useState({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] as number[] });
   const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
+  const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [serviceFormData, setServiceFormData] = useState({ name: "", description: "", price: 0, duration: 30 });
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<AppointmentStatusFilter>("all");
+  const [appointmentViewMode, setAppointmentViewMode] = useState<AppointmentViewMode>("day");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
+  const [weeklyStartDate, setWeeklyStartDate] = useState<Date>(() =>
+    startOfWeek(startOfToday(), { weekStartsOn: 1 }),
+  );
+  const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
     enabled: user?.authorized === true,
-    date: format(selectedDateFilter, 'yyyy-MM-dd'),
+    date: appointmentQueryDate,
     barberId: user?.role === "barber" ? (user.id ? String(user.id) : undefined) : (selectedBarberFilter === "all" ? undefined : selectedBarberFilter),
+    refetchInterval: 10000,
+  });
+  const { data: weeklyAppointments, isLoading: isLoadingWeeklyAppointments } = useAppointments({
+    enabled: user?.authorized === true,
+    barberId: user?.role === "barber" ? (user.id ? String(user.id) : undefined) : undefined,
     refetchInterval: 10000,
   });
   const { data: barbers } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
@@ -456,16 +1103,33 @@ export default function Admin() {
       return res.json();
     },
   });
-  const appointmentList = useMemo(
-    () => (Array.isArray(appointments) ? (appointments as AdminAppointment[]) : []),
-    [appointments],
-  );
+  const appointmentList = useMemo(() => {
+    const list = Array.isArray(appointments) ? (appointments as AdminAppointment[]) : [];
+    const visibleAppointments = appointmentViewMode === "upcoming"
+      ? list.filter((appointment) => new Date(appointment.startTime).getTime() >= startOfToday().getTime())
+      : list;
+
+    return [...visibleAppointments].sort(
+      (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
+    );
+  }, [appointments, appointmentViewMode]);
   const filteredAppointmentList = useMemo(
     () => selectedStatusFilter === "all"
       ? appointmentList
       : appointmentList.filter((appointment) => appointment.status === selectedStatusFilter),
     [appointmentList, selectedStatusFilter],
   );
+  const weeklyAppointmentList = useMemo(() => {
+    const list = Array.isArray(weeklyAppointments) ? (weeklyAppointments as AdminAppointment[]) : [];
+    const weekEnd = addDays(weeklyStartDate, 7);
+
+    return list
+      .filter((appointment) => {
+        const appointmentDate = parseISO(appointment.startTime);
+        return appointmentDate >= weeklyStartDate && appointmentDate < weekEnd;
+      })
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }, [weeklyAppointments, weeklyStartDate]);
   const updateStatus = useUpdateAppointmentStatus();
   const { toast } = useToast();
 
@@ -520,13 +1184,16 @@ export default function Admin() {
   const handleAddBarber = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const allServiceIds = getAllServiceIds(services);
       await apiRequest("POST", "/api/barbers", {
         ...barberFormData,
         avatar: barberFormData.avatar || null,
+        color: normalizeBarberColor(barberFormData.color),
+        serviceIds: normalizeServiceSelection(barberFormData.serviceIds, allServiceIds),
       });
       queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
       setIsAddingBarber(false);
-      setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "" });
+      setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] });
       toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao adicionar barbeiro.", variant: "destructive" });
@@ -726,20 +1393,36 @@ export default function Admin() {
     [shopAvailabilityForm],
   );
 
-  const openExceptionDialog = (barberId?: string) => {
-    setActiveTab("appointments");
+  const openScheduleBlockDialog = (mode: "exception" | "manual", barberId?: string) => {
     setBlockData((current) => ({
       ...current,
       barberId: barberId || current.barberId,
       serviceId: "",
       times: [],
       name: "",
-      phone: "900000000",
+      phone: mode === "manual" ? "" : "900000000",
       isMultiDay: false,
-      isManualBooking: false,
+      isManualBooking: mode === "manual",
       isRecurring: false,
     }));
     setIsBlocking(true);
+  };
+
+  const openExceptionDialog = (barberId?: string) => {
+    openScheduleBlockDialog("exception", barberId);
+  };
+
+  const getAgendaSelectedBarberId = () => {
+    if (user?.role === "barber" && user.id) return String(user.id);
+    return selectedBarberFilter !== "all" ? selectedBarberFilter : undefined;
+  };
+
+  const openAgendaExceptionDialog = () => {
+    openExceptionDialog(getAgendaSelectedBarberId());
+  };
+
+  const openManualBookingDialog = () => {
+    openScheduleBlockDialog("manual", getAgendaSelectedBarberId());
   };
 
   const handleCreateBarberInvite = async (barber: any) => {
@@ -768,8 +1451,11 @@ export default function Admin() {
     setCustomerHistory(null);
     setCustomerNotes("");
     try {
-      const emailQuery = appointment.customerEmail ? `?email=${encodeURIComponent(appointment.customerEmail)}` : "";
-      const res = await apiFetch(`/api/admin/customers/${encodeURIComponent(appointment.customerPhone)}/history${emailQuery}`);
+      const params = new URLSearchParams();
+      if (appointment.customerEmail) params.set("email", appointment.customerEmail);
+      if (appointment.customerName) params.set("name", appointment.customerName);
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const res = await apiFetch(`/api/admin/customers/${encodeURIComponent(appointment.customerPhone)}/history${query}`);
       if (!res.ok) throw new Error("Não foi possível carregar o histórico do cliente.");
       const data = await res.json();
       setCustomerHistory(data);
@@ -787,6 +1473,7 @@ export default function Admin() {
     setIsSavingCustomerNotes(true);
     try {
       const res = await apiRequest("PATCH", `/api/admin/customers/${encodeURIComponent(customerHistory.customer.phone)}/notes`, {
+        customerName: customerHistory.customer.name || "",
         email: customerHistory.customer.email || "",
         notes: customerNotes,
       });
@@ -865,7 +1552,7 @@ export default function Admin() {
   useEffect(() => {
     appointmentSignaturesRef.current = new Set();
     hasHydratedAppointmentsRef.current = false;
-  }, [selectedDateFilter, selectedBarberFilter, user?.role, user?.id]);
+  }, [appointmentViewMode, selectedDateFilter, selectedBarberFilter, user?.role, user?.id]);
 
   useEffect(() => {
     if (!user?.authorized) return;
@@ -922,6 +1609,24 @@ export default function Admin() {
 
     return periods.some((period: any) => startMinutes >= period.start && endMinutes <= period.end);
   };
+
+  const selectedBlockBarber = barbers?.find((barber) => String(barber.id) === blockData.barberId);
+  const manualBookingServices = useMemo(() => {
+    const serviceList = services || [];
+    if (!blockData.barberId) return serviceList;
+    return serviceList.filter((service) => canBarberPerformService(selectedBlockBarber, service.id));
+  }, [blockData.barberId, selectedBlockBarber, services]);
+
+  useEffect(() => {
+    if (!blockData.isManualBooking || !blockData.serviceId) return;
+    if (manualBookingServices.some((service) => String(service.id) === blockData.serviceId)) return;
+
+    setBlockData((current) => ({
+      ...current,
+      serviceId: "",
+      times: [],
+    }));
+  }, [blockData.isManualBooking, blockData.serviceId, manualBookingServices]);
 
   const selectedBlockDuration = blockData.isManualBooking && blockData.serviceId
     ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
@@ -1141,7 +1846,7 @@ export default function Admin() {
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="w-full justify-start overflow-x-auto bg-card border border-white/10 p-1">
-            <TabsTrigger value="dashboard" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><BarChart3 className="w-4 h-4" /> Dashboard</TabsTrigger>
+            <TabsTrigger value="dashboard" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {user.role === "admin" && (
               <>
@@ -1155,6 +1860,20 @@ export default function Admin() {
           </TabsList>
 
           <TabsContent value="dashboard" className="space-y-6 outline-none">
+            <WeeklyAgenda
+              weekStartDate={weeklyStartDate}
+              appointments={weeklyAppointmentList}
+              barbers={barbers}
+              services={services}
+              isLoading={isLoadingWeeklyAppointments}
+              onPreviousWeek={() => setWeeklyStartDate((current) => addDays(current, -7))}
+              onNextWeek={() => setWeeklyStartDate((current) => addDays(current, 7))}
+              onToday={() => setWeeklyStartDate(startOfWeek(startOfToday(), { weekStartsOn: 1 }))}
+              onManualBooking={openManualBookingDialog}
+              onOpenCustomerHistory={openCustomerHistory}
+              getStatusLabel={getStatusLabel}
+            />
+
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white">Dashboard de negócio</h2>
@@ -1348,7 +2067,7 @@ export default function Admin() {
             )}
           </TabsContent>
 
-          <TabsContent value="appointments" className="space-y-6 outline-none">
+          <TabsContent value="appointments" forceMount className="space-y-6 outline-none">
             <div className="flex flex-col sm:flex-row items-stretch gap-3 shrink-0 mb-6">
               {user.role === "admin" ? (
                 <Select value={selectedBarberFilter} onValueChange={setSelectedBarberFilter}>
@@ -1366,16 +2085,41 @@ export default function Admin() {
                 </div>
               )}
 
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="border-white/10 gap-2 justify-start h-11 sm:h-9 text-white">
-                    <CalendarIcon className="w-4 h-4" /> {format(selectedDateFilter, "dd 'de' MMMM", { locale: pt })}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0 bg-card border-white/10" align="end">
-                  <Calendar mode="single" selected={selectedDateFilter} onSelect={(d) => d && setSelectedDateFilter(d)} locale={pt} initialFocus />
-                </PopoverContent>
-              </Popover>
+              <div className="grid grid-cols-2 gap-1 rounded-md border border-white/10 bg-card p-1 sm:w-[210px]">
+                <Button
+                  type="button"
+                  variant={appointmentViewMode === "day" ? "gold" : "ghost"}
+                  className="h-9 px-3 text-xs"
+                  onClick={() => setAppointmentViewMode("day")}
+                >
+                  Dia
+                </Button>
+                <Button
+                  type="button"
+                  variant={appointmentViewMode === "upcoming" ? "gold" : "ghost"}
+                  className="h-9 px-3 text-xs"
+                  onClick={() => setAppointmentViewMode("upcoming")}
+                >
+                  Próximas
+                </Button>
+              </div>
+
+              {appointmentViewMode === "day" ? (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="border-white/10 gap-2 justify-start h-11 sm:h-9 text-white">
+                      <CalendarIcon className="w-4 h-4" /> {format(selectedDateFilter, "dd 'de' MMMM", { locale: pt })}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0 bg-card border-white/10" align="end">
+                    <Calendar mode="single" selected={selectedDateFilter} onSelect={(d) => d && setSelectedDateFilter(d)} locale={pt} initialFocus />
+                  </PopoverContent>
+                </Popover>
+              ) : (
+                <Button variant="outline" className="pointer-events-none border-white/10 gap-2 justify-start h-11 sm:h-9 text-white/80">
+                  <CalendarIcon className="w-4 h-4" /> Hoje em diante
+                </Button>
+              )}
 
               <Select value={selectedStatusFilter} onValueChange={(value) => setSelectedStatusFilter(value as AppointmentStatusFilter)}>
                 <SelectTrigger className="border-white/10 h-11 sm:h-9 bg-card w-full sm:w-[210px] text-white">
@@ -1390,95 +2134,109 @@ export default function Admin() {
                 </SelectContent>
               </Select>
 
+              <div className="grid grid-cols-2 gap-2 sm:ml-auto sm:flex">
+                <Button
+                  variant="outline"
+                  className="min-w-0 gap-2 h-11 sm:h-9 border-white/10 whitespace-normal"
+                  onClick={openAgendaExceptionDialog}
+                >
+                  <AlertTriangle className="h-4 w-4" /> Ausência
+                </Button>
+                <Button
+                  variant="gold"
+                  className="min-w-0 gap-2 h-11 sm:h-9 whitespace-normal"
+                  onClick={openManualBookingDialog}
+                >
+                  <Plus className="w-4 h-4" /> Marcação manual
+                </Button>
+              </div>
+
               <Dialog open={isBlocking} onOpenChange={setIsBlocking}>
-                <DialogTrigger asChild>
-                  <Button variant="gold" className="gap-2 h-11 sm:h-9 sm:ml-auto">
-                    <Plus className="w-4 h-4" /> Exceção / marcação
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-6 shadow-2xl backdrop-blur-md">
-                  <DialogHeader>
-                    <DialogTitle className="text-xl font-display font-bold text-primary">Exceções da agenda</DialogTitle>
+                <DialogContent className="grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden bg-card border-white/10 text-white w-[calc(100vw-1rem)] max-w-2xl sm:w-[94vw] max-h-[calc(100dvh-1.5rem)] rounded-2xl p-0 shadow-2xl backdrop-blur-md">
+                  <DialogHeader className="border-b border-white/10 px-5 py-5 pr-12 sm:px-6">
+                    <DialogTitle className="text-xl font-display font-bold text-primary">
+                      {blockData.isManualBooking ? "Marcação manual" : "Ausência na agenda"}
+                    </DialogTitle>
                     <DialogDescription className="text-sm text-gray-400">
-                      O horário da barbearia é a regra principal. Use isto para bloquear horas, férias ou criar uma marcação que chegou por telefone.
+                      {blockData.isManualBooking
+                        ? "Crie uma marcação que chegou por chamada ou mensagem diretamente na agenda."
+                        : "Bloqueie horas, férias ou ausências sem alterar o horário base da barbearia."}
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="space-y-6">
-                    <div className="grid gap-3 rounded-xl border border-primary/10 bg-primary/5 p-3 sm:grid-cols-2">
-                      <Button
-                        type="button"
-                        variant={!blockData.isManualBooking ? "gold" : "outline"}
-                        className="h-auto min-h-16 flex-col items-start rounded-xl p-4 text-left"
-                        onClick={() => setBlockData({ ...blockData, isManualBooking: false, isRecurring: false })}
-                      >
-                        <span className="text-sm font-bold">Bloqueio / ausência</span>
-                        <span className="text-xs font-normal opacity-80">Pausas, férias, almoço maior ou fecho excecional.</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={blockData.isManualBooking ? "gold" : "outline"}
-                        className="h-auto min-h-16 flex-col items-start rounded-xl p-4 text-left"
-                        onClick={() => setBlockData({ ...blockData, isManualBooking: true, isMultiDay: false })}
-                      >
-                        <span className="text-sm font-bold">Marcação manual</span>
-                        <span className="text-xs font-normal opacity-80">Para clientes que marcaram por chamada ou mensagem.</span>
-                      </Button>
-                      {!blockData.isManualBooking && (
-                        <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-2">
-                          <div>
-                            <Label htmlFor="multiDay" className="text-sm font-medium cursor-pointer">Bloquear vários dias</Label>
-                            <p className="text-xs text-gray-500">Ideal para férias ou ausências completas.</p>
+                  <div className="min-h-0 overflow-y-auto px-5 py-5 sm:px-6">
+                    <div className="space-y-5">
+                      <div className="rounded-xl border border-primary/10 bg-primary/5 p-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
+                            {blockData.isManualBooking ? <User className="h-5 w-5" /> : <AlertTriangle className="h-5 w-5" />}
                           </div>
-                          <Switch
-                            id="multiDay"
-                            checked={blockData.isMultiDay}
-                            onCheckedChange={(checked) => setBlockData({ ...blockData, isMultiDay: checked, isManualBooking: false, isRecurring: false })}
-                          />
-                        </div>
-                      )}
-                      {blockData.isManualBooking && (
-                        <div className="sm:col-span-2 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-2">
-                          <div>
-                            <Label htmlFor="recurring" className="text-sm font-medium cursor-pointer">Repetir marcação</Label>
-                            <p className="text-xs text-gray-500">Reserva automática para clientes fixos.</p>
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-white">
+                              {blockData.isManualBooking ? "Marcação adicionada à agenda" : "Ausência / bloqueio"}
+                            </p>
+                            <p className="mt-1 whitespace-normal break-words text-xs text-gray-400">
+                              {blockData.isManualBooking
+                                ? "Para clientes que entraram por contacto direto e precisam de ficar registados."
+                                : "Pausas, férias, almoço maior ou fecho excecional para um barbeiro."}
+                            </p>
                           </div>
-                          <Switch
-                            id="recurring"
-                            checked={blockData.isRecurring}
-                            onCheckedChange={(checked) => setBlockData({ ...blockData, isRecurring: checked, isMultiDay: false })}
-                          />
                         </div>
-                      )}
-                    </div>
-                    
-                    {blockData.isRecurring && (
-                      <div className="grid grid-cols-2 gap-4 p-4 bg-primary/5 rounded-xl border border-primary/10">
-                        <div className="space-y-2">
-                          <Label className="text-xs text-gray-400">Repetir a cada (semanas)</Label>
-                          <Select value={blockData.recurringWeeks} onValueChange={(v) => setBlockData({...blockData, recurringWeeks: v})}>
-                            <SelectTrigger className="bg-background/50 border-white/10 h-10"><SelectValue /></SelectTrigger>
-                            <SelectContent className="bg-card border-white/10 text-white">
-                              <SelectItem value="1">1 semana</SelectItem>
-                              <SelectItem value="2">2 semanas</SelectItem>
-                              <SelectItem value="3">3 semanas</SelectItem>
-                              <SelectItem value="4">4 semanas</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs text-gray-400">Durante (meses)</Label>
-                          <Select value={blockData.recurringMonths} onValueChange={(v) => setBlockData({...blockData, recurringMonths: v})}>
-                            <SelectTrigger className="bg-background/50 border-white/10 h-10"><SelectValue /></SelectTrigger>
-                            <SelectContent className="bg-card border-white/10 text-white">
-                              <SelectItem value="1">1 mês</SelectItem>
-                              <SelectItem value="3">3 meses</SelectItem>
-                              <SelectItem value="6">6 meses</SelectItem>
-                              <SelectItem value="12">1 ano</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
+                        {!blockData.isManualBooking && (
+                          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-2">
+                            <div>
+                              <Label htmlFor="multiDay" className="text-sm font-medium cursor-pointer">Bloquear vários dias</Label>
+                              <p className="text-xs text-gray-500">Ideal para férias ou ausências completas.</p>
+                            </div>
+                            <Switch
+                              id="multiDay"
+                              checked={blockData.isMultiDay}
+                              onCheckedChange={(checked) => setBlockData({ ...blockData, isMultiDay: checked, isManualBooking: false, isRecurring: false })}
+                            />
+                          </div>
+                        )}
+                        {blockData.isManualBooking && (
+                          <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-2">
+                            <div>
+                              <Label htmlFor="recurring" className="text-sm font-medium cursor-pointer">Repetir marcação</Label>
+                              <p className="text-xs text-gray-500">Reserva automática para clientes fixos.</p>
+                            </div>
+                            <Switch
+                              id="recurring"
+                              checked={blockData.isRecurring}
+                              onCheckedChange={(checked) => setBlockData({ ...blockData, isRecurring: checked, isMultiDay: false })}
+                            />
+                          </div>
+                        )}
                       </div>
-                    )}
+
+                      {blockData.isRecurring && (
+                        <div className="grid grid-cols-2 gap-4 p-4 bg-primary/5 rounded-xl border border-primary/10">
+                          <div className="space-y-2">
+                            <Label className="text-xs text-gray-400">Repetir a cada (semanas)</Label>
+                            <Select value={blockData.recurringWeeks} onValueChange={(v) => setBlockData({...blockData, recurringWeeks: v})}>
+                              <SelectTrigger className="bg-background/50 border-white/10 h-10"><SelectValue /></SelectTrigger>
+                              <SelectContent className="bg-card border-white/10 text-white">
+                                <SelectItem value="1">1 semana</SelectItem>
+                                <SelectItem value="2">2 semanas</SelectItem>
+                                <SelectItem value="3">3 semanas</SelectItem>
+                                <SelectItem value="4">4 semanas</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-xs text-gray-400">Durante (meses)</Label>
+                            <Select value={blockData.recurringMonths} onValueChange={(v) => setBlockData({...blockData, recurringMonths: v})}>
+                              <SelectTrigger className="bg-background/50 border-white/10 h-10"><SelectValue /></SelectTrigger>
+                              <SelectContent className="bg-card border-white/10 text-white">
+                                <SelectItem value="1">1 mês</SelectItem>
+                                <SelectItem value="3">3 meses</SelectItem>
+                                <SelectItem value="6">6 meses</SelectItem>
+                                <SelectItem value="12">1 ano</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      )}
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-3">
@@ -1512,8 +2270,13 @@ export default function Admin() {
                           <Label className="text-sm font-medium text-gray-300">Serviço</Label>
                           <Select value={blockData.serviceId} onValueChange={(v) => setBlockData({...blockData, serviceId: v})}>
                             <SelectTrigger className="bg-background/50 border-white/10 h-12 rounded-xl text-white"><SelectValue placeholder="Selecione" /></SelectTrigger>
-                            <SelectContent className="bg-card border-white/10 text-white">{services?.map(s => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
+                            <SelectContent className="bg-card border-white/10 text-white">
+                              {manualBookingServices.map(s => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}
+                            </SelectContent>
                           </Select>
+                          {blockData.barberId && manualBookingServices.length === 0 && (
+                            <p className="text-xs text-red-300">Este barbeiro não tem serviços associados.</p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1590,16 +2353,19 @@ export default function Admin() {
                         )}
                       </div>
 
-                      <Button
-                        type="button"
-                        variant="gold"
-                        className="w-full h-12 text-base font-bold rounded-xl mt-4"
-                        disabled={!blockData.barberId || blockData.times.length === 0 || (blockData.isManualBooking && !blockData.serviceId)}
-                        onClick={handleBlockTime}
-                      >
-                        {blockData.isManualBooking ? "Criar marcação" : "Guardar exceção"}
-                      </Button>
                     </div>
+                  </div>
+                  <div className="border-t border-white/10 bg-card/95 px-5 py-4 sm:px-6">
+                    <Button
+                      type="button"
+                      variant="gold"
+                      className="w-full h-12 text-base font-bold rounded-xl"
+                      disabled={!blockData.barberId || blockData.times.length === 0 || (blockData.isManualBooking && !blockData.serviceId)}
+                      onClick={handleBlockTime}
+                    >
+                      {blockData.isManualBooking ? "Criar marcação" : "Guardar ausência"}
+                    </Button>
+                  </div>
                   </DialogContent>
               </Dialog>
             </div>
@@ -1609,10 +2375,14 @@ export default function Admin() {
                 <div className="space-y-5">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      <h2 className="text-xl font-display font-bold text-white">Agenda do dia</h2>
+                      <h2 className="text-xl font-display font-bold text-white">
+                        {appointmentViewMode === "day" ? "Agenda do dia" : "Próximas marcações"}
+                      </h2>
                       <p className="text-xs text-gray-400 flex items-center gap-2 mt-1">
                         <Bell className="w-3.5 h-3.5 text-primary" />
-                        Atualiza automaticamente a cada 10 segundos.
+                        {appointmentViewMode === "day"
+                          ? "Atualiza automaticamente a cada 10 segundos."
+                          : "Mostra marcações de hoje em diante e atualiza automaticamente."}
                       </p>
                     </div>
                     <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
@@ -1632,7 +2402,9 @@ export default function Admin() {
                             <div className="flex items-center justify-between gap-3">
                               <div>
                                 <h3 className="font-bold text-white">{barber.name}</h3>
-                                <p className="text-xs text-gray-500">{format(selectedDateFilter, "dd/MM/yyyy")}</p>
+                                <p className="text-xs text-gray-500">
+                                  {appointmentViewMode === "day" ? format(selectedDateFilter, "dd/MM/yyyy") : "Hoje em diante"}
+                                </p>
                               </div>
                               <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
                                 {barberAppointments.length}
@@ -1652,6 +2424,9 @@ export default function Admin() {
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
                                     <p className="text-2xl font-display font-bold text-primary">{format(parseISO(app.startTime), "HH:mm")}</p>
+                                    {appointmentViewMode === "upcoming" && (
+                                      <p className="text-xs text-gray-500">{format(parseISO(app.startTime), "dd/MM/yyyy")}</p>
+                                    )}
                                     <p className="text-sm font-semibold text-white">{app.customerName}</p>
                                   </div>
                                   <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", getStatusClass(app.status))}>
@@ -1732,13 +2507,37 @@ export default function Admin() {
                                               </Select>
                                               <input type="hidden" id={`edit-app-barber-val-${app.id}`} data-value={String(app.barberId)} />
                                             </div>
+                                            <div className="space-y-2">
+                                              <Label>Serviço</Label>
+                                              <Select defaultValue={app.serviceId ? String(app.serviceId) : "none"} onValueChange={(v) => {
+                                                const el = document.getElementById(`edit-app-service-val-${app.id}`);
+                                                if (el) el.setAttribute('data-value', v);
+                                              }}>
+                                                <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
+                                                <SelectContent className="bg-card border-white/10 text-white">
+                                                  {app.serviceId === null && <SelectItem value="none">Sem serviço</SelectItem>}
+                                                  {services?.map((service) => (
+                                                    <SelectItem key={service.id} value={String(service.id)}>
+                                                      {service.name} · {service.duration} min
+                                                    </SelectItem>
+                                                  ))}
+                                                </SelectContent>
+                                              </Select>
+                                              <input type="hidden" id={`edit-app-service-val-${app.id}`} data-value={app.serviceId ? String(app.serviceId) : "none"} />
+                                            </div>
                                             <Button variant="gold" className="w-full" onClick={async () => {
                                               const dateVal = (document.getElementById(`edit-app-date-${app.id}`) as HTMLInputElement).value;
                                               const timeVal = (document.getElementById(`edit-app-time-${app.id}`) as HTMLInputElement).value;
                                               const barberId = (document.getElementById(`edit-app-barber-val-${app.id}`) as HTMLInputElement).getAttribute('data-value') || String(app.barberId);
+                                              const serviceId = (document.getElementById(`edit-app-service-val-${app.id}`) as HTMLInputElement).getAttribute('data-value') || (app.serviceId ? String(app.serviceId) : "none");
                                               const newStartTime = new Date(`${dateVal}T${timeVal}`);
-                                              await apiRequest("PATCH", `/api/appointments/${app.id}`, { startTime: newStartTime, barberId: Number(barberId) });
+                                              await apiRequest("PATCH", `/api/appointments/${app.id}`, {
+                                                startTime: newStartTime,
+                                                barberId: Number(barberId),
+                                                serviceId: serviceId === "none" ? null : Number(serviceId),
+                                              });
                                               queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+                                              queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
                                               toast({ title: "Sucesso", description: "Marcação atualizada." });
                                             }}>Guardar alterações</Button>
                                           </div>
@@ -1752,7 +2551,9 @@ export default function Admin() {
 
                             {barberAppointments.length === 0 && (
                               <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
-                                {selectedStatusFilter === "all" ? "Sem marcações neste dia." : "Sem marcações para este estado."}
+                                {selectedStatusFilter === "all"
+                                  ? appointmentViewMode === "day" ? "Sem marcações neste dia." : "Sem marcações futuras."
+                                  : "Sem marcações para este estado."}
                               </div>
                             )}
                           </div>
@@ -1774,7 +2575,7 @@ export default function Admin() {
                     <Plus className="w-4 h-4" /> Adicionar Barbeiro
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="bg-card border-white/10 text-white">
+                <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Adicionar Membro à Equipa</DialogTitle>
                   </DialogHeader>
@@ -1814,6 +2615,10 @@ export default function Admin() {
                         className="bg-background border-white/10 text-white" 
                       />
                     </div>
+                    <BarberColorField
+                      value={barberFormData.color}
+                      onChange={(color) => setBarberFormData({ ...barberFormData, color })}
+                    />
                     <BarberPhotoPicker
                       inputId="new-barber-photo"
                       value={barberFormData.avatar}
@@ -1821,6 +2626,14 @@ export default function Admin() {
                       onChange={(avatar) => setBarberFormData({ ...barberFormData, avatar })}
                       onRemove={() => setBarberFormData({ ...barberFormData, avatar: "" })}
                       toast={toast}
+                    />
+                    <BarberServicesPicker
+                      services={services}
+                      selectedServiceIds={getEffectiveServiceSelection(barberFormData.serviceIds, services)}
+                      onChange={(serviceIds) => setBarberFormData({
+                        ...barberFormData,
+                        serviceIds: normalizeServiceSelection(serviceIds, getAllServiceIds(services)),
+                      })}
                     />
                     <Button 
                       variant="gold" 
@@ -1859,18 +2672,28 @@ export default function Admin() {
                     </ConfirmAction>
                   </div>
                   <CardContent className="p-4">
-                    <h3 className="font-bold text-lg">{barber.name}</h3>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: normalizeBarberColor(barber.color) }} />
+                      <h3 className="font-bold text-lg">{barber.name}</h3>
+                    </div>
                     <p className="text-sm text-primary mb-2">{barber.specialty}</p>
+                    <p className="mb-3 line-clamp-2 text-xs text-gray-400">
+                      {formatBarberServicesSummary(barber, services)}
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       <Dialog>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
-                        <DialogContent className="bg-card border-white/10 text-white">
+                        <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
                           <DialogHeader><DialogTitle>Editar Barbeiro</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4">
                             <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>
+                            <div className="space-y-2">
+                              <Label>Cor na agenda</Label>
+                              <Input type="color" defaultValue={normalizeBarberColor(barber.color)} id={`edit-barber-color-${barber.id}`} className="h-10 w-20 bg-background border-white/10 p-1" />
+                            </div>
                             <BarberPhotoPicker
                               inputId={`edit-barber-photo-${barber.id}`}
                               value={getEditedBarberAvatar(barberAvatarDrafts, barber)}
@@ -1879,13 +2702,44 @@ export default function Admin() {
                               onRemove={() => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: null }))}
                               toast={toast}
                             />
+                            <BarberServicesPicker
+                              services={services}
+                              selectedServiceIds={getEffectiveServiceSelection(
+                                Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id)
+                                  ? barberServiceDrafts[barber.id]
+                                  : barber.serviceIds,
+                                services,
+                              )}
+                              onChange={(serviceIds) => setBarberServiceDrafts((current) => ({
+                                ...current,
+                                [barber.id]: normalizeServiceSelection(serviceIds, getAllServiceIds(services)),
+                              }))}
+                            />
                             <Button variant="gold" className="w-full" onClick={async () => {
                               const name = (document.getElementById(`edit-barber-name-${barber.id}`) as HTMLInputElement).value;
                               const specialty = (document.getElementById(`edit-barber-spec-${barber.id}`) as HTMLInputElement).value;
+                              const color = (document.getElementById(`edit-barber-color-${barber.id}`) as HTMLInputElement).value;
                               const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
-                              await apiRequest("PATCH", `/api/barbers/${barber.id}`, { name, specialty, avatar: avatar || null });
+                              const selectedServiceIds = getEffectiveServiceSelection(
+                                Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id)
+                                  ? barberServiceDrafts[barber.id]
+                                  : barber.serviceIds,
+                                services,
+                              );
+                              await apiRequest("PATCH", `/api/barbers/${barber.id}`, {
+                                name,
+                                specialty,
+                                color: normalizeBarberColor(color),
+                                avatar: avatar || null,
+                                serviceIds: normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services)),
+                              });
                               queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
                               setBarberAvatarDrafts((current) => {
+                                const next = { ...current };
+                                delete next[barber.id];
+                                return next;
+                              });
+                              setBarberServiceDrafts((current) => {
                                 const next = { ...current };
                                 delete next[barber.id];
                                 return next;
@@ -1901,7 +2755,7 @@ export default function Admin() {
                         className="flex-1 h-8 text-xs"
                         onClick={() => openExceptionDialog(String(barber.id))}
                       >
-                        Exceções
+                        Ausências
                       </Button>
                       <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
@@ -1961,21 +2815,58 @@ export default function Admin() {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
                     <div className="space-y-2">
                       <Label className="text-xs">Telemóvel (obrigatório)</Label>
-                      <Input id="bl-phone" className="bg-background border-white/10" placeholder="912345678" />
+                      <Input
+                        id="bl-phone"
+                        type="tel"
+                        inputMode="numeric"
+                        autoComplete="tel"
+                        maxLength={18}
+                        className="bg-background border-white/10"
+                        placeholder="912345678"
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label className="text-xs">Email (opcional)</Label>
-                      <Input id="bl-email" className="bg-background border-white/10" placeholder="cliente@email.com" />
+                      <Input
+                        id="bl-email"
+                        type="email"
+                        autoComplete="email"
+                        className="bg-background border-white/10"
+                        placeholder="cliente@email.com"
+                      />
                     </div>
                     <div className="flex items-end">
                       <Button variant="destructive" className="w-full" onClick={async () => {
-                        const phone = (document.getElementById("bl-phone") as HTMLInputElement).value;
-                        const email = (document.getElementById("bl-email") as HTMLInputElement).value;
-                        if (!phone) { toast({ title: "Erro", description: "O telemóvel é obrigatório.", variant: "destructive" }); return; }
-                        await apiRequest("POST", "/api/admin/blacklist", { phone, email, reason: "Bloqueio manual pelo administrador" });
+                        const phoneInput = document.getElementById("bl-phone") as HTMLInputElement;
+                        const emailInput = document.getElementById("bl-email") as HTMLInputElement;
+                        const phone = phoneInput.value;
+                        const email = emailInput.value;
+                        const normalizedPhone = normalizePortuguesePhone(phone);
+                        const normalizedEmail = normalizeEmail(email);
+
+                        if (!phone.trim()) {
+                          toast({ title: "Erro", description: "O telemóvel é obrigatório.", variant: "destructive" });
+                          return;
+                        }
+
+                        if (!isValidPortugueseMobile(phone)) {
+                          toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
+                          return;
+                        }
+
+                        if (!isValidOptionalEmail(email)) {
+                          toast({ title: "Email inválido", description: emailValidationMessage, variant: "destructive" });
+                          return;
+                        }
+
+                        await apiRequest("POST", "/api/admin/blacklist", {
+                          phone: normalizedPhone,
+                          email: normalizedEmail || undefined,
+                          reason: "Bloqueio manual pelo administrador",
+                        });
                         queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
-                        (document.getElementById("bl-phone") as HTMLInputElement).value = "";
-                        (document.getElementById("bl-email") as HTMLInputElement).value = "";
+                        phoneInput.value = "";
+                        emailInput.value = "";
                         toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
                       }}>Bloquear Cliente</Button>
                     </div>
@@ -2171,7 +3062,7 @@ export default function Admin() {
                       <CalendarIcon className="h-5 w-5 text-primary" /> Horário base da barbearia
                     </CardTitle>
                     <p className="mt-2 max-w-2xl text-sm text-gray-400">
-                      Este horário define quando a loja aceita marcações. Ausências, férias e ajustes pontuais continuam nas exceções de cada barbeiro.
+                      Este horário define quando a loja aceita marcações. Ausências, férias e ajustes pontuais continuam nas ausências de cada barbeiro.
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
@@ -2180,7 +3071,7 @@ export default function Admin() {
                       className="gap-2 border-white/10"
                       onClick={() => openExceptionDialog()}
                     >
-                      <Plus className="h-4 w-4" /> Criar exceção
+                      <Plus className="h-4 w-4" /> Criar ausência
                     </Button>
                     <Button
                       variant="gold"

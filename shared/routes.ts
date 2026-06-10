@@ -1,7 +1,21 @@
 import { z } from 'zod';
-import { insertBarberSchema, insertServiceSchema, insertAppointmentSchema, appointmentStatuses, barbers, services, appointments } from './schema';
+import {
+  insertBarberSchema,
+  insertServiceSchema,
+  insertAppointmentSchema,
+  appointmentStatuses,
+  services,
+  appointments,
+  type BarberWithServices,
+} from './schema';
 
-export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
+const serviceIdsInputSchema = z.array(z.number().int().positive()).optional();
+export const barberInputSchema = insertBarberSchema.extend({
+  serviceIds: serviceIdsInputSchema,
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida. Use formato hexadecimal.").optional(),
+});
+
+export type CreateBarberRequest = z.infer<typeof barberInputSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
 
@@ -33,23 +47,23 @@ export const api = {
       method: 'GET' as const,
       path: '/api/barbers',
       responses: {
-        200: z.array(z.custom<typeof barbers.$inferSelect>()),
+        200: z.array(z.custom<BarberWithServices>()),
       },
     },
     get: {
       method: 'GET' as const,
       path: '/api/barbers/:id',
       responses: {
-        200: z.custom<typeof barbers.$inferSelect>(),
+        200: z.custom<BarberWithServices>(),
         404: errorSchemas.notFound,
       },
     },
     create: { // For admin/seed
       method: 'POST' as const,
       path: '/api/barbers',
-      input: insertBarberSchema,
+      input: barberInputSchema,
       responses: {
-        201: z.custom<typeof barbers.$inferSelect>(),
+        201: z.custom<BarberWithServices>(),
         400: errorSchemas.validation,
       },
     }

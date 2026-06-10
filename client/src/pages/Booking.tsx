@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -13,8 +13,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
-
+import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
@@ -213,11 +212,28 @@ const saveLastBookingPreference = ({
   }
 };
 
+function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
+  const customAvatar = barber.avatar?.trim();
+  if (customAvatar) return customAvatar;
+
+  const name = barber.name.toLowerCase();
+  if (name.includes("baptista")) return fabioAvatar;
+  if (name.includes("bruno")) return brunoAvatar;
+  return "/images/logo.jpg";
+}
+
+function getBarberAvatarFallback(barber: { name: string }) {
+  const name = barber.name.toLowerCase();
+  if (name.includes("baptista")) return fabioAvatar;
+  if (name.includes("bruno")) return brunoAvatar;
+  return "/images/logo.jpg";
+}
+
 // Step components
 const StepIndicator = ({ currentStep }: { currentStep: number }) => {
   const steps = ["Barbeiro", "Serviço", "Data e hora", "Detalhes"];
   return (
-    <div className="w-full py-4 md:py-6 mb-4 md:mb-8">
+    <div className="w-full py-4 md:py-6 mb-4 md:mb-8 lg:py-4 lg:mb-6">
       <div className="flex justify-between items-center relative z-10">
         {steps.map((step, i) => (
           <div key={i} className="flex flex-col items-center gap-1 md:gap-2 w-1/4">
@@ -272,6 +288,16 @@ export default function Booking() {
   const createAppointment = useCreateAppointment();
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
+  const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
+  const availableServices = useMemo(() => {
+    if (selectedBarberId && selectedBarberId !== 0) {
+      return visibleServices.filter((service) => canBarberPerformService(selectedBarber, service.id));
+    }
+
+    return visibleServices.filter((service) =>
+      visibleBarbers.some((barber) => canBarberPerformService(barber, service.id)),
+    );
+  }, [selectedBarber, selectedBarberId, visibleBarbers, visibleServices]);
 
   // Fetch appointments for selected date/barber to block slots
   const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
@@ -284,10 +310,19 @@ export default function Booking() {
     enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId),
   });
 
-  const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
-  const selectedService = visibleServices.find((service) => service.id === selectedServiceId);
+  const selectedService = availableServices.find((service) => service.id === selectedServiceId);
   const selectedBarberLabel = selectedBarberId === 0 ? "Sem preferência" : selectedBarber?.name;
   const selectedPhoneCountryData = getPhoneCountry(selectedPhoneCountry);
+
+  useEffect(() => {
+    if (!selectedServiceId) return;
+    if (!barbers || !services) return;
+    if (availableServices.some((service) => service.id === selectedServiceId)) return;
+
+    setSelectedServiceId(null);
+    setSelectedTime(null);
+    if (step > 2) setStep(2);
+  }, [availableServices, barbers, selectedServiceId, services, step]);
 
   // Generate Time Slots
   const timeSlots = useMemo(() => {
@@ -455,7 +490,7 @@ export default function Booking() {
   return (
     <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col font-body">
       <nav className="border-b border-white/10 py-4 bg-background sticky top-0 z-50">
-        <div className="mx-auto flex w-full max-w-4xl items-center gap-4 px-4">
+        <div className="mx-auto flex w-full max-w-4xl items-center gap-4 px-4 lg:max-w-[calc(100vw-4rem)] xl:max-w-7xl">
           <Button 
             variant="ghost" 
             size="icon" 
@@ -471,7 +506,7 @@ export default function Booking() {
         </div>
       </nav>
 
-      <div className="mx-auto flex-1 w-full max-w-4xl px-4 pt-8 pb-28 md:py-8">
+      <div className="mx-auto flex-1 w-full max-w-4xl px-4 pt-8 pb-28 md:pt-8 md:pb-0 lg:max-w-[calc(100vw-4rem)] xl:max-w-7xl">
         <StepIndicator currentStep={step} />
 
         <AnimatePresence mode="wait">
@@ -481,12 +516,12 @@ export default function Booking() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
             transition={{ duration: 0.3 }}
-            className="min-h-[400px]"
+            className="min-h-[400px] lg:min-h-0"
           >
             {/* STEP 1: SELECT BARBER */}
             {step === 1 && (
-              <div className="space-y-6">
-                <div className="text-center mb-8">
+              <div className="space-y-6 lg:space-y-4">
+                <div className="text-center mb-8 lg:mb-6">
                   <h2 className="text-2xl font-display font-bold mb-2">Seleciona o barbeiro</h2>
                   <p className="text-gray-400">Escolhe com quem queres marcar.</p>
                 </div>
@@ -496,7 +531,7 @@ export default function Booking() {
                     {[1,2,3].map(i => <div key={i} className="h-64 bg-card rounded-xl"></div>)}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
                     <motion.div 
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
@@ -534,11 +569,8 @@ export default function Booking() {
                     </motion.div>
 
                     {visibleBarbers.map((barber) => {
-                      const barberName = barber.name.toLowerCase();
-                      const avatarSrc = barber.avatar ||
-                                      (barberName.includes("baptista") ? fabioAvatar :
-                                      barberName.includes("bruno") ? brunoAvatar :
-                                      null);
+                      const avatarSrc = getBarberAvatar(barber);
+                      const fallbackAvatarSrc = getBarberAvatarFallback(barber);
                       return (
                         <motion.div 
                           key={barber.id}
@@ -552,9 +584,9 @@ export default function Booking() {
                               : "border-white/5 hover:border-primary/50"
                           )}
                         >
-                          <div className="aspect-[4/3] sm:aspect-[4/5] bg-muted relative overflow-hidden">
+                          <div className="aspect-[4/3] sm:aspect-[4/5] lg:aspect-[4/3] bg-muted relative overflow-hidden">
                              <img 
-                               src={avatarSrc || `https://images.unsplash.com/photo-${barber.id % 2 === 0 ? '1582234057037-9755b3c4342a' : '1562947262-6718d0979e2c'}?w=500&h=600&fit=crop`} 
+                               src={avatarSrc}
                                alt={barber.name} 
                                className={cn(
                                  "w-full h-full object-cover transition-all duration-700 ease-in-out",
@@ -562,8 +594,9 @@ export default function Booking() {
                                )}
                                onError={(e) => {
                                  const target = e.target as HTMLImageElement;
-                                 if (!target.src.includes('unsplash')) {
-                                   target.src = `https://images.unsplash.com/photo-${barber.id % 2 === 0 ? '1582234057037-9755b3c4342a' : '1562947262-6718d0979e2c'}?w=500&h=600&fit=crop`;
+                                 if (target.dataset.fallbackApplied !== "true") {
+                                   target.dataset.fallbackApplied = "true";
+                                   target.src = fallbackAvatarSrc;
                                  }
                                }}
                              />
@@ -597,8 +630,8 @@ export default function Booking() {
 
             {/* STEP 2: SELECT SERVICE */}
             {step === 2 && (
-              <div className="space-y-6">
-                <div className="text-center mb-8">
+              <div className="space-y-6 lg:space-y-4">
+                <div className="text-center mb-8 lg:mb-6">
                   <h2 className="text-2xl font-display font-bold mb-2">Selecione o Serviço</h2>
                   <p className="text-gray-400">O que vamos fazer hoje?</p>
                 </div>
@@ -608,8 +641,8 @@ export default function Booking() {
                      {[1,2,3].map(i => <div key={i} className="h-20 bg-card rounded-xl"></div>)}
                   </div>
                 ) : (
-                  <div className="space-y-3 md:space-y-4 max-w-2xl mx-auto px-1">
-                    {visibleServices.map((service) => (
+                  <div className="mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0">
+                    {availableServices.map((service) => (
                       <div
                         key={service.id}
                         onClick={() => setSelectedServiceId(service.id)}
@@ -640,6 +673,11 @@ export default function Booking() {
                         </div>
                       </div>
                     ))}
+                    {availableServices.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
+                        Este barbeiro não tem serviços disponíveis para marcação online.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -647,7 +685,7 @@ export default function Booking() {
 
             {/* STEP 3: DATE & TIME */}
             {step === 3 && (
-              <div className="flex flex-col gap-8">
+              <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(300px,380px)_1fr] lg:items-start">
                 <div className="w-full">
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     <CalendarIcon className="w-5 h-5 text-primary" /> Selecione a Data
@@ -756,7 +794,7 @@ export default function Booking() {
 
             {/* STEP 4: CUSTOMER DETAILS */}
             {step === 4 && (
-              <div className="max-w-md mx-auto space-y-8">
+              <div className="mx-auto max-w-md space-y-8 lg:grid lg:max-w-4xl lg:grid-cols-2 lg:gap-6 lg:space-y-0">
                 <div className="bg-card border border-white/10 rounded-xl p-6 space-y-4">
                   <h3 className="font-bold text-lg mb-4 border-b border-white/10 pb-2">Resumo da Marcação</h3>
                   <div className="flex justify-between text-sm">
@@ -789,6 +827,7 @@ export default function Booking() {
                         placeholder="O seu nome" 
                         className="pl-10 bg-background border-white/10 focus:border-primary"
                         maxLength={MAX_NAME_LENGTH}
+                        autoComplete="name"
                         value={customerDetails.name}
                         onChange={(e) => setCustomerDetails(prev => ({ ...prev, name: e.target.value }))}
                       />
@@ -838,6 +877,7 @@ export default function Booking() {
                     <Input 
                       id="email" 
                       type="email" 
+                      autoComplete="email"
                       placeholder="exemplo@email.com" 
                       className="bg-background border-white/10 focus:border-primary"
                       maxLength={MAX_EMAIL_LENGTH}
@@ -852,19 +892,8 @@ export default function Booking() {
         </AnimatePresence>
 
         {/* Footer Actions */}
-        <div className="fixed bottom-0 left-0 w-full bg-card border-t border-white/10 p-4 md:static md:bg-transparent md:border-0 md:mt-12">
-          <div className="mx-auto flex w-full max-w-4xl justify-between">
-            <Button 
-              variant="outline" 
-              onClick={() => {
-                if (step > 1) setStep(prev => prev - 1);
-                else navigate("/");
-              }}
-              className="border-white/10 hover:bg-white/5"
-            >
-              Voltar
-            </Button>
-
+        <div className="fixed bottom-0 left-0 w-full bg-card border-t border-white/10 p-4 md:static md:bg-transparent md:border-0 md:mt-12 lg:mt-6">
+          <div className="mx-auto flex w-full max-w-4xl justify-end lg:max-w-[calc(100vw-4rem)] xl:max-w-7xl">
             {step < 4 ? (
               <Button 
                 variant="gold" 

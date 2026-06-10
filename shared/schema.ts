@@ -1,4 +1,4 @@
-import { pgSchema, pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
@@ -48,6 +48,7 @@ export const barbers = appPgTable("barbers", {
   avatar: text("avatar"),
   email: text("email").unique(),
   password: text("password"),
+  color: text("color").notNull().default("#D4AF37"),
   isVisible: boolean("is_visible").default(true),
 });
 
@@ -117,6 +118,13 @@ export const barberAvailability = appPgTable("barber_availability", {
   isWorking: boolean("is_working").default(true).notNull(),
 });
 
+export const barberServices = appPgTable("barber_services", {
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  serviceId: integer("service_id").references(() => services.id).notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.barberId, table.serviceId] }),
+}));
+
 export const barberInvites = appPgTable("barber_invites", {
   id: idColumn("barber_invites_id_seq"),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
@@ -128,12 +136,15 @@ export const barberInvites = appPgTable("barber_invites", {
 
 export const customerNotes = appPgTable("customer_notes", {
   id: idColumn("customer_notes_id_seq"),
-  phone: text("phone").notNull().unique(),
+  phone: text("phone").notNull(),
+  customerNameKey: text("customer_name_key").notNull().default(""),
   email: text("email"),
   notes: text("notes").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  customerNotesIdentityIdx: uniqueIndex("customer_notes_phone_name_idx").on(table.phone, table.customerNameKey),
+}));
 
 // === RELATIONS ===
 
@@ -150,10 +161,23 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
 
 export const barbersRelations = relations(barbers, ({ many }) => ({
   appointments: many(appointments),
+  serviceAssignments: many(barberServices),
 }));
 
 export const servicesRelations = relations(services, ({ many }) => ({
   appointments: many(appointments),
+  barberAssignments: many(barberServices),
+}));
+
+export const barberServicesRelations = relations(barberServices, ({ one }) => ({
+  barber: one(barbers, {
+    fields: [barberServices.barberId],
+    references: [barbers.id],
+  }),
+  service: one(services, {
+    fields: [barberServices.serviceId],
+    references: [services.id],
+  }),
 }));
 
 // === BASE SCHEMAS ===
@@ -186,6 +210,7 @@ export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });
 export const insertBlacklistSchema = createInsertSchema(blacklist).omit({ id: true, createdAt: true });
 export const insertShopAvailabilitySchema = createInsertSchema(shopAvailability).omit({ id: true });
 export const insertBarberAvailabilitySchema = createInsertSchema(barberAvailability).omit({ id: true });
+export const insertBarberServiceSchema = createInsertSchema(barberServices);
 export const insertBarberInviteSchema = createInsertSchema(barberInvites).omit({ id: true, createdAt: true });
 export const insertCustomerNoteSchema = createInsertSchema(customerNotes).omit({
   id: true,
@@ -203,8 +228,13 @@ export type Admin = typeof admins.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
 export type BarberAvailability = typeof barberAvailability.$inferSelect;
+export type BarberService = typeof barberServices.$inferSelect;
 export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;
+
+export type BarberWithServices = Barber & {
+  serviceIds: number[];
+};
 
 export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
@@ -213,6 +243,7 @@ export type CreateAdminRequest = z.infer<typeof insertAdminSchema>;
 export type InsertBlacklist = z.infer<typeof insertBlacklistSchema>;
 export type CreateShopAvailabilityRequest = z.infer<typeof insertShopAvailabilitySchema>;
 export type CreateBarberAvailabilityRequest = z.infer<typeof insertBarberAvailabilitySchema>;
+export type CreateBarberServiceRequest = z.infer<typeof insertBarberServiceSchema>;
 export type CreateBarberInviteRequest = z.infer<typeof insertBarberInviteSchema>;
 export type CreateCustomerNoteRequest = z.infer<typeof insertCustomerNoteSchema>;
 
