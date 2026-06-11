@@ -53,6 +53,29 @@ test.describe("public booking flow", () => {
     await expect(page.getByRole("button", { name: "Confirmar" })).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
   });
+
+  test("shows inline validation in the customer details step", async ({ page }) => {
+    await page.goto("/book?barberId=1&serviceId=1&date=2026-06-11&time=15:30");
+
+    await page.getByRole("button", { name: "Confirmar" }).click();
+    await expect(page.getByText("Indique o nome para a marcação.")).toBeVisible();
+    await expect(page.getByText("Indique o telemóvel para confirmarmos a marcação.")).toBeVisible();
+
+    await page.getByPlaceholder("O seu nome").fill("Pedro Faria");
+    await page.getByPlaceholder("912 345 678").fill("123");
+    await page.getByPlaceholder("exemplo@email.com").fill("email-invalido");
+
+    await expect(page.getByText("Indique o nome para a marcação.")).not.toBeVisible();
+    await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).toBeVisible();
+    await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).toBeVisible();
+
+    await page.getByPlaceholder("912 345 678").fill("912695704");
+    await page.getByPlaceholder("exemplo@email.com").fill("");
+
+    await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).not.toBeVisible();
+    await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).not.toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
 });
 
 test.describe("admin navigation", () => {
