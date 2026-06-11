@@ -78,6 +78,17 @@
   background: hsl(var(--primary) / 0.5);
 }
 
+@layer utilities {
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* Utilities for gold gradients */
 .gold-gradient-text {
   @apply bg-clip-text text-transparent bg-gradient-to-r from-[#D4AF37] via-[#F2D06B] to-[#D4AF37];

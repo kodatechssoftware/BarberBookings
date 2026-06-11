@@ -1911,11 +1911,11 @@ export default function Admin() {
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
                 <Label className="text-white">Email ou nome de utilizador</Label>
-                <Input value={loginData.username} onChange={(e) => setLoginData({...loginData, username: e.target.value})} className="bg-background border-white/10 text-white" placeholder="Introduza o email ou nome de utilizador" required />
+                <Input value={loginData.username} onChange={(e) => setLoginData({...loginData, username: e.target.value})} className="bg-background border-white/10 text-white" placeholder="Introduza o email ou nome de utilizador" autoComplete="username" required />
               </div>
               <div className="space-y-2">
                 <Label className="text-white">Palavra-passe</Label>
-                <Input type="password" value={loginData.password} onChange={(e) => setLoginData({...loginData, password: e.target.value})} className="bg-background border-white/10 text-white" required />
+                <Input type="password" value={loginData.password} onChange={(e) => setLoginData({...loginData, password: e.target.value})} className="bg-background border-white/10 text-white" autoComplete="current-password" required />
               </div>
               <Button type="submit" variant="gold" className="w-full" disabled={isLoggingIn}>{isLoggingIn ? "A entrar..." : "Entrar"}</Button>
               <p className="text-[10px] text-gray-500 text-center">Barbeiros devem definir a palavra-passe através do convite enviado pelo administrador.</p>
@@ -2042,7 +2042,7 @@ export default function Admin() {
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="w-full justify-start overflow-x-auto bg-card border border-white/10 p-1">
+          <TabsList className="scrollbar-none w-full justify-start overflow-x-auto bg-card border border-white/10 p-1">
             <TabsTrigger value="dashboard" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {user.role === "admin" && (
