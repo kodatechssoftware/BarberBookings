@@ -2265,7 +2265,7 @@ export default function Admin() {
             )}
           </TabsContent>
 
-          <TabsContent value="appointments" forceMount className="space-y-6 outline-none">
+          <TabsContent value="appointments" className="space-y-6 outline-none">
             <div className="flex flex-col sm:flex-row items-stretch gap-3 shrink-0 mb-6">
               {user.role === "admin" ? (
                 <Select value={selectedBarberFilter} onValueChange={setSelectedBarberFilter}>
