@@ -324,6 +324,11 @@ type ServiceListItem = {
   isVisible?: boolean | null;
 };
 
+type BarberListCacheItem = {
+  id: number;
+  [key: string]: unknown;
+};
+
 const barberColorPalette = ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
 const defaultBarberColor = "#D4AF37";
 
@@ -337,6 +342,28 @@ function colorWithAlpha(color: string | undefined | null, alpha: number) {
   const g = parseInt(normalized.slice(2, 4), 16);
   const b = parseInt(normalized.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function isBarbersQuery(queryKey: readonly unknown[]) {
+  return queryKey[0] === "/api/barbers";
+}
+
+async function refreshBarbersCache(updatedBarber?: BarberListCacheItem) {
+  if (updatedBarber) {
+    queryClient.setQueriesData<BarberListCacheItem[]>(
+      { predicate: (query) => isBarbersQuery(query.queryKey) },
+      (current) => {
+        if (!Array.isArray(current)) return current;
+        return current.map((barber) =>
+          barber.id === updatedBarber.id ? { ...barber, ...updatedBarber } : barber,
+        );
+      },
+    );
+  }
+
+  await queryClient.invalidateQueries({
+    predicate: (query) => isBarbersQuery(query.queryKey),
+  });
 }
 
 function getAllServiceIds(services?: ServiceListItem[]) {
@@ -1333,7 +1360,7 @@ export default function Admin() {
         color: normalizeBarberColor(barberFormData.color),
         serviceIds: normalizeServiceSelection(barberFormData.serviceIds, allServiceIds),
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+      await refreshBarbersCache();
       setIsAddingBarber(false);
       setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] });
       toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
@@ -2708,7 +2735,7 @@ export default function Admin() {
                       onConfirm={async () => {
                         try {
                           await apiRequest("DELETE", `/api/barbers/${barber.id}`);
-                          queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                          await refreshBarbersCache();
                           toast({ title: "Sucesso", description: "Barbeiro removido." });
                         } catch (err: any) {
                           toast({ title: "Erro", description: err.message || "Não foi possível remover o barbeiro.", variant: "destructive" });
@@ -2775,14 +2802,15 @@ export default function Admin() {
                                   : barber.serviceIds,
                                 services,
                               );
-                              await apiRequest("PATCH", `/api/barbers/${barber.id}`, {
+                              const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, {
                                 name,
                                 specialty,
                                 color: normalizeBarberColor(color),
                                 avatar: avatar || null,
                                 serviceIds: normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services)),
                               });
-                              queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                              const updatedBarber = await response.json();
+                              await refreshBarbersCache(updatedBarber);
                               setBarberAvatarDrafts((current) => {
                                 const next = { ...current };
                                 delete next[barber.id];
@@ -2827,8 +2855,9 @@ export default function Admin() {
                         className="h-8 text-[10px] text-gray-400 border-white/5"
                         onClick={async () => {
                           try {
-                            await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible: !barber.isVisible });
-                            queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                            const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible: !barber.isVisible });
+                            const updatedBarber = await response.json();
+                            await refreshBarbersCache(updatedBarber);
                             toast({
                               title: "Sucesso",
                               description: barber.isVisible ? "Barbeiro ocultado." : "Barbeiro visível no site.",
