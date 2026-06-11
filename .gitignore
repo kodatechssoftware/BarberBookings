@@ -11,3 +11,5 @@ migrations
 .local-postgres-data/
 .local-postgres.log
 .railway-local-test*.log
+playwright-report/
+test-results/
