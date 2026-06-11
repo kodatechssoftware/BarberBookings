@@ -8,6 +8,7 @@ import {
   verificationCodes,
   shopAvailability,
   barberAvailability,
+  barberServices,
   barberInvites,
   customerNotes,
   type Barber,
@@ -18,6 +19,7 @@ import {
   type Blacklist,
   type ShopAvailability,
   type BarberAvailability,
+  type BarberService,
   type BarberInvite,
   type CustomerNote,
   type CreateBarberRequest,
@@ -27,10 +29,12 @@ import {
   type InsertBlacklist,
   type CreateShopAvailabilityRequest,
   type CreateBarberAvailabilityRequest,
+  type CreateBarberServiceRequest,
   type CreateBarberInviteRequest,
   type CreateCustomerNoteRequest
 } from "@shared/schema";
 import { eq, and, gte, lte, sql, type SQL } from "drizzle-orm";
+import { normalizeEmail, normalizePortuguesePhone } from "@shared/customer-validation";
 
 type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   cancelToken: string;
@@ -80,6 +84,9 @@ export interface IStorage {
   getBarberAvailability(barberId: number): Promise<BarberAvailability[]>;
   getAllBarberAvailability(): Promise<BarberAvailability[]>;
   replaceBarberAvailability(barberId: number, rows: Omit<CreateBarberAvailabilityRequest, "barberId">[]): Promise<BarberAvailability[]>;
+  getAllBarberServices(): Promise<BarberService[]>;
+  getBarberServiceIds(barberId: number): Promise<number[]>;
+  replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]>;
 
   // Barber invites
   createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite>;
@@ -87,7 +94,7 @@ export interface IStorage {
   markBarberInviteUsed(id: number): Promise<BarberInvite | undefined>;
 
   // Customer notes
-  getCustomerNoteByPhone(phone: string): Promise<CustomerNote | undefined>;
+  getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
   upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote>;
 
   // Verification
@@ -124,6 +131,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteBarber(id: number): Promise<void> {
+    const [appointment] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(eq(appointments.barberId, id))
+      .limit(1);
+
+    if (appointment) {
+      const error = new Error("Barber has appointments") as Error & { code?: string };
+      error.code = "23503";
+      throw error;
+    }
+
+    await db.delete(barberServices).where(eq(barberServices.barberId, id));
+    await db.delete(barberAvailability).where(eq(barberAvailability.barberId, id));
     await db.delete(barbers).where(eq(barbers.id, id));
   }
 
@@ -147,6 +168,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteService(id: number): Promise<void> {
+    await db.delete(barberServices).where(eq(barberServices.serviceId, id));
     // Set serviceId to null for all appointments linked to this service
     await db.update(appointments).set({ serviceId: null }).where(eq(appointments.serviceId, id));
     // Now we can safely delete the service
@@ -238,21 +260,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async isBlacklisted(email?: string, phone?: string): Promise<boolean> {
-    if (!email && !phone) return false;
-    
-    // Check phone first (most reliable)
-    if (phone) {
-      const [phoneEntry] = await db.select().from(blacklist).where(eq(blacklist.phone, phone));
-      if (phoneEntry) return true;
-    }
+    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail && !normalizedPhone) return false;
 
-    // Check email if provided
-    if (email) {
-      const [emailEntry] = await db.select().from(blacklist).where(eq(blacklist.email, email));
-      if (emailEntry) return true;
-    }
-    
-    return false;
+    const entries = await db.select().from(blacklist);
+    return entries.some((entry) =>
+      (normalizedPhone && normalizePortuguesePhone(entry.phone) === normalizedPhone) ||
+      (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
+    );
   }
 
   async getShopAvailability(): Promise<ShopAvailability[]> {
@@ -303,6 +319,37 @@ export class DatabaseStorage implements IStorage {
       .returning();
   }
 
+  async getAllBarberServices(): Promise<BarberService[]> {
+    return await db
+      .select()
+      .from(barberServices)
+      .orderBy(barberServices.barberId, barberServices.serviceId);
+  }
+
+  async getBarberServiceIds(barberId: number): Promise<number[]> {
+    const rows = await db
+      .select({ serviceId: barberServices.serviceId })
+      .from(barberServices)
+      .where(eq(barberServices.barberId, barberId))
+      .orderBy(barberServices.serviceId);
+
+    return rows.map((row) => row.serviceId);
+  }
+
+  async replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]> {
+    await db.delete(barberServices).where(eq(barberServices.barberId, barberId));
+
+    const uniqueServiceIds = Array.from(new Set(serviceIds));
+    if (uniqueServiceIds.length === 0) {
+      return [];
+    }
+
+    return await db
+      .insert(barberServices)
+      .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId } satisfies CreateBarberServiceRequest)))
+      .returning();
+  }
+
   async createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
     const [newInvite] = await db.insert(barberInvites).values(invite).returning();
     return newInvite;
@@ -322,8 +369,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async getCustomerNoteByPhone(phone: string): Promise<CustomerNote | undefined> {
-    const [note] = await db.select().from(customerNotes).where(eq(customerNotes.phone, phone));
+  async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
+    const [note] = await db
+      .select()
+      .from(customerNotes)
+      .where(and(eq(customerNotes.phone, phone), eq(customerNotes.customerNameKey, customerNameKey)));
     return note;
   }
 
@@ -333,12 +383,13 @@ export class DatabaseStorage implements IStorage {
       .insert(customerNotes)
       .values({
         phone: note.phone,
+        customerNameKey: note.customerNameKey || "",
         email: note.email || null,
         notes: note.notes || "",
         updatedAt: now,
       })
       .onConflictDoUpdate({
-        target: customerNotes.phone,
+        target: [customerNotes.phone, customerNotes.customerNameKey],
         set: {
           email: note.email || null,
           notes: note.notes || "",
@@ -401,6 +452,7 @@ export class MemoryStorage implements IStorage {
   private blacklist: Blacklist[] = [];
   private shopAvailability: ShopAvailability[] = [];
   private barberAvailability: BarberAvailability[] = [];
+  private barberServices: BarberService[] = [];
   private barberInvites: BarberInvite[] = [];
   private customerNotes: CustomerNote[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
@@ -439,6 +491,7 @@ export class MemoryStorage implements IStorage {
       avatar: barber.avatar ?? null,
       email: barber.email ?? null,
       password: barber.password ?? null,
+      color: barber.color ?? "#D4AF37",
       isVisible: barber.isVisible ?? true,
     };
     this.barbers.push(newBarber);
@@ -460,6 +513,7 @@ export class MemoryStorage implements IStorage {
     }
     this.barbers = this.barbers.filter((barber) => barber.id !== id);
     this.barberAvailability = this.barberAvailability.filter((row) => row.barberId !== id);
+    this.barberServices = this.barberServices.filter((row) => row.barberId !== id);
   }
 
   async getServices(): Promise<Service[]> {
@@ -494,6 +548,7 @@ export class MemoryStorage implements IStorage {
     this.appointments = this.appointments.map((appointment) =>
       appointment.serviceId === id ? { ...appointment, serviceId: null } : appointment,
     );
+    this.barberServices = this.barberServices.filter((row) => row.serviceId !== id);
     this.services = this.services.filter((service) => service.id !== id);
   }
 
@@ -601,8 +656,13 @@ export class MemoryStorage implements IStorage {
   }
 
   async isBlacklisted(email?: string, phone?: string): Promise<boolean> {
+    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail && !normalizedPhone) return false;
+
     return this.blacklist.some((entry) =>
-      (phone && entry.phone === phone) || (email && entry.email === email),
+      (normalizedPhone && normalizePortuguesePhone(entry.phone) === normalizedPhone) ||
+      (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }
 
@@ -654,6 +714,26 @@ export class MemoryStorage implements IStorage {
     return createdRows;
   }
 
+  async getAllBarberServices(): Promise<BarberService[]> {
+    return [...this.barberServices].sort(
+      (a, b) => a.barberId - b.barberId || a.serviceId - b.serviceId,
+    );
+  }
+
+  async getBarberServiceIds(barberId: number): Promise<number[]> {
+    return this.barberServices
+      .filter((row) => row.barberId === barberId)
+      .map((row) => row.serviceId)
+      .sort((a, b) => a - b);
+  }
+
+  async replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]> {
+    this.barberServices = this.barberServices.filter((row) => row.barberId !== barberId);
+    const createdRows = Array.from(new Set(serviceIds)).map((serviceId) => ({ barberId, serviceId }));
+    this.barberServices.push(...createdRows);
+    return createdRows;
+  }
+
   async createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
     const newInvite: BarberInvite = {
       id: this.nextIds.invite++,
@@ -678,13 +758,16 @@ export class MemoryStorage implements IStorage {
     return this.barberInvites[index];
   }
 
-  async getCustomerNoteByPhone(phone: string): Promise<CustomerNote | undefined> {
-    return this.customerNotes.find((note) => note.phone === phone);
+  async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
+    return this.customerNotes.find((note) => note.phone === phone && note.customerNameKey === customerNameKey);
   }
 
   async upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote> {
     const now = new Date();
-    const existingIndex = this.customerNotes.findIndex((item) => item.phone === note.phone);
+    const customerNameKey = note.customerNameKey || "";
+    const existingIndex = this.customerNotes.findIndex((item) =>
+      item.phone === note.phone && item.customerNameKey === customerNameKey,
+    );
     if (existingIndex !== -1) {
       this.customerNotes[existingIndex] = {
         ...this.customerNotes[existingIndex],
@@ -698,6 +781,7 @@ export class MemoryStorage implements IStorage {
     const savedNote: CustomerNote = {
       id: this.nextIds.customerNote++,
       phone: note.phone,
+      customerNameKey,
       email: note.email || null,
       notes: note.notes || "",
       createdAt: now,
