@@ -41,6 +41,20 @@ npm run db:push
 npm run dev
 ```
 
+### Testes automaticos
+
+Os testes E2E arrancam a aplicacao numa porta propria com `USE_MEMORY_STORAGE=true`, por isso nao escrevem na base de dados real.
+
+```powershell
+npm run test:e2e
+```
+
+Para abrir o runner visual do Playwright:
+
+```powershell
+npm run test:e2e:ui
+```
+
 ### URLs e acessos
 
 - App local: `http://localhost:5000`

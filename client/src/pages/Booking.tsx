@@ -229,6 +229,28 @@ function getBarberAvatarFallback(barber: { name: string }) {
   return "/images/logo.jpg";
 }
 
+const BarberCardSkeleton = () => (
+  <div className="overflow-hidden rounded-xl border border-white/5 bg-card">
+    <div className="aspect-[4/3] sm:aspect-[4/5] lg:aspect-[4/3] animate-pulse bg-white/5" />
+    <div className="space-y-3 p-4">
+      <div className="h-4 w-2/3 animate-pulse rounded bg-white/10" />
+      <div className="h-3 w-1/2 animate-pulse rounded bg-white/5" />
+    </div>
+  </div>
+);
+
+const ServiceCardSkeleton = () => (
+  <div className="flex min-h-[112px] items-center gap-4 rounded-xl border border-white/5 bg-card p-4 md:p-6">
+    <div className="h-10 w-10 shrink-0 animate-pulse rounded-full bg-white/10" />
+    <div className="min-w-0 flex-1 space-y-3">
+      <div className="h-4 w-2/3 animate-pulse rounded bg-white/10" />
+      <div className="h-3 w-full animate-pulse rounded bg-white/5" />
+      <div className="h-3 w-20 animate-pulse rounded bg-white/5" />
+    </div>
+    <div className="h-5 w-16 animate-pulse rounded bg-white/10" />
+  </div>
+);
+
 // Step components
 const StepIndicator = ({ currentStep }: { currentStep: number }) => {
   const steps = ["Barbeiro", "Serviço", "Data e hora", "Detalhes"];
@@ -527,8 +549,8 @@ export default function Booking() {
                 </div>
                 
                 {loadingBarbers ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 animate-pulse">
-                    {[1,2,3].map(i => <div key={i} className="h-64 bg-card rounded-xl"></div>)}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 md:gap-6 lg:grid-cols-4">
+                    {Array.from({ length: 4 }, (_, i) => <BarberCardSkeleton key={i} />)}
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
@@ -637,8 +659,8 @@ export default function Booking() {
                 </div>
 
                 {loadingServices ? (
-                  <div className="space-y-4 animate-pulse">
-                     {[1,2,3].map(i => <div key={i} className="h-20 bg-card rounded-xl"></div>)}
+                  <div className="mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0">
+                    {Array.from({ length: 3 }, (_, i) => <ServiceCardSkeleton key={i} />)}
                   </div>
                 ) : (
                   <div className="mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0">

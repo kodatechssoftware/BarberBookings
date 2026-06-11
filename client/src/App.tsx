@@ -33,6 +33,7 @@ function Router() {
       <Switch>
         <Route path="/">{() => <Home />}</Route>
         <Route path="/book">{() => <Booking />}</Route>
+        <Route path="/booking">{() => <Booking />}</Route>
         <Route path="/admin">{() => <Admin />}</Route>
         <Route path="/cancel/:token">{() => <Cancellation />}</Route>
         <Route path="/reschedule/:token">{() => <Reschedule />}</Route>

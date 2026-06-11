@@ -25,6 +25,28 @@ export function isValidPortugueseMobile(value?: string | null) {
   return portugueseMobilePattern.test(normalizePortuguesePhone(value));
 }
 
+export function getPortugueseMobileMatchKeys(value?: string | null) {
+  const digits = (value || "").replace(/\D/g, "");
+  const normalized = normalizePortuguesePhone(value);
+  const keys = new Set<string>();
+
+  if (normalized) keys.add(normalized);
+
+  const localCandidate = digits.slice(-9);
+  if (portugueseMobilePattern.test(localCandidate)) {
+    keys.add(localCandidate);
+  }
+
+  return keys;
+}
+
+export function portugueseMobilePhonesMatch(left?: string | null, right?: string | null) {
+  const leftKeys = getPortugueseMobileMatchKeys(left);
+  const rightKeys = getPortugueseMobileMatchKeys(right);
+
+  return Array.from(leftKeys).some((key) => rightKeys.has(key));
+}
+
 export function normalizeEmail(value?: string | null) {
   return (value || "").trim().toLowerCase();
 }

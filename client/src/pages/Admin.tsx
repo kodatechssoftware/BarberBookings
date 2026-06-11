@@ -324,6 +324,11 @@ type ServiceListItem = {
   isVisible?: boolean | null;
 };
 
+type BarberListCacheItem = {
+  id: number;
+  [key: string]: unknown;
+};
+
 const barberColorPalette = ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
 const defaultBarberColor = "#D4AF37";
 
@@ -337,6 +342,28 @@ function colorWithAlpha(color: string | undefined | null, alpha: number) {
   const g = parseInt(normalized.slice(2, 4), 16);
   const b = parseInt(normalized.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function isBarbersQuery(queryKey: readonly unknown[]) {
+  return queryKey[0] === "/api/barbers";
+}
+
+async function refreshBarbersCache(updatedBarber?: BarberListCacheItem) {
+  if (updatedBarber) {
+    queryClient.setQueriesData<BarberListCacheItem[]>(
+      { predicate: (query) => isBarbersQuery(query.queryKey) },
+      (current) => {
+        if (!Array.isArray(current)) return current;
+        return current.map((barber) =>
+          barber.id === updatedBarber.id ? { ...barber, ...updatedBarber } : barber,
+        );
+      },
+    );
+  }
+
+  await queryClient.invalidateQueries({
+    predicate: (query) => isBarbersQuery(query.queryKey),
+  });
 }
 
 function getAllServiceIds(services?: ServiceListItem[]) {
@@ -521,8 +548,9 @@ function WeeklyAgenda({
   onPreviousWeek,
   onNextWeek,
   onToday,
+  onException,
   onManualBooking,
-  onOpenCustomerHistory,
+  onSelectAppointment,
   getStatusLabel,
 }: {
   weekStartDate: Date;
@@ -533,8 +561,9 @@ function WeeklyAgenda({
   onPreviousWeek: () => void;
   onNextWeek: () => void;
   onToday: () => void;
+  onException: () => void;
   onManualBooking: () => void;
-  onOpenCustomerHistory: (appointment: AdminAppointment) => void;
+  onSelectAppointment: (appointment: AdminAppointment) => void;
   getStatusLabel: (status: string) => string;
 }) {
   const calendarDays = useMemo(
@@ -582,7 +611,7 @@ function WeeklyAgenda({
       <button
         key={appointment.id}
         type="button"
-        onClick={() => onOpenCustomerHistory(appointment)}
+        onClick={() => onSelectAppointment(appointment)}
         className={cn(
           "w-full rounded-lg border px-3 py-2 text-left transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
           appointment.status !== "booked" && "opacity-70",
@@ -634,9 +663,14 @@ function WeeklyAgenda({
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
-            <Button type="button" variant="gold" className="h-10 gap-2" onClick={onManualBooking}>
-              <Plus className="h-4 w-4" /> Marcação manual
-            </Button>
+            <div className="grid grid-cols-2 gap-2 sm:flex">
+              <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={onException}>
+                <AlertTriangle className="h-4 w-4" /> Ausência
+              </Button>
+              <Button type="button" variant="gold" className="h-10 gap-2" onClick={onManualBooking}>
+                <Plus className="h-4 w-4" /> Marcação manual
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -750,7 +784,7 @@ function WeeklyAgenda({
                             <button
                               key={appointment.id}
                               type="button"
-                              onClick={() => onOpenCustomerHistory(appointment)}
+                              onClick={() => onSelectAppointment(appointment)}
                               className={cn(
                                 "absolute overflow-hidden rounded-lg border px-2 py-1.5 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                                 appointment.status !== "booked" && "opacity-70",
@@ -986,6 +1020,135 @@ function ConfirmAction({
     </AlertDialog>
   );
 }
+
+function AppointmentDetailsDialog({
+  appointment,
+  open,
+  onOpenChange,
+  barbers,
+  services,
+  toast,
+  getBarberName,
+  getServiceName,
+  getStatusLabel,
+  getStatusClass,
+  onOpenHistory,
+  onStatusChange,
+  onBlockCustomer,
+}: {
+  appointment: AdminAppointment | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null }>;
+  services?: ServiceListItem[];
+  toast: ReturnType<typeof useToast>["toast"];
+  getBarberName: (id: number) => string;
+  getServiceName: (id?: number | null) => string;
+  getStatusLabel: (status: string) => string;
+  getStatusClass: (status: string) => string;
+  onOpenHistory: (appointment: AdminAppointment) => void;
+  onStatusChange: (appointmentId: number, status: AppointmentStatus) => void;
+  onBlockCustomer: (appointment: AdminAppointment) => Promise<void>;
+}) {
+  if (!appointment) {
+    return <Dialog open={open} onOpenChange={onOpenChange} />;
+  }
+
+  const start = parseISO(appointment.startTime);
+  const end = getWeeklyAppointmentEnd(appointment);
+
+  const handleOpenHistory = () => {
+    onOpenChange(false);
+    onOpenHistory(appointment);
+  };
+
+  const handleStatusChange = (status: AppointmentStatus) => {
+    onStatusChange(appointment.id, status);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Detalhes da marcação</DialogTitle>
+          <DialogDescription className="text-gray-400">
+            {format(start, "dd/MM/yyyy", { locale: pt })} · {format(start, "HH:mm")} - {format(end, "HH:mm")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 pt-2">
+          <div className="rounded-2xl border border-white/10 bg-background/60 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-2xl font-display font-bold text-primary">{format(start, "HH:mm")}</p>
+                <h3 className="mt-1 truncate text-lg font-bold text-white">{appointment.customerName}</h3>
+                <p className="text-sm text-gray-400">{appointment.customerPhone}</p>
+              </div>
+              <span className={cn("shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide", getStatusClass(appointment.status))}>
+                {getStatusLabel(appointment.status)}
+              </span>
+            </div>
+
+            <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+              <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
+                <p className="text-xs uppercase tracking-widest text-gray-500">Barbeiro</p>
+                <p className="mt-1 font-semibold text-white">{getBarberName(appointment.barberId)}</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
+                <p className="text-xs uppercase tracking-widest text-gray-500">Serviço</p>
+                <p className="mt-1 font-semibold text-white">{getServiceName(appointment.serviceId)}</p>
+              </div>
+            </div>
+
+            {appointment.depositRequired && (
+              <p className="mt-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
+                Depósito recomendado: {appointment.depositReason || "regra operacional"}
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            <Button size="sm" variant="outline" onClick={handleOpenHistory} className="h-9 border-white/10 text-xs">
+              <User className="mr-1 h-3.5 w-3.5" /> Histórico
+            </Button>
+
+            {appointment.status === "booked" && (
+              <>
+                <Button size="sm" variant="ghost" onClick={() => handleStatusChange("completed")} className="h-9 text-xs text-green-300 hover:text-green-200">
+                  <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => handleStatusChange("no_show")} className="h-9 text-xs text-rose-300 hover:text-rose-200">
+                  Falta
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">
+                  <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
+                </Button>
+                <ConfirmAction
+                  title="Bloquear cliente?"
+                  description={`${appointment.customerName} (${appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
+                  confirmLabel="Bloquear"
+                  confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onConfirm={() => onBlockCustomer(appointment)}
+                >
+                  <Button size="sm" variant="ghost" className="h-9 text-xs text-destructive hover:text-red-300">
+                    Bloquear
+                  </Button>
+                </ConfirmAction>
+                <EditAppointmentDialog
+                  appointment={appointment}
+                  barbers={barbers}
+                  services={services}
+                  toast={toast}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function createDefaultAvailabilityForm(): AvailabilityForm {
   return {
     0: { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] },
@@ -1064,6 +1227,7 @@ export default function Admin() {
   const [weeklyStartDate, setWeeklyStartDate] = useState<Date>(() =>
     startOfWeek(startOfToday(), { weekStartsOn: 1 }),
   );
+  const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
     enabled: user?.authorized === true,
@@ -1130,6 +1294,11 @@ export default function Admin() {
       })
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }, [weeklyAppointments, weeklyStartDate]);
+  const selectedAppointmentDetails = useMemo(() => {
+    if (!selectedAppointment) return null;
+    const candidates = [...weeklyAppointmentList, ...appointmentList];
+    return candidates.find((appointment) => appointment.id === selectedAppointment.id) || selectedAppointment;
+  }, [appointmentList, selectedAppointment, weeklyAppointmentList]);
   const updateStatus = useUpdateAppointmentStatus();
   const { toast } = useToast();
 
@@ -1191,7 +1360,7 @@ export default function Admin() {
         color: normalizeBarberColor(barberFormData.color),
         serviceIds: normalizeServiceSelection(barberFormData.serviceIds, allServiceIds),
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+      await refreshBarbersCache();
       setIsAddingBarber(false);
       setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] });
       toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
@@ -1525,6 +1694,16 @@ export default function Admin() {
     );
   };
 
+  const handleBlockCustomer = async (appointment: AdminAppointment) => {
+    await apiRequest("POST", "/api/admin/blacklist", {
+      phone: appointment.customerPhone,
+      email: appointment.customerEmail,
+      reason: `Faltou à marcação de ${format(parseISO(appointment.startTime), "dd/MM/yyyy HH:mm")}`,
+    });
+    toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
+  };
+
   const activeBarberColumns = useMemo(() => {
     const allBarbers = barbers || [];
     if (user?.role === "barber") {
@@ -1732,11 +1911,11 @@ export default function Admin() {
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
                 <Label className="text-white">Email ou nome de utilizador</Label>
-                <Input value={loginData.username} onChange={(e) => setLoginData({...loginData, username: e.target.value})} className="bg-background border-white/10 text-white" placeholder="Introduza o email ou nome de utilizador" required />
+                <Input value={loginData.username} onChange={(e) => setLoginData({...loginData, username: e.target.value})} className="bg-background border-white/10 text-white" placeholder="Introduza o email ou nome de utilizador" autoComplete="username" required />
               </div>
               <div className="space-y-2">
                 <Label className="text-white">Palavra-passe</Label>
-                <Input type="password" value={loginData.password} onChange={(e) => setLoginData({...loginData, password: e.target.value})} className="bg-background border-white/10 text-white" required />
+                <Input type="password" value={loginData.password} onChange={(e) => setLoginData({...loginData, password: e.target.value})} className="bg-background border-white/10 text-white" autoComplete="current-password" required />
               </div>
               <Button type="submit" variant="gold" className="w-full" disabled={isLoggingIn}>{isLoggingIn ? "A entrar..." : "Entrar"}</Button>
               <p className="text-[10px] text-gray-500 text-center">Barbeiros devem definir a palavra-passe através do convite enviado pelo administrador.</p>
@@ -1844,8 +2023,26 @@ export default function Admin() {
           </DialogContent>
         </Dialog>
 
+        <AppointmentDetailsDialog
+          appointment={selectedAppointmentDetails}
+          open={!!selectedAppointmentDetails}
+          onOpenChange={(open) => {
+            if (!open) setSelectedAppointment(null);
+          }}
+          barbers={barbers}
+          services={services}
+          toast={toast}
+          getBarberName={getBarberName}
+          getServiceName={getServiceName}
+          getStatusLabel={getStatusLabel}
+          getStatusClass={getStatusClass}
+          onOpenHistory={openCustomerHistory}
+          onStatusChange={handleStatusChange}
+          onBlockCustomer={handleBlockCustomer}
+        />
+
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="w-full justify-start overflow-x-auto bg-card border border-white/10 p-1">
+          <TabsList className="scrollbar-none w-full justify-start overflow-x-auto bg-card border border-white/10 p-1">
             <TabsTrigger value="dashboard" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className="gap-2 whitespace-nowrap text-white data-[state=active]:text-primary"><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {user.role === "admin" && (
@@ -1869,8 +2066,9 @@ export default function Admin() {
               onPreviousWeek={() => setWeeklyStartDate((current) => addDays(current, -7))}
               onNextWeek={() => setWeeklyStartDate((current) => addDays(current, 7))}
               onToday={() => setWeeklyStartDate(startOfWeek(startOfToday(), { weekStartsOn: 1 }))}
+              onException={openAgendaExceptionDialog}
               onManualBooking={openManualBookingDialog}
-              onOpenCustomerHistory={openCustomerHistory}
+              onSelectAppointment={setSelectedAppointment}
               getStatusLabel={getStatusLabel}
             />
 
@@ -2067,7 +2265,7 @@ export default function Admin() {
             )}
           </TabsContent>
 
-          <TabsContent value="appointments" forceMount className="space-y-6 outline-none">
+          <TabsContent value="appointments" className="space-y-6 outline-none">
             <div className="flex flex-col sm:flex-row items-stretch gap-3 shrink-0 mb-6">
               {user.role === "admin" ? (
                 <Select value={selectedBarberFilter} onValueChange={setSelectedBarberFilter}>
@@ -2085,11 +2283,11 @@ export default function Admin() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-1 rounded-md border border-white/10 bg-card p-1 sm:w-[210px]">
+              <div className="grid h-11 grid-cols-2 gap-1 rounded-md border border-white/10 bg-card p-1 sm:h-9 sm:w-[178px]">
                 <Button
                   type="button"
                   variant={appointmentViewMode === "day" ? "gold" : "ghost"}
-                  className="h-9 px-3 text-xs"
+                  className="h-full px-3 text-xs"
                   onClick={() => setAppointmentViewMode("day")}
                 >
                   Dia
@@ -2097,7 +2295,7 @@ export default function Admin() {
                 <Button
                   type="button"
                   variant={appointmentViewMode === "upcoming" ? "gold" : "ghost"}
-                  className="h-9 px-3 text-xs"
+                  className="h-full px-3 text-xs"
                   onClick={() => setAppointmentViewMode("upcoming")}
                 >
                   Próximas
@@ -2371,18 +2569,18 @@ export default function Admin() {
             </div>
             
             <div className="rounded-xl border border-white/10 bg-card p-4 md:p-5">
-              {isLoadingAppointments ? <div className="p-12 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div> : (
+              {isLoadingAppointments ? (
+                <div className="flex p-12 justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
+              ) : (
                 <div className="space-y-5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <h2 className="text-xl font-display font-bold text-white">
-                        {appointmentViewMode === "day" ? "Agenda do dia" : "Próximas marcações"}
-                      </h2>
-                      <p className="text-xs text-gray-400 flex items-center gap-2 mt-1">
-                        <Bell className="w-3.5 h-3.5 text-primary" />
+                      <h2 className="text-xl font-display font-bold text-white">Lista de marcações</h2>
+                      <p className="mt-1 flex items-center gap-2 text-xs text-gray-400">
+                        <Bell className="h-3.5 w-3.5 text-primary" />
                         {appointmentViewMode === "day"
-                          ? "Atualiza automaticamente a cada 10 segundos."
-                          : "Mostra marcações de hoje em diante e atualiza automaticamente."}
+                          ? "Marcações do dia selecionado, com filtros e ações no detalhe."
+                          : "Marcações futuras, com filtros e ações no detalhe."}
                       </p>
                     </div>
                     <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
@@ -2392,178 +2590,56 @@ export default function Admin() {
                     </span>
                   </div>
 
-                  {appointmentsByBarber.length === 0 ? (
-                    <p className="text-center text-gray-500 py-10">Sem barbeiros para apresentar nesta vista.</p>
+                  {filteredAppointmentList.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center text-sm text-gray-500">
+                      {selectedStatusFilter === "all"
+                        ? appointmentViewMode === "day" ? "Sem marcações neste dia." : "Sem marcações futuras."
+                        : "Sem marcações para este estado."}
+                    </div>
                   ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-4">
-                      {appointmentsByBarber.map(({ barber, appointments: barberAppointments }) => (
-                        <div key={barber.id} className="rounded-2xl border border-white/10 bg-background/60 min-h-[220px]">
-                          <div className="sticky top-0 z-10 rounded-t-2xl border-b border-white/10 bg-background/95 p-4 backdrop-blur">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <h3 className="font-bold text-white">{barber.name}</h3>
-                                <p className="text-xs text-gray-500">
-                                  {appointmentViewMode === "day" ? format(selectedDateFilter, "dd/MM/yyyy") : "Hoje em diante"}
-                                </p>
-                              </div>
-                              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary">
-                                {barberAppointments.length}
+                    <div className="overflow-hidden rounded-2xl border border-white/10">
+                      <div className="hidden grid-cols-[120px_1.2fr_1fr_1fr_130px] gap-4 border-b border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500 md:grid">
+                        <span>Quando</span>
+                        <span>Cliente</span>
+                        <span>Barbeiro</span>
+                        <span>Serviço</span>
+                        <span className="text-right">Estado</span>
+                      </div>
+                      <div className="divide-y divide-white/10">
+                        {filteredAppointmentList.map((app) => (
+                          <button
+                            key={app.id}
+                            type="button"
+                            onClick={() => setSelectedAppointment(app)}
+                            className={cn(
+                              "grid w-full gap-3 px-4 py-4 text-left transition hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary md:grid-cols-[120px_1.2fr_1fr_1fr_130px] md:items-center md:gap-4",
+                              app.status !== "booked" && "opacity-70",
+                            )}
+                          >
+                            <div>
+                              <p className="font-display text-xl font-bold text-primary">{format(parseISO(app.startTime), "HH:mm")}</p>
+                              <p className="text-xs text-gray-500">{format(parseISO(app.startTime), "dd/MM/yyyy")}</p>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-white">{app.customerName}</p>
+                              <p className="truncate text-xs text-gray-400">{app.customerPhone || "Sem telefone"}</p>
+                            </div>
+                            <p className="truncate text-sm text-gray-300">{getBarberName(app.barberId)}</p>
+                            <p className="truncate text-sm text-gray-300">{getServiceName(app.serviceId)}</p>
+                            <div className="flex md:justify-end">
+                              <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", getStatusClass(app.status))}>
+                                {getStatusLabel(app.status)}
                               </span>
                             </div>
-                          </div>
-
-                          <div className="space-y-3 p-3">
-                            {barberAppointments.map((app) => (
-                              <div
-                                key={app.id}
-                                className={cn(
-                                  "rounded-2xl border border-white/10 bg-card p-3 shadow-sm transition-colors",
-                                  app.status !== "booked" && "opacity-65",
-                                )}
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <p className="text-2xl font-display font-bold text-primary">{format(parseISO(app.startTime), "HH:mm")}</p>
-                                    {appointmentViewMode === "upcoming" && (
-                                      <p className="text-xs text-gray-500">{format(parseISO(app.startTime), "dd/MM/yyyy")}</p>
-                                    )}
-                                    <p className="text-sm font-semibold text-white">{app.customerName}</p>
-                                  </div>
-                                  <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", getStatusClass(app.status))}>
-                                    {getStatusLabel(app.status)}
-                                  </span>
-                                </div>
-
-                                <div className="mt-3 space-y-1 text-xs text-gray-400">
-                                  <p>{getServiceName(app.serviceId)}</p>
-                                  {app.customerPhone && <p>{app.customerPhone}</p>}
-                                  {app.depositRequired && (
-                                    <p className="rounded-lg border border-primary/20 bg-primary/10 px-2 py-1 text-primary">
-                                      Depósito recomendado: {app.depositReason || "regra operacional"}
-                                    </p>
-                                  )}
-                                </div>
-
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  <Button size="sm" variant="outline" onClick={() => openCustomerHistory(app)} className="h-8 border-white/10 text-xs">
-                                    <User className="mr-1 h-3.5 w-3.5" /> Histórico
-                                  </Button>
-
-                                  {app.status === "booked" && (
-                                    <>
-                                      <Button size="sm" variant="ghost" onClick={() => handleStatusChange(app.id, "completed")} className="h-8 text-xs text-green-300 hover:text-green-200">
-                                        <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
-                                      </Button>
-                                      <Button size="sm" variant="ghost" onClick={() => handleStatusChange(app.id, "no_show")} className="h-8 text-xs text-rose-300 hover:text-rose-200">
-                                        Falta
-                                      </Button>
-                                      <Button size="sm" variant="ghost" onClick={() => handleStatusChange(app.id, "cancelled")} className="h-8 text-xs text-red-300 hover:text-red-200">
-                                        <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
-                                      </Button>
-                                      <ConfirmAction
-                                        title="Bloquear cliente?"
-                                        description={`${app.customerName} (${app.customerPhone}) deixa de conseguir fazer marcações online.`}
-                                        confirmLabel="Bloquear"
-                                        confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                        onConfirm={async () => {
-                                          await apiRequest("POST", "/api/admin/blacklist", { phone: app.customerPhone, email: app.customerEmail, reason: `Faltou à marcação de ${format(parseISO(app.startTime), "dd/MM/yyyy HH:mm")}` });
-                                          toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
-                                          queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
-                                        }}
-                                      >
-                                        <Button size="sm" variant="ghost" className="h-8 text-xs text-destructive hover:text-red-300" title="Adicionar à lista de bloqueio">
-                                          Bloquear
-                                        </Button>
-                                      </ConfirmAction>
-                                      <Dialog>
-                                        <DialogTrigger asChild>
-                                          <Button size="sm" variant="ghost" className="h-8 text-xs text-primary hover:text-primary/80">
-                                            <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
-                                          </Button>
-                                        </DialogTrigger>
-                                        <DialogContent className="bg-card border-white/10 text-white">
-                                          <DialogHeader><DialogTitle>Editar marcação</DialogTitle></DialogHeader>
-                                          <div className="space-y-4 pt-4">
-                                            <div className="grid grid-cols-2 gap-4">
-                                              <div className="space-y-2">
-                                                <Label>Data</Label>
-                                                <Input type="date" defaultValue={format(parseISO(app.startTime), "yyyy-MM-dd")} id={`edit-app-date-${app.id}`} className="bg-background border-white/10 text-white" />
-                                              </div>
-                                              <div className="space-y-2">
-                                                <Label>Hora</Label>
-                                                <Input type="time" defaultValue={format(parseISO(app.startTime), "HH:mm")} id={`edit-app-time-${app.id}`} className="bg-background border-white/10 text-white" />
-                                              </div>
-                                            </div>
-                                            <div className="space-y-2">
-                                              <Label>Barbeiro</Label>
-                                              <Select defaultValue={String(app.barberId)} onValueChange={(v) => {
-                                                const el = document.getElementById(`edit-app-barber-val-${app.id}`);
-                                                if (el) el.setAttribute('data-value', v);
-                                              }}>
-                                                <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
-                                                <SelectContent className="bg-card border-white/10 text-white">
-                                                  {barbers?.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
-                                                </SelectContent>
-                                              </Select>
-                                              <input type="hidden" id={`edit-app-barber-val-${app.id}`} data-value={String(app.barberId)} />
-                                            </div>
-                                            <div className="space-y-2">
-                                              <Label>Serviço</Label>
-                                              <Select defaultValue={app.serviceId ? String(app.serviceId) : "none"} onValueChange={(v) => {
-                                                const el = document.getElementById(`edit-app-service-val-${app.id}`);
-                                                if (el) el.setAttribute('data-value', v);
-                                              }}>
-                                                <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
-                                                <SelectContent className="bg-card border-white/10 text-white">
-                                                  {app.serviceId === null && <SelectItem value="none">Sem serviço</SelectItem>}
-                                                  {services?.map((service) => (
-                                                    <SelectItem key={service.id} value={String(service.id)}>
-                                                      {service.name} · {service.duration} min
-                                                    </SelectItem>
-                                                  ))}
-                                                </SelectContent>
-                                              </Select>
-                                              <input type="hidden" id={`edit-app-service-val-${app.id}`} data-value={app.serviceId ? String(app.serviceId) : "none"} />
-                                            </div>
-                                            <Button variant="gold" className="w-full" onClick={async () => {
-                                              const dateVal = (document.getElementById(`edit-app-date-${app.id}`) as HTMLInputElement).value;
-                                              const timeVal = (document.getElementById(`edit-app-time-${app.id}`) as HTMLInputElement).value;
-                                              const barberId = (document.getElementById(`edit-app-barber-val-${app.id}`) as HTMLInputElement).getAttribute('data-value') || String(app.barberId);
-                                              const serviceId = (document.getElementById(`edit-app-service-val-${app.id}`) as HTMLInputElement).getAttribute('data-value') || (app.serviceId ? String(app.serviceId) : "none");
-                                              const newStartTime = new Date(`${dateVal}T${timeVal}`);
-                                              await apiRequest("PATCH", `/api/appointments/${app.id}`, {
-                                                startTime: newStartTime,
-                                                barberId: Number(barberId),
-                                                serviceId: serviceId === "none" ? null : Number(serviceId),
-                                              });
-                                              queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-                                              queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
-                                              toast({ title: "Sucesso", description: "Marcação atualizada." });
-                                            }}>Guardar alterações</Button>
-                                          </div>
-                                        </DialogContent>
-                                      </Dialog>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-
-                            {barberAppointments.length === 0 && (
-                              <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
-                                {selectedStatusFilter === "all"
-                                  ? appointmentViewMode === "day" ? "Sem marcações neste dia." : "Sem marcações futuras."
-                                  : "Sem marcações para este estado."}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
               )}
             </div>
+
           </TabsContent>
 
           <TabsContent value="barbers" className="outline-none">
@@ -2659,7 +2735,7 @@ export default function Admin() {
                       onConfirm={async () => {
                         try {
                           await apiRequest("DELETE", `/api/barbers/${barber.id}`);
-                          queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                          await refreshBarbersCache();
                           toast({ title: "Sucesso", description: "Barbeiro removido." });
                         } catch (err: any) {
                           toast({ title: "Erro", description: err.message || "Não foi possível remover o barbeiro.", variant: "destructive" });
@@ -2726,14 +2802,15 @@ export default function Admin() {
                                   : barber.serviceIds,
                                 services,
                               );
-                              await apiRequest("PATCH", `/api/barbers/${barber.id}`, {
+                              const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, {
                                 name,
                                 specialty,
                                 color: normalizeBarberColor(color),
                                 avatar: avatar || null,
                                 serviceIds: normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services)),
                               });
-                              queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                              const updatedBarber = await response.json();
+                              await refreshBarbersCache(updatedBarber);
                               setBarberAvatarDrafts((current) => {
                                 const next = { ...current };
                                 delete next[barber.id];
@@ -2778,8 +2855,9 @@ export default function Admin() {
                         className="h-8 text-[10px] text-gray-400 border-white/5"
                         onClick={async () => {
                           try {
-                            await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible: !barber.isVisible });
-                            queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
+                            const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible: !barber.isVisible });
+                            const updatedBarber = await response.json();
+                            await refreshBarbersCache(updatedBarber);
                             toast({
                               title: "Sucesso",
                               description: barber.isVisible ? "Barbeiro ocultado." : "Barbeiro visível no site.",
