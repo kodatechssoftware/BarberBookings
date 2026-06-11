@@ -96,6 +96,74 @@ function getAppSession(req: Request) {
   return req.session as AppSession;
 }
 
+type AuditLogInput = {
+  actorType?: string;
+  actorId?: number | null;
+  actorName?: string | null;
+  action: string;
+  entityType: string;
+  entityId?: number | null;
+  summary: string;
+  metadata?: Record<string, unknown> | string | null;
+};
+
+async function getAuditActor(req: Request) {
+  const appSession = getAppSession(req);
+
+  if (appSession.role === "barber" && appSession.barberId) {
+    const barber = await storage.getBarber(appSession.barberId);
+    return {
+      actorType: "barber",
+      actorId: appSession.barberId,
+      actorName: barber?.name || "Barbeiro",
+    };
+  }
+
+  if (appSession.role === "admin" && appSession.adminId) {
+    return {
+      actorType: "admin",
+      actorId: appSession.adminId,
+      actorName: "Administrador",
+    };
+  }
+
+  return {
+    actorType: "system",
+    actorId: null,
+    actorName: "Sistema",
+  };
+}
+
+async function recordAuditLog(req: Request, input: AuditLogInput) {
+  try {
+    const actor = input.actorType
+      ? {
+          actorType: input.actorType,
+          actorId: input.actorId ?? null,
+          actorName: input.actorName ?? null,
+        }
+      : await getAuditActor(req);
+
+    const metadata = input.metadata
+      ? typeof input.metadata === "string"
+        ? input.metadata
+        : JSON.stringify(input.metadata)
+      : null;
+
+    await storage.createAuditLog({
+      ...actor,
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId ?? null,
+      summary: input.summary,
+      metadata,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("Audit log skipped:", message);
+  }
+}
+
 function getSessionSameSite(): "lax" | "strict" | "none" {
   const value = (process.env.SESSION_SAME_SITE || "lax").toLowerCase();
 
@@ -777,6 +845,20 @@ export async function registerRoutes(
     next();
   };
 
+  app.get("/api/admin/audit-logs", requireAdmin, async (req, res) => {
+    try {
+      const requestedLimit = Number(req.query.limit || 30);
+      const limit = Number.isFinite(requestedLimit)
+        ? Math.min(Math.max(Math.floor(requestedLimit), 1), 100)
+        : 30;
+      const logs = await storage.getAuditLogs(limit);
+      res.json(logs);
+    } catch (error) {
+      console.warn("Could not load audit logs:", error instanceof Error ? error.message : error);
+      res.json([]);
+    }
+  });
+
   // === BARBERS MGMT ===
   app.post("/api/barbers", requireAdmin, async (req, res) => {
     try {
@@ -787,6 +869,13 @@ export async function registerRoutes(
       if (normalizedServiceIds !== undefined) {
         await storage.replaceBarberServices(barber.id, normalizedServiceIds);
       }
+      await recordAuditLog(req, {
+        action: "barber.created",
+        entityType: "barber",
+        entityId: barber.id,
+        summary: `Barbeiro criado: ${barber.name}`,
+        metadata: { serviceIds: normalizedServiceIds || [] },
+      });
       res.status(201).json({ ...barber, serviceIds: normalizedServiceIds || [] });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -821,7 +910,23 @@ export async function registerRoutes(
       }
 
       const currentServiceIds = normalizedServiceIds ?? await storage.getBarberServiceIds(barberId);
-      res.json({ ...barber, serviceIds: currentServiceIds });
+      const updatedBarber = barber || existing;
+      await recordAuditLog(req, {
+        action: "barber.updated",
+        entityType: "barber",
+        entityId: barberId,
+        summary: `Barbeiro atualizado: ${updatedBarber.name}`,
+        metadata: {
+          fields: [
+            ...Object.keys(barberPatch),
+            ...(normalizedServiceIds !== undefined ? ["serviceIds"] : []),
+          ],
+          previousColor: existing.color,
+          newColor: updatedBarber.color,
+          serviceIds: currentServiceIds,
+        },
+      });
+      res.json({ ...updatedBarber, serviceIds: currentServiceIds });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -847,6 +952,13 @@ export async function registerRoutes(
       }).parse(req.body);
       const normalizedServiceIds = await normalizeBarberServiceIds(parsed.serviceIds);
       await storage.replaceBarberServices(barberId, normalizedServiceIds || []);
+      await recordAuditLog(req, {
+        action: "barber.services_updated",
+        entityType: "barber",
+        entityId: barberId,
+        summary: `Serviços do barbeiro atualizados: ${barber.name}`,
+        metadata: { serviceIds: normalizedServiceIds || [] },
+      });
       res.json({ ...barber, serviceIds: normalizedServiceIds || [] });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -864,7 +976,15 @@ export async function registerRoutes(
 
   app.delete("/api/barbers/:id", requireAdmin, async (req, res) => {
     try {
-      await storage.deleteBarber(Number(req.params.id));
+      const barberId = Number(req.params.id);
+      const barber = await storage.getBarber(barberId);
+      await storage.deleteBarber(barberId);
+      await recordAuditLog(req, {
+        action: "barber.deleted",
+        entityType: "barber",
+        entityId: barberId,
+        summary: `Barbeiro removido: ${barber?.name || barberId}`,
+      });
       res.json({ message: "Barbeiro removido" });
     } catch (error: any) {
       if (error?.code === "23503") {
@@ -878,6 +998,12 @@ export async function registerRoutes(
     try {
       const updated = await storage.updateBarber(Number(req.params.id), { password: null });
       if (!updated) return res.status(404).json({ message: "Barbeiro não encontrado" });
+      await recordAuditLog(req, {
+        action: "barber.password_reset",
+        entityType: "barber",
+        entityId: updated.id,
+        summary: `Palavra-passe removida: ${updated.name}`,
+      });
       res.json({ message: "Palavra-passe removida" });
     } catch (error) {
       res.status(500).json({ message: "Erro ao repor palavra-passe" });
@@ -900,6 +1026,13 @@ export async function registerRoutes(
       await storage.updateBarber(barberId, { password: null });
       const invite = await storage.createBarberInvite({ barberId, token, expiresAt, usedAt: null });
       const inviteUrl = buildPublicUrl(`/barber-invite/${invite.token}`);
+      await recordAuditLog(req, {
+        action: "barber.invite_created",
+        entityType: "barber",
+        entityId: barberId,
+        summary: `Convite criado para ${barber.name}`,
+        metadata: { expiresAt },
+      });
 
       res.status(201).json({
         message: "Convite criado. Envie este link ao barbeiro para definir a palavra-passe.",
@@ -963,6 +1096,13 @@ export async function registerRoutes(
     try {
       const input = api.services.create.input.parse(req.body);
       const service = await storage.createService(input);
+      await recordAuditLog(req, {
+        action: "service.created",
+        entityType: "service",
+        entityId: service.id,
+        summary: `Serviço criado: ${service.name}`,
+        metadata: { duration: service.duration, price: service.price },
+      });
       res.status(201).json(service);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -979,6 +1119,13 @@ export async function registerRoutes(
     try {
       const service = await storage.updateService(Number(req.params.id), req.body);
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
+      await recordAuditLog(req, {
+        action: "service.updated",
+        entityType: "service",
+        entityId: service.id,
+        summary: `Serviço atualizado: ${service.name}`,
+        metadata: { fields: Object.keys(req.body || {}) },
+      });
       res.json(service);
     } catch (error) {
       res.status(500).json({ message: "Erro ao atualizar serviço" });
@@ -987,7 +1134,15 @@ export async function registerRoutes(
 
   app.delete("/api/services/:id", requireAdmin, async (req, res) => {
     try {
-      await storage.deleteService(Number(req.params.id));
+      const serviceId = Number(req.params.id);
+      const service = await storage.getService(serviceId);
+      await storage.deleteService(serviceId);
+      await recordAuditLog(req, {
+        action: "service.deleted",
+        entityType: "service",
+        entityId: serviceId,
+        summary: `Serviço removido: ${service?.name || serviceId}`,
+      });
       res.json({ message: "Serviço removido" });
     } catch (error) {
       res.status(500).json({ message: "Erro ao remover serviço" });
@@ -1052,6 +1207,12 @@ export async function registerRoutes(
     }
 
     const availability = await storage.replaceShopAvailability(rows.filter((row) => row !== null));
+    await recordAuditLog(req, {
+      action: "shop_availability.updated",
+      entityType: "shop_availability",
+      summary: "Horário base da barbearia atualizado",
+      metadata: { rows: availability.length },
+    });
     res.json(availability);
   });
 
@@ -1107,6 +1268,13 @@ export async function registerRoutes(
     }
 
     const availability = await storage.replaceBarberAvailability(barberId, rows.filter((row) => row !== null));
+    await recordAuditLog(req, {
+      action: "barber_availability.updated",
+      entityType: "barber",
+      entityId: barberId,
+      summary: `Horário do barbeiro atualizado: ${barber.name}`,
+      metadata: { rows: availability.length },
+    });
     res.json(availability);
   });
 
@@ -1182,7 +1350,7 @@ export async function registerRoutes(
       // Check for blacklist
       const isBlacklisted = await storage.isBlacklisted(normalizedCustomerEmail || undefined, normalizedCustomerPhone);
       if (isBlacklisted) {
-        return res.status(403).json({ message: "Não é possível realizar a marcação online. Por favor, contacte a barbearia." });
+        return res.status(403).json({ message: "Não é possível realizar a marcação online. Contacte a barbearia." });
       }
 
 
@@ -1256,6 +1424,20 @@ export async function registerRoutes(
         durationMinutes: requestedDuration,
         depositRequired: depositRecommendation.required,
         depositReason: depositRecommendation.reason,
+      });
+      await recordAuditLog(req, {
+        actorType: "client",
+        actorId: null,
+        actorName: input.customerName,
+        action: "appointment.created_online",
+        entityType: "appointment",
+        entityId: appointment.id,
+        summary: `Marcação online criada: ${input.customerName}`,
+        metadata: {
+          barberId: finalBarberId,
+          serviceId: input.serviceId,
+          startTime: appointment.startTime,
+        },
       });
 
       const service = services.find(s => s.id === input.serviceId);
@@ -1372,9 +1554,25 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Horário indisponível para este barbeiro." });
       }
 
+      const createdAppointments: Appointment[] = [];
       for (const app of appointments) {
-        await storage.createAppointment(app);
+        createdAppointments.push(await storage.createAppointment(app));
       }
+
+      await recordAuditLog(req, {
+        action: isManualBooking ? "appointment.created_manual" : "appointment.absence_created",
+        entityType: "appointment",
+        entityId: createdAppointments[0]?.id ?? null,
+        summary: isManualBooking
+          ? `${createdAppointments.length} marcação manual criada`
+          : `${createdAppointments.length} ausência criada`,
+        metadata: {
+          count: createdAppointments.length,
+          barberId: Number(barberId),
+          serviceId: serviceId ? Number(serviceId) : null,
+          recurring: Boolean(isRecurring),
+        },
+      });
 
       res.status(201).json({ message: `${appointments.length} marcações criadas.` });
     } catch (error) {
@@ -1492,6 +1690,27 @@ export async function registerRoutes(
       }
 
       const updated = await storage.updateAppointment(appointmentId, updateData);
+      if (updated) {
+        await recordAuditLog(req, {
+          action: status ? "appointment.status_changed" : "appointment.updated",
+          entityType: "appointment",
+          entityId: appointmentId,
+          summary: status
+            ? `Estado da marcação alterado: ${currentApp.customerName}`
+            : `Marcação atualizada: ${currentApp.customerName}`,
+          metadata: {
+            fields: Object.keys(updateData),
+            previousStartTime: currentApp.startTime,
+            newStartTime: updated.startTime,
+            previousBarberId: currentApp.barberId,
+            newBarberId: updated.barberId,
+            previousServiceId: currentApp.serviceId,
+            newServiceId: updated.serviceId,
+            previousStatus: currentApp.status,
+            newStatus: updated.status,
+          },
+        });
+      }
 
       res.json(updated);
     } catch (error) {
@@ -1517,6 +1736,13 @@ export async function registerRoutes(
 
      const updated = await storage.updateAppointmentStatus(appointmentId, status);
      if (!updated) return res.status(404).json({ message: "Marcação não encontrada" });
+     await recordAuditLog(req, {
+       action: "appointment.status_changed",
+       entityType: "appointment",
+       entityId: appointmentId,
+       summary: `Estado da marcação alterado: ${currentApp.customerName}`,
+       metadata: { previousStatus: currentApp.status, newStatus: status },
+     });
      res.json(updated);
   });
 
@@ -1890,6 +2116,13 @@ export async function registerRoutes(
         email: input.email || null,
         reason: input.reason || undefined,
       });
+      await recordAuditLog(req, {
+        action: "customer.blocked",
+        entityType: "blacklist",
+        entityId: entry.id,
+        summary: `Cliente bloqueado: ${entry.phone}`,
+        metadata: { email: entry.email, reason: entry.reason },
+      });
       res.status(201).json(entry);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1903,7 +2136,16 @@ export async function registerRoutes(
   });
 
   const removeBlacklistEntry = async (req: Request, res: Response) => {
-    await storage.removeFromBlacklist(Number(req.params.id));
+    const entryId = Number(req.params.id);
+    const entry = (await storage.getBlacklist()).find((item) => item.id === entryId);
+    await storage.removeFromBlacklist(entryId);
+    await recordAuditLog(req, {
+      action: "customer.unblocked",
+      entityType: "blacklist",
+      entityId: entryId,
+      summary: `Cliente desbloqueado: ${entry?.phone || entryId}`,
+      metadata: { email: entry?.email || null },
+    });
     res.json({ message: "Removido da lista de bloqueio" });
   };
 
@@ -2011,6 +2253,13 @@ export async function registerRoutes(
       customerNameKey,
       email: email || undefined,
       notes: parsed.data.notes.trim(),
+    });
+    await recordAuditLog(req, {
+      action: "customer_note.updated",
+      entityType: "customer_note",
+      entityId: note.id,
+      summary: `Notas do cliente atualizadas: ${parsed.data.customerName || phone}`,
+      metadata: { phone, customerNameKey },
     });
 
     res.json(note);

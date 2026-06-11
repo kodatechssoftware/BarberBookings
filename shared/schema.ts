@@ -19,6 +19,7 @@ export const shopAvailabilityIdSeq = appPgSchema?.sequence("shop_availability_id
 export const barberAvailabilityIdSeq = appPgSchema?.sequence("barber_availability_id_seq");
 export const barberInvitesIdSeq = appPgSchema?.sequence("barber_invites_id_seq");
 export const customerNotesIdSeq = appPgSchema?.sequence("customer_notes_id_seq");
+export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -146,6 +147,19 @@ export const customerNotes = appPgTable("customer_notes", {
   customerNotesIdentityIdx: uniqueIndex("customer_notes_phone_name_idx").on(table.phone, table.customerNameKey),
 }));
 
+export const auditLogs = appPgTable("audit_logs", {
+  id: idColumn("audit_logs_id_seq"),
+  actorType: text("actor_type").notNull(),
+  actorId: integer("actor_id"),
+  actorName: text("actor_name"),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: integer("entity_id"),
+  summary: text("summary").notNull(),
+  metadata: text("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // === RELATIONS ===
 
 export const appointmentsRelations = relations(appointments, ({ one }) => ({
@@ -217,6 +231,7 @@ export const insertCustomerNoteSchema = createInsertSchema(customerNotes).omit({
   createdAt: true,
   updatedAt: true,
 });
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 
 // === EXPLICIT API CONTRACT TYPES ===
 
@@ -231,6 +246,7 @@ export type BarberAvailability = typeof barberAvailability.$inferSelect;
 export type BarberService = typeof barberServices.$inferSelect;
 export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;
+export type AuditLog = typeof auditLogs.$inferSelect;
 
 export type BarberWithServices = Barber & {
   serviceIds: number[];
@@ -246,6 +262,7 @@ export type CreateBarberAvailabilityRequest = z.infer<typeof insertBarberAvailab
 export type CreateBarberServiceRequest = z.infer<typeof insertBarberServiceSchema>;
 export type CreateBarberInviteRequest = z.infer<typeof insertBarberInviteSchema>;
 export type CreateCustomerNoteRequest = z.infer<typeof insertCustomerNoteSchema>;
+export type CreateAuditLogRequest = z.infer<typeof insertAuditLogSchema>;
 
 export type AppointmentWithDetails = Appointment & {
   barber: Barber;

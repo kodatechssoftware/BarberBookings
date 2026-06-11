@@ -429,7 +429,7 @@ export default function Booking() {
       setShowTimeError(true);
       toast({
         title: "Seleção necessária",
-        description: "Por favor, escolha uma hora para a sua marcação.",
+        description: "Escolha uma hora para a sua marcação.",
         variant: "destructive"
       });
       // Force scroll to time section if needed
@@ -443,7 +443,7 @@ export default function Booking() {
 
   const handleSubmit = async () => {
     if (selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime) {
-      toast({ title: "Erro", description: "Por favor confirme barbeiro, serviço, data e hora.", variant: "destructive" });
+      toast({ title: "Erro", description: "Confirme barbeiro, serviço, data e hora.", variant: "destructive" });
       return;
     }
 
@@ -980,7 +980,7 @@ export default function Booking() {
                   (step === 3 && (!selectedDate || !selectedTime))
                 }
               >
-                Próximo
+                Seguinte
               </Button>
             ) : (
               <Button 

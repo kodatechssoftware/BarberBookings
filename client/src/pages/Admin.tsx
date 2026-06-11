@@ -133,6 +133,19 @@ type DashboardData = {
   }>;
 };
 
+type AuditLogItem = {
+  id: number;
+  actorType: string;
+  actorId?: number | null;
+  actorName?: string | null;
+  action: string;
+  entityType: string;
+  entityId?: number | null;
+  summary: string;
+  metadata?: string | null;
+  createdAt: string;
+};
+
 const currencyFormatter = new Intl.NumberFormat("pt-PT", {
   style: "currency",
   currency: "EUR",
@@ -140,6 +153,12 @@ const currencyFormatter = new Intl.NumberFormat("pt-PT", {
 
 function formatCents(value: number) {
   return currencyFormatter.format((value || 0) / 100);
+}
+
+function formatAuditTimestamp(value: string) {
+  const date = parseISO(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return format(date, "dd/MM HH:mm", { locale: pt });
 }
 
 const DashboardChartCard = lazy(() => import("@/components/admin/DashboardChartCard"));
@@ -170,6 +189,59 @@ function DashboardChartFallback({
       </CardHeader>
       <CardContent>
         <div className={`${heightClassName} w-full animate-pulse rounded-lg bg-white/5`} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function AuditLogPanel({
+  logs,
+  isLoading,
+}: {
+  logs?: AuditLogItem[];
+  isLoading: boolean;
+}) {
+  const latestLogs = (logs || []).slice(0, 6);
+
+  return (
+    <Card className="border-white/10 bg-card text-white">
+      <CardHeader>
+        <CardTitle className="text-base font-bold">Atividade recente</CardTitle>
+        <p className="text-sm text-gray-400">Últimas ações registadas na gestão.</p>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex min-h-[120px] items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          </div>
+        ) : latestLogs.length > 0 ? (
+          <div className="space-y-2">
+            {latestLogs.map((log) => (
+              <div
+                key={log.id}
+                className="flex flex-col gap-2 rounded-lg border border-white/10 bg-background/60 p-3 sm:flex-row sm:items-start sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{log.summary}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {log.actorName || "Sistema"} · {log.action}
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs text-gray-500">
+                  {formatAuditTimestamp(log.createdAt)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-white/10 px-4 py-8 text-center">
+            <Clock className="mx-auto h-5 w-5 text-gray-600" />
+            <p className="mt-3 text-sm font-semibold text-white">Ainda sem atividade registada</p>
+            <p className="mt-1 text-sm text-gray-500">
+              As próximas alterações feitas na gestão aparecem aqui automaticamente.
+            </p>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -606,11 +678,14 @@ function WeeklyAgenda({
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
     const color = normalizeBarberColor(barber?.color);
+    const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
     return (
       <button
         key={appointment.id}
         type="button"
+        aria-label={appointmentLabel}
+        title={appointmentLabel}
         onClick={() => onSelectAppointment(appointment)}
         className={cn(
           "w-full rounded-lg border px-3 py-2 text-left transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
@@ -714,7 +789,7 @@ function WeeklyAgenda({
                       </div>
                     ) : (
                       <p className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-sm text-gray-500">
-                        Sem marcações.
+                        Sem marcações neste dia.
                       </p>
                     )}
                   </div>
@@ -779,11 +854,14 @@ function WeeklyAgenda({
                           const barber = barbersById.get(appointment.barberId);
                           const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                           const color = normalizeBarberColor(barber?.color);
+                          const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
                           return (
                             <button
                               key={appointment.id}
                               type="button"
+                              aria-label={appointmentLabel}
+                              title={appointmentLabel}
                               onClick={() => onSelectAppointment(appointment)}
                               className={cn(
                                 "absolute overflow-hidden rounded-lg border px-2 py-1.5 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
@@ -810,7 +888,7 @@ function WeeklyAgenda({
                         })}
                         {dayAppointments.length === 0 && (
                           <div className="absolute inset-x-3 top-4 rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-gray-600">
-                            Sem marcações
+                            Sem marcações neste dia
                           </div>
                         )}
                       </div>
@@ -902,6 +980,7 @@ function EditAppointmentDialog({
       });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       toast({ title: "Sucesso", description: "Marcação atualizada." });
       setOpen(false);
     } catch (err: any) {
@@ -1246,6 +1325,11 @@ export default function Admin() {
     queryKey: ["/api/admin/blacklist"],
     enabled: user?.role === "admin"
   });
+  const { data: auditLogs, isLoading: isLoadingAuditLogs } = useQuery<AuditLogItem[]>({
+    queryKey: ["/api/admin/audit-logs"],
+    enabled: user?.role === "admin",
+    refetchInterval: 15000,
+  });
   const { data: allAvailabilityRows } = useQuery<any[]>({
     queryKey: ["/api/barbers/availability"],
     enabled: user?.authorized === true,
@@ -1361,6 +1445,7 @@ export default function Admin() {
         serviceIds: normalizeServiceSelection(barberFormData.serviceIds, allServiceIds),
       });
       await refreshBarbersCache();
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingBarber(false);
       setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] });
       toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
@@ -1374,6 +1459,7 @@ export default function Admin() {
     try {
       await apiRequest("POST", "/api/services", serviceFormData);
       queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingService(false);
       setServiceFormData({ name: "", description: "", price: 0, duration: 30 });
       toast({ title: "Sucesso", description: "Serviço adicionado com sucesso." });
@@ -1527,6 +1613,7 @@ export default function Admin() {
 
       await apiRequest("PATCH", "/api/shop/availability", rows);
       queryClient.invalidateQueries({ queryKey: ["/api/shop/availability"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       toast({ title: "Sucesso", description: "Horário da barbearia atualizado." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Não foi possível guardar o horário da barbearia.", variant: "destructive" });
@@ -1609,6 +1696,7 @@ export default function Admin() {
         title: "Convite criado",
         description: `Link copiado para enviar a ${barber.name}: ${data.inviteUrl}`,
       });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Não foi possível criar o convite.", variant: "destructive" });
     }
@@ -1655,6 +1743,7 @@ export default function Admin() {
         },
       });
       setCustomerNotes(savedNote.notes || "");
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       toast({ title: "Notas guardadas", description: "As preferências do cliente foram atualizadas." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Não foi possível guardar as notas.", variant: "destructive" });
@@ -1686,6 +1775,7 @@ export default function Admin() {
       {
         onSuccess: () => {
           toast({ title: "Atualizado", description: `Estado alterado para ${getStatusLabel(status).toLowerCase()}.` });
+          queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
         },
         onError: (error: any) => {
           toast({ title: "Erro", description: error.message || "Não foi possível atualizar a marcação.", variant: "destructive" });
@@ -1702,6 +1792,7 @@ export default function Admin() {
     });
     toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
   };
 
   const activeBarberColumns = useMemo(() => {
@@ -1890,6 +1981,7 @@ export default function Admin() {
       setIsBlocking(false);
       setBlockData({ ...blockData, times: [], name: "", phone: "900000000", serviceId: "", isMultiDay: false, isManualBooking: false, isRecurring: false });
       refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message, variant: "destructive" });
     }
@@ -2071,6 +2163,10 @@ export default function Admin() {
               onSelectAppointment={setSelectedAppointment}
               getStatusLabel={getStatusLabel}
             />
+
+            {user.role === "admin" && (
+              <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs} />
+            )}
 
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -2606,10 +2702,16 @@ export default function Admin() {
                         <span className="text-right">Estado</span>
                       </div>
                       <div className="divide-y divide-white/10">
-                        {filteredAppointmentList.map((app) => (
+                        {filteredAppointmentList.map((app) => {
+                          const start = parseISO(app.startTime);
+                          const appointmentLabel = `Abrir detalhes da marcação de ${app.customerName}, ${format(start, "HH:mm")}`;
+
+                          return (
                           <button
                             key={app.id}
                             type="button"
+                            aria-label={appointmentLabel}
+                            title={appointmentLabel}
                             onClick={() => setSelectedAppointment(app)}
                             className={cn(
                               "grid w-full gap-3 px-4 py-4 text-left transition hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary md:grid-cols-[120px_1.2fr_1fr_1fr_130px] md:items-center md:gap-4",
@@ -2617,12 +2719,12 @@ export default function Admin() {
                             )}
                           >
                             <div>
-                              <p className="font-display text-xl font-bold text-primary">{format(parseISO(app.startTime), "HH:mm")}</p>
-                              <p className="text-xs text-gray-500">{format(parseISO(app.startTime), "dd/MM/yyyy")}</p>
+                              <p className="font-display text-xl font-bold text-primary">{format(start, "HH:mm")}</p>
+                              <p className="text-xs text-gray-500">{format(start, "dd/MM/yyyy")}</p>
                             </div>
                             <div className="min-w-0">
                               <p className="truncate font-semibold text-white">{app.customerName}</p>
-                              <p className="truncate text-xs text-gray-400">{app.customerPhone || "Sem telefone"}</p>
+                              <p className="truncate text-xs text-gray-400">{app.customerPhone || "Sem telemóvel"}</p>
                             </div>
                             <p className="truncate text-sm text-gray-300">{getBarberName(app.barberId)}</p>
                             <p className="truncate text-sm text-gray-300">{getServiceName(app.serviceId)}</p>
@@ -2632,7 +2734,8 @@ export default function Admin() {
                               </span>
                             </div>
                           </button>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -2736,6 +2839,7 @@ export default function Admin() {
                         try {
                           await apiRequest("DELETE", `/api/barbers/${barber.id}`);
                           await refreshBarbersCache();
+                          queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                           toast({ title: "Sucesso", description: "Barbeiro removido." });
                         } catch (err: any) {
                           toast({ title: "Erro", description: err.message || "Não foi possível remover o barbeiro.", variant: "destructive" });
@@ -2811,6 +2915,7 @@ export default function Admin() {
                               });
                               const updatedBarber = await response.json();
                               await refreshBarbersCache(updatedBarber);
+                              queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                               setBarberAvatarDrafts((current) => {
                                 const next = { ...current };
                                 delete next[barber.id];
@@ -2858,6 +2963,7 @@ export default function Admin() {
                             const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible: !barber.isVisible });
                             const updatedBarber = await response.json();
                             await refreshBarbersCache(updatedBarber);
+                            queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
                               title: "Sucesso",
                               description: barber.isVisible ? "Barbeiro ocultado." : "Barbeiro visível no site.",
@@ -2943,6 +3049,7 @@ export default function Admin() {
                           reason: "Bloqueio manual pelo administrador",
                         });
                         queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
+                        queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                         phoneInput.value = "";
                         emailInput.value = "";
                         toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
@@ -2971,6 +3078,7 @@ export default function Admin() {
                                 try {
                                   await apiRequest("DELETE", `/api/admin/blacklist/${entry.id}`);
                                   queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                                   toast({ title: "Sucesso", description: "Cliente removido da lista de bloqueio." });
                                 } catch (err: any) {
                                   toast({ title: "Erro", description: err.message || "Não foi possível remover o cliente da lista de bloqueio.", variant: "destructive" });
@@ -3077,6 +3185,7 @@ export default function Admin() {
                               const duration = Number((document.getElementById(`edit-service-dur-${service.id}`) as HTMLInputElement).value);
                               await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, price, duration });
                               queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                              queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                               toast({ title: "Sucesso", description: "Serviço atualizado." });
                             }}>Guardar</Button>
                           </div>
@@ -3091,6 +3200,7 @@ export default function Admin() {
                           try {
                             await apiRequest("DELETE", `/api/services/${service.id}`);
                             queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({ title: "Sucesso", description: "Serviço removido." });
                           } catch {
                             toast({ title: "Erro", description: "Não foi possível remover o serviço. Verifique se existem marcações associadas.", variant: "destructive" });
@@ -3109,6 +3219,7 @@ export default function Admin() {
                           try {
                             await apiRequest("PATCH", `/api/services/${service.id}`, { isVisible: !service.isVisible });
                             queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
                               title: "Sucesso",
                               description: service.isVisible ? "Serviço ocultado." : "Serviço visível no site.",
