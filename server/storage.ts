@@ -34,7 +34,7 @@ import {
   type CreateCustomerNoteRequest
 } from "@shared/schema";
 import { eq, and, gte, lte, sql, type SQL } from "drizzle-orm";
-import { normalizeEmail, normalizePortuguesePhone } from "@shared/customer-validation";
+import { normalizeEmail, portugueseMobilePhonesMatch } from "@shared/customer-validation";
 
 type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   cancelToken: string;
@@ -260,13 +260,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async isBlacklisted(email?: string, phone?: string): Promise<boolean> {
-    const normalizedPhone = normalizePortuguesePhone(phone);
+    const hasPhone = Boolean(phone?.replace(/\D/g, ""));
     const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail && !normalizedPhone) return false;
+    if (!normalizedEmail && !hasPhone) return false;
 
     const entries = await db.select().from(blacklist);
     return entries.some((entry) =>
-      (normalizedPhone && normalizePortuguesePhone(entry.phone) === normalizedPhone) ||
+      (hasPhone && portugueseMobilePhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }
@@ -656,12 +656,12 @@ export class MemoryStorage implements IStorage {
   }
 
   async isBlacklisted(email?: string, phone?: string): Promise<boolean> {
-    const normalizedPhone = normalizePortuguesePhone(phone);
+    const hasPhone = Boolean(phone?.replace(/\D/g, ""));
     const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail && !normalizedPhone) return false;
+    if (!normalizedEmail && !hasPhone) return false;
 
     return this.blacklist.some((entry) =>
-      (normalizedPhone && normalizePortuguesePhone(entry.phone) === normalizedPhone) ||
+      (hasPhone && portugueseMobilePhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }
