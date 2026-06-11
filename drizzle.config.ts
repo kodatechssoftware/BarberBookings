@@ -15,6 +15,7 @@ export default defineConfig({
   tablesFilter: [
     "admins",
     "appointments",
+    "audit_logs",
     "barber_availability",
     "barber_invites",
     "barber_services",
