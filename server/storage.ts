@@ -11,6 +11,7 @@ import {
   barberServices,
   barberInvites,
   customerNotes,
+  auditLogs,
   type Barber,
   type Service,
   type Appointment,
@@ -22,6 +23,7 @@ import {
   type BarberService,
   type BarberInvite,
   type CustomerNote,
+  type AuditLog,
   type CreateBarberRequest,
   type CreateServiceRequest,
   type CreateAppointmentRequest,
@@ -31,9 +33,10 @@ import {
   type CreateBarberAvailabilityRequest,
   type CreateBarberServiceRequest,
   type CreateBarberInviteRequest,
-  type CreateCustomerNoteRequest
+  type CreateCustomerNoteRequest,
+  type CreateAuditLogRequest
 } from "@shared/schema";
-import { eq, and, gte, lte, sql, type SQL } from "drizzle-orm";
+import { eq, and, gte, lte, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail, portugueseMobilePhonesMatch } from "@shared/customer-validation";
 
 type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
@@ -96,6 +99,10 @@ export interface IStorage {
   // Customer notes
   getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
   upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote>;
+
+  // Audit log
+  getAuditLogs(limit?: number): Promise<AuditLog[]>;
+  createAuditLog(log: CreateAuditLogRequest): Promise<AuditLog>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -401,6 +408,19 @@ export class DatabaseStorage implements IStorage {
     return savedNote;
   }
 
+  async getAuditLogs(limit = 50): Promise<AuditLog[]> {
+    return await db
+      .select()
+      .from(auditLogs)
+      .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+      .limit(limit);
+  }
+
+  async createAuditLog(log: CreateAuditLogRequest): Promise<AuditLog> {
+    const [entry] = await db.insert(auditLogs).values(log).returning();
+    return entry;
+  }
+
   async hasData(): Promise<boolean> {
       const [barber] = await db.select().from(barbers).limit(1);
       return !!barber;
@@ -455,6 +475,7 @@ export class MemoryStorage implements IStorage {
   private barberServices: BarberService[] = [];
   private barberInvites: BarberInvite[] = [];
   private customerNotes: CustomerNote[] = [];
+  private auditLogs: AuditLog[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
   private nextIds = {
@@ -467,6 +488,7 @@ export class MemoryStorage implements IStorage {
     availability: 1,
     invite: 1,
     customerNote: 1,
+    auditLog: 1,
     verificationCode: 1,
   };
 
@@ -789,6 +811,31 @@ export class MemoryStorage implements IStorage {
     };
     this.customerNotes.push(savedNote);
     return savedNote;
+  }
+
+  async getAuditLogs(limit = 50): Promise<AuditLog[]> {
+    return [...this.auditLogs]
+      .sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id,
+      )
+      .slice(0, limit);
+  }
+
+  async createAuditLog(log: CreateAuditLogRequest): Promise<AuditLog> {
+    const entry: AuditLog = {
+      id: this.nextIds.auditLog++,
+      actorType: log.actorType,
+      actorId: log.actorId ?? null,
+      actorName: log.actorName ?? null,
+      action: log.action,
+      entityType: log.entityType,
+      entityId: log.entityId ?? null,
+      summary: log.summary,
+      metadata: log.metadata ?? null,
+      createdAt: new Date(),
+    };
+    this.auditLogs.push(entry);
+    return entry;
   }
 
   async createVerificationCode(phone: string, code: string): Promise<void> {

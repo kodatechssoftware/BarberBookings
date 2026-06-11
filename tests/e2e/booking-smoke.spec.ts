@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { getAvailableTimeSlots } from "../../client/src/lib/availability";
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -24,6 +24,52 @@ async function loginAdmin(page: Page) {
   await page.locator('input[type="password"]').fill("baptista2026");
   await page.getByRole("button", { name: "Entrar" }).click();
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+}
+
+async function loginAdminRequest(request: APIRequestContext) {
+  const loginResponse = await request.post("/api/admin/login", {
+    data: { username: "admin", password: "baptista2026" },
+  });
+  expect(loginResponse.ok()).toBe(true);
+}
+
+function currentWeekThursdayIso(hour = 10, minute = 0) {
+  const now = new Date();
+  const monday = new Date(now);
+  const currentDay = now.getDay();
+  const offsetToMonday = currentDay === 0 ? -6 : 1 - currentDay;
+  monday.setDate(now.getDate() + offsetToMonday);
+
+  const thursday = new Date(monday);
+  thursday.setDate(monday.getDate() + 3);
+  thursday.setHours(hour, minute, 0, 0);
+  return thursday.toISOString();
+}
+
+async function createManualAppointmentForCurrentWeek(request: APIRequestContext) {
+  await loginAdminRequest(request);
+
+  const [barbersResponse, servicesResponse] = await Promise.all([
+    request.get("/api/barbers?includeHidden=true"),
+    request.get("/api/services?includeHidden=true"),
+  ]);
+  expect(barbersResponse.ok()).toBe(true);
+  expect(servicesResponse.ok()).toBe(true);
+
+  const [barber] = await barbersResponse.json();
+  const [service] = await servicesResponse.json();
+
+  const createResponse = await request.post("/api/appointments/block", {
+    data: {
+      barberId: barber.id,
+      serviceId: service.id,
+      startTime: currentWeekThursdayIso(10, 0),
+      name: "Agenda Click QA",
+      phone: "912695705",
+      isManualBooking: true,
+    },
+  });
+  expect(createResponse.ok()).toBe(true);
 }
 
 test.describe("public booking flow", () => {
@@ -53,10 +99,35 @@ test.describe("public booking flow", () => {
     await expect(page.getByRole("button", { name: "Confirmar" })).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
   });
+
+  test("shows inline validation in the customer details step", async ({ page }) => {
+    await page.goto("/book?barberId=1&serviceId=1&date=2026-06-11&time=15:30");
+
+    await page.getByRole("button", { name: "Confirmar" }).click();
+    await expect(page.getByText("Indique o nome para a marcação.")).toBeVisible();
+    await expect(page.getByText("Indique o telemóvel para confirmarmos a marcação.")).toBeVisible();
+
+    await page.getByPlaceholder("O seu nome").fill("Pedro Faria");
+    await page.getByPlaceholder("912 345 678").fill("123");
+    await page.getByPlaceholder("exemplo@email.com").fill("email-invalido");
+
+    await expect(page.getByText("Indique o nome para a marcação.")).not.toBeVisible();
+    await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).toBeVisible();
+    await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).toBeVisible();
+
+    await page.getByPlaceholder("912 345 678").fill("912695704");
+    await page.getByPlaceholder("exemplo@email.com").fill("");
+
+    await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).not.toBeVisible();
+    await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).not.toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
 });
 
 test.describe("admin navigation", () => {
-  test("shows agenda only in Agenda and appointment list only in Marcações", async ({ page }) => {
+  test("shows agenda only in Agenda and appointment list only in Marcações", async ({ page, request }) => {
+    await createManualAppointmentForCurrentWeek(request);
+
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
@@ -64,6 +135,15 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Agenda semanal")).toBeVisible();
     await expect(page.getByText("Agenda do dia")).not.toBeVisible();
     await expect(page.getByText("Lista de marcações")).not.toBeVisible();
+    const weeklyAppointment = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Agenda Click QA/,
+    }).first();
+    await expect(weeklyAppointment).toBeVisible();
+    await weeklyAppointment.press("Enter");
+    const appointmentDialog = page.getByRole("dialog");
+    await expect(appointmentDialog).toContainText("Detalhes da marcação");
+    await expect(appointmentDialog.getByRole("heading", { name: "Agenda Click QA" })).toBeVisible();
+    await page.keyboard.press("Escape");
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole("tab", { name: "Marcações" }).click();
@@ -92,11 +172,26 @@ test.describe("admin navigation", () => {
 });
 
 test.describe("booking rules", () => {
-  test("blocks a blacklisted Portuguese phone even with another country prefix", async ({ request }) => {
-    const loginResponse = await request.post("/api/admin/login", {
-      data: { username: "admin", password: "baptista2026" },
+  test("records admin actions in the audit log", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const blacklistResponse = await request.post("/api/admin/blacklist", {
+      data: { phone: "912695708", reason: "E2E audit log" },
     });
-    expect(loginResponse.ok()).toBe(true);
+    expect(blacklistResponse.ok()).toBe(true);
+
+    const auditResponse = await request.get("/api/admin/audit-logs?limit=10");
+    expect(auditResponse.ok()).toBe(true);
+    const logs = await auditResponse.json();
+
+    expect(logs.some((log: any) =>
+      log.action === "customer.blocked" &&
+      String(log.summary).includes("912695708"),
+    )).toBe(true);
+  });
+
+  test("blocks a blacklisted Portuguese phone even with another country prefix", async ({ request }) => {
+    await loginAdminRequest(request);
 
     const blacklistResponse = await request.post("/api/admin/blacklist", {
       data: { phone: "912695703", reason: "E2E guard" },

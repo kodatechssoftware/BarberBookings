@@ -48,6 +48,7 @@ const PHONE_COUNTRIES = [
 ] as const;
 
 type PhoneCountryCode = typeof PHONE_COUNTRIES[number]["code"];
+type CustomerField = keyof BookingPreference["customerDetails"];
 
 const DEFAULT_PHONE_COUNTRY = PHONE_COUNTRIES[0];
 
@@ -299,6 +300,11 @@ export default function Booking() {
   const [selectedPhoneCountry, setSelectedPhoneCountry] = useState<PhoneCountryCode>(initialPreference.phoneCountryCode);
   const [showTimeError, setShowTimeError] = useState(false);
   const [customerDetails, setCustomerDetails] = useState(initialPreference.customerDetails);
+  const [customerTouched, setCustomerTouched] = useState<Record<CustomerField, boolean>>({
+    name: false,
+    phone: false,
+    email: false,
+  });
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -335,6 +341,28 @@ export default function Booking() {
   const selectedService = availableServices.find((service) => service.id === selectedServiceId);
   const selectedBarberLabel = selectedBarberId === 0 ? "Sem preferência" : selectedBarber?.name;
   const selectedPhoneCountryData = getPhoneCountry(selectedPhoneCountry);
+  const customerFieldErrors = useMemo(() => {
+    const digits = customerDetails.phone.replace(/\D/g, "");
+    const phoneLengthLabel = selectedPhoneCountryData.minDigits === selectedPhoneCountryData.maxDigits
+      ? `${selectedPhoneCountryData.minDigits} dígitos`
+      : `entre ${selectedPhoneCountryData.minDigits} e ${selectedPhoneCountryData.maxDigits} dígitos`;
+
+    return {
+      name: customerDetails.name.trim() ? "" : "Indique o nome para a marcação.",
+      phone: !digits
+        ? "Indique o telemóvel para confirmarmos a marcação."
+        : isValidBookingPhone(customerDetails.phone, selectedPhoneCountry)
+          ? ""
+          : `Confirme que o número tem ${phoneLengthLabel} para ${selectedPhoneCountryData.label}.`,
+      email: isValidOptionalEmail(customerDetails.email)
+        ? ""
+        : "Indique um email válido ou deixe o campo vazio.",
+    };
+  }, [customerDetails.email, customerDetails.name, customerDetails.phone, selectedPhoneCountry, selectedPhoneCountryData]);
+  const showCustomerError = (field: CustomerField) => customerTouched[field] && Boolean(customerFieldErrors[field]);
+  const markCustomerTouched = (field: CustomerField) => {
+    setCustomerTouched((current) => ({ ...current, [field]: true }));
+  };
 
   useEffect(() => {
     if (!selectedServiceId) return;
@@ -401,7 +429,7 @@ export default function Booking() {
       setShowTimeError(true);
       toast({
         title: "Seleção necessária",
-        description: "Por favor, escolha uma hora para a sua marcação.",
+        description: "Escolha uma hora para a sua marcação.",
         variant: "destructive"
       });
       // Force scroll to time section if needed
@@ -414,39 +442,28 @@ export default function Booking() {
   const handleBack = () => setStep(prev => prev - 1);
 
   const handleSubmit = async () => {
-    if (selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime || !customerDetails.name || !customerDetails.phone) {
-      toast({ title: "Erro", description: "Por favor preencha todos os campos obrigatórios.", variant: "destructive" });
+    if (selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime) {
+      toast({ title: "Erro", description: "Confirme barbeiro, serviço, data e hora.", variant: "destructive" });
       return;
     }
 
-    const customerName = customerDetails.name.trim();
-    if (!customerName) {
-      toast({ title: "Erro", description: "Por favor indique o seu nome.", variant: "destructive" });
-      return;
-    }
-
-    if (!isValidBookingPhone(customerDetails.phone, selectedPhoneCountry)) {
+    setCustomerTouched({ name: true, phone: true, email: true });
+    if (customerFieldErrors.name || customerFieldErrors.phone || customerFieldErrors.email) {
       toast({
-        title: "Telemóvel inválido",
-        description: "Escolha o país e confirme que o número tem o tamanho correto.",
+        title: "Corrija os dados",
+        description: "Veja os campos assinalados antes de confirmar.",
         variant: "destructive",
       });
       return;
     }
+
+    const customerName = customerDetails.name.trim();
     const normalizedPhone = toStoredPhone(customerDetails.phone, selectedPhoneCountry);
 
     const [hours, minutes] = selectedTime.split(':').map(Number);
     const appointmentDate = new Date(selectedDate);
     appointmentDate.setHours(hours, minutes, 0, 0);
     const customerEmail = customerDetails.email.trim();
-    if (!isValidOptionalEmail(customerEmail)) {
-      toast({
-        title: "Email inválido",
-        description: "Indique um email válido ou deixe o campo vazio.",
-        variant: "destructive",
-      });
-      return;
-    }
 
     try {
       const result = await createAppointment.mutateAsync({
@@ -847,18 +864,34 @@ export default function Booking() {
                       <Input 
                         id="name" 
                         placeholder="O seu nome" 
-                        className="pl-10 bg-background border-white/10 focus:border-primary"
+                        className={cn(
+                          "pl-10 bg-background focus:border-primary",
+                          showCustomerError("name") ? "border-red-500 focus:border-red-500" : "border-white/10",
+                        )}
                         maxLength={MAX_NAME_LENGTH}
                         autoComplete="name"
+                        aria-invalid={showCustomerError("name")}
+                        aria-describedby={showCustomerError("name") ? "name-error" : undefined}
                         value={customerDetails.name}
                         onChange={(e) => setCustomerDetails(prev => ({ ...prev, name: e.target.value }))}
+                        onBlur={() => markCustomerTouched("name")}
                       />
                     </div>
+                    {showCustomerError("name") && (
+                      <p id="name-error" className="text-xs font-medium text-red-400">
+                        {customerFieldErrors.name}
+                      </p>
+                    )}
                   </div>
                   
                   <div className="space-y-2">
                     <Label htmlFor="phone">Telemóvel *</Label>
-                    <div className="flex rounded-md border border-white/10 bg-background focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+                    <div className={cn(
+                      "flex rounded-md border bg-background focus-within:ring-1",
+                      showCustomerError("phone")
+                        ? "border-red-500 focus-within:border-red-500 focus-within:ring-red-500"
+                        : "border-white/10 focus-within:border-primary focus-within:ring-primary",
+                    )}>
                       <div className="relative shrink-0 border-r border-white/10">
                         <select
                           aria-label="Pais do telemovel"
@@ -867,6 +900,7 @@ export default function Booking() {
                           onChange={(e) => {
                             setSelectedPhoneCountry(e.target.value as PhoneCountryCode);
                             setCustomerDetails(prev => ({ ...prev, phone: "" }));
+                            markCustomerTouched("phone");
                           }}
                         >
                           {PHONE_COUNTRIES.map((country) => (
@@ -885,13 +919,22 @@ export default function Booking() {
                         placeholder={selectedPhoneCountryData.placeholder}
                         className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                         maxLength={MAX_PHONE_LENGTH}
+                        aria-invalid={showCustomerError("phone")}
+                        aria-describedby={showCustomerError("phone") ? "phone-error" : "phone-help"}
                         value={customerDetails.phone}
                         onChange={(e) => setCustomerDetails(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }))}
+                        onBlur={() => markCustomerTouched("phone")}
                       />
                     </div>
-                    <p className="text-[11px] text-gray-500">
-                      Escolha o país e escreva apenas o número. O indicativo é adicionado automaticamente.
-                    </p>
+                    {showCustomerError("phone") ? (
+                      <p id="phone-error" className="text-xs font-medium text-red-400">
+                        {customerFieldErrors.phone}
+                      </p>
+                    ) : (
+                      <p id="phone-help" className="text-[11px] text-gray-500">
+                        Escolha o país e escreva apenas o número. O indicativo é adicionado automaticamente.
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -901,11 +944,22 @@ export default function Booking() {
                       type="email" 
                       autoComplete="email"
                       placeholder="exemplo@email.com" 
-                      className="bg-background border-white/10 focus:border-primary"
+                      className={cn(
+                        "bg-background focus:border-primary",
+                        showCustomerError("email") ? "border-red-500 focus:border-red-500" : "border-white/10",
+                      )}
                       maxLength={MAX_EMAIL_LENGTH}
+                      aria-invalid={showCustomerError("email")}
+                      aria-describedby={showCustomerError("email") ? "email-error" : undefined}
                       value={customerDetails.email}
                       onChange={(e) => setCustomerDetails(prev => ({ ...prev, email: e.target.value }))}
+                      onBlur={() => markCustomerTouched("email")}
                     />
+                    {showCustomerError("email") && (
+                      <p id="email-error" className="text-xs font-medium text-red-400">
+                        {customerFieldErrors.email}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -926,7 +980,7 @@ export default function Booking() {
                   (step === 3 && (!selectedDate || !selectedTime))
                 }
               >
-                Próximo
+                Seguinte
               </Button>
             ) : (
               <Button 
