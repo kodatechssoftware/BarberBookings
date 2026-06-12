@@ -255,9 +255,22 @@ function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
   return "/images/logo.jpg";
 }
 
-const MAX_BARBER_PHOTO_INPUT_BYTES = 10 * 1024 * 1024;
+const MAX_BARBER_PHOTO_INPUT_BYTES = 25 * 1024 * 1024;
+const MAX_BARBER_PHOTO_OUTPUT_BYTES = 900 * 1024;
 const BARBER_PHOTO_MAX_SIDE = 1200;
-const BARBER_PHOTO_QUALITY = 0.82;
+const BARBER_PHOTO_MIN_SIDE = 360;
+const BARBER_PHOTO_RESIZE_FACTOR = 0.82;
+const BARBER_PHOTO_QUALITIES = [0.82, 0.74, 0.66, 0.58, 0.5, 0.42];
+const SUPPORTED_BARBER_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const SUPPORTED_BARBER_PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+
+function isSupportedBarberPhoto(file: File) {
+  const type = file.type.toLowerCase();
+  if (SUPPORTED_BARBER_PHOTO_TYPES.has(type)) return true;
+
+  const name = file.name.toLowerCase();
+  return SUPPORTED_BARBER_PHOTO_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
 
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -277,29 +290,61 @@ function loadImage(src: string) {
   });
 }
 
-async function fileToBarberAvatar(file: File) {
-  if (!file.type.startsWith("image/")) {
-    throw new Error("Escolha um ficheiro de imagem.");
-  }
+function getDataUrlByteSize(dataUrl: string) {
+  const marker = ";base64,";
+  const markerIndex = dataUrl.indexOf(marker);
+  if (markerIndex === -1) return dataUrl.length;
 
-  if (file.size > MAX_BARBER_PHOTO_INPUT_BYTES) {
-    throw new Error("A imagem deve ter no máximo 10 MB.");
-  }
+  const base64 = dataUrl.slice(markerIndex + marker.length);
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.ceil((base64.length * 3) / 4) - padding;
+}
 
-  const dataUrl = await readFileAsDataUrl(file);
-  const image = await loadImage(dataUrl);
-  const scale = Math.min(1, BARBER_PHOTO_MAX_SIDE / image.width, BARBER_PHOTO_MAX_SIDE / image.height);
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
+function renderBarberPhoto(image: HTMLImageElement, maxSide: number, quality: number) {
+  const originalWidth = image.naturalWidth || image.width;
+  const originalHeight = image.naturalHeight || image.height;
+  const scale = Math.min(1, maxSide / originalWidth, maxSide / originalHeight);
+  const width = Math.max(1, Math.round(originalWidth * scale));
+  const height = Math.max(1, Math.round(originalHeight * scale));
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
 
   const context = canvas.getContext("2d");
-  if (!context) return dataUrl;
+  if (!context) throw new Error("Não foi possível otimizar a imagem.");
 
+  context.fillStyle = "#111111";
+  context.fillRect(0, 0, width, height);
   context.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL("image/jpeg", BARBER_PHOTO_QUALITY);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function fileToBarberAvatar(file: File) {
+  if (!isSupportedBarberPhoto(file)) {
+    throw new Error("Escolha uma imagem JPG, PNG ou WebP.");
+  }
+
+  if (file.size > MAX_BARBER_PHOTO_INPUT_BYTES) {
+    throw new Error("A imagem deve ter no máximo 25 MB antes de otimizar.");
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+
+  for (
+    let maxSide = BARBER_PHOTO_MAX_SIDE;
+    maxSide >= BARBER_PHOTO_MIN_SIDE;
+    maxSide = Math.floor(maxSide * BARBER_PHOTO_RESIZE_FACTOR)
+  ) {
+    for (const quality of BARBER_PHOTO_QUALITIES) {
+      const avatar = renderBarberPhoto(image, maxSide, quality);
+      if (getDataUrlByteSize(avatar) <= MAX_BARBER_PHOTO_OUTPUT_BYTES) {
+        return avatar;
+      }
+    }
+  }
+
+  throw new Error("Não foi possível reduzir a imagem. Experimente uma foto com menos resolução.");
 }
 
 type ToastFn = ReturnType<typeof useToast>["toast"];
@@ -346,7 +391,7 @@ function BarberPhotoPicker({
           <Input
             id={inputId}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp"
             className="hidden"
             onChange={async (event) => {
               await handleBarberPhotoFile(event.target.files?.[0], onChange, toast);
@@ -373,7 +418,7 @@ function BarberPhotoPicker({
               <Trash2 className="h-4 w-4" /> Remover foto
             </Button>
           )}
-          <p className="w-full text-xs text-gray-400">JPG, PNG ou WebP. A imagem é otimizada automaticamente.</p>
+          <p className="w-full text-xs text-gray-400">JPG, PNG ou WebP até 25 MB. A foto é reduzida automaticamente.</p>
         </div>
       </div>
     </div>

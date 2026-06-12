@@ -169,6 +169,66 @@ test.describe("admin navigation", () => {
       await expectNoHorizontalOverflow(page);
     }
   });
+
+  test("reduces large barber photos before saving them", async ({ page }) => {
+    await loginAdmin(page);
+
+    await page.getByRole("tab", { name: "Equipa" }).click();
+    await page.getByRole("button", { name: "Editar" }).first().click();
+
+    const dialog = page.getByRole("dialog", { name: "Editar Barbeiro" });
+    await expect(dialog).toBeVisible();
+
+    const uploadedSize = await page.evaluate(async () => {
+      const input = document.querySelector<HTMLInputElement>('input[type="file"][accept*="image/jpeg"]');
+      if (!input) throw new Error("Photo input not found");
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 2200;
+      canvas.height = 2200;
+
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Canvas not available");
+
+      const imageData = context.createImageData(canvas.width, canvas.height);
+      for (let offset = 0; offset < imageData.data.length; offset += 65536) {
+        crypto.getRandomValues(imageData.data.subarray(offset, Math.min(offset + 65536, imageData.data.length)));
+      }
+      for (let alpha = 3; alpha < imageData.data.length; alpha += 4) {
+        imageData.data[alpha] = 255;
+      }
+      context.putImageData(imageData, 0, 0);
+
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((result) => {
+          if (!result) reject(new Error("Large image was not created"));
+          else resolve(result);
+        }, "image/png");
+      });
+
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([blob], "foto-grande.png", { type: "image/png" }));
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return blob.size;
+    });
+
+    expect(uploadedSize).toBeGreaterThan(10 * 1024 * 1024);
+    expect(uploadedSize).toBeLessThanOrEqual(25 * 1024 * 1024);
+    await expect(page.getByText("A imagem deve ter no máximo 10 MB.")).not.toBeVisible();
+
+    const preview = dialog.locator('img[src^="data:image/jpeg"]').first();
+    await expect(preview).toBeVisible({ timeout: 15000 });
+
+    const optimizedSize = await preview.evaluate((image) => {
+      const src = (image as HTMLImageElement).currentSrc || (image as HTMLImageElement).src;
+      const base64 = src.split(";base64,")[1] || "";
+      const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+      return Math.ceil((base64.length * 3) / 4) - padding;
+    });
+
+    expect(optimizedSize).toBeLessThanOrEqual(900 * 1024);
+  });
 });
 
 test.describe("booking rules", () => {
