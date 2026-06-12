@@ -134,34 +134,36 @@ async function getAuditActor(req: Request) {
   };
 }
 
-async function recordAuditLog(req: Request, input: AuditLogInput) {
-  try {
-    const actor = input.actorType
-      ? {
-          actorType: input.actorType,
-          actorId: input.actorId ?? null,
-          actorName: input.actorName ?? null,
-        }
-      : await getAuditActor(req);
+function recordAuditLog(req: Request, input: AuditLogInput) {
+  void (async () => {
+    try {
+      const actor = input.actorType
+        ? {
+            actorType: input.actorType,
+            actorId: input.actorId ?? null,
+            actorName: input.actorName ?? null,
+          }
+        : await getAuditActor(req);
 
-    const metadata = input.metadata
-      ? typeof input.metadata === "string"
-        ? input.metadata
-        : JSON.stringify(input.metadata)
-      : null;
+      const metadata = input.metadata
+        ? typeof input.metadata === "string"
+          ? input.metadata
+          : JSON.stringify(input.metadata)
+        : null;
 
-    await storage.createAuditLog({
-      ...actor,
-      action: input.action,
-      entityType: input.entityType,
-      entityId: input.entityId ?? null,
-      summary: input.summary,
-      metadata,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn("Audit log skipped:", message);
-  }
+      await storage.createAuditLog({
+        ...actor,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId ?? null,
+        summary: input.summary,
+        metadata,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("Audit log skipped:", message);
+    }
+  })();
 }
 
 function getSessionSameSite(): "lax" | "strict" | "none" {
