@@ -420,7 +420,7 @@ function isBarbersQuery(queryKey: readonly unknown[]) {
   return queryKey[0] === "/api/barbers";
 }
 
-async function refreshBarbersCache(updatedBarber?: BarberListCacheItem) {
+function refreshBarbersCache(updatedBarber?: BarberListCacheItem) {
   if (updatedBarber) {
     queryClient.setQueriesData<BarberListCacheItem[]>(
       { predicate: (query) => isBarbersQuery(query.queryKey) },
@@ -433,7 +433,7 @@ async function refreshBarbersCache(updatedBarber?: BarberListCacheItem) {
     );
   }
 
-  await queryClient.invalidateQueries({
+  void queryClient.invalidateQueries({
     predicate: (query) => isBarbersQuery(query.queryKey),
   });
 }
@@ -1295,6 +1295,7 @@ export default function Admin() {
   const [barberFormData, setBarberFormData] = useState({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] as number[] });
   const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
+  const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
   const [serviceFormData, setServiceFormData] = useState({ name: "", description: "", price: 0, duration: 30 });
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
@@ -2895,39 +2896,61 @@ export default function Admin() {
                                 [barber.id]: normalizeServiceSelection(serviceIds, getAllServiceIds(services)),
                               }))}
                             />
-                            <Button variant="gold" className="w-full" onClick={async () => {
-                              const name = (document.getElementById(`edit-barber-name-${barber.id}`) as HTMLInputElement).value;
-                              const specialty = (document.getElementById(`edit-barber-spec-${barber.id}`) as HTMLInputElement).value;
-                              const color = (document.getElementById(`edit-barber-color-${barber.id}`) as HTMLInputElement).value;
-                              const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
-                              const selectedServiceIds = getEffectiveServiceSelection(
-                                Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id)
-                                  ? barberServiceDrafts[barber.id]
-                                  : barber.serviceIds,
-                                services,
-                              );
-                              const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, {
-                                name,
-                                specialty,
-                                color: normalizeBarberColor(color),
-                                avatar: avatar || null,
-                                serviceIds: normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services)),
-                              });
-                              const updatedBarber = await response.json();
-                              await refreshBarbersCache(updatedBarber);
-                              queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                              setBarberAvatarDrafts((current) => {
-                                const next = { ...current };
-                                delete next[barber.id];
-                                return next;
-                              });
-                              setBarberServiceDrafts((current) => {
-                                const next = { ...current };
-                                delete next[barber.id];
-                                return next;
-                              });
-                              toast({ title: "Sucesso", description: "Barbeiro atualizado." });
-                            }}>Guardar</Button>
+                            <Button
+                              variant="gold"
+                              className="w-full"
+                              disabled={savingBarberId === barber.id}
+                              onClick={async () => {
+                                setSavingBarberId(barber.id);
+                                try {
+                                  const name = (document.getElementById(`edit-barber-name-${barber.id}`) as HTMLInputElement).value;
+                                  const specialty = (document.getElementById(`edit-barber-spec-${barber.id}`) as HTMLInputElement).value;
+                                  const color = (document.getElementById(`edit-barber-color-${barber.id}`) as HTMLInputElement).value;
+                                  const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
+                                  const hasServiceDraft = Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id);
+                                  const selectedServiceIds = getEffectiveServiceSelection(
+                                    hasServiceDraft ? barberServiceDrafts[barber.id] : barber.serviceIds,
+                                    services,
+                                  );
+                                  const payload: Record<string, unknown> = {
+                                    name,
+                                    specialty,
+                                    color: normalizeBarberColor(color),
+                                    avatar: avatar || null,
+                                  };
+                                  if (hasServiceDraft) {
+                                    payload.serviceIds = normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services));
+                                  }
+
+                                  const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, payload);
+                                  const updatedBarber = await response.json();
+                                  refreshBarbersCache(updatedBarber);
+                                  void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+                                  setBarberAvatarDrafts((current) => {
+                                    const next = { ...current };
+                                    delete next[barber.id];
+                                    return next;
+                                  });
+                                  setBarberServiceDrafts((current) => {
+                                    const next = { ...current };
+                                    delete next[barber.id];
+                                    return next;
+                                  });
+                                  toast({ title: "Sucesso", description: "Barbeiro atualizado." });
+                                } catch (err: any) {
+                                  toast({
+                                    title: "Erro",
+                                    description: err.message || "Não foi possível atualizar o barbeiro.",
+                                    variant: "destructive",
+                                  });
+                                } finally {
+                                  setSavingBarberId(null);
+                                }
+                              }}
+                            >
+                              {savingBarberId === barber.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              {savingBarberId === barber.id ? "A guardar..." : "Guardar"}
+                            </Button>
                           </div>
                         </DialogContent>
                       </Dialog>
