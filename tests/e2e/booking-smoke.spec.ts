@@ -144,6 +144,13 @@ test.describe("admin navigation", () => {
     await expect(appointmentDialog).toContainText("Detalhes da marcação");
     await expect(appointmentDialog.getByRole("heading", { name: "Agenda Click QA" })).toBeVisible();
     await page.keyboard.press("Escape");
+
+    await expect(page.getByRole("button", { name: "Mostrar atividade recente" })).toBeVisible();
+    await expect(page.getByText("appointment.created_manual")).not.toBeVisible();
+    await page.getByRole("button", { name: "Mostrar atividade recente" }).click();
+    await expect(page.getByText("Marcação manual criada").first()).toBeVisible();
+    await expect(page.getByText("appointment.created_manual")).not.toBeVisible();
+
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole("tab", { name: "Marcações" }).click();

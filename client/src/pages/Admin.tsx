@@ -161,6 +161,39 @@ function formatAuditTimestamp(value: string) {
   return format(date, "dd/MM HH:mm", { locale: pt });
 }
 
+const auditActionLabels: Record<string, string> = {
+  "appointment.created_online": "Marcação criada pelo site",
+  "appointment.created_manual": "Marcação manual criada",
+  "appointment.absence_created": "Ausência criada na agenda",
+  "appointment.updated": "Marcação alterada",
+  "appointment.status_changed": "Estado da marcação alterado",
+  "barber.created": "Barbeiro criado",
+  "barber.updated": "Barbeiro atualizado",
+  "barber.services_updated": "Serviços do barbeiro atualizados",
+  "barber.deleted": "Barbeiro removido",
+  "barber.password_reset": "Acesso do barbeiro reposto",
+  "barber.invite_created": "Convite enviado ao barbeiro",
+  "service.created": "Serviço criado",
+  "service.updated": "Serviço atualizado",
+  "service.deleted": "Serviço removido",
+  "shop_availability.updated": "Horário da barbearia atualizado",
+  "barber_availability.updated": "Horário do barbeiro atualizado",
+  "customer.blocked": "Cliente bloqueado",
+  "customer.unblocked": "Cliente desbloqueado",
+  "customer_note.updated": "Notas do cliente atualizadas",
+};
+
+function getAuditActionLabel(action: string) {
+  return auditActionLabels[action] || "Atividade registada";
+}
+
+function getAuditActorLabel(log: AuditLogItem) {
+  if (log.actorType === "admin") return log.actorName || "Administrador";
+  if (log.actorType === "barber") return log.actorName ? `Barbeiro: ${log.actorName}` : "Barbeiro";
+  if (log.actorType === "customer") return log.actorName ? `Cliente: ${log.actorName}` : "Cliente";
+  return log.actorName || "Sistema";
+}
+
 const DashboardChartCard = lazy(() => import("@/components/admin/DashboardChartCard"));
 
 const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; label: string }> = [
@@ -201,48 +234,69 @@ function AuditLogPanel({
   logs?: AuditLogItem[];
   isLoading: boolean;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const latestLogs = (logs || []).slice(0, 6);
+  const toggleLabel = isExpanded ? "Ocultar atividade recente" : "Mostrar atividade recente";
 
   return (
     <Card className="border-white/10 bg-card text-white">
       <CardHeader>
-        <CardTitle className="text-base font-bold">Atividade recente</CardTitle>
-        <p className="text-sm text-gray-400">Últimas ações registadas na gestão.</p>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="flex min-h-[120px] items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </div>
-        ) : latestLogs.length > 0 ? (
-          <div className="space-y-2">
-            {latestLogs.map((log) => (
-              <div
-                key={log.id}
-                className="flex flex-col gap-2 rounded-lg border border-white/10 bg-background/60 p-3 sm:flex-row sm:items-start sm:justify-between"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-white">{log.summary}</p>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {log.actorName || "Sistema"} · {log.action}
-                  </p>
-                </div>
-                <span className="shrink-0 text-xs text-gray-500">
-                  {formatAuditTimestamp(log.createdAt)}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-white/10 px-4 py-8 text-center">
-            <Clock className="mx-auto h-5 w-5 text-gray-600" />
-            <p className="mt-3 text-sm font-semibold text-white">Ainda sem atividade registada</p>
-            <p className="mt-1 text-sm text-gray-500">
-              As próximas alterações feitas na gestão aparecem aqui automaticamente.
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-base font-bold">Atividade recente</CardTitle>
+            <p className="mt-1 text-sm text-gray-400">
+              Histórico interno das alterações. Abra apenas quando precisar de confirmar o que aconteceu.
             </p>
           </div>
-        )}
-      </CardContent>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full gap-2 border-white/10 sm:w-auto"
+            aria-expanded={isExpanded}
+            onClick={() => setIsExpanded((current) => !current)}
+          >
+            <Clock className="h-4 w-4" />
+            {toggleLabel}
+          </Button>
+        </div>
+      </CardHeader>
+      {isExpanded && (
+        <CardContent>
+          {isLoading ? (
+            <div className="flex min-h-[120px] items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            </div>
+          ) : latestLogs.length > 0 ? (
+            <div className="space-y-2">
+              {latestLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex flex-col gap-2 rounded-lg border border-white/10 bg-background/60 p-3 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">{log.summary}</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {getAuditActorLabel(log)} · {getAuditActionLabel(log.action)}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-xs text-gray-500">
+                    {formatAuditTimestamp(log.createdAt)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-white/10 px-4 py-8 text-center">
+              <Clock className="mx-auto h-5 w-5 text-gray-600" />
+              <p className="mt-3 text-sm font-semibold text-white">Ainda sem atividade registada</p>
+              <p className="mt-1 text-sm text-gray-500">
+                As próximas alterações feitas na gestão aparecem aqui automaticamente.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      )}
     </Card>
   );
 }
