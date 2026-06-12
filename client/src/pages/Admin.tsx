@@ -710,6 +710,28 @@ function isAppointmentVisibleOnGrid(appointment: AdminAppointment) {
   return getAgendaMinutes(end) > weeklyAgendaStartHour * 60 && getAgendaMinutes(start) < weeklyAgendaEndHour * 60;
 }
 
+function getAppointmentStartSlotKey(appointment: AdminAppointment) {
+  return format(parseISO(appointment.startTime), "HH:mm");
+}
+
+function groupAppointmentsByStart(appointments: AdminAppointment[]) {
+  const grouped = new Map<string, AdminAppointment[]>();
+
+  appointments.forEach((appointment) => {
+    const key = getAppointmentStartSlotKey(appointment);
+    const list = grouped.get(key) || [];
+    list.push(appointment);
+    grouped.set(key, list);
+  });
+
+  return Array.from(grouped.entries())
+    .map(([slotKey, items]) => ({
+      slotKey,
+      appointments: items.sort((a, b) => a.barberId - b.barberId || a.customerName.localeCompare(b.customerName)),
+    }))
+    .sort((a, b) => a.slotKey.localeCompare(b.slotKey));
+}
+
 function WeeklyAgenda({
   weekStartDate,
   appointments,
@@ -737,6 +759,10 @@ function WeeklyAgenda({
   onSelectAppointment: (appointment: AdminAppointment) => void;
   getStatusLabel: (status: string) => string;
 }) {
+  const [selectedAgendaGroup, setSelectedAgendaGroup] = useState<{
+    slotKey: string;
+    appointments: AdminAppointment[];
+  } | null>(null);
   const calendarDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(weekStartDate, index)),
     [weekStartDate],
@@ -771,7 +797,11 @@ function WeeklyAgenda({
     appointments.some((appointment) => appointment.barberId === barber.id),
   );
 
-  const renderAppointmentSummary = (appointment: AdminAppointment, compact = false) => {
+  const renderAppointmentSummary = (
+    appointment: AdminAppointment,
+    compact = false,
+    onPick: (appointment: AdminAppointment) => void = onSelectAppointment,
+  ) => {
     const start = parseISO(appointment.startTime);
     const end = getWeeklyAppointmentEnd(appointment);
     const barber = barbersById.get(appointment.barberId);
@@ -785,7 +815,7 @@ function WeeklyAgenda({
         type="button"
         aria-label={appointmentLabel}
         title={appointmentLabel}
-        onClick={() => onSelectAppointment(appointment)}
+        onClick={() => onPick(appointment)}
         className={cn(
           "w-full rounded-lg border px-3 py-2 text-left transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
           appointment.status !== "booked" && "opacity-70",
@@ -816,7 +846,44 @@ function WeeklyAgenda({
     );
   };
 
+  const renderMobileAppointmentRow = (appointment: AdminAppointment) => {
+    const start = parseISO(appointment.startTime);
+    const end = getWeeklyAppointmentEnd(appointment);
+    const barber = barbersById.get(appointment.barberId);
+    const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
+    const color = normalizeBarberColor(barber?.color);
+    const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
+
+    return (
+      <button
+        key={appointment.id}
+        type="button"
+        aria-label={appointmentLabel}
+        title={appointmentLabel}
+        onClick={() => onSelectAppointment(appointment)}
+        className={cn(
+          "grid w-full grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-lg border border-white/10 bg-background/70 p-3 text-left transition hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+          appointment.status !== "booked" && "opacity-70",
+        )}
+      >
+        <div>
+          <p className="text-sm font-bold text-primary">{format(start, "HH:mm")}</p>
+          <p className="text-[11px] text-gray-500">{format(end, "HH:mm")}</p>
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+            <p className="truncate text-sm font-semibold text-white">{appointment.customerName}</p>
+          </div>
+          <p className="mt-1 truncate text-xs text-gray-400">{barber?.name || "Barbeiro"} · {service?.name || "Sem serviço"}</p>
+          <p className="mt-1 text-[11px] uppercase tracking-wide text-gray-500">{getStatusLabel(appointment.status)}</p>
+        </div>
+      </button>
+    );
+  };
+
   return (
+    <>
     <Card className="border-white/10 bg-card text-white">
       <CardHeader className="gap-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -870,6 +937,7 @@ function WeeklyAgenda({
               {calendarDays.map((day) => {
                 const key = getDateKey(day);
                 const dayAppointments = appointmentsByDay.get(key) || [];
+                const slotGroups = groupAppointmentsByStart(dayAppointments);
 
                 return (
                   <div key={key} className="rounded-xl border border-white/10 bg-background/60 p-3">
@@ -882,9 +950,34 @@ function WeeklyAgenda({
                         {dayAppointments.length}
                       </span>
                     </div>
-                    {dayAppointments.length > 0 ? (
+                    {slotGroups.length > 0 ? (
                       <div className="space-y-2">
-                        {dayAppointments.map((appointment) => renderAppointmentSummary(appointment))}
+                        {slotGroups.map((group) => (
+                          <div key={group.slotKey} className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
+                            {group.appointments.length > 1 && (
+                              <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                                <p className="text-xs font-bold text-white">
+                                  {group.slotKey} · {group.appointments.length} marcações
+                                </p>
+                                <div className="flex -space-x-1">
+                                  {group.appointments.slice(0, 4).map((appointment) => {
+                                    const barber = barbersById.get(appointment.barberId);
+                                    return (
+                                      <span
+                                        key={appointment.id}
+                                        className="h-3 w-3 rounded-full border border-background"
+                                        style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                      />
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                            <div className="space-y-2">
+                              {group.appointments.map((appointment) => renderMobileAppointmentRow(appointment))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     ) : (
                       <p className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-sm text-gray-500">
@@ -923,6 +1016,10 @@ function WeeklyAgenda({
                   {calendarDays.map((day) => {
                     const key = getDateKey(day);
                     const dayAppointments = (appointmentsByDay.get(key) || []).filter(isAppointmentVisibleOnGrid);
+                    const groupedSlots = groupAppointmentsByStart(dayAppointments);
+                    const crowdedGroups = groupedSlots.filter((group) => group.appointments.length >= 3);
+                    const crowdedAppointmentIds = new Set(crowdedGroups.flatMap((group) => group.appointments.map((appointment) => appointment.id)));
+                    const visibleSingleAppointments = dayAppointments.filter((appointment) => !crowdedAppointmentIds.has(appointment.id));
 
                     return (
                       <div key={key} className="relative border-r border-white/10 last:border-r-0" style={{ height: weeklyAgendaHeight }}>
@@ -933,7 +1030,59 @@ function WeeklyAgenda({
                             style={{ top: (hour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute }}
                           />
                         ))}
-                        {dayAppointments.map((appointment) => {
+                        {crowdedGroups.map((group) => {
+                          const start = parseISO(group.appointments[0].startTime);
+                          const maxEnd = group.appointments.reduce((latest, appointment) => {
+                            const end = getWeeklyAppointmentEnd(appointment);
+                            return end.getTime() > latest.getTime() ? end : latest;
+                          }, getWeeklyAppointmentEnd(group.appointments[0]));
+                          const startMinutes = Math.max(
+                            weeklyAgendaStartHour * 60,
+                            getAgendaMinutes(start),
+                          );
+                          const endMinutes = Math.min(
+                            weeklyAgendaEndHour * 60,
+                            getAgendaMinutes(maxEnd),
+                          );
+                          const top = (startMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute + 4;
+                          const height = Math.max(52, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
+                          const groupLabel = `Ver ${group.appointments.length} marcações às ${group.slotKey}`;
+                          const barberNames = group.appointments
+                            .map((appointment) => barbersById.get(appointment.barberId)?.name || "Barbeiro")
+                            .filter((name, index, names) => names.indexOf(name) === index);
+
+                          return (
+                            <button
+                              key={`group-${key}-${group.slotKey}`}
+                              type="button"
+                              aria-label={groupLabel}
+                              title={groupLabel}
+                              onClick={() => setSelectedAgendaGroup(group)}
+                              className="absolute left-1 right-1 overflow-hidden rounded-lg border border-primary/60 bg-primary/15 px-2 py-1.5 text-left shadow-sm shadow-primary/10 transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                              style={{ top, height }}
+                            >
+                              <span className="block text-[11px] font-bold text-white">
+                                {group.slotKey} · {group.appointments.length} marcações
+                              </span>
+                              <span className="mt-1 flex items-center gap-1">
+                                {group.appointments.slice(0, 5).map((appointment) => {
+                                  const barber = barbersById.get(appointment.barberId);
+                                  return (
+                                    <span
+                                      key={appointment.id}
+                                      className="h-2.5 w-2.5 rounded-full border border-background"
+                                      style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                    />
+                                  );
+                                })}
+                              </span>
+                              <span className="mt-1 block truncate text-[11px] text-gray-300">
+                                {barberNames.join(", ")}
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {visibleSingleAppointments.map((appointment) => {
                           const start = parseISO(appointment.startTime);
                           const end = getWeeklyAppointmentEnd(appointment);
                           const startMinutes = Math.max(
@@ -946,8 +1095,8 @@ function WeeklyAgenda({
                           );
                           const top = (startMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute + 4;
                           const height = Math.max(44, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
-                          const slotKey = format(start, "HH:mm");
-                          const sameSlot = dayAppointments.filter((item) => format(parseISO(item.startTime), "HH:mm") === slotKey);
+                          const slotKey = getAppointmentStartSlotKey(appointment);
+                          const sameSlot = visibleSingleAppointments.filter((item) => getAppointmentStartSlotKey(item) === slotKey);
                           const laneIndex = Math.max(0, sameSlot.findIndex((item) => item.id === appointment.id));
                           const laneWidth = 100 / Math.max(1, sameSlot.length);
                           const barber = barbersById.get(appointment.barberId);
@@ -1000,6 +1149,34 @@ function WeeklyAgenda({
         )}
       </CardContent>
     </Card>
+    <Dialog
+      open={Boolean(selectedAgendaGroup)}
+      onOpenChange={(open) => {
+        if (!open) setSelectedAgendaGroup(null);
+      }}
+    >
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>
+            {selectedAgendaGroup
+              ? `${selectedAgendaGroup.appointments.length} marcações às ${selectedAgendaGroup.slotKey}`
+              : "Marcações"}
+          </DialogTitle>
+          <DialogDescription>
+            Escolha uma marcação para ver os detalhes completos.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          {selectedAgendaGroup?.appointments.map((appointment) =>
+            renderAppointmentSummary(appointment, false, (selectedAppointment) => {
+              setSelectedAgendaGroup(null);
+              onSelectAppointment(selectedAppointment);
+            }),
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
