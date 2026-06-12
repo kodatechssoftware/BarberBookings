@@ -72,6 +72,62 @@ async function createManualAppointmentForCurrentWeek(request: APIRequestContext)
   expect(createResponse.ok()).toBe(true);
 }
 
+async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequestContext) {
+  await loginAdminRequest(request);
+
+  const [barbersResponse, servicesResponse] = await Promise.all([
+    request.get("/api/barbers?includeHidden=true"),
+    request.get("/api/services?includeHidden=true"),
+  ]);
+  expect(barbersResponse.ok()).toBe(true);
+  expect(servicesResponse.ok()).toBe(true);
+
+  const barbers = await barbersResponse.json();
+  const services = await servicesResponse.json();
+  const defaultService = services[0];
+  expect(defaultService).toBeTruthy();
+
+  const visibleBarbers = barbers.filter((barber: any) => barber.isVisible !== false);
+  const testColors = ["#2DD4BF", "#F97316", "#A855F7"];
+  while (visibleBarbers.length < 3) {
+    const index = visibleBarbers.length;
+    const createBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Barbeiro Grupo ${index + 1}`,
+        specialty: "Teste de agenda",
+        color: testColors[index] || "#D4AF37",
+        isVisible: true,
+        serviceIds: [defaultService.id],
+      },
+    });
+    expect(createBarberResponse.ok()).toBe(true);
+    visibleBarbers.push(await createBarberResponse.json());
+  }
+
+  visibleBarbers.splice(3);
+  expect(visibleBarbers.length).toBeGreaterThanOrEqual(3);
+
+  for (const [index, barber] of visibleBarbers.entries()) {
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) ||
+      barber.serviceIds.length === 0 ||
+      barber.serviceIds.includes(item.id),
+    ) || services[0];
+
+    const createResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: currentWeekThursdayIso(11, 0),
+        name: `Grupo Agenda ${index + 1}`,
+        phone: `91269572${index}`,
+        isManualBooking: true,
+      },
+    });
+    expect(createResponse.ok()).toBe(true);
+  }
+}
+
 test.describe("public booking flow", () => {
   test("opens /booking and stays responsive on desktop and mobile", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -235,6 +291,32 @@ test.describe("admin navigation", () => {
     });
 
     expect(optimizedSize).toBeLessThanOrEqual(900 * 1024);
+  });
+
+  test("groups busy weekly slots with several barbers at the same time", async ({ page, request }) => {
+    await createConcurrentManualAppointmentsForCurrentWeek(request);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    const groupedSlot = page.getByRole("button", { name: "Ver 3 marcações às 11:00" });
+    await expect(groupedSlot).toBeVisible();
+    await expect(page.getByText("Grupo Agenda 1")).not.toBeVisible();
+
+    await groupedSlot.click();
+    const groupedDialog = page.getByRole("dialog");
+    await expect(groupedDialog.getByRole("heading", { name: "3 marcações às 11:00" })).toBeVisible();
+    await expect(groupedDialog.getByText("Grupo Agenda 1")).toBeVisible();
+    await expect(groupedDialog.getByText("Grupo Agenda 2")).toBeVisible();
+    await expect(groupedDialog.getByText("Grupo Agenda 3")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    await expect(page.getByText("11:00 · 3 marcações").first()).toBeVisible();
+    await expect(page.getByText("Grupo Agenda 1")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
   });
 });
 
