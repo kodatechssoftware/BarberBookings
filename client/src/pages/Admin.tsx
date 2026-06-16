@@ -904,8 +904,6 @@ export default function Admin() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [customerNotes, setCustomerNotes] = useState("");
   const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
-  const appointmentSignaturesRef = useRef<Set<string>>(new Set());
-  const hasHydratedAppointmentsRef = useRef(false);
 
   const handleAddBarber = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1359,38 +1357,6 @@ export default function Admin() {
   useEffect(() => {
     checkAuth();
   }, []);
-
-  useEffect(() => {
-    appointmentSignaturesRef.current = new Set();
-    hasHydratedAppointmentsRef.current = false;
-  }, [appointmentViewMode, selectedDateFilter, selectedBarberFilter, user?.role, user?.id]);
-
-  useEffect(() => {
-    if (!user?.authorized) return;
-
-    const list = appointmentList.filter((appointment) =>
-      ["booked", "cancelled", "late_cancelled"].includes(appointment.status),
-    );
-    const signatures = new Set(
-      list.map((appointment) => `${appointment.id}:${appointment.status}:${appointment.startTime}`),
-    );
-
-    if (hasHydratedAppointmentsRef.current) {
-      const changedItems = list.filter(
-        (appointment) => !appointmentSignaturesRef.current.has(`${appointment.id}:${appointment.status}:${appointment.startTime}`),
-      );
-      if (changedItems.length > 0) {
-        const appointment = changedItems[0];
-        toast({
-          title: "Painel atualizado",
-          description: `${getStatusLabel(appointment.status)}: ${appointment.customerName} às ${format(parseISO(appointment.startTime), "HH:mm")}.`,
-        });
-      }
-    }
-
-    appointmentSignaturesRef.current = signatures;
-    hasHydratedAppointmentsRef.current = true;
-  }, [appointmentList, toast, user?.authorized]);
 
   const isDayClosed = (date: Date) => {
     const day = date.getDay();
