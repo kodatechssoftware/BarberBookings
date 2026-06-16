@@ -1,10 +1,9 @@
-import { useMemo, useState, type DragEvent } from "react";
+import { useMemo, type DragEvent } from "react";
 import { addDays, format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
 import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { AppointmentStatus } from "@/hooks/use-appointments";
@@ -178,10 +177,6 @@ export function WeeklyAgenda({
   onSelectAppointment: (appointment: WeeklyAgendaAppointment) => void;
   getStatusLabel: (status: string) => string;
 }) {
-  const [selectedAgendaGroup, setSelectedAgendaGroup] = useState<{
-    slotKey: string;
-    appointments: WeeklyAgendaAppointment[];
-  } | null>(null);
   const calendarDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(weekStartDate, index)),
     [weekStartDate],
@@ -229,57 +224,6 @@ export function WeeklyAgenda({
   const visibleBarbers = (barbers || []).filter((barber) =>
     appointments.some((appointment) => appointment.barberId === barber.id),
   );
-
-  const renderAppointmentSummary = (
-    appointment: WeeklyAgendaAppointment,
-    compact = false,
-    onPick: (appointment: WeeklyAgendaAppointment) => void = onSelectAppointment,
-  ) => {
-    const start = parseISO(appointment.startTime);
-    const end = getWeeklyAppointmentEnd(appointment);
-    const barber = barbersById.get(appointment.barberId);
-    const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-    const color = normalizeBarberColor(barber?.color);
-    const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
-
-    return (
-      <button
-        key={appointment.id}
-        type="button"
-        draggable={appointment.status === "booked"}
-        aria-label={appointmentLabel}
-        title={appointmentLabel}
-        onDragStart={(event) => handleDragStart(event, appointment)}
-        onClick={() => onPick(appointment)}
-        className={cn(
-          "w-full rounded-lg border px-3 py-2 text-left transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-          appointment.status !== "booked" && "opacity-70",
-        )}
-        style={{
-          borderColor: colorWithAlpha(color, 0.55),
-          backgroundColor: colorWithAlpha(color, 0.13),
-        }}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-white">
-              {format(start, "HH:mm")} - {format(end, "HH:mm")}
-            </p>
-            <p className="mt-1 truncate text-sm font-semibold text-white">{appointment.customerName}</p>
-          </div>
-          <span className="shrink-0 rounded-full bg-background/60 px-2 py-0.5 text-[10px] uppercase text-gray-300">
-            {getStatusLabel(appointment.status)}
-          </span>
-        </div>
-        {!compact && (
-          <div className="mt-1 min-w-0 text-xs text-gray-300">
-            <p className="truncate">{service?.name || "Sem serviço"}</p>
-            <p className="truncate" style={{ color }}>{barber?.name || "Barbeiro"}</p>
-          </div>
-        )}
-      </button>
-    );
-  };
 
   const renderMobileAppointmentRow = (appointment: WeeklyAgendaAppointment) => {
     const start = parseISO(appointment.startTime);
@@ -466,8 +410,8 @@ export function WeeklyAgenda({
             </div>
 
             <div className="hidden overflow-x-auto lg:block">
-              <div className="min-w-[1040px]">
-                <div className="grid grid-cols-[64px_repeat(7,minmax(130px,1fr))]">
+              <div className="min-w-[1420px]">
+                <div className="grid grid-cols-[64px_repeat(7,minmax(190px,1fr))]">
                   <div />
                   {calendarDays.map((day) => (
                     <div key={getDateKey(day)} className="border-b border-white/10 px-3 pb-3 text-center">
@@ -476,7 +420,7 @@ export function WeeklyAgenda({
                     </div>
                   ))}
                 </div>
-                <div className="grid grid-cols-[64px_repeat(7,minmax(130px,1fr))] overflow-hidden rounded-xl border border-white/10 bg-background/40">
+                <div className="grid grid-cols-[64px_repeat(7,minmax(190px,1fr))] overflow-hidden rounded-xl border border-white/10 bg-background/40">
                   <div className="relative border-r border-white/10 bg-background/80" style={{ height: weeklyAgendaHeight }}>
                     {weeklyAgendaHours.slice(0, -1).map((hour) => (
                       <span
@@ -492,10 +436,6 @@ export function WeeklyAgenda({
                   {calendarDays.map((day) => {
                     const key = getDateKey(day);
                     const dayAppointments = (appointmentsByDay.get(key) || []).filter(isAppointmentVisibleOnGrid);
-                    const groupedSlots = groupAppointmentsByStart(dayAppointments);
-                    const crowdedGroups = groupedSlots.filter((group) => group.appointments.length >= 3);
-                    const crowdedAppointmentIds = new Set(crowdedGroups.flatMap((group) => group.appointments.map((appointment) => appointment.id)));
-                    const visibleSingleAppointments = dayAppointments.filter((appointment) => !crowdedAppointmentIds.has(appointment.id));
 
                     return (
                       <div key={key} className="relative border-r border-white/10 last:border-r-0" style={{ height: weeklyAgendaHeight }}>
@@ -526,59 +466,7 @@ export function WeeklyAgenda({
                             />
                           );
                         })}
-                        {crowdedGroups.map((group) => {
-                          const start = parseISO(group.appointments[0].startTime);
-                          const maxEnd = group.appointments.reduce((latest, appointment) => {
-                            const end = getWeeklyAppointmentEnd(appointment);
-                            return end.getTime() > latest.getTime() ? end : latest;
-                          }, getWeeklyAppointmentEnd(group.appointments[0]));
-                          const startMinutes = Math.max(
-                            weeklyAgendaStartHour * 60,
-                            getAgendaMinutes(start),
-                          );
-                          const endMinutes = Math.min(
-                            weeklyAgendaEndHour * 60,
-                            getAgendaMinutes(maxEnd),
-                          );
-                          const top = (startMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute + 4;
-                          const height = Math.max(52, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
-                          const groupLabel = `Ver ${group.appointments.length} marcações às ${group.slotKey}`;
-                          const barberNames = group.appointments
-                            .map((appointment) => barbersById.get(appointment.barberId)?.name || "Barbeiro")
-                            .filter((name, index, names) => names.indexOf(name) === index);
-
-                          return (
-                            <button
-                              key={`group-${key}-${group.slotKey}`}
-                              type="button"
-                              aria-label={groupLabel}
-                              title={groupLabel}
-                              onClick={() => setSelectedAgendaGroup(group)}
-                              className="absolute left-1 right-1 z-10 overflow-hidden rounded-lg border border-primary/60 bg-primary/15 px-2 py-1.5 text-left shadow-sm shadow-primary/10 transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                              style={{ top, height }}
-                            >
-                              <span className="block text-[11px] font-bold text-white">
-                                {group.slotKey} · {group.appointments.length} marcações
-                              </span>
-                              <span className="mt-1 flex items-center gap-1">
-                                {group.appointments.slice(0, 5).map((appointment) => {
-                                  const barber = barbersById.get(appointment.barberId);
-                                  return (
-                                    <span
-                                      key={appointment.id}
-                                      className="h-2.5 w-2.5 rounded-full border border-background"
-                                      style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
-                                    />
-                                  );
-                                })}
-                              </span>
-                              <span className="mt-1 block truncate text-[11px] text-gray-300">
-                                {barberNames.join(", ")}
-                              </span>
-                            </button>
-                          );
-                        })}
-                        {visibleSingleAppointments.map((appointment) => {
+                        {dayAppointments.map((appointment) => {
                           const start = parseISO(appointment.startTime);
                           const end = getWeeklyAppointmentEnd(appointment);
                           const startMinutes = Math.max(
@@ -592,12 +480,14 @@ export function WeeklyAgenda({
                           const top = (startMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute + 4;
                           const height = Math.max(44, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
                           const slotKey = getAppointmentStartSlotKey(appointment);
-                          const sameSlot = visibleSingleAppointments.filter((item) => getAppointmentStartSlotKey(item) === slotKey);
+                          const sameSlot = dayAppointments.filter((item) => getAppointmentStartSlotKey(item) === slotKey);
                           const laneIndex = Math.max(0, sameSlot.findIndex((item) => item.id === appointment.id));
                           const laneWidth = 100 / Math.max(1, sameSlot.length);
                           const barber = barbersById.get(appointment.barberId);
                           const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                           const color = normalizeBarberColor(barber?.color);
+                          const isSharedSlot = sameSlot.length > 1;
+                          const isCrowdedSlot = sameSlot.length >= 3;
                           const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
                           return (
@@ -610,7 +500,8 @@ export function WeeklyAgenda({
                               onDragStart={(event) => handleDragStart(event, appointment)}
                               onClick={() => onSelectAppointment(appointment)}
                               className={cn(
-                                "absolute z-10 overflow-hidden rounded-lg border px-2 py-1.5 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                                "absolute z-10 overflow-hidden rounded-lg border text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                                isCrowdedSlot ? "px-1.5 py-1" : "px-2 py-1.5",
                                 appointment.status !== "booked" && "opacity-70",
                               )}
                               style={{
@@ -623,12 +514,12 @@ export function WeeklyAgenda({
                                 boxShadow: `0 12px 24px ${colorWithAlpha(color, 0.12)}`,
                               }}
                             >
-                              <span className="block text-[11px] font-bold text-white">
-                                {format(start, "HH:mm")} - {format(end, "HH:mm")}
-                              </span>
-                              <span className="block truncate text-xs font-semibold text-white">{appointment.customerName}</span>
+                              <span className={cn("block truncate font-semibold text-white", isCrowdedSlot ? "text-[11px]" : "text-xs")}>{appointment.customerName}</span>
                               <span className="block truncate text-[11px] text-gray-300">{service?.name || "Sem serviço"}</span>
                               <span className="block truncate text-[11px]" style={{ color }}>{barber?.name || "Barbeiro"}</span>
+                              {!isSharedSlot && appointment.customerPhone && (
+                                <span className="block truncate text-[10px] text-gray-500">{appointment.customerPhone}</span>
+                              )}
                             </button>
                           );
                         })}
@@ -647,33 +538,6 @@ export function WeeklyAgenda({
         )}
       </CardContent>
     </Card>
-    <Dialog
-      open={Boolean(selectedAgendaGroup)}
-      onOpenChange={(open) => {
-        if (!open) setSelectedAgendaGroup(null);
-      }}
-    >
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>
-            {selectedAgendaGroup
-              ? `${selectedAgendaGroup.appointments.length} marcações às ${selectedAgendaGroup.slotKey}`
-              : "Marcações"}
-          </DialogTitle>
-          <DialogDescription>
-            Escolha uma marcação para ver os detalhes completos.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2">
-          {selectedAgendaGroup?.appointments.map((appointment) =>
-            renderAppointmentSummary(appointment, false, (selectedAppointment) => {
-              setSelectedAgendaGroup(null);
-              onSelectAppointment(selectedAppointment);
-            }),
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
     </>
   );
 }

@@ -414,23 +414,31 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const groupedSlot = page.getByRole("button", { name: "Ver 3 marcações às 11:00" });
-    await expect(groupedSlot).toBeVisible();
-    await expect(page.getByText("Grupo Agenda 1")).not.toBeVisible();
+    const firstConcurrent = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Grupo Agenda 1/,
+    }).first();
+    const secondConcurrent = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Grupo Agenda 2/,
+    }).first();
+    const thirdConcurrent = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Grupo Agenda 3/,
+    }).first();
 
-    await groupedSlot.click();
-    const groupedDialog = page.getByRole("dialog");
-    await expect(groupedDialog.getByRole("heading", { name: "3 marcações às 11:00" })).toBeVisible();
-    await expect(groupedDialog.getByText("Grupo Agenda 1")).toBeVisible();
-    await expect(groupedDialog.getByText("Grupo Agenda 2")).toBeVisible();
-    await expect(groupedDialog.getByText("Grupo Agenda 3")).toBeVisible();
+    await expect(firstConcurrent).toBeVisible();
+    await expect(secondConcurrent).toBeVisible();
+    await expect(thirdConcurrent).toBeVisible();
+    await expect(page.getByRole("button", { name: "Ver 3 marcações às 11:00" })).toHaveCount(0);
+
+    await firstConcurrent.click();
+    const appointmentDialog = page.getByRole("dialog");
+    await expect(appointmentDialog.getByRole("heading", { name: "Grupo Agenda 1" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await expect(page.getByText("11:00 · 3 marcações").first()).toBeVisible();
-    await expect(page.getByText("Grupo Agenda 1")).toBeVisible();
+    await expect(page.getByText("Grupo Agenda 1").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 });
