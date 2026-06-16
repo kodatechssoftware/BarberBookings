@@ -57,7 +57,10 @@ function dateKeyFromIso(isoDate: string) {
   return isoDate.slice(0, 10);
 }
 
-async function createManualAppointmentForCurrentWeek(request: APIRequestContext) {
+async function createManualAppointmentForCurrentWeek(
+  request: APIRequestContext,
+  options: { name?: string; phone?: string; hour?: number; minute?: number } = {},
+) {
   await loginAdminRequest(request);
 
   const [barbersResponse, servicesResponse] = await Promise.all([
@@ -74,13 +77,13 @@ async function createManualAppointmentForCurrentWeek(request: APIRequestContext)
     data: {
       barberId: barber.id,
       serviceId: service.id,
-      startTime: currentWeekThursdayIso(10, 0),
-      name: "Agenda Click QA",
-      phone: "912695705",
+      startTime: currentWeekThursdayIso(options.hour ?? 10, options.minute ?? 0),
+      name: options.name || "Agenda Click QA",
+      phone: options.phone || "912695705",
       isManualBooking: true,
     },
   });
-  expect(createResponse.ok()).toBe(true);
+  expect(createResponse.ok(), await createResponse.text()).toBe(true);
 }
 
 async function createExportAppointment(
@@ -348,6 +351,50 @@ test.describe("admin navigation", () => {
     }
   });
 
+  test("keeps the admin dashboard usable on mobile and saves internal notes", async ({ page, request }) => {
+    await createManualAppointmentForCurrentWeek(request, {
+      name: "Notas Internas QA",
+      phone: "912695706",
+      hour: 14,
+      minute: 30,
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginAdmin(page);
+
+    await expect(page.getByText("Resumo do dia")).toBeVisible();
+    await expect(page.getByText("Dashboard simples")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    const appointmentButton = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Notas Internas QA/,
+    }).first();
+    await expect(appointmentButton).toBeVisible();
+    await appointmentButton.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Notas internas", { exact: true })).toBeVisible();
+    const notesInput = dialog.locator("textarea").last();
+    await expect(notesInput).toBeEnabled();
+
+    const noteText = "Prefere máquina 0.5 e gosta da barba curta.";
+    await notesInput.fill(noteText);
+    await dialog.getByRole("button", { name: "Guardar notas" }).click();
+    await expect(page.getByText("As notas internas do cliente foram atualizadas.").first()).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.reload();
+    await expect(page.getByText("Resumo do dia")).toBeVisible();
+
+    const reloadedAppointmentButton = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Notas Internas QA/,
+    }).first();
+    await expect(reloadedAppointmentButton).toBeVisible();
+    await reloadedAppointmentButton.click();
+    await expect(page.getByRole("dialog").locator("textarea").last()).toHaveValue(noteText);
+    await expectNoHorizontalOverflow(page);
+  });
+
   test("reduces large barber photos before saving them", async ({ page }) => {
     await loginAdmin(page);
 
@@ -600,7 +647,8 @@ test.describe("booking rules", () => {
 
     const [barber] = await barbersResponse.json();
     const [service] = await servicesResponse.json();
-    const startTime = currentWeekThursdayIso(15, 0);
+    const uniqueWeeksAhead = 12 + (Math.floor(Date.now() / 1000) % 20);
+    const startTime = futureThursdayIso(uniqueWeeksAhead, 15, 0);
 
     const bookingPayload = {
       barberId: barber.id,

@@ -1,10 +1,10 @@
-import { lazy, Suspense, useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
 import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
 import { addDays, format, parseISO, startOfToday, startOfWeek, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, UserCheck, Upload, Trash2 } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -157,6 +157,30 @@ function formatCents(value: number) {
   return currencyFormatter.format((value || 0) / 100);
 }
 
+function isOperationalAdminAppointment(appointment: AdminAppointment) {
+  const name = appointment.customerName.trim().toUpperCase();
+  return ![
+    "BLOQUEIO MANUAL",
+    "AUSÊNCIA",
+    "AUSENCIA",
+    "FÉRIAS",
+    "FERIAS",
+  ].some((marker) => name.includes(marker)) && !name.startsWith("RECORRENTE:");
+}
+
+function getAdminAppointmentEnd(appointment: AdminAppointment) {
+  const start = parseISO(appointment.startTime);
+  return new Date(start.getTime() + Math.max(15, appointment.durationMinutes || 30) * 60000);
+}
+
+function getAppointmentServicePriceCents(
+  appointment: AdminAppointment,
+  services?: Array<{ id: number; price?: number | null }>,
+) {
+  if (!appointment.serviceId) return 0;
+  return services?.find((service) => service.id === appointment.serviceId)?.price || 0;
+}
+
 function formatAuditTimestamp(value: string) {
   const date = parseISO(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -196,30 +220,7 @@ function getAuditActorLabel(log: AuditLogItem) {
   return log.actorName || "Sistema";
 }
 
-const DashboardChartCard = lazy(() => import("@/components/admin/DashboardChartCard"));
 const adminTabTriggerClass = "h-10 shrink-0 gap-2 whitespace-nowrap px-3 text-white data-[state=active]:text-primary";
-
-function DashboardChartFallback({
-  title,
-  heightClassName,
-  description,
-}: {
-  title: string;
-  heightClassName: string;
-  description?: string;
-}) {
-  return (
-    <Card className="border-white/10 bg-card text-white">
-      <CardHeader>
-        <CardTitle className="text-base font-bold">{title}</CardTitle>
-        {description && <p className="text-sm text-gray-400">{description}</p>}
-      </CardHeader>
-      <CardContent>
-        <div className={`${heightClassName} w-full animate-pulse rounded-lg bg-white/5`} />
-      </CardContent>
-    </Card>
-  );
-}
 
 function AuditLogPanel({
   logs,
@@ -291,6 +292,184 @@ function AuditLogPanel({
           )}
         </CardContent>
       )}
+    </Card>
+  );
+}
+
+type TodaySummary = {
+  total: number;
+  delayed: number;
+  probableNoShows: number;
+  projectedRevenueCents: number;
+  nextAppointment: AdminAppointment | null;
+};
+
+function TodayOverviewPanel({
+  summary,
+  getBarberName,
+  getServiceName,
+}: {
+  summary: TodaySummary;
+  getBarberName: (id: number) => string;
+  getServiceName: (id?: number | null) => string;
+}) {
+  const next = summary.nextAppointment;
+  const nextStart = next ? parseISO(next.startTime) : null;
+
+  return (
+    <Card className="border-white/10 bg-card text-white">
+      <CardHeader className="pb-3">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-widest text-primary">Hoje</p>
+            <CardTitle className="text-xl font-bold">Resumo do dia</CardTitle>
+          </div>
+          <p className="text-sm text-gray-400">{format(startOfToday(), "dd 'de' MMMM", { locale: pt })}</p>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-3 md:grid-cols-[1.4fr_repeat(4,minmax(0,1fr))]">
+        <div className="rounded-xl border border-white/10 bg-background/60 p-3">
+          <p className="text-xs uppercase tracking-widest text-gray-500">Próxima marcação</p>
+          {next && nextStart ? (
+            <div className="mt-2 min-w-0">
+              <p className="truncate text-lg font-bold text-white">{next.customerName}</p>
+              <p className="mt-1 text-sm text-primary">{format(nextStart, "HH:mm")} · {getServiceName(next.serviceId)}</p>
+              <p className="mt-1 truncate text-xs text-gray-400">{getBarberName(next.barberId)}</p>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm font-semibold text-gray-400">Sem próximas marcações hoje</p>
+          )}
+        </div>
+        {[
+          { label: "Total do dia", value: String(summary.total), tone: "text-white" },
+          { label: "Atrasadas", value: String(summary.delayed), tone: summary.delayed ? "text-orange-300" : "text-gray-300" },
+          { label: "Faltas prováveis", value: String(summary.probableNoShows), tone: summary.probableNoShows ? "text-rose-300" : "text-gray-300" },
+          { label: "Receita prevista", value: formatCents(summary.projectedRevenueCents), tone: "text-primary" },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl border border-white/10 bg-background/60 p-3">
+            <p className="text-xs uppercase tracking-widest text-gray-500">{item.label}</p>
+            <p className={cn("mt-2 text-xl font-bold", item.tone)}>{item.value}</p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
+  const busiestBarber = [...data.barbers].sort((a, b) => b.appointments - a.appointments)[0];
+  const topServices = data.services.slice(0, 5);
+  const noShowsByMonth = Array.from(
+    data.daily.reduce((map, day) => {
+      const monthKey = day.date.slice(0, 7);
+      const current = map.get(monthKey) || 0;
+      map.set(monthKey, current + day.noShows);
+      return map;
+    }, new Map<string, number>()),
+  ).map(([month, noShows]) => ({
+    month,
+    label: format(parseISO(`${month}-01`), "MMM yyyy", { locale: pt }),
+    noShows,
+  }));
+
+  return (
+    <Card className="border-white/10 bg-card text-white">
+      <CardHeader>
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <CardTitle className="text-xl font-bold">Dashboard simples</CardTitle>
+            <p className="mt-1 text-sm text-gray-400">Receita, procura e faltas sem ruído.</p>
+          </div>
+          <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
+            Últimos {data.range.days} dias
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+            <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
+              <Euro className="h-4 w-4 text-green-300" /> Receita concluída
+            </p>
+            <p className="mt-2 text-2xl font-bold text-white">{formatCents(data.summary.revenueCents)}</p>
+            <p className="mt-1 text-xs text-gray-400">{data.summary.completed} serviços concluídos</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+            <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
+              <TrendingUp className="h-4 w-4 text-primary" /> Receita prevista
+            </p>
+            <p className="mt-2 text-2xl font-bold text-primary">{formatCents(data.summary.projectedRevenueCents)}</p>
+            <p className="mt-1 text-xs text-gray-400">{data.summary.booked} marcações ativas</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+            <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
+              <Users className="h-4 w-4 text-blue-300" /> Barbeiro mais ocupado
+            </p>
+            <p className="mt-2 truncate text-xl font-bold text-white">{busiestBarber?.name || "Sem dados"}</p>
+            <p className="mt-1 text-xs text-gray-400">{busiestBarber ? `${busiestBarber.appointments} marcações` : "Ainda sem marcações"}</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+            <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
+              <AlertTriangle className="h-4 w-4 text-rose-300" /> Faltas no período
+            </p>
+            <p className="mt-2 text-2xl font-bold text-rose-300">{data.summary.noShows}</p>
+            <p className="mt-1 text-xs text-gray-400">{data.summary.noShowRate}% de risco registado</p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+          <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+            <div className="mb-4 flex items-center gap-2">
+              <Scissors className="h-4 w-4 text-primary" />
+              <h3 className="font-semibold text-white">Serviços mais pedidos</h3>
+            </div>
+            {topServices.length === 0 ? (
+              <p className="py-6 text-center text-sm text-gray-500">Sem dados neste período.</p>
+            ) : (
+              <div className="space-y-3">
+                {topServices.map((service) => {
+                  const maxCount = Math.max(...topServices.map((item) => item.count), 1);
+                  return (
+                    <div key={service.id} className="space-y-2">
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="min-w-0 truncate font-medium text-white">{service.name}</span>
+                        <span className="shrink-0 text-gray-400">{service.count} marcações</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.max(8, (service.count / maxCount) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+            <div className="mb-4 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-300" />
+              <h3 className="font-semibold text-white">Faltas por mês</h3>
+            </div>
+            {noShowsByMonth.length === 0 ? (
+              <p className="py-6 text-center text-sm text-gray-500">Sem dados neste período.</p>
+            ) : (
+              <div className="space-y-2">
+                {noShowsByMonth.map((item) => (
+                  <div key={item.month} className="flex items-center justify-between rounded-lg border border-white/10 bg-card px-3 py-2">
+                    <span className="text-sm text-gray-300">{item.label}</span>
+                    <span className={cn("text-sm font-bold", item.noShows ? "text-rose-300" : "text-gray-500")}>
+                      {item.noShows}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
     </Card>
   );
 }
@@ -864,6 +1043,31 @@ export default function Admin() {
       return matchesBarber && matchesStatus;
     });
   }, [selectedBarberFilter, selectedStatusFilter, user?.role, weeklyAppointmentList]);
+  const todaySummary = useMemo<TodaySummary>(() => {
+    const now = new Date();
+    const todayKey = format(startOfToday(), "yyyy-MM-dd");
+    const todayAppointments = weeklyAppointmentList.filter((appointment) => {
+      const matchesDay = format(parseISO(appointment.startTime), "yyyy-MM-dd") === todayKey;
+      const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
+      return matchesDay && matchesBarber && isOperationalAdminAppointment(appointment);
+    });
+    const bookedToday = todayAppointments.filter((appointment) => appointment.status === "booked");
+    const nextAppointment = bookedToday.find((appointment) => parseISO(appointment.startTime).getTime() >= now.getTime()) || null;
+
+    return {
+      total: todayAppointments.length,
+      delayed: bookedToday.filter((appointment) => {
+        const start = parseISO(appointment.startTime);
+        const end = getAdminAppointmentEnd(appointment);
+        return start < now && end >= now;
+      }).length,
+      probableNoShows: bookedToday.filter((appointment) => getAdminAppointmentEnd(appointment) < now).length,
+      projectedRevenueCents: todayAppointments
+        .filter((appointment) => appointment.status === "booked" || appointment.status === "completed")
+        .reduce((total, appointment) => total + getAppointmentServicePriceCents(appointment, services), 0),
+      nextAppointment,
+    };
+  }, [selectedBarberFilter, services, user?.role, weeklyAppointmentList]);
   const selectedAppointmentDetails = useMemo(() => {
     if (!selectedAppointment) return null;
     const candidates = [...weeklyAppointmentList, ...appointmentList];
@@ -1666,6 +1870,12 @@ export default function Admin() {
           </TabsList>
 
           <TabsContent value="dashboard" className="space-y-6 outline-none">
+            <TodayOverviewPanel
+              summary={todaySummary}
+              getBarberName={getBarberName}
+              getServiceName={getServiceName}
+            />
+
             <WeeklyAgenda
               weekStartDate={weeklyStartDate}
               appointments={filteredWeeklyAppointmentList}
@@ -1732,156 +1942,12 @@ export default function Admin() {
 
             {isLoadingDashboard || !dashboardData ? (
               <Card className="border-white/10 bg-card text-white">
-                <CardContent className="flex min-h-[320px] items-center justify-center">
+                <CardContent className="flex min-h-[260px] items-center justify-center">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 </CardContent>
               </Card>
             ) : (
-              <>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  {[
-                    {
-                      label: "Receita concluída",
-                      value: formatCents(dashboardData.summary.revenueCents),
-                      detail: `${dashboardData.summary.completed} serviços concluídos`,
-                      icon: Euro,
-                      tone: "text-green-300",
-                    },
-                    {
-                      label: "Receita em agenda",
-                      value: formatCents(dashboardData.summary.projectedRevenueCents),
-                      detail: `${dashboardData.summary.booked} marcações ativas`,
-                      icon: TrendingUp,
-                      tone: "text-primary",
-                    },
-                    {
-                      label: "Taxa de conclusão",
-                      value: `${dashboardData.summary.completionRate}%`,
-                      detail: `${dashboardData.summary.appointments} marcações no período`,
-                      icon: UserCheck,
-                      tone: "text-blue-300",
-                    },
-                    {
-                      label: "Risco operacional",
-                      value: `${dashboardData.summary.noShowRate}%`,
-                      detail: `${dashboardData.summary.noShows} faltas · ${dashboardData.summary.cancellations} cancelamentos`,
-                      icon: AlertTriangle,
-                      tone: "text-rose-300",
-                    },
-                  ].map((metric) => (
-                    <Card key={metric.label} className="border-white/10 bg-card text-white">
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-widest text-gray-500">{metric.label}</p>
-                            <p className="mt-2 text-2xl font-bold">{metric.value}</p>
-                          </div>
-                          <metric.icon className={cn("mt-1 h-5 w-5", metric.tone)} />
-                        </div>
-                        <p className="mt-3 text-xs text-gray-400">{metric.detail}</p>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_1fr]">
-                  <Suspense
-                    fallback={
-                      <DashboardChartFallback
-                        title="Evolução diária"
-                        description="Marcações, serviços concluídos e receita por dia."
-                        heightClassName="h-[280px]"
-                      />
-                    }
-                  >
-                    <DashboardChartCard variant="daily" daily={dashboardData.daily} formatCents={formatCents} />
-                  </Suspense>
-
-                  <Card className="border-white/10 bg-card text-white">
-                    <CardHeader>
-                      <CardTitle className="text-base font-bold">Sinais rápidos</CardTitle>
-                      <p className="text-sm text-gray-400">Pontos que merecem ação nos próximos dias.</p>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="rounded-lg border border-white/10 bg-background/60 p-3">
-                        <p className="text-xs text-gray-500">Próximos 7 dias</p>
-                        <p className="mt-1 text-xl font-bold">{dashboardData.summary.upcomingWeek} marcações</p>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-background/60 p-3">
-                        <p className="text-xs text-gray-500">Ticket médio concluído</p>
-                        <p className="mt-1 text-xl font-bold">{formatCents(dashboardData.summary.averageTicketCents)}</p>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-background/60 p-3">
-                        <p className="text-xs text-gray-500">Hora com mais procura</p>
-                        <p className="mt-1 text-xl font-bold">{dashboardData.summary.busiestHour || "Sem dados"}</p>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-background/60 p-3">
-                        <p className="text-xs text-gray-500">Clientes a recuperar</p>
-                        <p className="mt-1 text-xl font-bold">{dashboardData.summary.inactiveCustomers}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                  <Suspense fallback={<DashboardChartFallback title="Desempenho por barbeiro" heightClassName="h-[260px]" />}>
-                    <DashboardChartCard variant="barbers" barbers={dashboardData.barbers} formatCents={formatCents} />
-                  </Suspense>
-
-                  <Card className="border-white/10 bg-card text-white">
-                    <CardHeader>
-                      <CardTitle className="text-base font-bold">Serviços com mais procura</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {dashboardData.services.length === 0 ? (
-                        <p className="py-8 text-center text-sm text-gray-500">Sem dados neste período.</p>
-                      ) : (
-                        dashboardData.services.map((service) => {
-                          const maxCount = Math.max(...dashboardData.services.map((item) => item.count), 1);
-                          return (
-                            <div key={service.id} className="space-y-2">
-                              <div className="flex items-center justify-between gap-3 text-sm">
-                                <span className="font-medium text-white">{service.name}</span>
-                                <span className="text-gray-400">{service.count} marcações · {formatCents(service.revenueCents)}</span>
-                              </div>
-                              <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                                <div
-                                  className="h-full rounded-full bg-primary"
-                                  style={{ width: `${Math.max(8, (service.count / maxCount) * 100)}%` }}
-                                />
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <Card className="border-white/10 bg-card text-white">
-                  <CardHeader>
-                    <CardTitle className="text-base font-bold">Clientes que podem voltar</CardTitle>
-                    <p className="text-sm text-gray-400">Clientes concluídos sem nova marcação há mais de 45 dias.</p>
-                  </CardHeader>
-                  <CardContent>
-                    {dashboardData.inactiveCustomers.length === 0 ? (
-                      <p className="py-6 text-center text-sm text-gray-500">Sem clientes inativos para este filtro.</p>
-                    ) : (
-                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {dashboardData.inactiveCustomers.map((customer) => (
-                          <div key={`${customer.phone}-${customer.email}`} className="rounded-lg border border-white/10 bg-background/60 p-3">
-                            <p className="font-semibold text-white">{customer.name || "Cliente"}</p>
-                            <p className="mt-1 text-xs text-gray-400">{customer.phone || customer.email}</p>
-                            <p className="mt-3 text-xs text-gray-500">
-                              Última visita há {customer.daysSinceLastVisit} dias · {customer.totalVisits} visitas
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </>
+              <SimpleBusinessDashboard data={dashboardData} />
             )}
           </TabsContent>
 

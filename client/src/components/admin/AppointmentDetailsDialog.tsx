@@ -19,10 +19,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { canBarberPerformService } from "@/lib/availability";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiFetch } from "@/lib/api";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
 
 type AdminAppointment = {
@@ -261,6 +263,68 @@ export function AppointmentDetailsDialog({
   onStatusChange: (appointmentId: number, status: AppointmentStatus) => void;
   onBlockCustomer: (appointment: AdminAppointment) => Promise<void>;
 }) {
+  const [customerNotes, setCustomerNotes] = useState("");
+  const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
+  const [isLoadingCustomerNotes, setIsLoadingCustomerNotes] = useState(false);
+  const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
+
+  useEffect(() => {
+    if (!open || !appointment?.customerPhone) return;
+
+    let isMounted = true;
+    const loadCustomerNotes = async () => {
+      setIsLoadingCustomerNotes(true);
+      try {
+        const params = new URLSearchParams();
+        if (appointment.customerEmail) params.set("email", appointment.customerEmail);
+        if (appointment.customerName) params.set("name", appointment.customerName);
+        const query = params.toString() ? `?${params.toString()}` : "";
+        const res = await apiFetch(`/api/admin/customers/${encodeURIComponent(appointment.customerPhone)}/history${query}`);
+        if (!res.ok) throw new Error("Não foi possível carregar as notas.");
+        const data = await res.json();
+        if (!isMounted) return;
+        setCustomerNotes(data.notes?.notes || "");
+        setCustomerNotesUpdatedAt(data.notes?.updatedAt || null);
+      } catch {
+        if (!isMounted) return;
+        setCustomerNotes("");
+        setCustomerNotesUpdatedAt(null);
+      } finally {
+        if (isMounted) setIsLoadingCustomerNotes(false);
+      }
+    };
+
+    loadCustomerNotes();
+    return () => {
+      isMounted = false;
+    };
+  }, [appointment?.customerEmail, appointment?.customerName, appointment?.customerPhone, open]);
+
+  const handleSaveCustomerNotes = async () => {
+    if (!appointment?.customerPhone) return;
+    setIsSavingCustomerNotes(true);
+    try {
+      const res = await apiRequest("PATCH", `/api/admin/customers/${encodeURIComponent(appointment.customerPhone)}/notes`, {
+        customerName: appointment.customerName || "",
+        email: appointment.customerEmail || "",
+        notes: customerNotes,
+      });
+      const savedNote = await res.json();
+      setCustomerNotes(savedNote.notes || "");
+      setCustomerNotesUpdatedAt(savedNote.updatedAt || null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      toast({ title: "Notas guardadas", description: "As notas internas do cliente foram atualizadas." });
+    } catch (err: any) {
+      toast({
+        title: "Erro",
+        description: err.message || "Não foi possível guardar as notas.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingCustomerNotes(false);
+    }
+  };
+
   if (!appointment) {
     return <Dialog open={open} onOpenChange={onOpenChange} />;
   }
@@ -317,6 +381,45 @@ export function AppointmentDetailsDialog({
                 Depósito recomendado: {appointment.depositReason || "regra operacional"}
               </p>
             )}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-background/50 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <Label className="text-sm font-semibold text-white">Notas internas</Label>
+                <p className="mt-1 text-xs text-gray-400">
+                  Preferências, atrasos habituais, alergias ou detalhes importantes do cliente.
+                </p>
+              </div>
+              {customerNotesUpdatedAt && (
+                <span className="text-[11px] text-gray-500">
+                  {format(parseISO(customerNotesUpdatedAt), "dd/MM HH:mm")}
+                </span>
+              )}
+            </div>
+            <Textarea
+              value={customerNotes}
+              onChange={(event) => setCustomerNotes(event.target.value)}
+              maxLength={1200}
+              disabled={isLoadingCustomerNotes}
+              placeholder="Ex.: prefere máquina 0.5, costuma atrasar 10 min, quer sempre barba curta."
+              className="mt-3 min-h-[96px] resize-y border-white/10 bg-card text-white placeholder:text-gray-600"
+            />
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-xs text-gray-500">
+                {isLoadingCustomerNotes ? "A carregar notas..." : `${customerNotes.length}/1200`}
+              </span>
+              <Button
+                type="button"
+                variant="gold"
+                size="sm"
+                onClick={handleSaveCustomerNotes}
+                disabled={isLoadingCustomerNotes || isSavingCustomerNotes}
+                className="w-full sm:w-auto"
+              >
+                {isSavingCustomerNotes ? "A guardar..." : "Guardar notas"}
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
