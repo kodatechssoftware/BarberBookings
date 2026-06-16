@@ -528,6 +528,9 @@ export function WeeklyAgenda({
                             const color = normalizeBarberColor(barber?.color);
                             const isSharedSlot = sameSlot.length > 1;
                             const isCrowdedSlot = sameSlot.length >= 3;
+                            const isCompactCard = isCrowdedSlot || height < 56;
+                            const canShowServiceName = !isCompactCard || height >= 58;
+                            const canShowPhone = !isSharedSlot && height >= 74;
                             const serviceBadge = getServiceBadge(service?.name);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
@@ -542,7 +545,7 @@ export function WeeklyAgenda({
                                 onClick={() => onSelectAppointment(appointment)}
                                 className={cn(
                                   "absolute z-10 overflow-hidden rounded-lg border text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-                                  isCrowdedSlot ? "px-1.5 py-1" : "px-2 py-1.5",
+                                  isCompactCard ? "flex flex-col justify-center gap-0.5 px-1.5 py-1" : "px-2 py-1.5",
                                   appointment.status !== "booked" && "opacity-70",
                                 )}
                                 style={{
@@ -555,17 +558,29 @@ export function WeeklyAgenda({
                                   boxShadow: `0 12px 24px ${colorWithAlpha(color, 0.12)}`,
                                 }}
                               >
-                                <span className="inline-flex h-5 max-w-full items-center gap-1 rounded-full border border-white/10 bg-black/15 px-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-100">
-                                  <Scissors className="h-3 w-3 shrink-0" />
+                                <span
+                                  className={cn(
+                                    "inline-flex max-w-full items-center rounded-full border border-white/10 bg-black/15 font-semibold uppercase text-gray-100",
+                                    isCompactCard ? "h-4 gap-0.5 px-1 text-[8px]" : "h-5 gap-1 px-1.5 text-[10px]",
+                                  )}
+                                >
+                                  <Scissors className={cn("shrink-0", isCompactCard ? "h-2.5 w-2.5" : "h-3 w-3")} />
                                   <span className="truncate">{serviceBadge}</span>
                                 </span>
-                                <span className={cn("mt-1 block truncate font-semibold text-white", isCrowdedSlot ? "text-[11px]" : "text-xs")}>
+                                <span
+                                  className={cn(
+                                    "block truncate font-semibold leading-tight text-white",
+                                    isCompactCard ? "text-[11px]" : "mt-1 text-xs",
+                                  )}
+                                >
                                   {appointment.customerName}
                                 </span>
-                                <span className={cn("block truncate text-gray-100/90", isCrowdedSlot ? "text-[10px]" : "text-[11px]")}>
-                                  {service?.name || "Sem serviço"}
-                                </span>
-                                {!isSharedSlot && appointment.customerPhone && (
+                                {canShowServiceName && (
+                                  <span className="block truncate text-[11px] leading-tight text-gray-100/90">
+                                    {service?.name || "Sem serviço"}
+                                  </span>
+                                )}
+                                {canShowPhone && appointment.customerPhone && (
                                   <span className="block truncate text-[10px] text-gray-500">{appointment.customerPhone}</span>
                                 )}
                               </button>
