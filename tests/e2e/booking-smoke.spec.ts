@@ -197,6 +197,8 @@ test.describe("public booking flow", () => {
     await expect(phoneInput).toHaveValue("910000000");
     await phoneInput.fill("abc912-695-704");
     await expect(phoneInput).toHaveValue("912695704");
+    await phoneInput.fill("9126957000000000");
+    await expect(phoneInput).toHaveValue("912695700");
 
     await page.getByPlaceholder("O seu nome").fill("Pedro Faria");
     await phoneInput.fill("123");

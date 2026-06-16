@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, type ChangeEvent } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -364,6 +364,11 @@ export default function Booking() {
   const showCustomerError = (field: CustomerField) => customerTouched[field] && Boolean(customerFieldErrors[field]);
   const markCustomerTouched = (field: CustomerField) => {
     setCustomerTouched((current) => ({ ...current, [field]: true }));
+  };
+  const handleCustomerPhoneChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const phone = formatPhoneInput(event.currentTarget.value, selectedPhoneCountryData.maxDigits);
+    event.currentTarget.value = phone;
+    setCustomerDetails((prev) => ({ ...prev, phone }));
   };
 
   useEffect(() => {
@@ -925,11 +930,10 @@ export default function Booking() {
                         autoComplete="tel"
                         placeholder={selectedPhoneCountryData.placeholder}
                         className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
-                        maxLength={MAX_PHONE_LENGTH}
                         aria-invalid={showCustomerError("phone")}
                         aria-describedby={showCustomerError("phone") ? "phone-error" : "phone-help"}
                         value={customerDetails.phone}
-                        onChange={(e) => setCustomerDetails(prev => ({ ...prev, phone: formatPhoneInput(e.target.value, selectedPhoneCountryData.maxDigits) }))}
+                        onChange={handleCustomerPhoneChange}
                         onBlur={() => markCustomerTouched("phone")}
                       />
                     </div>
