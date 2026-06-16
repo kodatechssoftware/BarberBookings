@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import ExcelJS from "exceljs";
 import { getAvailableTimeSlots } from "../../client/src/lib/availability";
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -46,6 +47,16 @@ function currentWeekThursdayIso(hour = 10, minute = 0) {
   return thursday.toISOString();
 }
 
+function futureThursdayIso(weeksAhead = 3, hour = 10, minute = 0) {
+  const date = new Date(currentWeekThursdayIso(hour, minute));
+  date.setDate(date.getDate() + weeksAhead * 7);
+  return date.toISOString();
+}
+
+function dateKeyFromIso(isoDate: string) {
+  return isoDate.slice(0, 10);
+}
+
 async function createManualAppointmentForCurrentWeek(request: APIRequestContext) {
   await loginAdminRequest(request);
 
@@ -70,6 +81,43 @@ async function createManualAppointmentForCurrentWeek(request: APIRequestContext)
     },
   });
   expect(createResponse.ok()).toBe(true);
+}
+
+async function createExportAppointment(
+  request: APIRequestContext,
+  data: { name: string; phone: string; startTime: string },
+) {
+  const [barbersResponse, servicesResponse] = await Promise.all([
+    request.get("/api/barbers?includeHidden=true"),
+    request.get("/api/services?includeHidden=true"),
+  ]);
+  expect(barbersResponse.ok()).toBe(true);
+  expect(servicesResponse.ok()).toBe(true);
+
+  const [barber] = await barbersResponse.json();
+  const [service] = await servicesResponse.json();
+  expect(barber).toBeTruthy();
+  expect(service).toBeTruthy();
+
+  const createResponse = await request.post("/api/appointments/block", {
+    data: {
+      barberId: barber.id,
+      serviceId: service.id,
+      startTime: data.startTime,
+      name: data.name,
+      phone: data.phone,
+      isManualBooking: true,
+    },
+  });
+  expect(createResponse.ok(), await createResponse.text()).toBe(true);
+
+  const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(data.startTime)}`);
+  expect(appointmentsResponse.ok()).toBe(true);
+  const appointments = await appointmentsResponse.json();
+  const appointment = appointments.find((item: any) => item.customerName === data.name);
+  expect(appointment).toBeTruthy();
+
+  return { appointment, barber, service };
 }
 
 async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequestContext) {
@@ -388,6 +436,75 @@ test.describe("admin navigation", () => {
 });
 
 test.describe("booking rules", () => {
+  test("exports a management-ready Excel report with numeric revenue", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const completedStart = futureThursdayIso(4, 9, 0);
+    const bookedStart = futureThursdayIso(4, 14, 0);
+    const completed = await createExportAppointment(request, {
+      name: "Excel Completed QA",
+      phone: "912695741",
+      startTime: completedStart,
+    });
+    const booked = await createExportAppointment(request, {
+      name: "Excel Booked QA",
+      phone: "912695742",
+      startTime: bookedStart,
+    });
+
+    const statusResponse = await request.patch(`/api/appointments/${completed.appointment.id}/status`, {
+      data: { status: "completed" },
+    });
+    expect(statusResponse.ok()).toBe(true);
+
+    const dateKey = dateKeyFromIso(completedStart);
+    const exportResponse = await request.get(`/api/admin/export?startDate=${dateKey}&endDate=${dateKey}&barberId=all`);
+    expect(exportResponse.ok()).toBe(true);
+    expect(exportResponse.headers()["content-type"]).toContain("spreadsheetml.sheet");
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+
+    for (const sheetName of ["Resumo Geral", "Resumo por Barbeiro", "Resumo por Serviço", "Resumo diário", "Detalhe Completo"]) {
+      expect(workbook.getWorksheet(sheetName), `${sheetName} sheet`).toBeTruthy();
+    }
+
+    const completedServiceValue = completed.service.price / 100;
+    const bookedServiceValue = booked.service.price / 100;
+    const summarySheet = workbook.getWorksheet("Resumo Geral");
+    expect(summarySheet?.getCell("B10").value).toBe(completedServiceValue);
+    expect(summarySheet?.getCell("B11").value).toBe(bookedServiceValue);
+
+    const detailSheet = workbook.getWorksheet("Detalhe Completo");
+    expect(detailSheet).toBeTruthy();
+    const headers = detailSheet!.getRow(1).values as unknown[];
+    const customerCol = headers.indexOf("Cliente");
+    const statusCol = headers.indexOf("Estado");
+    const realizedCol = headers.indexOf("Receita realizada (€)");
+    const projectedCol = headers.indexOf("Receita prevista (€)");
+    expect(customerCol).toBeGreaterThan(0);
+    expect(statusCol).toBeGreaterThan(0);
+    expect(realizedCol).toBeGreaterThan(0);
+    expect(projectedCol).toBeGreaterThan(0);
+
+    let completedRow: ExcelJS.Row | undefined;
+    let bookedRow: ExcelJS.Row | undefined;
+    detailSheet!.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell(customerCol).value === "Excel Completed QA") completedRow = row;
+      if (row.getCell(customerCol).value === "Excel Booked QA") bookedRow = row;
+    });
+
+    expect(completedRow).toBeTruthy();
+    expect(bookedRow).toBeTruthy();
+    expect(completedRow!.getCell(statusCol).value).toBe("Concluída");
+    expect(completedRow!.getCell(realizedCol).value).toBe(completedServiceValue);
+    expect(completedRow!.getCell(projectedCol).value).toBe(0);
+    expect(bookedRow!.getCell(statusCol).value).toBe("Marcada");
+    expect(bookedRow!.getCell(realizedCol).value).toBe(0);
+    expect(bookedRow!.getCell(projectedCol).value).toBe(bookedServiceValue);
+  });
+
   test("rejects malformed phone numbers sent directly to the booking API", async ({ request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),

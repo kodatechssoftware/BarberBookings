@@ -2597,7 +2597,7 @@ export default function Admin() {
             <Card className="bg-card border-white/10 max-w-2xl mx-auto">
               <CardHeader>
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
-                <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com o resumo e detalhes das marcações concluídas.</p>
+                <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com resumo financeiro, estados e detalhe das marcações do período.</p>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

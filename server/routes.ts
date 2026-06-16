@@ -64,6 +64,13 @@ const weekdays: Record<string, number> = {
 };
 
 const appointmentStatusSet = new Set<string>(appointmentStatuses);
+const appointmentStatusLabels: Record<Appointment["status"], string> = {
+  booked: "Marcada",
+  completed: "Concluída",
+  cancelled: "Cancelada",
+  late_cancelled: "Cancelamento tardio",
+  no_show: "Falta",
+};
 
 type AppSession = session.Session & Partial<session.SessionData> & {
   adminId?: number;
@@ -716,8 +723,16 @@ function isOperationalAppointment(appointment: Appointment) {
   ].some((marker) => name.includes(marker)) && !name.startsWith("RECORRENTE:");
 }
 
+function getAppointmentStatusLabel(status: Appointment["status"]) {
+  return appointmentStatusLabels[status] || status;
+}
+
 function getServicePriceCents(serviceId: number | null, servicePrices: Map<number, number>) {
   return serviceId ? servicePrices.get(serviceId) ?? 0 : 0;
+}
+
+function centsToEuros(cents: number) {
+  return cents / 100;
 }
 
 function addCalendarDays(date: Date, amount: number) {
@@ -2330,96 +2345,386 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Datas inválidas" });
     }
 
-    try {
-      const allBarbers = await storage.getBarbers();
-      const allServices = await storage.getServices();
-      const allAppointments = await storage.getAppointments(
-        barberId && barberId !== "all" ? Number(barberId) : undefined
-      );
+    if (start > end) {
+      return res.status(400).json({ message: "A data de início não pode ser posterior à data de fim" });
+    }
 
-      const filteredAppointments = allAppointments.filter(app => {
-        const appDate = new Date(app.startTime);
-        const isPastOrToday = appDate <= end;
-        return (app.status === "completed" || (app.status === "booked" && isPastOrToday)) && 
-               appDate >= start && appDate <= end && 
-               app.customerName !== "BLOQUEIO MANUAL" &&
-               !app.customerName.includes("AUSÊNCIA") &&
-               !app.customerName.includes("FÉRIAS");
+    const selectedBarberId = barberId && barberId !== "all" ? Number(barberId) : undefined;
+    if (selectedBarberId !== undefined && !Number.isInteger(selectedBarberId)) {
+      return res.status(400).json({ message: "Barbeiro inválido" });
+    }
+
+    try {
+      const [allBarbers, allServices, allAppointments] = await Promise.all([
+        storage.getBarbers(),
+        storage.getServices(),
+        storage.getAppointments(selectedBarberId),
+      ]);
+
+      const barbersById = new Map(allBarbers.map((barber) => [barber.id, barber]));
+      const servicesById = new Map(allServices.map((service) => [service.id, service]));
+      const servicePrices = new Map(allServices.map((service) => [service.id, service.price]));
+      const selectedBarber = selectedBarberId ? barbersById.get(selectedBarberId) : undefined;
+
+      type ExportSummaryRow = {
+        name: string;
+        appointments: number;
+        completed: number;
+        booked: number;
+        cancelled: number;
+        lateCancelled: number;
+        noShows: number;
+        realizedCents: number;
+        projectedCents: number;
+      };
+
+      type ExportDailyRow = ExportSummaryRow & {
+        date: Date;
+        key: string;
+      };
+
+      const createSummaryRow = (name: string): ExportSummaryRow => ({
+        name,
+        appointments: 0,
+        completed: 0,
+        booked: 0,
+        cancelled: 0,
+        lateCancelled: 0,
+        noShows: 0,
+        realizedCents: 0,
+        projectedCents: 0,
       });
+
+      const addAppointmentToSummary = (
+        summary: ExportSummaryRow,
+        appointment: Appointment,
+        priceCents: number,
+      ) => {
+        summary.appointments += 1;
+        if (appointment.status === "completed") {
+          summary.completed += 1;
+          summary.realizedCents += priceCents;
+        }
+        if (appointment.status === "booked") {
+          summary.booked += 1;
+          summary.projectedCents += priceCents;
+        }
+        if (appointment.status === "cancelled") summary.cancelled += 1;
+        if (appointment.status === "late_cancelled") summary.lateCancelled += 1;
+        if (appointment.status === "no_show") summary.noShows += 1;
+      };
+
+      const rangeAppointments = allAppointments
+        .filter(isOperationalAppointment)
+        .filter((appointment) => {
+          const appointmentDate = new Date(appointment.startTime);
+          return appointmentDate >= start && appointmentDate <= end;
+        })
+        .sort((left, right) => new Date(left.startTime).getTime() - new Date(right.startTime).getTime());
+
+      const totalSummary = createSummaryRow("Total geral");
+      const barberSummaryMap = new Map<number, ExportSummaryRow>();
+      const serviceSummaryMap = new Map<number | "unknown", ExportSummaryRow>();
+      const dailySummaryMap = new Map<string, ExportDailyRow>();
+
+      createDashboardDays(start, end).forEach((day) => {
+        dailySummaryMap.set(day.key, {
+          ...createSummaryRow(day.label),
+          date: parseISO(day.key),
+          key: day.key,
+        });
+      });
+
+      rangeAppointments.forEach((appointment) => {
+        const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
+        const barber = barbersById.get(appointment.barberId);
+        const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
+        const serviceKey = appointment.serviceId ?? "unknown";
+        const dateKey = format(new Date(appointment.startTime), "yyyy-MM-dd");
+        const barberSummary = barberSummaryMap.get(appointment.barberId) || createSummaryRow(barber?.name || "Barbeiro desconhecido");
+        const serviceSummary = serviceSummaryMap.get(serviceKey) || createSummaryRow(service?.name || "Serviço desconhecido");
+        const dailySummary = dailySummaryMap.get(dateKey);
+
+        addAppointmentToSummary(totalSummary, appointment, priceCents);
+        addAppointmentToSummary(barberSummary, appointment, priceCents);
+        addAppointmentToSummary(serviceSummary, appointment, priceCents);
+        if (dailySummary) addAppointmentToSummary(dailySummary, appointment, priceCents);
+
+        barberSummaryMap.set(appointment.barberId, barberSummary);
+        serviceSummaryMap.set(serviceKey, serviceSummary);
+      });
+
+      const averageTicketEuros = totalSummary.completed
+        ? centsToEuros(Math.round(totalSummary.realizedCents / totalSummary.completed))
+        : 0;
+      const completionRate = totalSummary.appointments
+        ? totalSummary.completed / totalSummary.appointments
+        : 0;
+      const riskRate = totalSummary.appointments
+        ? (totalSummary.noShows + totalSummary.lateCancelled) / totalSummary.appointments
+        : 0;
 
       const workbook = new ExcelJS.Workbook();
-      const summarySheet = workbook.addWorksheet("Resumo por Barbeiro");
-      const detailSheet = workbook.addWorksheet("Detalhe Completo");
+      workbook.creator = "Baptista Barber Shop";
+      workbook.created = new Date();
+      workbook.modified = new Date();
 
-      // Folha 1: Resumo
-      summarySheet.columns = [
-        { header: "Nome do Barbeiro", key: "barberName", width: 25 },
-        { header: "Número Total de Serviços", key: "totalServices", width: 25 },
-        { header: "Total Faturado (€)", key: "totalRevenue", width: 20 },
-      ];
+      const currencyFormat = '€ #,##0.00;[Red]-€ #,##0.00';
+      const percentFormat = "0.0%";
+      const dateFormat = "dd/mm/yyyy";
+      const dateTimeFormat = "dd/mm/yyyy hh:mm";
+      const headerFill: ExcelJS.Fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF111827" },
+      };
 
-      const summaryData: Record<number, { name: string; count: number; revenue: number }> = {};
-      
-      filteredAppointments.forEach(app => {
-        const service = allServices.find(s => s.id === app.serviceId);
-        const barber = allBarbers.find(b => b.id === app.barberId);
-        if (!barber) return;
+      const styleHeaderRow = (sheet: ExcelJS.Worksheet, rowNumber = 1) => {
+        const row = sheet.getRow(rowNumber);
+        row.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        row.fill = headerFill;
+        row.alignment = { vertical: "middle" };
+        row.height = 22;
+      };
 
-        if (!summaryData[barber.id]) {
-          summaryData[barber.id] = { name: barber.name, count: 0, revenue: 0 };
-        }
-        summaryData[barber.id].count++;
-        summaryData[barber.id].revenue += (service?.price || 0) / 100;
-      });
-
-      const sortedSummary = Object.values(summaryData).sort((a, b) => b.revenue - a.revenue);
-      let grandTotalServices = 0;
-      let grandTotalRevenue = 0;
-
-      sortedSummary.forEach(item => {
-        summarySheet.addRow({
-          barberName: item.name,
-          totalServices: item.count,
-          totalRevenue: item.revenue.toLocaleString('pt-PT', { style: 'currency', currency: 'EUR' })
+      const finishTableSheet = (
+        sheet: ExcelJS.Worksheet,
+        widths: number[],
+        numberFormats: Record<number, string> = {},
+      ) => {
+        sheet.views = [{ state: "frozen", ySplit: 1 }];
+        styleHeaderRow(sheet);
+        widths.forEach((width, index) => {
+          sheet.getColumn(index + 1).width = width;
         });
-        grandTotalServices += item.count;
-        grandTotalRevenue += item.revenue;
-      });
-
-      summarySheet.addRow({});
-      summarySheet.addRow({
-        barberName: "Total Geral",
-        totalServices: grandTotalServices,
-        totalRevenue: grandTotalRevenue.toLocaleString('pt-PT', { style: 'currency', currency: 'EUR' })
-      });
-
-      summarySheet.getRow(1).font = { bold: true };
-      summarySheet.getRow(summarySheet.rowCount).font = { bold: true };
-
-      // Folha 2: Detalhe
-      detailSheet.columns = [
-        { header: "Data", key: "date", width: 20 },
-        { header: "Nome do Barbeiro", key: "barberName", width: 25 },
-        { header: "Nome do Cliente", key: "customerName", width: 25 },
-        { header: "Serviço Realizado", key: "serviceName", width: 25 },
-        { header: "Valor (€)", key: "price", width: 15 },
-      ];
-
-      filteredAppointments
-        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
-        .forEach(app => {
-          const service = allServices.find(s => s.id === app.serviceId);
-          const barber = allBarbers.find(b => b.id === app.barberId);
-          detailSheet.addRow({
-            date: format(new Date(app.startTime), "dd/MM/yyyy HH:mm"),
-            barberName: barber?.name || "Desconhecido",
-            customerName: app.customerName,
-            serviceName: service?.name || "Desconhecido",
-            price: ((service?.price || 0) / 100).toLocaleString('pt-PT', { style: 'currency', currency: 'EUR' })
+        Object.entries(numberFormats).forEach(([columnIndex, numberFormat]) => {
+          sheet.getColumn(Number(columnIndex)).numFmt = numberFormat;
+        });
+        sheet.eachRow((row) => {
+          row.eachCell((cell) => {
+            cell.border = {
+              top: { style: "thin", color: { argb: "FFE5E7EB" } },
+              left: { style: "thin", color: { argb: "FFE5E7EB" } },
+              bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+              right: { style: "thin", color: { argb: "FFE5E7EB" } },
+            };
+            cell.alignment = { vertical: "middle" };
           });
         });
+      };
 
-      detailSheet.getRow(1).font = { bold: true };
+      const addTable = (
+        sheet: ExcelJS.Worksheet,
+        name: string,
+        headers: string[],
+        rows: Array<Array<string | number | Date | null>>,
+      ) => {
+        sheet.addTable({
+          name,
+          ref: "A1",
+          headerRow: true,
+          totalsRow: false,
+          style: {
+            theme: "TableStyleMedium2",
+            showRowStripes: true,
+          },
+          columns: headers.map((header) => ({ name: header, filterButton: true })),
+          rows,
+        });
+      };
+
+      const summarySheet = workbook.addWorksheet("Resumo Geral");
+      summarySheet.mergeCells("A1:B1");
+      summarySheet.getCell("A1").value = "Relatório de gestão";
+      summarySheet.getCell("A1").font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+      summarySheet.getCell("A1").fill = headerFill;
+      summarySheet.getCell("A1").alignment = { vertical: "middle" };
+      summarySheet.getRow(1).height = 28;
+      summarySheet.addRows([
+        ["Período", `${format(start, "dd/MM/yyyy")} a ${format(end, "dd/MM/yyyy")}`],
+        ["Barbeiro", selectedBarber?.name || "Todos os barbeiros"],
+        ["Marcações no período", totalSummary.appointments],
+        ["Concluídas", totalSummary.completed],
+        ["Marcadas", totalSummary.booked],
+        ["Canceladas", totalSummary.cancelled],
+        ["Cancelamentos tardios", totalSummary.lateCancelled],
+        ["Faltas", totalSummary.noShows],
+        ["Receita realizada", centsToEuros(totalSummary.realizedCents)],
+        ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
+        ["Ticket médio realizado", averageTicketEuros],
+        ["Taxa de conclusão", completionRate],
+        ["Taxa de risco", riskRate],
+        ["Nota", "Receita realizada considera apenas marcações concluídas. Marcações marcadas contam como previsão."],
+      ]);
+      summarySheet.getColumn(1).width = 28;
+      summarySheet.getColumn(2).width = 58;
+      [10, 11, 12].forEach((rowNumber) => {
+        summarySheet.getCell(rowNumber, 2).numFmt = currencyFormat;
+      });
+      [13, 14].forEach((rowNumber) => {
+        summarySheet.getCell(rowNumber, 2).numFmt = percentFormat;
+      });
+      summarySheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          row.getCell(1).font = { bold: true };
+          row.eachCell((cell) => {
+            cell.border = {
+              top: { style: "thin", color: { argb: "FFE5E7EB" } },
+              left: { style: "thin", color: { argb: "FFE5E7EB" } },
+              bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+              right: { style: "thin", color: { argb: "FFE5E7EB" } },
+            };
+            cell.alignment = { vertical: "middle", wrapText: rowNumber === 15 };
+          });
+        }
+      });
+
+      const summaryHeaders = [
+        "Nome",
+        "Total marcações",
+        "Concluídas",
+        "Marcadas",
+        "Canceladas",
+        "Cancelamentos tardios",
+        "Faltas",
+        "Receita realizada (€)",
+        "Receita prevista (€)",
+        "Ticket médio (€)",
+        "Taxa conclusão",
+      ];
+      const summaryToRow = (item: ExportSummaryRow) => [
+        item.name,
+        item.appointments,
+        item.completed,
+        item.booked,
+        item.cancelled,
+        item.lateCancelled,
+        item.noShows,
+        centsToEuros(item.realizedCents),
+        centsToEuros(item.projectedCents),
+        item.completed ? centsToEuros(Math.round(item.realizedCents / item.completed)) : 0,
+        item.appointments ? item.completed / item.appointments : 0,
+      ];
+
+      const barberSheet = workbook.addWorksheet("Resumo por Barbeiro");
+      addTable(
+        barberSheet,
+        "ResumoPorBarbeiro",
+        summaryHeaders,
+        Array.from(barberSummaryMap.values())
+          .sort((left, right) => right.realizedCents - left.realizedCents || right.appointments - left.appointments)
+          .map(summaryToRow),
+      );
+      finishTableSheet(barberSheet, [26, 17, 13, 12, 12, 22, 10, 20, 20, 16, 16], {
+        8: currencyFormat,
+        9: currencyFormat,
+        10: currencyFormat,
+        11: percentFormat,
+      });
+
+      const serviceSheet = workbook.addWorksheet("Resumo por Serviço");
+      addTable(
+        serviceSheet,
+        "ResumoPorServico",
+        summaryHeaders,
+        Array.from(serviceSummaryMap.values())
+          .sort((left, right) => right.realizedCents - left.realizedCents || right.appointments - left.appointments)
+          .map(summaryToRow),
+      );
+      finishTableSheet(serviceSheet, [28, 17, 13, 12, 12, 22, 10, 20, 20, 16, 16], {
+        8: currencyFormat,
+        9: currencyFormat,
+        10: currencyFormat,
+        11: percentFormat,
+      });
+
+      const dailySheet = workbook.addWorksheet("Resumo diário");
+      addTable(
+        dailySheet,
+        "ResumoDiario",
+        ["Data", ...summaryHeaders.slice(1)],
+        Array.from(dailySummaryMap.values()).map((item) => [
+          item.date,
+          item.appointments,
+          item.completed,
+          item.booked,
+          item.cancelled,
+          item.lateCancelled,
+          item.noShows,
+          centsToEuros(item.realizedCents),
+          centsToEuros(item.projectedCents),
+          item.completed ? centsToEuros(Math.round(item.realizedCents / item.completed)) : 0,
+          item.appointments ? item.completed / item.appointments : 0,
+        ]),
+      );
+      finishTableSheet(dailySheet, [14, 17, 13, 12, 12, 22, 10, 20, 20, 16, 16], {
+        1: dateFormat,
+        8: currencyFormat,
+        9: currencyFormat,
+        10: currencyFormat,
+        11: percentFormat,
+      });
+
+      const detailSheet = workbook.addWorksheet("Detalhe Completo");
+      const detailHeaders = [
+        "ID",
+        "Data",
+        "Hora",
+        "Fim",
+        "Barbeiro",
+        "Cliente",
+        "Telemóvel",
+        "Email",
+        "Serviço",
+        "Duração (min)",
+        "Estado",
+        "Valor serviço (€)",
+        "Receita realizada (€)",
+        "Receita prevista (€)",
+        "Sinal recomendado",
+        "Motivo do sinal",
+        "Criada em",
+      ];
+      addTable(
+        detailSheet,
+        "DetalheCompleto",
+        detailHeaders,
+        rangeAppointments.map((appointment) => {
+          const startTime = new Date(appointment.startTime);
+          const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
+          const barber = barbersById.get(appointment.barberId);
+          const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
+          const realizedCents = appointment.status === "completed" ? priceCents : 0;
+          const projectedCents = appointment.status === "booked" ? priceCents : 0;
+
+          return [
+            appointment.id,
+            startTime,
+            format(startTime, "HH:mm"),
+            format(new Date(startTime.getTime() + appointment.durationMinutes * 60000), "HH:mm"),
+            barber?.name || "Barbeiro desconhecido",
+            appointment.customerName,
+            appointment.customerPhone,
+            appointment.customerEmail || "",
+            service?.name || "Serviço desconhecido",
+            appointment.durationMinutes,
+            getAppointmentStatusLabel(appointment.status),
+            centsToEuros(priceCents),
+            centsToEuros(realizedCents),
+            centsToEuros(projectedCents),
+            appointment.depositRequired ? "Sim" : "Não",
+            appointment.depositReason || "",
+            appointment.createdAt ? new Date(appointment.createdAt) : null,
+          ];
+        }),
+      );
+      finishTableSheet(detailSheet, [10, 14, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 18, 34, 18], {
+        2: dateFormat,
+        12: currencyFormat,
+        13: currencyFormat,
+        14: currencyFormat,
+        17: dateTimeFormat,
+      });
 
       const fileName = `relatorio_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;
       
