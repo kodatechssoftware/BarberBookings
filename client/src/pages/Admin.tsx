@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppointmentsTab, blockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
+import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1636,6 +1637,19 @@ export default function Admin() {
           onBlockCustomer={handleBlockCustomer}
         />
 
+        <AppointmentBlockDialog
+          open={isBlocking}
+          onOpenChange={setIsBlocking}
+          barbers={barbers}
+          manualBookingServices={manualBookingServices}
+          blockData={blockData}
+          onBlockDataChange={setBlockData}
+          isCalendarOpen={isCalendarOpen}
+          onCalendarOpenChange={setIsCalendarOpen}
+          availableBlockTimes={availableBlockTimes}
+          onSubmit={handleBlockTime}
+        />
+
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="scrollbar-none sticky top-2 z-30 w-full justify-start overflow-x-auto rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:static md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
@@ -1875,7 +1889,6 @@ export default function Admin() {
             <AppointmentsTab
               user={user}
               barbers={barbers}
-              manualBookingServices={manualBookingServices}
               appointmentList={appointmentList}
               filteredAppointmentList={filteredAppointmentList}
               appointmentViewMode={appointmentViewMode}
@@ -1887,17 +1900,8 @@ export default function Admin() {
               selectedStatusFilter={selectedStatusFilter}
               onSelectedStatusFilterChange={setSelectedStatusFilter}
               isLoadingAppointments={isLoadingAppointments}
-              isBlocking={isBlocking}
-              onBlockingChange={setIsBlocking}
-              blockData={blockData}
-              onBlockDataChange={setBlockData}
-              isCalendarOpen={isCalendarOpen}
-              onCalendarOpenChange={setIsCalendarOpen}
-              availableBlockTimes={availableBlockTimes}
               dayAppointmentSummary={dayAppointmentSummary}
-              onOpenAgendaException={openAgendaExceptionDialog}
               onOpenManualBooking={() => openManualBookingDialog()}
-              onBlockTime={handleBlockTime}
               onSelectAppointment={(appointment) => setSelectedAppointment(appointment)}
               getBarberName={getBarberName}
               getServiceName={getServiceName}
@@ -2115,14 +2119,6 @@ export default function Admin() {
                           </div>
                         </DialogContent>
                       </Dialog>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 h-8 text-xs"
-                        onClick={() => openExceptionDialog(String(barber.id))}
-                      >
-                        Ausências
-                      </Button>
                       <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
                         description="A palavra-passe atual deixa de funcionar até o barbeiro aceitar o novo convite."
@@ -2437,17 +2433,10 @@ export default function Admin() {
                       <CalendarIcon className="h-5 w-5 text-primary" /> Horário base da barbearia
                     </CardTitle>
                     <p className="mt-2 max-w-2xl text-sm text-gray-400">
-                      Este horário define quando a loja aceita marcações. Ausências, férias e ajustes pontuais continuam nas ausências de cada barbeiro.
+                      Este horário define quando a loja aceita marcações. Ausências, férias e ajustes pontuais são geridos na Agenda.
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button
-                      variant="outline"
-                      className="gap-2 border-white/10"
-                      onClick={() => openExceptionDialog()}
-                    >
-                      <Plus className="h-4 w-4" /> Criar ausência
-                    </Button>
                     <Button
                       variant="gold"
                       className="gap-2"

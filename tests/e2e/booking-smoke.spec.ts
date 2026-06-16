@@ -245,6 +245,9 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Agenda semanal")).toBeVisible();
     await expect(page.getByText("Agenda do dia")).not.toBeVisible();
     await expect(page.getByText("Lista de marcações")).not.toBeVisible();
+    await page.getByRole("button", { name: "Ausência" }).click();
+    await expect(page.getByRole("dialog", { name: "Ausência na agenda" })).toBeVisible();
+    await page.keyboard.press("Escape");
     const weeklyAppointment = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Agenda Click QA/,
     }).first();
@@ -267,6 +270,7 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Lista de marcações")).toBeVisible();
     await expect(page.getByText("Agenda semanal")).not.toBeVisible();
     await expect(page.getByText("Agenda do dia")).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Ausência" })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 
     const adminTabs = [
@@ -283,6 +287,12 @@ test.describe("admin navigation", () => {
       await expect(page.getByText("Agenda semanal")).not.toBeVisible();
       await expect(page.getByText("Agenda do dia")).not.toBeVisible();
       await expect(page.getByText("Lista de marcações")).not.toBeVisible();
+      if (adminTab.name === "Equipa") {
+        await expect(page.getByRole("button", { name: "Ausências" })).toHaveCount(0);
+      }
+      if (adminTab.name === "Horário") {
+        await expect(page.getByRole("button", { name: "Criar ausência" })).toHaveCount(0);
+      }
       await expectNoHorizontalOverflow(page);
     }
   });
