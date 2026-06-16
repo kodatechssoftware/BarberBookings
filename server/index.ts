@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
+import { ensureAppointmentOverlapProtection } from "./db";
 
 const app = express();
 const httpServer = createServer(app);
@@ -154,6 +155,7 @@ app.use((req, res, next) => {
 (async () => {
   log(`starting BarberBookings API (${getSafeDatabaseTarget()})`);
 
+  await ensureAppointmentOverlapProtection();
   const server = await registerRoutes(app, httpServer);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

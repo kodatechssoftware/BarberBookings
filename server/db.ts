@@ -19,3 +19,52 @@ export const pool = new Pool({
   connectionString: process.env.DATABASE_URL || fallbackMemoryDatabaseUrl,
 });
 export const db = drizzle(pool, { schema });
+
+function quoteIdentifier(identifier: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+    throw new Error(`Unsafe database identifier: ${identifier}`);
+  }
+
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+export async function ensureAppointmentOverlapProtection() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const tableName = "appointments";
+  const constraintName = "appointments_no_booked_overlap";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
+
+  await pool.query("CREATE EXTENSION IF NOT EXISTS btree_gist");
+
+  const existingConstraint = await pool.query(
+    `
+      SELECT 1
+      FROM pg_constraint constraint_info
+      JOIN pg_class table_info ON table_info.oid = constraint_info.conrelid
+      JOIN pg_namespace namespace_info ON namespace_info.oid = table_info.relnamespace
+      WHERE constraint_info.conname = $1
+        AND namespace_info.nspname = $2
+        AND table_info.relname = $3
+      LIMIT 1
+    `,
+    [constraintName, schemaName, tableName],
+  );
+
+  if (existingConstraint.rowCount) return;
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedTableName}
+    ADD CONSTRAINT ${quoteIdentifier(constraintName)}
+    EXCLUDE USING gist (
+      barber_id WITH =,
+      tsrange(
+        start_time,
+        start_time + make_interval(mins => duration_minutes),
+        '[)'
+      ) WITH &&
+    )
+    WHERE (status = 'booked')
+  `);
+}

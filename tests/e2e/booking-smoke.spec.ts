@@ -156,6 +156,35 @@ test.describe("public booking flow", () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  test("does not show availability dots on past calendar days", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/book?barberId=1&serviceId=1");
+
+    await expect(page.getByText("Dias com horários disponíveis")).toBeVisible();
+
+    const todayDayOfMonth = new Date().getDate();
+    const markedPastDays = await page.evaluate((todayDay) => {
+      return Array.from(document.querySelectorAll<HTMLElement>(".booking-day-available:not(.day-outside)"))
+        .map((element) => Number(element.textContent?.trim()))
+        .filter((day) => Number.isFinite(day) && day < todayDay);
+    }, todayDayOfMonth);
+
+    expect(markedPastDays).toEqual([]);
+  });
+
+  test("shows availability dots on next-month days visible in the calendar grid", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/book?barberId=1&serviceId=1&date=2026-06-30");
+
+    await expect(page.getByText("junho 2026")).toBeVisible();
+
+    await expect.poll(async () => page.evaluate(() => {
+      return Array.from(document.querySelectorAll<HTMLElement>(".booking-day-available.day-outside"))
+        .map((element) => Number(element.textContent?.trim()))
+        .filter((day) => Number.isFinite(day));
+    })).toEqual(expect.arrayContaining([1, 2, 3, 4]));
+  });
+
   test("shows inline validation in the customer details step", async ({ page }) => {
     await page.goto("/book?barberId=1&serviceId=1&date=2026-06-11&time=15:30");
 
@@ -163,15 +192,21 @@ test.describe("public booking flow", () => {
     await expect(page.getByText("Indique o nome para a marcação.")).toBeVisible();
     await expect(page.getByText("Indique o telemóvel para confirmarmos a marcação.")).toBeVisible();
 
+    const phoneInput = page.getByPlaceholder("912 345 678");
+    await phoneInput.fill("91--0000000");
+    await expect(phoneInput).toHaveValue("910000000");
+    await phoneInput.fill("abc912-695-704");
+    await expect(phoneInput).toHaveValue("912695704");
+
     await page.getByPlaceholder("O seu nome").fill("Pedro Faria");
-    await page.getByPlaceholder("912 345 678").fill("123");
+    await phoneInput.fill("123");
     await page.getByPlaceholder("exemplo@email.com").fill("email-invalido");
 
     await expect(page.getByText("Indique o nome para a marcação.")).not.toBeVisible();
     await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).toBeVisible();
     await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).toBeVisible();
 
-    await page.getByPlaceholder("912 345 678").fill("912695704");
+    await phoneInput.fill("912695704");
     await page.getByPlaceholder("exemplo@email.com").fill("");
 
     await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).not.toBeVisible();
@@ -181,6 +216,25 @@ test.describe("public booking flow", () => {
 });
 
 test.describe("admin navigation", () => {
+  test("advances to the admin panel from the login response", async ({ page }) => {
+    await page.route("**/api/admin/me", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ authorized: false, role: "" }),
+      });
+    });
+
+    await page.goto("/admin");
+    await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
+    await page.locator('input[type="password"]').fill("baptista2026");
+    await page.getByRole("button", { name: "Entrar" }).click();
+
+    await expect(page.getByText("Login efetuado com sucesso", { exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+    await expect(page.getByText("Acesso para Administradores e Barbeiros")).not.toBeVisible();
+  });
+
   test("shows agenda only in Agenda and appointment list only in Marcações", async ({ page, request }) => {
     await createManualAppointmentForCurrentWeek(request);
 
@@ -321,6 +375,31 @@ test.describe("admin navigation", () => {
 });
 
 test.describe("booking rules", () => {
+  test("rejects malformed phone numbers sent directly to the booking API", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    const response = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: currentWeekThursdayIso(17, 30),
+        customerName: "Numero Esquisito",
+        customerPhone: "91--0000000",
+        customerEmail: null,
+      },
+    });
+
+    expect(response.status()).toBe(400);
+  });
+
   test("records admin actions in the audit log", async ({ request }) => {
     await loginAdminRequest(request);
 
@@ -371,6 +450,46 @@ test.describe("booking rules", () => {
     expect(createResponse.status()).toBe(403);
     const createBody = await createResponse.json();
     expect(createBody.message).toContain("Não é possível realizar a marcação online");
+  });
+
+  test("allows only one concurrent booking for the same barber and slot", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const startTime = currentWeekThursdayIso(15, 0);
+
+    const bookingPayload = {
+      barberId: barber.id,
+      serviceId: service.id,
+      startTime,
+      customerEmail: null,
+    };
+
+    const responses = await Promise.all([
+      request.post("/api/appointments", {
+        data: {
+          ...bookingPayload,
+          customerName: "Concorrente A",
+          customerPhone: "912695731",
+        },
+      }),
+      request.post("/api/appointments", {
+        data: {
+          ...bookingPayload,
+          customerName: "Concorrente B",
+          customerPhone: "912695732",
+        },
+      }),
+    ]);
+
+    const statuses = responses.map((response) => response.status()).sort();
+    expect(statuses).toEqual([201, 409]);
   });
 
   test("marks overlapping slots unavailable using the existing appointment duration", () => {

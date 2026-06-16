@@ -198,13 +198,14 @@ export const barberServicesRelations = relations(barberServices, ({ one }) => ({
 
 export const insertBarberSchema = createInsertSchema(barbers).omit({ id: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true });
+const localPortugueseMobilePattern = /^9\d{8}$/;
+const internationalPhonePattern = /^\+\d{7,15}$/;
+const internationalZeroPrefixPhonePattern = /^00\d{7,15}$/;
 const bookingPhoneSchema = z.string().trim().refine((value) => {
   const trimmed = value.trim();
-  const digits = value.replace(/\D/g, "");
-  if (!trimmed.startsWith("+") && !trimmed.startsWith("00") && digits.length === 9 && digits.startsWith("9")) {
-    return true;
-  }
-  return (trimmed.startsWith("+") || trimmed.startsWith("00")) && digits.length >= 7 && digits.length <= 15;
+  return localPortugueseMobilePattern.test(trimmed) ||
+    internationalPhonePattern.test(trimmed) ||
+    internationalZeroPrefixPhonePattern.test(trimmed);
 }, "Indique um telemovel valido.");
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   id: true,

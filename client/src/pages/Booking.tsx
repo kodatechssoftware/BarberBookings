@@ -6,7 +6,7 @@ import { type AppointmentRecord, useCreateAppointment, usePublicAppointments } f
 import { Button } from "@/components/ui/button-custom";
 import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { addDays, eachDayOfInterval, endOfMonth, format, parseISO, startOfMonth, startOfToday } from "date-fns";
+import { eachDayOfInterval, endOfMonth, endOfWeek, format, parseISO, startOfMonth, startOfToday, startOfWeek } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
@@ -52,8 +52,8 @@ type CustomerField = keyof BookingPreference["customerDetails"];
 
 const DEFAULT_PHONE_COUNTRY = PHONE_COUNTRIES[0];
 
-const formatPhoneInput = (value: string) => {
-  return value.replace(/[^\d\s()-]/g, "").replace(/\s+/g, " ").trimStart().slice(0, MAX_PHONE_LENGTH);
+const formatPhoneInput = (value: string, maxLength = MAX_PHONE_LENGTH) => {
+  return value.replace(/\D/g, "").slice(0, maxLength);
 };
 
 const getPhoneCountry = (countryCode: PhoneCountryCode) => (
@@ -72,19 +72,21 @@ const splitStoredPhone = (value: string) => {
   if (!matchedCountry) {
     return {
       countryCode: DEFAULT_PHONE_COUNTRY.code,
-      localPhone: formatPhoneInput(trimmed),
+      localPhone: formatPhoneInput(trimmed, DEFAULT_PHONE_COUNTRY.maxDigits),
     };
   }
 
   return {
     countryCode: matchedCountry.code,
-    localPhone: formatPhoneInput(internationalValue.slice(matchedCountry.dialCode.length)),
+    localPhone: formatPhoneInput(internationalValue.slice(matchedCountry.dialCode.length), matchedCountry.maxDigits),
   };
 };
 
 const isValidBookingPhone = (value: string, countryCode: PhoneCountryCode) => {
   const country = getPhoneCountry(countryCode);
   const digits = value.replace(/\D/g, "");
+  if (digits !== value.trim()) return false;
+  if (countryCode === "PT") return /^9\d{8}$/.test(digits);
   return digits.length >= country.minDigits && digits.length <= country.maxDigits;
 };
 
@@ -390,14 +392,19 @@ export default function Booking() {
   const availableDateKeys = useMemo(() => {
     if (!selectedService || selectedBarberId === null) return new Set<string>();
 
+    const today = startOfToday();
     const monthStart = startOfMonth(visibleCalendarMonth);
     const monthEnd = endOfMonth(visibleCalendarMonth);
+    const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
+    const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
     const appointments = calendarAppointments ?? [];
     const availability = (availabilityRows as AvailabilityRow[] | undefined) ?? [];
     const shopAvailability = (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [];
     const availableKeys = new Set<string>();
 
-    eachDayOfInterval({ start: monthStart, end: monthEnd }).forEach((date) => {
+    eachDayOfInterval({ start: calendarStart, end: calendarEnd }).forEach((date) => {
+      if (date < today) return;
+
       const slots = getAvailableTimeSlots({
         selectedService,
         selectedDate: date,
@@ -741,7 +748,7 @@ export default function Booking() {
                         setSelectedTime(null);
                         setShowTimeError(false);
                       }}
-                      disabled={(date) => date < addDays(new Date(), -1)}
+                      disabled={(date) => date < startOfToday()}
                       initialFocus
                       className="w-full rounded-md px-1 py-2 md:px-3 md:py-3"
                       locale={pt}
@@ -914,7 +921,7 @@ export default function Booking() {
                       <Input 
                         id="phone" 
                         type="tel"
-                        inputMode="tel"
+                        inputMode="numeric"
                         autoComplete="tel"
                         placeholder={selectedPhoneCountryData.placeholder}
                         className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -922,7 +929,7 @@ export default function Booking() {
                         aria-invalid={showCustomerError("phone")}
                         aria-describedby={showCustomerError("phone") ? "phone-error" : "phone-help"}
                         value={customerDetails.phone}
-                        onChange={(e) => setCustomerDetails(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }))}
+                        onChange={(e) => setCustomerDetails(prev => ({ ...prev, phone: formatPhoneInput(e.target.value, selectedPhoneCountryData.maxDigits) }))}
                         onBlur={() => markCustomerTouched("phone")}
                       />
                     </div>

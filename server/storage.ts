@@ -47,6 +47,52 @@ type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   depositReason?: string | null;
 };
 
+const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
+const appointmentConflictCode = "APPOINTMENT_CONFLICT";
+
+export class AppointmentConflictError extends Error {
+  code = appointmentConflictCode;
+  status = 409;
+
+  constructor(message = "Este horário já está reservado.") {
+    super(message);
+    this.name = "AppointmentConflictError";
+  }
+}
+
+export function isAppointmentConflictError(error: unknown) {
+  return Boolean(
+    error instanceof AppointmentConflictError ||
+    (error && typeof error === "object" && "code" in error && (
+      (error as { code?: unknown }).code === appointmentConflictCode ||
+      (error as { code?: unknown }).code === "23P01"
+    )),
+  );
+}
+
+function toAppointmentDate(value: Date | string) {
+  return value instanceof Date ? value : new Date(value);
+}
+
+function getDurationMinutes(duration?: number | null) {
+  return typeof duration === "number" && Number.isFinite(duration) && duration > 0
+    ? duration
+    : DEFAULT_APPOINTMENT_DURATION_MINUTES;
+}
+
+function getAppointmentEndTime(startTime: Date | string, durationMinutes?: number | null) {
+  const start = toAppointmentDate(startTime);
+  return new Date(start.getTime() + getDurationMinutes(durationMinutes) * 60000);
+}
+
+function getAppointmentLockDayKey(date: Date) {
+  return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86400000);
+}
+
+function shouldProtectAppointment(status?: string | null) {
+  return (status || "booked") === "booked";
+}
+
 export interface IStorage {
   // Barbers
   getBarbers(): Promise<Barber[]>;
@@ -113,6 +159,53 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private async lockAppointmentDay(
+    tx: Pick<typeof db, "execute">,
+    barberId: number,
+    startTime: Date | string,
+  ) {
+    const date = toAppointmentDate(startTime);
+    await tx.execute(sql`
+      SELECT pg_advisory_xact_lock(${barberId}, ${getAppointmentLockDayKey(date)})
+    `);
+  }
+
+  private async assertNoAppointmentConflict(
+    tx: Pick<typeof db, "select">,
+    candidate: {
+      barberId: number;
+      startTime: Date | string;
+      durationMinutes?: number | null;
+      status?: string | null;
+    },
+    ignoreAppointmentId?: number,
+  ) {
+    if (!shouldProtectAppointment(candidate.status)) return;
+
+    const startTime = toAppointmentDate(candidate.startTime);
+    const endTime = getAppointmentEndTime(startTime, candidate.durationMinutes);
+    const conflictConditions: SQL[] = [
+      eq(appointments.barberId, candidate.barberId),
+      eq(appointments.status, "booked"),
+      sql`${appointments.startTime} < ${endTime}`,
+      sql`${appointments.startTime} + make_interval(mins => ${appointments.durationMinutes}) > ${startTime}`,
+    ];
+
+    if (ignoreAppointmentId !== undefined) {
+      conflictConditions.push(sql`${appointments.id} <> ${ignoreAppointmentId}`);
+    }
+
+    const [conflictingAppointment] = await tx
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(and(...conflictConditions))
+      .limit(1);
+
+    if (conflictingAppointment) {
+      throw new AppointmentConflictError();
+    }
+  }
+
   async getBarbers(): Promise<Barber[]> {
     return await db.select().from(barbers).orderBy(barbers.id);
   }
@@ -218,16 +311,59 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
-    const [newAppointment] = await db.insert(appointments).values(appointment).returning();
-    return newAppointment;
+    try {
+      return await db.transaction(async (tx) => {
+        await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
+        await this.assertNoAppointmentConflict(tx, appointment);
+
+        const [newAppointment] = await tx.insert(appointments).values(appointment).returning();
+        return newAppointment;
+      });
+    } catch (error) {
+      if (isAppointmentConflictError(error)) {
+        throw new AppointmentConflictError();
+      }
+      throw error;
+    }
   }
 
   async updateAppointment(
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
   ): Promise<Appointment | undefined> {
-    const [updated] = await db.update(appointments).set(appointment).where(eq(appointments.id, id)).returning();
-    return updated;
+    try {
+      return await db.transaction(async (tx) => {
+        const [current] = await tx
+          .select()
+          .from(appointments)
+          .where(eq(appointments.id, id))
+          .limit(1);
+
+        if (!current) return undefined;
+
+        const candidate = {
+          ...current,
+          ...appointment,
+        };
+
+        if (shouldProtectAppointment(candidate.status)) {
+          await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
+          await this.assertNoAppointmentConflict(tx, candidate, id);
+        }
+
+        const [updated] = await tx
+          .update(appointments)
+          .set(appointment)
+          .where(eq(appointments.id, id))
+          .returning();
+        return updated;
+      });
+    } catch (error) {
+      if (isAppointmentConflictError(error)) {
+        throw new AppointmentConflictError();
+      }
+      throw error;
+    }
   }
 
   async updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined> {
@@ -239,8 +375,7 @@ export class DatabaseStorage implements IStorage {
       updateData.cancelledAt = null;
     }
 
-    const [updated] = await db.update(appointments).set(updateData).where(eq(appointments.id, id)).returning();
-    return updated;
+    return this.updateAppointment(id, updateData);
   }
 
   async getAdminByUsername(username: string): Promise<Admin | undefined> {
@@ -492,6 +627,35 @@ export class MemoryStorage implements IStorage {
     verificationCode: 1,
   };
 
+  private assertNoAppointmentConflict(
+    candidate: {
+      id?: number;
+      barberId: number;
+      startTime: Date | string;
+      durationMinutes?: number | null;
+      status?: string | null;
+    },
+    ignoreAppointmentId?: number,
+  ) {
+    if (!shouldProtectAppointment(candidate.status)) return;
+
+    const startTime = toAppointmentDate(candidate.startTime);
+    const endTime = getAppointmentEndTime(startTime, candidate.durationMinutes);
+    const conflictingAppointment = this.appointments.find((appointment) => {
+      if (appointment.status !== "booked") return false;
+      if (appointment.barberId !== candidate.barberId) return false;
+      if (ignoreAppointmentId !== undefined && appointment.id === ignoreAppointmentId) return false;
+
+      const appointmentStart = toAppointmentDate(appointment.startTime);
+      const appointmentEnd = getAppointmentEndTime(appointmentStart, appointment.durationMinutes);
+      return startTime < appointmentEnd && endTime > appointmentStart;
+    });
+
+    if (conflictingAppointment) {
+      throw new AppointmentConflictError();
+    }
+  }
+
   async getBarbers(): Promise<Barber[]> {
     return [...this.barbers].sort((a, b) => a.id - b.id);
   }
@@ -615,6 +779,7 @@ export class MemoryStorage implements IStorage {
       depositReason: appointment.depositReason ?? null,
       createdAt: new Date(),
     };
+    this.assertNoAppointmentConflict(newAppointment);
     this.appointments.push(newAppointment);
     return newAppointment;
   }
@@ -625,7 +790,9 @@ export class MemoryStorage implements IStorage {
   ): Promise<Appointment | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
-    this.appointments[index] = { ...this.appointments[index], ...appointment };
+    const updatedAppointment = { ...this.appointments[index], ...appointment };
+    this.assertNoAppointmentConflict(updatedAppointment, id);
+    this.appointments[index] = updatedAppointment;
     return this.appointments[index];
   }
 
