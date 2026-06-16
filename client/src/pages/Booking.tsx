@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, type ChangeEvent } from "react";
+import { useEffect, useState, useMemo, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -55,6 +55,8 @@ const DEFAULT_PHONE_COUNTRY = PHONE_COUNTRIES[0];
 const formatPhoneInput = (value: string, maxLength = MAX_PHONE_LENGTH) => {
   return value.replace(/\D/g, "").slice(0, maxLength);
 };
+
+const isDigitsOnly = (value: string) => /^\d*$/.test(value);
 
 const getPhoneCountry = (countryCode: PhoneCountryCode) => (
   PHONE_COUNTRIES.find((country) => country.code === countryCode) ?? DEFAULT_PHONE_COUNTRY
@@ -365,8 +367,25 @@ export default function Booking() {
   const markCustomerTouched = (field: CustomerField) => {
     setCustomerTouched((current) => ({ ...current, [field]: true }));
   };
+  const handleCustomerPhoneBeforeInput = (event: FormEvent<HTMLInputElement>) => {
+    const inputEvent = event.nativeEvent as InputEvent;
+    if (inputEvent.data && !isDigitsOnly(inputEvent.data)) {
+      event.preventDefault();
+    }
+  };
+  const handleCustomerPhonePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    if (!isDigitsOnly(event.clipboardData.getData("text"))) {
+      event.preventDefault();
+    }
+  };
   const handleCustomerPhoneChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const phone = formatPhoneInput(event.currentTarget.value, selectedPhoneCountryData.maxDigits);
+    const rawPhone = event.currentTarget.value;
+    if (!isDigitsOnly(rawPhone)) {
+      event.currentTarget.value = customerDetails.phone;
+      return;
+    }
+
+    const phone = rawPhone.slice(0, selectedPhoneCountryData.maxDigits);
     event.currentTarget.value = phone;
     setCustomerDetails((prev) => ({ ...prev, phone }));
   };
@@ -933,6 +952,8 @@ export default function Booking() {
                         aria-invalid={showCustomerError("phone")}
                         aria-describedby={showCustomerError("phone") ? "phone-error" : "phone-help"}
                         value={customerDetails.phone}
+                        onBeforeInput={handleCustomerPhoneBeforeInput}
+                        onPaste={handleCustomerPhonePaste}
                         onChange={handleCustomerPhoneChange}
                         onBlur={() => markCustomerTouched("phone")}
                       />

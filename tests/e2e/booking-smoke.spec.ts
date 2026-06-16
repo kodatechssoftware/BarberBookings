@@ -194,9 +194,10 @@ test.describe("public booking flow", () => {
 
     const phoneInput = page.getByPlaceholder("912 345 678");
     await phoneInput.fill("91--0000000");
-    await expect(phoneInput).toHaveValue("910000000");
-    await phoneInput.fill("abc912-695-704");
-    await expect(phoneInput).toHaveValue("912695704");
+    await expect(phoneInput).toHaveValue("");
+    await phoneInput.focus();
+    await page.keyboard.type("91-.2345");
+    await expect(phoneInput).toHaveValue("912345");
     await phoneInput.fill("9126957000000000");
     await expect(phoneInput).toHaveValue("912695700");
 
