@@ -2534,7 +2534,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Etiqueta na agenda</Label>
+                      <Label>Nome curto na agenda (opcional)</Label>
                       <Input
                         value={serviceFormData.agendaLabel}
                         onChange={e => setServiceFormData({...serviceFormData, agendaLabel: e.target.value})}
@@ -2594,7 +2594,7 @@ export default function Admin() {
                             <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>
                             <div>
-                              <Label>Etiqueta na agenda</Label>
+                              <Label>Nome curto na agenda (opcional)</Label>
                               <Input
                                 defaultValue={service.agendaLabel || ""}
                                 id={`edit-service-agenda-label-${service.id}`}
