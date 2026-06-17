@@ -149,7 +149,7 @@ function getServiceBadge(serviceName?: string | null) {
     normalizedName.includes("cabelo") ||
     normalizedName.includes("degrade")
   ) {
-    return "Corte";
+    return "Cabelo";
   }
 
   return "Serviço";
