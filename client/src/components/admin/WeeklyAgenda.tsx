@@ -529,7 +529,6 @@ export function WeeklyAgenda({
                             const isSharedSlot = sameSlot.length > 1;
                             const isCrowdedSlot = sameSlot.length >= 3;
                             const isCompactCard = isCrowdedSlot || height < 56;
-                            const canShowServiceName = !isCompactCard || height >= 58;
                             const canShowPhone = !isSharedSlot && height >= 74;
                             const serviceBadge = getServiceBadge(service?.name);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
@@ -570,16 +569,11 @@ export function WeeklyAgenda({
                                 <span
                                   className={cn(
                                     "block truncate font-semibold leading-tight text-white",
-                                    isCompactCard ? "text-[11px]" : "mt-1 text-xs",
+                                    isCompactCard ? "text-[11px]" : "mt-1.5 text-xs",
                                   )}
                                 >
                                   {appointment.customerName}
                                 </span>
-                                {canShowServiceName && (
-                                  <span className="block truncate text-[11px] leading-tight text-gray-100/90">
-                                    {service?.name || "Sem serviço"}
-                                  </span>
-                                )}
                                 {canShowPhone && appointment.customerPhone && (
                                   <span className="block truncate text-[10px] text-gray-500">{appointment.customerPhone}</span>
                                 )}
