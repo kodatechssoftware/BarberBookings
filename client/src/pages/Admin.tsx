@@ -2539,10 +2539,8 @@ export default function Admin() {
                         value={serviceFormData.agendaLabel}
                         onChange={e => setServiceFormData({...serviceFormData, agendaLabel: e.target.value})}
                         className="bg-background border-white/10 text-white"
-                        placeholder="Ex: Corte degradê"
                         maxLength={40}
                       />
-                      <p className="mt-1 text-xs text-gray-500">Nome curto mostrado na agenda. Útil para encurtar nomes longos.</p>
                     </div>
                     <div>
                       <Label>Preço (€) *</Label>
@@ -2601,10 +2599,8 @@ export default function Admin() {
                                 defaultValue={service.agendaLabel || ""}
                                 id={`edit-service-agenda-label-${service.id}`}
                                 className="bg-background border-white/10"
-                                placeholder="Ex: Corte degradê"
                                 maxLength={40}
                               />
-                              <p className="mt-1 text-xs text-gray-500">Nome curto mostrado na agenda. Útil para encurtar nomes longos.</p>
                             </div>
                             <div><Label>Preço (€)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Duração (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
