@@ -718,9 +718,55 @@ function getEditedBarberAvatar(
 type ServiceListItem = {
   id: number;
   name: string;
+  agendaLabel?: string | null;
   duration?: number;
   isVisible?: boolean | null;
 };
+
+type ServiceMutationResponse = {
+  id?: number;
+  agendaLabel?: string | null;
+} | null;
+
+type ServiceFormData = {
+  name: string;
+  description: string;
+  agendaLabel: string;
+  price: number;
+  duration: number;
+};
+
+const emptyServiceFormData: ServiceFormData = {
+  name: "",
+  description: "",
+  agendaLabel: "",
+  price: 0,
+  duration: 30,
+};
+
+function getAgendaLabelPayload(value?: string | null) {
+  const trimmed = (value || "").trim();
+  return trimmed ? trimmed : null;
+}
+
+async function assertServiceAgendaLabelPersisted(response: Response, expectedAgendaLabel: string | null) {
+  const service = await response.json().catch(() => null);
+  if (expectedAgendaLabel && service?.agendaLabel !== expectedAgendaLabel) {
+    throw new Error("A etiqueta da agenda não ficou gravada. O servidor/API ainda não tem esta alteração ativa.");
+  }
+
+  return service;
+}
+
+async function rollbackServiceIfAgendaLabelFailed(service: ServiceMutationResponse, expectedAgendaLabel: string | null) {
+  if (!expectedAgendaLabel || service?.agendaLabel === expectedAgendaLabel) return;
+
+  if (service?.id) {
+    await apiRequest("DELETE", `/api/services/${service.id}`).catch(() => null);
+  }
+
+  throw new Error("A etiqueta da agenda não ficou gravada. Reinicie ou atualize o backend e tente novamente.");
+}
 
 type BarberListCacheItem = {
   id: number;
@@ -1004,11 +1050,12 @@ export default function Admin() {
   const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
-  const [serviceFormData, setServiceFormData] = useState({ name: "", description: "", price: 0, duration: 30 });
+  const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<AppointmentStatusFilter>("all");
+  const [selectedAgendaStatusFilter, setSelectedAgendaStatusFilter] = useState<AppointmentStatusFilter>("all");
   const [appointmentViewMode, setAppointmentViewMode] = useState<AppointmentViewMode>("day");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
@@ -1090,10 +1137,12 @@ export default function Admin() {
   const filteredWeeklyAppointmentList = useMemo(() => {
     return weeklyAppointmentList.filter((appointment) => {
       const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
-      const matchesStatus = selectedStatusFilter === "all" || appointment.status === selectedStatusFilter;
+      const matchesStatus = selectedAgendaStatusFilter === "all"
+        ? appointment.status === "booked"
+        : appointment.status === selectedAgendaStatusFilter;
       return matchesBarber && matchesStatus;
     });
-  }, [selectedBarberFilter, selectedStatusFilter, user?.role, weeklyAppointmentList]);
+  }, [selectedAgendaStatusFilter, selectedBarberFilter, user?.role, weeklyAppointmentList]);
   const todaySummary = useMemo<TodaySummary>(() => {
     const now = new Date();
     const todayKey = format(startOfToday(), "yyyy-MM-dd");
@@ -1198,11 +1247,17 @@ export default function Admin() {
   const handleAddService = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await apiRequest("POST", "/api/services", serviceFormData);
+      const payload = {
+        ...serviceFormData,
+        agendaLabel: getAgendaLabelPayload(serviceFormData.agendaLabel),
+      };
+      const response = await apiRequest("POST", "/api/services", payload);
+      const createdService = await response.json().catch(() => null);
+      await rollbackServiceIfAgendaLabelFailed(createdService, payload.agendaLabel);
       queryClient.invalidateQueries({ queryKey: ["/api/services"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingService(false);
-      setServiceFormData({ name: "", description: "", price: 0, duration: 30 });
+      setServiceFormData(emptyServiceFormData);
       toast({ title: "Sucesso", description: "Serviço adicionado com sucesso." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao adicionar serviço.", variant: "destructive" });
@@ -1985,10 +2040,10 @@ export default function Admin() {
               services={services}
               isLoading={isLoadingWeeklyAppointments}
               selectedBarberFilter={selectedBarberFilter}
-              selectedStatusFilter={selectedStatusFilter}
+              selectedStatusFilter={selectedAgendaStatusFilter}
               canFilterBarbers={user.role === "admin"}
               onBarberFilterChange={setSelectedBarberFilter}
-              onStatusFilterChange={setSelectedStatusFilter}
+              onStatusFilterChange={setSelectedAgendaStatusFilter}
               onPreviousWeek={() => setWeeklyStartDate((current) => addDays(current, -7))}
               onNextWeek={() => setWeeklyStartDate((current) => addDays(current, 7))}
               onToday={() => setWeeklyStartDate(startOfWeek(startOfToday(), { weekStartsOn: 1 }))}
@@ -2479,6 +2534,17 @@ export default function Admin() {
                       />
                     </div>
                     <div>
+                      <Label>Etiqueta na agenda</Label>
+                      <Input
+                        value={serviceFormData.agendaLabel}
+                        onChange={e => setServiceFormData({...serviceFormData, agendaLabel: e.target.value})}
+                        className="bg-background border-white/10 text-white"
+                        placeholder="Ex: Corte degradê"
+                        maxLength={40}
+                      />
+                      <p className="mt-1 text-xs text-gray-500">Nome curto mostrado na agenda. Útil para encurtar nomes longos.</p>
+                    </div>
+                    <div>
                       <Label>Preço (€) *</Label>
                       <Input 
                         type="number" 
@@ -2514,7 +2580,11 @@ export default function Admin() {
               {services?.map(service => (
                 <Card key={service.id} className="bg-card border-white/10 text-white">
                   <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-lg font-bold">{service.name}</CardTitle><span className="text-primary font-bold">{(service.price / 100).toFixed(2)}€</span></CardHeader>
-                  <CardContent><p className="text-sm text-gray-400 mb-4">{service.duration} min</p>
+                  <CardContent>
+                    <div className="mb-4 space-y-1 text-sm text-gray-400">
+                      <p>{service.duration} min</p>
+                      <p className="text-xs text-gray-500">Agenda: {service.agendaLabel || "etiqueta automática"}</p>
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       <Dialog>
                         <DialogTrigger asChild>
@@ -2525,18 +2595,35 @@ export default function Admin() {
                           <div className="space-y-4 pt-4" data-edit-service-form>
                             <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>
+                            <div>
+                              <Label>Etiqueta na agenda</Label>
+                              <Input
+                                defaultValue={service.agendaLabel || ""}
+                                id={`edit-service-agenda-label-${service.id}`}
+                                className="bg-background border-white/10"
+                                placeholder="Ex: Corte degradê"
+                                maxLength={40}
+                              />
+                              <p className="mt-1 text-xs text-gray-500">Nome curto mostrado na agenda. Útil para encurtar nomes longos.</p>
+                            </div>
                             <div><Label>Preço (€)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Duração (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
                             <Button variant="gold" className="w-full" onClick={async (event) => {
-                              const formRoot = event.currentTarget.closest("[data-edit-service-form]");
-                              const name = formRoot?.querySelector<HTMLInputElement>(`#edit-service-name-${service.id}`)?.value || "";
-                              const description = formRoot?.querySelector<HTMLTextAreaElement>(`#edit-service-desc-${service.id}`)?.value || "";
-                              const price = Math.round(Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-price-${service.id}`)?.value || 0) * 100);
-                              const duration = Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-dur-${service.id}`)?.value || 0);
-                              await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, price, duration });
-                              queryClient.invalidateQueries({ queryKey: ["/api/services"] });
-                              queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                              toast({ title: "Sucesso", description: "Serviço atualizado." });
+                              try {
+                                const formRoot = event.currentTarget.closest("[data-edit-service-form]");
+                                const name = formRoot?.querySelector<HTMLInputElement>(`#edit-service-name-${service.id}`)?.value || "";
+                                const description = formRoot?.querySelector<HTMLTextAreaElement>(`#edit-service-desc-${service.id}`)?.value || "";
+                                const agendaLabel = getAgendaLabelPayload(formRoot?.querySelector<HTMLInputElement>(`#edit-service-agenda-label-${service.id}`)?.value);
+                                const price = Math.round(Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-price-${service.id}`)?.value || 0) * 100);
+                                const duration = Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-dur-${service.id}`)?.value || 0);
+                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, agendaLabel, price, duration });
+                                await assertServiceAgendaLabelPersisted(response, agendaLabel);
+                                queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                                queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+                                toast({ title: "Sucesso", description: "Serviço atualizado." });
+                              } catch (err: any) {
+                                toast({ title: "Erro", description: err.message || "Erro ao atualizar serviço.", variant: "destructive" });
+                              }
                             }}>Guardar</Button>
                           </div>
                         </DialogContent>

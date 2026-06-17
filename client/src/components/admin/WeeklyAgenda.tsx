@@ -27,13 +27,13 @@ type AppointmentStatusFilter = AppointmentStatus | "all";
 type WeeklyAgendaService = {
   id: number;
   name: string;
+  agendaLabel?: string | null;
   duration?: number;
   isVisible?: boolean | null;
 };
 
 const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; label: string }> = [
-  { value: "all", label: "Todos os estados" },
-  { value: "booked", label: "Marcadas" },
+  { value: "all", label: "Marcadas" },
   { value: "completed", label: "Concluídas" },
   { value: "cancelled", label: "Canceladas" },
   { value: "late_cancelled", label: "Cancelamentos tardios" },
@@ -57,7 +57,9 @@ function colorWithAlpha(color: string | undefined | null, alpha: number) {
 const weeklyAgendaStartHour = 9;
 const weeklyAgendaEndHour = 20;
 const weeklyAgendaPixelsPerMinute = 1.12;
-const weeklyAgendaHeight = (weeklyAgendaEndHour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute;
+const weeklyAgendaBottomPadding = 24;
+const weeklyAgendaHeight =
+  (weeklyAgendaEndHour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute + weeklyAgendaBottomPadding;
 const weeklyAgendaHours = Array.from(
   { length: weeklyAgendaEndHour - weeklyAgendaStartHour + 1 },
   (_, index) => weeklyAgendaStartHour + index,
@@ -137,7 +139,11 @@ function normalizeServiceNameForBadge(serviceName?: string | null) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function getServiceBadge(serviceName?: string | null) {
+function getServiceBadge(service?: WeeklyAgendaService) {
+  const customAgendaLabel = service?.agendaLabel?.trim();
+  if (customAgendaLabel) return customAgendaLabel;
+
+  const serviceName = service?.name?.trim();
   const normalizedName = normalizeServiceNameForBadge(serviceName);
   const hasBarba = normalizedName.includes("barba");
   const hasDegrade = normalizedName.includes("degrade");
@@ -159,7 +165,7 @@ function getServiceBadge(serviceName?: string | null) {
     return "Barba";
   }
 
-  return "Serviço";
+  return serviceName || "Serviço";
 }
 
 export function getAppointmentContactLinks(phone: string) {
@@ -268,7 +274,7 @@ export function WeeklyAgenda({
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
     const color = normalizeBarberColor(barber?.color);
-    const serviceBadge = getServiceBadge(service?.name);
+    const serviceBadge = getServiceBadge(service);
     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
     return (
@@ -532,7 +538,7 @@ export function WeeklyAgenda({
                             const barber = barbersById.get(appointment.barberId);
                             const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                             const color = normalizeBarberColor(barber?.color);
-                            const serviceBadge = getServiceBadge(service?.name);
+                            const serviceBadge = getServiceBadge(service);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
                             return (

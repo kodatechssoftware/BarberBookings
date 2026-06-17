@@ -68,3 +68,15 @@ export async function ensureAppointmentOverlapProtection() {
     WHERE (status = 'booked')
   `);
 }
+
+export async function ensureServiceAgendaLabelColumn() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedTableName}
+    ADD COLUMN IF NOT EXISTS agenda_label text
+  `);
+}

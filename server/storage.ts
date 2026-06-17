@@ -715,6 +715,7 @@ export class MemoryStorage implements IStorage {
       id: this.nextIds.service++,
       name: service.name,
       description: service.description ?? null,
+      agendaLabel: service.agendaLabel ?? null,
       price: service.price,
       duration: service.duration,
       isVisible: service.isVisible ?? true,

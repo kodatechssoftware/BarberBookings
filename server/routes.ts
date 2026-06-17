@@ -18,7 +18,7 @@ import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { parseISO, format, isValid, startOfDay, endOfDay } from "date-fns";
 import ExcelJS from 'exceljs';
-import { appointmentStatuses, type Appointment } from "@shared/schema";
+import { appointmentStatuses, insertServiceSchema, type Appointment } from "@shared/schema";
 import {
   emailValidationMessage,
   isValidOptionalEmail,
@@ -1136,7 +1136,7 @@ export async function registerRoutes(
   // === SERVICES MGMT ===
   app.post("/api/services", requireAdmin, async (req, res) => {
     try {
-      const input = api.services.create.input.parse(req.body);
+      const input = insertServiceSchema.parse(req.body);
       const service = await storage.createService(input);
       await recordAuditLog(req, {
         action: "service.created",
@@ -1159,7 +1159,8 @@ export async function registerRoutes(
 
   app.patch("/api/services/:id", requireAdmin, async (req, res) => {
     try {
-      const service = await storage.updateService(Number(req.params.id), req.body);
+      const input = insertServiceSchema.partial().parse(req.body);
+      const service = await storage.updateService(Number(req.params.id), input);
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
       await recordAuditLog(req, {
         action: "service.updated",
@@ -1170,6 +1171,12 @@ export async function registerRoutes(
       });
       res.json(service);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0].message,
+          field: error.errors[0].path.join("."),
+        });
+      }
       res.status(500).json({ message: "Erro ao atualizar serviço" });
     }
   });

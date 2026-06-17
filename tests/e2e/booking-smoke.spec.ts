@@ -384,6 +384,94 @@ test.describe("admin navigation", () => {
     }
   });
 
+  test("uses manual and automatic service agenda labels", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const barbersResponse = await request.get("/api/barbers?includeHidden=true");
+    expect(barbersResponse.ok()).toBe(true);
+    const [barber] = await barbersResponse.json();
+    expect(barber).toBeTruthy();
+
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Serviços" }).click();
+    await page.getByRole("button", { name: "Adicionar Serviço" }).click();
+
+    const serviceDialog = page.getByRole("dialog", { name: "Novo Serviço" });
+    const serviceInputs = serviceDialog.locator("input");
+    await serviceInputs.nth(0).fill("Corte A");
+    await serviceInputs.nth(1).fill("Teste de etiqueta na agenda");
+    await serviceInputs.nth(2).fill("Corte B");
+    await serviceInputs.nth(3).fill("10");
+    await serviceInputs.nth(4).fill("30");
+    await serviceDialog.getByRole("button", { name: "Criar Serviço" }).click();
+    await expect(page.getByText("Agenda: Corte B")).toBeVisible();
+
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+    expect(servicesResponse.ok()).toBe(true);
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) => item.name === "Corte A");
+    expect(service).toBeTruthy();
+    expect(service.agendaLabel).toBe("Corte B");
+
+    const madeixasServiceResponse = await request.post("/api/services", {
+      data: {
+        name: "Madeixas QA",
+        description: "Teste de etiqueta automatica",
+        price: 1000,
+        duration: 30,
+      },
+    });
+    expect(madeixasServiceResponse.ok(), await madeixasServiceResponse.text()).toBe(true);
+    const madeixasService = await madeixasServiceResponse.json();
+    expect(madeixasService.agendaLabel ?? null).toBe(null);
+
+    const createResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: currentWeekThursdayIso(19, 30),
+        name: "Cliente Etiqueta",
+        phone: "912695733",
+        isManualBooking: true,
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+
+    const createMadeixasResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: madeixasService.id,
+        startTime: currentWeekThursdayIso(18, 30),
+        name: "Cliente Madeixas",
+        phone: "912695734",
+        isManualBooking: true,
+      },
+    });
+    expect(createMadeixasResponse.ok(), await createMadeixasResponse.text()).toBe(true);
+
+    await page.reload();
+    await page.getByRole("tab", { name: "Agenda" }).waitFor({ state: "visible" });
+    const agendaAppointment = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Cliente Etiqueta/,
+    }).first();
+    await expect(agendaAppointment).toBeVisible();
+    await expect(agendaAppointment).toContainText("Corte B");
+    await expect(agendaAppointment).not.toContainText("Corte A");
+
+    const automaticAgendaAppointment = page.locator("button:visible").filter({ hasText: "Cliente Madeixas" }).first();
+    await expect(automaticAgendaAppointment).toBeVisible();
+    await expect(automaticAgendaAppointment).toContainText("Madeixas QA");
+    await expect(automaticAgendaAppointment).not.toContainText("Serviço");
+
+    await expect.poll(async () => agendaAppointment.evaluate((element) => {
+      const column = element.parentElement;
+      if (!column) return false;
+      const appointmentRect = element.getBoundingClientRect();
+      const columnRect = column.getBoundingClientRect();
+      return appointmentRect.bottom <= columnRect.bottom + 1;
+    })).toBe(true);
+  });
+
   test("keeps the admin dashboard usable on mobile and saves internal notes", async ({ page, request }) => {
     await createManualAppointmentForCurrentWeek(request, {
       name: "Notas Internas QA",
@@ -467,6 +555,9 @@ test.describe("admin navigation", () => {
 
     await page.reload();
     await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+    await expect(page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Disponibilidade Manual QA/,
+    })).toHaveCount(0);
 
     dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
     await selectDialogOption(page, dialog, 0, barber.name);

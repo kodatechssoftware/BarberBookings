@@ -57,6 +57,7 @@ export const services = appPgTable("services", {
   id: idColumn("services_id_seq"),
   name: text("name").notNull(),
   description: text("description"),
+  agendaLabel: text("agenda_label"),
   price: integer("price").notNull(),
   duration: integer("duration").notNull(),
   isVisible: boolean("is_visible").default(true),
@@ -197,7 +198,9 @@ export const barberServicesRelations = relations(barberServices, ({ one }) => ({
 // === BASE SCHEMAS ===
 
 export const insertBarberSchema = createInsertSchema(barbers).omit({ id: true });
-export const insertServiceSchema = createInsertSchema(services).omit({ id: true });
+export const insertServiceSchema = createInsertSchema(services).omit({ id: true }).extend({
+  agendaLabel: z.string().trim().max(40, "A etiqueta da agenda nao pode ter mais de 40 caracteres.").optional().nullable(),
+});
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;
 const internationalZeroPrefixPhonePattern = /^00\d{7,15}$/;
