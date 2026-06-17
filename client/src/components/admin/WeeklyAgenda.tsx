@@ -130,26 +130,33 @@ function getDailyAppointmentLabel(count: number) {
   return `${count} no dia`;
 }
 
+function normalizeServiceNameForBadge(serviceName?: string | null) {
+  return (serviceName || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
 function getServiceBadge(serviceName?: string | null) {
-  const normalizedName = (serviceName || "").toLowerCase();
+  const normalizedName = normalizeServiceNameForBadge(serviceName);
+  const hasBarba = normalizedName.includes("barba");
+  const hasDegrade = normalizedName.includes("degrade");
+  const hasSimples = normalizedName.includes("simples");
+  const hasHairService =
+    normalizedName.includes("corte") || normalizedName.includes("cabelo") || hasDegrade || hasSimples;
 
-  if (
-    normalizedName.includes("barba") &&
-    (normalizedName.includes("corte") || normalizedName.includes("cabelo") || normalizedName.includes("degrade"))
-  ) {
-    return "Barba e cabelo";
+  const haircutLabel = hasDegrade ? "Corte degradê" : hasSimples ? "Corte simples" : hasHairService ? "Corte" : "";
+
+  if (haircutLabel && hasBarba) {
+    return `${haircutLabel} + barba`;
   }
 
-  if (normalizedName.includes("barba")) {
+  if (haircutLabel) {
+    return haircutLabel;
+  }
+
+  if (hasBarba) {
     return "Barba";
-  }
-
-  if (
-    normalizedName.includes("corte") ||
-    normalizedName.includes("cabelo") ||
-    normalizedName.includes("degrade")
-  ) {
-    return "Cabelo";
   }
 
   return "Serviço";
