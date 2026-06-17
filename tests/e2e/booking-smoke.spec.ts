@@ -780,6 +780,23 @@ test.describe("booking rules", () => {
     expect(response.status()).toBe(400);
   });
 
+  test("does not expose barber credentials through barber APIs", async ({ request }) => {
+    const publicResponse = await request.get("/api/barbers");
+    expect(publicResponse.ok()).toBe(true);
+    const publicBarbers = await publicResponse.json();
+    expect(publicBarbers.length).toBeGreaterThan(0);
+    expect(publicBarbers[0]).not.toHaveProperty("password");
+    expect(publicBarbers[0]).not.toHaveProperty("email");
+
+    await loginAdminRequest(request);
+    const privateResponse = await request.get("/api/barbers?includeHidden=true");
+    expect(privateResponse.ok()).toBe(true);
+    const privateBarbers = await privateResponse.json();
+    expect(privateBarbers.length).toBeGreaterThan(0);
+    expect(privateBarbers[0]).toHaveProperty("email");
+    expect(privateBarbers[0]).not.toHaveProperty("password");
+  });
+
   test("records admin actions in the audit log", async ({ request }) => {
     await loginAdminRequest(request);
 

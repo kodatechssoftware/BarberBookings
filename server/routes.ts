@@ -364,6 +364,14 @@ async function getBarbersWithServiceIds() {
   }));
 }
 
+function sanitizeBarberForResponse<T extends { email?: unknown; password?: unknown }>(
+  barber: T,
+  includePrivateFields = false,
+) {
+  const { email, password: _password, ...publicBarber } = barber;
+  return includePrivateFields ? { ...publicBarber, email } : publicBarber;
+}
+
 function isLateCancellation(startTime: Date | string) {
   const appointmentDate = toDate(startTime);
   const millisecondsUntilAppointment = appointmentDate.getTime() - Date.now();
@@ -1217,7 +1225,10 @@ export async function registerRoutes(
     const includeHidden = req.query.includeHidden === "true" &&
       Boolean(appSession.adminId || appSession.barberId);
 
-    res.json(includeHidden ? barbers : barbers.filter((barber) => barber.isVisible));
+    res.json(
+      (includeHidden ? barbers : barbers.filter((barber) => barber.isVisible))
+        .map((barber) => sanitizeBarberForResponse(barber, includeHidden)),
+    );
   });
 
   app.get("/api/shop/availability", async (_req, res) => {
@@ -1332,8 +1343,14 @@ export async function registerRoutes(
     if (!barber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
+    const appSession = getAppSession(req);
+    const includePrivateFields = Boolean(appSession.adminId || appSession.barberId);
+    if (!barber.isVisible && !includePrivateFields) {
+      return res.status(404).json({ message: "Barbeiro não encontrado" });
+    }
+
     const serviceIds = await storage.getBarberServiceIds(barber.id);
-    res.json({ ...barber, serviceIds });
+    res.json(sanitizeBarberForResponse({ ...barber, serviceIds }, includePrivateFields));
   });
 
   // === SERVICES ===
