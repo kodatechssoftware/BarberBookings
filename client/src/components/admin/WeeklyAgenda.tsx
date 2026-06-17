@@ -526,10 +526,6 @@ export function WeeklyAgenda({
                             const barber = barbersById.get(appointment.barberId);
                             const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                             const color = normalizeBarberColor(barber?.color);
-                            const isSharedSlot = sameSlot.length > 1;
-                            const isCrowdedSlot = sameSlot.length >= 3;
-                            const isCompactCard = isCrowdedSlot || height < 56;
-                            const canShowPhone = !isSharedSlot && height >= 74;
                             const serviceBadge = getServiceBadge(service?.name);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
@@ -544,7 +540,7 @@ export function WeeklyAgenda({
                                 onClick={() => onSelectAppointment(appointment)}
                                 className={cn(
                                   "absolute z-10 overflow-hidden rounded-lg border text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-                                  isCompactCard ? "flex flex-col justify-center gap-0.5 px-1.5 py-1" : "px-2 py-1.5",
+                                  "flex flex-col justify-center gap-0.5 px-1.5 py-1",
                                   appointment.status !== "booked" && "opacity-70",
                                 )}
                                 style={{
@@ -558,25 +554,16 @@ export function WeeklyAgenda({
                                 }}
                               >
                                 <span
-                                  className={cn(
-                                    "inline-flex max-w-full items-center rounded-full border border-white/10 bg-black/15 font-semibold uppercase text-gray-100",
-                                    isCompactCard ? "h-4 gap-0.5 px-1 text-[8px]" : "h-5 gap-1 px-1.5 text-[10px]",
-                                  )}
+                                  className="inline-flex h-4 max-w-full items-center gap-0.5 rounded-full border border-white/10 bg-black/15 px-1 font-semibold uppercase text-[8px] text-gray-100"
                                 >
-                                  <Scissors className={cn("shrink-0", isCompactCard ? "h-2.5 w-2.5" : "h-3 w-3")} />
+                                  <Scissors className="h-2.5 w-2.5 shrink-0" />
                                   <span className="truncate">{serviceBadge}</span>
                                 </span>
                                 <span
-                                  className={cn(
-                                    "block truncate font-semibold leading-tight text-white",
-                                    isCompactCard ? "text-[11px]" : "mt-1.5 text-xs",
-                                  )}
+                                  className="block truncate text-[11px] font-semibold leading-tight text-white"
                                 >
                                   {appointment.customerName}
                                 </span>
-                                {canShowPhone && appointment.customerPhone && (
-                                  <span className="block truncate text-[10px] text-gray-500">{appointment.customerPhone}</span>
-                                )}
                               </button>
                             );
                           })}
