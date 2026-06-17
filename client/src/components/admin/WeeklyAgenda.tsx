@@ -324,7 +324,7 @@ export function WeeklyAgenda({
                 <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={onException}>
                   <AlertTriangle className="h-4 w-4" /> Ausência
                 </Button>
-                <Button type="button" variant="gold" className="h-10 gap-2" onClick={onManualBooking}>
+                <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking()}>
                   <Plus className="h-4 w-4" /> Marcação manual
                 </Button>
               </div>
