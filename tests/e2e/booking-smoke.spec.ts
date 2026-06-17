@@ -422,7 +422,7 @@ test.describe("admin navigation", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("blocks booked manual slots and frees them after cancellation", async ({ page, request }) => {
+  test("keeps manual and public availability in sync", async ({ page, request }) => {
     await loginAdminRequest(request);
 
     const appointmentStart = currentWeekThursdayIso(16, 30);
@@ -431,6 +431,12 @@ test.describe("admin navigation", () => {
       phone: "912695707",
       startTime: appointmentStart,
     });
+    const appointmentDateKey = dateKeyFromIso(appointmentStart);
+
+    const publicBusyResponse = await request.get(`/api/appointments/public?barberId=${barber.id}&date=${appointmentDateKey}`);
+    expect(publicBusyResponse.ok()).toBe(true);
+    const publicBusyAppointments = await publicBusyResponse.json();
+    expect(publicBusyAppointments.some((item: any) => item.id === appointment.id)).toBe(true);
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
@@ -448,6 +454,11 @@ test.describe("admin navigation", () => {
     });
     expect(cancelResponse.ok(), await cancelResponse.text()).toBe(true);
 
+    const publicFreeResponse = await request.get(`/api/appointments/public?barberId=${barber.id}&date=${appointmentDateKey}`);
+    expect(publicFreeResponse.ok()).toBe(true);
+    const publicFreeAppointments = await publicFreeResponse.json();
+    expect(publicFreeAppointments.some((item: any) => item.id === appointment.id)).toBe(false);
+
     await page.reload();
     await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
 
@@ -456,6 +467,29 @@ test.describe("admin navigation", () => {
     await selectDialogOption(page, dialog, 1, service.name);
 
     await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
+
+    const publicAppointmentStart = currentWeekThursdayIso(17, 30);
+    const publicCreateResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: publicAppointmentStart,
+        customerName: "Publico Sincronizado QA",
+        customerPhone: "912695709",
+        customerEmail: null,
+      },
+    });
+    expect(publicCreateResponse.ok(), await publicCreateResponse.text()).toBe(true);
+
+    await page.keyboard.press("Escape");
+    await page.reload();
+    await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+
+    dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00");
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+
+    await expect(dialog.getByRole("button", { name: "17:30", exact: true })).toBeDisabled();
     await expectNoHorizontalOverflow(page);
   });
 
