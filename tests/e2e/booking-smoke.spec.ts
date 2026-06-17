@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
 import { getAvailableTimeSlots } from "../../client/src/lib/availability";
 
@@ -55,6 +55,15 @@ function futureThursdayIso(weeksAhead = 3, hour = 10, minute = 0) {
 
 function dateKeyFromIso(isoDate: string) {
   return isoDate.slice(0, 10);
+}
+
+function dateLabelFromIso(isoDate: string) {
+  const date = new Date(isoDate);
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getFullYear()),
+  ].join("/");
 }
 
 async function createManualAppointmentForCurrentWeek(
@@ -177,6 +186,24 @@ async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequ
     });
     expect(createResponse.ok()).toBe(true);
   }
+}
+
+async function openManualBookingFromAgendaSlot(page: Page, isoDate: string, time: string) {
+  const dateLabel = dateLabelFromIso(isoDate);
+  const slotButton = page.getByRole("button", {
+    name: `Criar marcação em ${dateLabel} às ${time}`,
+  }).first();
+  await expect(slotButton).toBeVisible();
+  await slotButton.click();
+
+  const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+async function selectDialogOption(page: Page, dialog: Locator, index: number, optionName: string) {
+  await dialog.getByRole("combobox").nth(index).click();
+  await page.getByRole("option", { name: optionName }).click();
 }
 
 test.describe("public booking flow", () => {
@@ -392,6 +419,43 @@ test.describe("admin navigation", () => {
     await expect(reloadedAppointmentButton).toBeVisible();
     await reloadedAppointmentButton.click();
     await expect(page.getByRole("dialog").locator("textarea").last()).toHaveValue(noteText);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("blocks booked manual slots and frees them after cancellation", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const appointmentStart = currentWeekThursdayIso(16, 30);
+    const { appointment, barber, service } = await createExportAppointment(request, {
+      name: "Disponibilidade Manual QA",
+      phone: "912695707",
+      startTime: appointmentStart,
+    });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+
+    await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+
+    const cancelResponse = await request.patch(`/api/appointments/${appointment.id}/status`, {
+      data: { status: "cancelled" },
+    });
+    expect(cancelResponse.ok(), await cancelResponse.text()).toBe(true);
+
+    await page.reload();
+    await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+
+    dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+
+    await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
     await expectNoHorizontalOverflow(page);
   });
 

@@ -173,6 +173,57 @@ function getAdminAppointmentEnd(appointment: AdminAppointment) {
   return new Date(start.getTime() + Math.max(15, appointment.durationMinutes || 30) * 60000);
 }
 
+function getAdminAppointmentDurationMinutes(
+  appointment: Pick<AdminAppointment, "serviceId" | "durationMinutes">,
+  services?: Array<{ id: number; duration?: number | null }>,
+) {
+  const serviceDuration = appointment.serviceId
+    ? services?.find((service) => service.id === appointment.serviceId)?.duration
+    : undefined;
+  const storedDuration = appointment.durationMinutes;
+
+  if (typeof storedDuration !== "number" || !Number.isFinite(storedDuration) || storedDuration <= 0) {
+    return serviceDuration || 30;
+  }
+
+  if (appointment.serviceId && storedDuration === 30 && serviceDuration && serviceDuration !== 30) {
+    return serviceDuration;
+  }
+
+  return storedDuration;
+}
+
+function hasAdminAppointmentConflict({
+  appointments,
+  barberId,
+  date,
+  time,
+  duration,
+  services,
+}: {
+  appointments: AdminAppointment[];
+  barberId: number;
+  date: Date;
+  time: string;
+  duration: number;
+  services?: Array<{ id: number; duration?: number | null }>;
+}) {
+  const [hours, minutes] = time.split(":").map(Number);
+  const start = new Date(date);
+  start.setHours(hours, minutes, 0, 0);
+  const end = new Date(start.getTime() + duration * 60000);
+
+  return appointments.some((appointment) => {
+    if (appointment.barberId !== barberId || appointment.status !== "booked") return false;
+
+    const appointmentStart = parseISO(appointment.startTime);
+    const appointmentDuration = getAdminAppointmentDurationMinutes(appointment, services);
+    const appointmentEnd = new Date(appointmentStart.getTime() + appointmentDuration * 60000);
+
+    return start < appointmentEnd && end > appointmentStart;
+  });
+}
+
 function getAppointmentServicePriceCents(
   appointment: AdminAppointment,
   services?: Array<{ id: number; price?: number | null }>,
@@ -1091,6 +1142,20 @@ export default function Admin() {
     recurringWeeks: "2",
     recurringMonths: "6",
   });
+  const blockAppointmentDate = format(blockData.date, "yyyy-MM-dd");
+  const {
+    data: blockAppointments,
+  } = useAppointments({
+    enabled: user?.authorized === true && Boolean(blockData.barberId),
+    date: blockAppointmentDate,
+    barberId: blockData.barberId || undefined,
+    refetchInterval: 10000,
+  });
+  const blockAppointmentList = useMemo(
+    () => Array.isArray(blockAppointments) ? (blockAppointments as AdminAppointment[]) : [],
+    [blockAppointments],
+  );
+  const hasLoadedBlockAppointments = !blockData.barberId || Array.isArray(blockAppointments);
 
   const [loginData, setLoginData] = useState({ username: "", password: "" });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -1613,9 +1678,45 @@ export default function Admin() {
   const selectedBlockDuration = blockData.isManualBooking && blockData.serviceId
     ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
     : 30;
-  const availableBlockTimes = blockTimeOptions.filter((time) =>
-    isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId),
-  );
+  const availableBlockTimes = useMemo(() => {
+    if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
+    const barberId = Number(blockData.barberId);
+
+    return blockTimeOptions.filter((time) => {
+      if (!isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
+        return false;
+      }
+
+      return !hasAdminAppointmentConflict({
+        appointments: blockAppointmentList,
+        barberId,
+        date: blockData.date,
+        time,
+        duration: selectedBlockDuration,
+        services,
+      });
+    });
+  }, [
+    allAvailabilityRows,
+    blockAppointmentList,
+    blockData.barberId,
+    blockData.date,
+    hasLoadedBlockAppointments,
+    selectedBlockDuration,
+    services,
+    shopAvailabilityRows,
+  ]);
+  const availableBlockTimesKey = availableBlockTimes.join("|");
+  const selectedBlockTimesKey = blockData.times.join("|");
+
+  useEffect(() => {
+    setBlockData((current) => {
+      const availableTimes = new Set(availableBlockTimes);
+      const validTimes = current.times.filter((time) => availableTimes.has(time));
+      if (validTimes.length === current.times.length) return current;
+      return { ...current, times: validTimes };
+    });
+  }, [availableBlockTimesKey, selectedBlockTimesKey]);
 
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
@@ -1851,6 +1952,7 @@ export default function Admin() {
           isCalendarOpen={isCalendarOpen}
           onCalendarOpenChange={setIsCalendarOpen}
           availableBlockTimes={availableBlockTimes}
+          isCheckingAvailability={Boolean(blockData.barberId) && !hasLoadedBlockAppointments}
           onSubmit={handleBlockTime}
         />
 
