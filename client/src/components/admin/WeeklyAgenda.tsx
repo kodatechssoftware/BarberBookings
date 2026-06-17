@@ -137,7 +137,7 @@ function getServiceBadge(serviceName?: string | null) {
     normalizedName.includes("barba") &&
     (normalizedName.includes("corte") || normalizedName.includes("cabelo") || normalizedName.includes("degrade"))
   ) {
-    return "Combo";
+    return "Barba e cabelo";
   }
 
   if (normalizedName.includes("barba")) {
@@ -287,10 +287,9 @@ export function WeeklyAgenda({
           </div>
           <div className="mt-1 flex items-center gap-2">
             <span className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.06] px-2 text-[10px] font-semibold uppercase tracking-wide text-gray-300">
-              <Scissors className="h-3 w-3" />
+              <Scissors className="h-3 w-3 shrink-0" />
               {serviceBadge}
             </span>
-            <p className="min-w-0 truncate text-sm text-gray-200">{service?.name || "Sem serviço"}</p>
           </div>
           <p className="mt-1 text-[11px] uppercase tracking-wide text-gray-500">{getStatusLabel(appointment.status)}</p>
         </div>
@@ -554,9 +553,9 @@ export function WeeklyAgenda({
                                 }}
                               >
                                 <span
-                                  className="inline-flex h-4 max-w-full items-center gap-0.5 rounded-full border border-white/10 bg-black/15 px-1 font-semibold uppercase text-[8px] text-gray-100"
+                                  className="inline-flex h-5 max-w-full items-center gap-1 rounded-full border border-white/10 bg-black/15 px-1.5 font-semibold uppercase text-[9px] text-gray-100"
                                 >
-                                  <Scissors className="h-2.5 w-2.5 shrink-0" />
+                                  <Scissors className="h-3 w-3 shrink-0" />
                                   <span className="truncate">{serviceBadge}</span>
                                 </span>
                                 <span
