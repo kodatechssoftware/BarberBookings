@@ -1432,7 +1432,16 @@ export async function registerRoutes(
         const visibleBarbers = barbers.filter((barber) =>
           barber.isVisible && barberCanPerformService(barberServiceMap, barber.id, input.serviceId),
         );
-        let availableBarber: (typeof visibleBarbers)[number] | null = null;
+        const appointmentCountsByBarber = new Map<number, number>();
+        existingAppointments
+          .filter((appointment) => appointment.status === "booked" && isOperationalAppointment(appointment))
+          .forEach((appointment) => {
+            appointmentCountsByBarber.set(
+              appointment.barberId,
+              (appointmentCountsByBarber.get(appointment.barberId) || 0) + 1,
+            );
+          });
+        const availableBarbers: typeof visibleBarbers = [];
 
         for (const barber of visibleBarbers) {
           const workingPeriods = await getBarberWorkingPeriods(barber.id, getShopDateParts(input.startTime).weekday);
@@ -1447,14 +1456,18 @@ export async function registerRoutes(
             serviceDurations,
           );
           if (!hasConflict) {
-            availableBarber = barber;
-            break;
+            availableBarbers.push(barber);
           }
         }
 
-        if (!availableBarber) {
+        if (availableBarbers.length === 0) {
           return res.status(409).json({ message: "Nenhum barbeiro disponível para este horário." });
         }
+        const availableBarber = availableBarbers.sort((a, b) => {
+          const countDifference =
+            (appointmentCountsByBarber.get(a.id) || 0) - (appointmentCountsByBarber.get(b.id) || 0);
+          return countDifference || a.id - b.id;
+        })[0];
         finalBarberId = availableBarber.id;
       } else {
         if (!barberCanPerformService(barberServiceMap, finalBarberId, input.serviceId)) {

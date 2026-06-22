@@ -849,6 +849,51 @@ test.describe("booking rules", () => {
     expect(createBody.message).toContain("Não é possível realizar a marcação online");
   });
 
+  test("assigns no-preference bookings to the least busy available barber", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const barbers = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    expect(barbers.length).toBeGreaterThanOrEqual(2);
+    expect(service).toBeTruthy();
+
+    const busyBarber = barbers[0];
+    const lessBusyBarber = barbers[1];
+    const uniqueWeeksAhead = 16 + (Math.floor(Date.now() / 1000) % 20);
+
+    const existingBookingResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: busyBarber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(uniqueWeeksAhead, 10, 0),
+        customerName: "Carga Existente QA",
+        customerPhone: "912695735",
+        customerEmail: null,
+      },
+    });
+    expect(existingBookingResponse.ok(), await existingBookingResponse.text()).toBe(true);
+
+    const noPreferenceResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: 0,
+        serviceId: service.id,
+        startTime: futureThursdayIso(uniqueWeeksAhead, 15, 0),
+        customerName: "Sem Preferencia QA",
+        customerPhone: "912695736",
+        customerEmail: null,
+      },
+    });
+    expect(noPreferenceResponse.ok(), await noPreferenceResponse.text()).toBe(true);
+    const noPreferenceBooking = await noPreferenceResponse.json();
+
+    expect(noPreferenceBooking.barberId).toBe(lessBusyBarber.id);
+  });
+
   test("allows only one concurrent booking for the same barber and slot", async ({ request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
