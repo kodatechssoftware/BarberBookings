@@ -1768,8 +1768,14 @@ export default function Admin() {
     setBlockData((current) => {
       const availableTimes = new Set(availableBlockTimes);
       const validTimes = current.times.filter((time) => availableTimes.has(time));
-      if (validTimes.length === current.times.length) return current;
-      return { ...current, times: validTimes };
+      const nextTimes = current.isRecurring ? validTimes.slice(0, 1) : validTimes;
+      if (
+        nextTimes.length === current.times.length &&
+        nextTimes.every((time, index) => time === current.times[index])
+      ) {
+        return current;
+      }
+      return { ...current, times: nextTimes };
     });
   }, [availableBlockTimesKey, selectedBlockTimesKey]);
 
@@ -1786,6 +1792,10 @@ export default function Admin() {
     }
     if (blockData.isManualBooking && !blockData.serviceId) {
       toast({ title: "Erro", description: "Selecione um serviço.", variant: "destructive" });
+      return;
+    }
+    if (blockData.isRecurring && blockData.times.length !== 1) {
+      toast({ title: "Erro", description: "Escolha apenas uma hora para a marcação recorrente.", variant: "destructive" });
       return;
     }
 

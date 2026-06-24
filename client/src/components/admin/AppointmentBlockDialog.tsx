@@ -52,9 +52,28 @@ export function AppointmentBlockDialog({
   isCheckingAvailability = false,
   onSubmit,
 }: AppointmentBlockDialogProps) {
+  const isSingleTimeMode = blockData.isManualBooking && blockData.isRecurring;
+
   const setQuickBlockTimes = (times: string[]) => {
     const available = times.filter((time) => availableBlockTimes.includes(time));
     onBlockDataChange({ ...blockData, times: available });
+  };
+
+  const handleTimeClick = (time: string) => {
+    if (isSingleTimeMode) {
+      onBlockDataChange({
+        ...blockData,
+        times: blockData.times.includes(time) ? [] : [time],
+      });
+      return;
+    }
+
+    onBlockDataChange({
+      ...blockData,
+      times: blockData.times.includes(time)
+        ? blockData.times.filter((selectedTime) => selectedTime !== time)
+        : [...blockData.times, time],
+    });
   };
 
   return (
@@ -112,7 +131,12 @@ export function AppointmentBlockDialog({
                   <Switch
                     id="recurring"
                     checked={blockData.isRecurring}
-                    onCheckedChange={(checked) => onBlockDataChange({ ...blockData, isRecurring: checked, isMultiDay: false })}
+                    onCheckedChange={(checked) => onBlockDataChange({
+                      ...blockData,
+                      isRecurring: checked,
+                      isMultiDay: false,
+                      times: checked ? blockData.times.slice(0, 1) : blockData.times,
+                    })}
                   />
                 </div>
               )}
@@ -234,25 +258,29 @@ export function AppointmentBlockDialog({
             <div className="space-y-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <Label className="text-sm font-medium text-gray-300">Horas afetadas</Label>
+                  <Label className="text-sm font-medium text-gray-300">{isSingleTimeMode ? "Hora da marcação" : "Horas afetadas"}</Label>
                   <p className="text-xs text-gray-500">
-                    {blockData.times.length > 0 ? `${blockData.times.length} horário${blockData.times.length === 1 ? "" : "s"} selecionado${blockData.times.length === 1 ? "" : "s"}` : "Escolha uma ou mais horas."}
+                    {blockData.times.length > 0
+                      ? `${blockData.times.length} horário${blockData.times.length === 1 ? "" : "s"} selecionado${blockData.times.length === 1 ? "" : "s"}`
+                      : isSingleTimeMode ? "Escolha a hora que se repete." : "Escolha uma ou mais horas."}
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 sm:flex">
-                  <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(morningBlockTimes)}>
-                    Manhã
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(afternoonBlockTimes)}>
-                    Tarde
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(blockTimeOptions)}>
-                    Dia inteiro
-                  </Button>
-                  <Button type="button" variant="ghost" size="sm" className="h-10 text-xs text-gray-400 sm:h-8" onClick={() => onBlockDataChange({ ...blockData, times: [] })}>
-                    Limpar
-                  </Button>
-                </div>
+                {!isSingleTimeMode && (
+                  <div className="grid grid-cols-2 gap-2 sm:flex">
+                    <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(morningBlockTimes)}>
+                      Manhã
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(afternoonBlockTimes)}>
+                      Tarde
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(blockTimeOptions)}>
+                      Dia inteiro
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" className="h-10 text-xs text-gray-400 sm:h-8" onClick={() => onBlockDataChange({ ...blockData, times: [] })}>
+                      Limpar
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {!blockData.barberId && (
@@ -273,12 +301,7 @@ export function AppointmentBlockDialog({
                       size="sm"
                       className="h-11 rounded-lg text-xs disabled:opacity-30 sm:h-10"
                       disabled={!isAvailable}
-                      onClick={() => onBlockDataChange({
-                        ...blockData,
-                        times: blockData.times.includes(time)
-                          ? blockData.times.filter((selectedTime) => selectedTime !== time)
-                          : [...blockData.times, time],
-                      })}
+                      onClick={() => handleTimeClick(time)}
                     >
                       {time}
                     </Button>

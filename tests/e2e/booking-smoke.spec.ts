@@ -384,6 +384,38 @@ test.describe("admin navigation", () => {
     }
   });
 
+  test("keeps recurring manual bookings to a single selected time", async ({ page, request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await expect(dialog).toBeVisible();
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+    await dialog.getByLabel("Repetir marcação").click();
+
+    await expect(dialog.getByRole("button", { name: "Manhã" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Tarde" })).toHaveCount(0);
+    await expect(dialog.getByText("Hora da marcação")).toBeVisible();
+
+    await dialog.getByRole("button", { name: "14:00", exact: true }).click();
+    await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
+    await dialog.getByRole("button", { name: "14:30", exact: true }).click();
+    await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
   test("uses manual and automatic service agenda labels", async ({ page, request }) => {
     await loginAdminRequest(request);
 
@@ -892,6 +924,39 @@ test.describe("booking rules", () => {
     const noPreferenceBooking = await noPreferenceResponse.json();
 
     expect(noPreferenceBooking.barberId).toBe(lessBusyBarber.id);
+  });
+
+  test("explains the failed time when a recurring manual booking is outside the schedule", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    const response = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: "2026-08-06T18:30:00.000Z",
+        name: "Recorrente Fora Horario QA",
+        phone: "912695737",
+        isManualBooking: true,
+        isRecurring: true,
+        recurringWeeks: 1,
+        recurringMonths: 1,
+      },
+    });
+
+    expect(response.status()).toBe(400);
+    const body = await response.json();
+    expect(body.message).toContain("06/08/2026 19:30");
+    expect(body.message).toContain("60 min");
   });
 
   test("allows only one concurrent booking for the same barber and slot", async ({ request }) => {

@@ -53,6 +53,16 @@ const shopDateFormatter = new Intl.DateTimeFormat("en-GB", {
   hourCycle: "h23",
 });
 
+const shopDateTimeFormatter = new Intl.DateTimeFormat("pt-PT", {
+  timeZone: SHOP_TIME_ZONE,
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
 const weekdays: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -62,6 +72,10 @@ const weekdays: Record<string, number> = {
   Fri: 5,
   Sat: 6,
 };
+
+function formatShopDateTime(date: Date) {
+  return shopDateTimeFormatter.format(date).replace(",", "");
+}
 
 const appointmentStatusSet = new Set<string>(appointmentStatuses);
 const appointmentStatusLabels: Record<Appointment["status"], string> = {
@@ -1591,7 +1605,9 @@ export async function registerRoutes(
         const workingPeriods = await getBarberWorkingPeriods(Number(barberId), getShopDateParts(currentStart).weekday);
         const scheduleError = getScheduleValidationError(currentStart, duration, workingPeriods);
         if (scheduleError) {
-          return res.status(400).json({ message: scheduleError });
+          return res.status(400).json({
+            message: `${scheduleError} (${formatShopDateTime(currentStart)}, ${duration} min).`,
+          });
         }
 
         const existingAppointments = await storage.getAppointments(
@@ -1608,7 +1624,7 @@ export async function registerRoutes(
             serviceDurations,
           )
         ) {
-          conflicts.push(format(currentStart, "dd/MM/yyyy HH:mm"));
+          conflicts.push(formatShopDateTime(currentStart));
           continue;
         }
 
