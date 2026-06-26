@@ -66,6 +66,20 @@ function dateLabelFromIso(isoDate: string) {
   ].join("/");
 }
 
+function lisbonDateTimeParts(isoDate: string) {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Lisbon",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(isoDate)).map((part) => [part.type, part.value]),
+  );
+}
+
 async function createManualAppointmentForCurrentWeek(
   request: APIRequestContext,
   options: { name?: string; phone?: string; hour?: number; minute?: number } = {},
@@ -957,6 +971,88 @@ test.describe("booking rules", () => {
     const body = await response.json();
     expect(body.message).toContain("06/08/2026 19:30");
     expect(body.message).toContain("60 min");
+  });
+
+  test("keeps recurring manual booking hours across the Lisbon daylight saving change", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    const response = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: "2026-09-24T13:00:00.000Z",
+        name: "Recorrente Hora Verao QA",
+        phone: "912695738",
+        isManualBooking: true,
+        isRecurring: true,
+        recurringWeeks: 1,
+        recurringMonths: 2,
+      },
+    });
+
+    expect(response.ok(), await response.text()).toBe(true);
+
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=2026-10-29`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    const daylightSavingAppointment = appointments.find((appointment: any) =>
+      appointment.customerName === "Recorrente Hora Verao QA",
+    );
+    expect(daylightSavingAppointment).toBeTruthy();
+
+    const parts = lisbonDateTimeParts(daylightSavingAppointment.startTime);
+    expect(`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`).toBe("2026-10-29 14:00");
+  });
+
+  test("keeps recurring manual booking hours when Lisbon enters daylight saving time", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    const response = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: "2026-03-19T14:00:00.000Z",
+        name: "Recorrente Hora Inverno QA",
+        phone: "912695739",
+        isManualBooking: true,
+        isRecurring: true,
+        recurringWeeks: 1,
+        recurringMonths: 1,
+      },
+    });
+
+    expect(response.ok(), await response.text()).toBe(true);
+
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=2026-04-02`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    const daylightSavingAppointment = appointments.find((appointment: any) =>
+      appointment.customerName === "Recorrente Hora Inverno QA",
+    );
+    expect(daylightSavingAppointment).toBeTruthy();
+
+    const parts = lisbonDateTimeParts(daylightSavingAppointment.startTime);
+    expect(`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`).toBe("2026-04-02 14:00");
   });
 
   test("allows only one concurrent booking for the same barber and slot", async ({ request }) => {

@@ -216,9 +216,59 @@ function getShopDateParts(date: Date) {
   return {
     dateKey: `${parts.year}-${parts.month}-${parts.day}`,
     weekday: weekdays[parts.weekday] ?? -1,
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
     hour: Number(parts.hour),
     minute: Number(parts.minute),
   };
+}
+
+function addDaysToShopCalendarDate(year: number, month: number, day: number, days: number) {
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+}
+
+function getShopTimeZoneOffsetMs(date: Date) {
+  const parts = getShopDateParts(date);
+  const shopTimeAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+  );
+
+  return shopTimeAsUtc - date.getTime();
+}
+
+function createShopDateTime(year: number, month: number, day: number, hour: number, minute: number) {
+  const shopTimeAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+  let result = new Date(shopTimeAsUtc - getShopTimeZoneOffsetMs(new Date(shopTimeAsUtc)));
+  const adjustedResult = new Date(shopTimeAsUtc - getShopTimeZoneOffsetMs(result));
+
+  if (adjustedResult.getTime() !== result.getTime()) {
+    result = adjustedResult;
+  }
+
+  return result;
+}
+
+function addWeeksPreservingShopTime(startTime: Date, weeks: number) {
+  const start = getShopDateParts(startTime);
+  const targetDate = addDaysToShopCalendarDate(start.year, start.month, start.day, weeks * 7);
+
+  return createShopDateTime(
+    targetDate.year,
+    targetDate.month,
+    targetDate.day,
+    start.hour,
+    start.minute,
+  );
 }
 
 type MinutePeriod = { start: number; end: number };
@@ -1594,13 +1644,26 @@ export async function registerRoutes(
         : { required: false, reason: null };
 
       // Determine how many occurrences
-      const occurrences = (isRecurring && recurringWeeks && recurringMonths) 
-        ? Math.floor((Number(recurringMonths) * 4.33) / Number(recurringWeeks)) 
+      const recurringWeeksNumber = Number(recurringWeeks);
+      const recurringMonthsNumber = Number(recurringMonths);
+      if (
+        isRecurring &&
+        (!Number.isFinite(recurringWeeksNumber) ||
+          recurringWeeksNumber <= 0 ||
+          !Number.isFinite(recurringMonthsNumber) ||
+          recurringMonthsNumber <= 0)
+      ) {
+        return res.status(400).json({ message: "Repetição inválida." });
+      }
+
+      const occurrences = (isRecurring && recurringWeeks && recurringMonths)
+        ? Math.floor((recurringMonthsNumber * 4.33) / recurringWeeksNumber)
         : 1;
 
       for (let i = 0; i < occurrences; i++) {
-        const currentStart = new Date(start);
-        currentStart.setDate(start.getDate() + (i * Number(recurringWeeks || 0) * 7));
+        const currentStart = isRecurring
+          ? addWeeksPreservingShopTime(start, i * recurringWeeksNumber)
+          : new Date(start);
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
         const workingPeriods = await getBarberWorkingPeriods(Number(barberId), getShopDateParts(currentStart).weekday);
         const scheduleError = getScheduleValidationError(currentStart, duration, workingPeriods);
