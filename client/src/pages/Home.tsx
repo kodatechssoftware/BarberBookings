@@ -209,7 +209,7 @@ export default function Home() {
               Corte e barba com hora marcada
             </h1>
             <p className="mt-6 max-w-xl text-base leading-relaxed text-gray-300 md:text-lg">
-              Serviços essenciais, acabamentos cuidados e atendimento sem pressa no centro da Charneca da Caparica.
+              Cortes, barba e acabamentos cuidados, com atenção ao detalhe.
             </p>
 
             <div className="mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
