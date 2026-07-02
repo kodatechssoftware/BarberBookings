@@ -2843,10 +2843,11 @@ export async function registerRoutes(
         17: dateTimeFormat,
       });
 
-      const fileName = `relatorio_de_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;
+      const fileName = `Relat\u00f3rio_de_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;
+      const fallbackFileName = fileName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${fallbackFileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
 
       await workbook.xlsx.write(res);
       res.end();
