@@ -17,6 +17,7 @@ import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
 import { parseISO, format, isValid, startOfDay, endOfDay } from "date-fns";
+import { pt } from "date-fns/locale";
 import ExcelJS from 'exceljs';
 import { appointmentStatuses, insertServiceSchema, type Appointment } from "@shared/schema";
 import {
@@ -2783,8 +2784,8 @@ export async function registerRoutes(
 
       const detailSheet = workbook.addWorksheet("Detalhe Completo");
       const detailHeaders = [
-        "ID",
         "Data",
+        "Dia da semana",
         "Hora",
         "Fim",
         "Barbeiro",
@@ -2814,8 +2815,8 @@ export async function registerRoutes(
           const projectedCents = appointment.status === "booked" ? priceCents : 0;
 
           return [
-            appointment.id,
             startTime,
+            format(startTime, "EEEE", { locale: pt }),
             format(startTime, "HH:mm"),
             format(new Date(startTime.getTime() + appointment.durationMinutes * 60000), "HH:mm"),
             barber?.name || "Barbeiro desconhecido",
@@ -2834,8 +2835,8 @@ export async function registerRoutes(
           ];
         }),
       );
-      finishTableSheet(detailSheet, [10, 14, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 18, 34, 18], {
-        2: dateFormat,
+      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 18, 34, 18], {
+        1: dateFormat,
         12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
