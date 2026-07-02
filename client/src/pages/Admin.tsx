@@ -408,7 +408,7 @@ function TodayOverviewPanel({
 }
 
 function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
-  const busiestBarber = [...data.barbers].sort((a, b) => b.appointments - a.appointments)[0];
+  const busiestBarber = [...data.barbers].sort((a, b) => b.booked - a.booked || b.appointments - a.appointments)[0];
   const topServices = data.services.slice(0, 5);
   const noShowsByMonth = Array.from(
     data.daily.reduce((map, day) => {
@@ -457,7 +457,7 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
               <Users className="h-4 w-4 text-blue-300" /> Barbeiro mais ocupado
             </p>
             <p className="mt-2 truncate text-xl font-bold text-white">{busiestBarber?.name || "Sem dados"}</p>
-            <p className="mt-1 text-xs text-gray-400">{busiestBarber ? `${busiestBarber.appointments} marcações` : "Ainda sem marcações"}</p>
+            <p className="mt-1 text-xs text-gray-400">{busiestBarber ? `${busiestBarber.booked} marca\u00e7\u00f5es ativas` : "Ainda sem marca\u00e7\u00f5es"}</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
