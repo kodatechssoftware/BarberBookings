@@ -1075,6 +1075,7 @@ export default function Admin() {
   const [appointmentViewMode, setAppointmentViewMode] = useState<AppointmentViewMode>("day");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
+  const businessDashboardRef = useRef<HTMLDivElement>(null);
   const [weeklyStartDate, setWeeklyStartDate] = useState<Date>(() =>
     startOfWeek(startOfToday(), { weekStartsOn: 1 }),
   );
@@ -1123,6 +1124,19 @@ export default function Admin() {
       return res.json();
     },
   });
+  const keepBusinessDashboardInView = () => {
+    window.requestAnimationFrame(() => {
+      businessDashboardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+  const handleDashboardDaysChange = (value: string) => {
+    setDashboardDays(value);
+    keepBusinessDashboardInView();
+  };
+  const handleDashboardBarberChange = (value: string) => {
+    setDashboardBarberFilter(value);
+    keepBusinessDashboardInView();
+  };
   const appointmentList = useMemo(() => {
     const list = Array.isArray(appointments) ? (appointments as AdminAppointment[]) : [];
     const visibleAppointments = appointmentViewMode === "upcoming"
@@ -2110,7 +2124,7 @@ export default function Admin() {
               <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs} />
             )}
 
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div ref={businessDashboardRef} className="scroll-mt-24 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white">Dashboard de negócio</h2>
                 <p className="text-sm text-gray-400">
@@ -2118,7 +2132,7 @@ export default function Admin() {
                 </p>
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Select value={dashboardDays} onValueChange={setDashboardDays}>
+                <Select value={dashboardDays} onValueChange={handleDashboardDaysChange}>
                   <SelectTrigger className="h-11 border-white/10 bg-card text-white sm:w-[170px]">
                     <SelectValue placeholder="Período" />
                   </SelectTrigger>
@@ -2129,7 +2143,7 @@ export default function Admin() {
                   </SelectContent>
                 </Select>
                 {user.role === "admin" ? (
-                  <Select value={dashboardBarberFilter} onValueChange={setDashboardBarberFilter}>
+                  <Select value={dashboardBarberFilter} onValueChange={handleDashboardBarberChange}>
                     <SelectTrigger className="h-11 border-white/10 bg-card text-white sm:w-[190px]">
                       <SelectValue placeholder="Barbeiro" />
                     </SelectTrigger>
