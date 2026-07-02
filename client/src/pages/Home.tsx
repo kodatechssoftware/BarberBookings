@@ -14,6 +14,8 @@ import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
 const instagramUrl = import.meta.env.VITE_INSTAGRAM_URL || "";
+const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
+const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
 const googleMapsUrl = "https://www.google.com/maps/search/?api=1&query=Rua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%20N%C2%BA28";
 
 const weeklySchedule = [
@@ -377,15 +379,21 @@ export default function Home() {
                 Instagram
               </a>
             )}
-            <Link
-              href="/admin"
+            <a
+              href={adminUrl}
               className="text-gray-500 hover:text-primary"
-              onFocus={() => void preloadAdminPage()}
-              onMouseEnter={() => void preloadAdminPage()}
-              onTouchStart={() => void preloadAdminPage()}
+              onFocus={() => {
+                if (shouldPreloadAdminPage) void preloadAdminPage();
+              }}
+              onMouseEnter={() => {
+                if (shouldPreloadAdminPage) void preloadAdminPage();
+              }}
+              onTouchStart={() => {
+                if (shouldPreloadAdminPage) void preloadAdminPage();
+              }}
             >
               Acesso administrativo
-            </Link>
+            </a>
           </div>
         </div>
       </footer>
