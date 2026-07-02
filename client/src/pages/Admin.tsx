@@ -37,7 +37,7 @@ import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialo
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { apiFetch, buildApiUrl } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import {
   canBarberPerformService,
   getEffectivePeriodsForBarber,
@@ -945,6 +945,22 @@ function BarberColorField({
   );
 }
 
+function getFilenameFromContentDisposition(header: string | null) {
+  if (!header) return null;
+
+  const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const fallbackMatch = header.match(/filename="?([^";]+)"?/i);
+  return fallbackMatch?.[1] || null;
+}
+
 const weekDays = [
   { id: 1, label: "Segunda", short: "Seg" },
   { id: 2, label: "Terça", short: "Ter" },
@@ -1267,11 +1283,36 @@ export default function Admin() {
   const handleExport = async () => {
     setIsExporting(true);
     try {
+      if (exportDates.start > exportDates.end) {
+        toast({
+          title: "Datas invalidas",
+          description: "A data de inicio nao pode ser posterior a data de fim.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportDates.barberId}`;
-      window.open(buildApiUrl(url), '_blank');
-      toast({ title: "Sucesso", description: "O relatório está a ser gerado." });
-    } catch (err) {
-      toast({ title: "Erro", description: "Falha ao gerar o relatório.", variant: "destructive" });
+      const response = await apiFetch(url);
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.message || "Falha ao gerar o relatorio.");
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = getFilenameFromContentDisposition(response.headers.get("Content-Disposition")) || "Relatorio.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(downloadUrl);
+
+      toast({ title: "Sucesso", description: "O relatorio foi descarregado." });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message || "Falha ao gerar o relatorio.", variant: "destructive" });
     } finally {
       setIsExporting(false);
     }
