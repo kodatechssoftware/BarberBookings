@@ -130,8 +130,8 @@ export function AppointmentBlockDialog({
                 <div className="mt-4 grid gap-3">
                   <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>
-                      <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Marcar fora do horário</Label>
-                      <p className="text-xs text-gray-500">Para pedidos combinados diretamente com o barbeiro antes da abertura ou depois do fecho.</p>
+                      <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Mostrar horários fora do horário normal</Label>
+                      <p className="text-xs text-gray-500">Use apenas quando o cliente combinou uma exceção diretamente com o barbeiro.</p>
                     </div>
                     <Switch
                       id="outsideHours"
