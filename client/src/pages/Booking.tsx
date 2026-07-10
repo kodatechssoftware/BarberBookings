@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots } from "@/lib/availability";
+import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
@@ -412,6 +412,15 @@ export default function Booking() {
       existingAppointments,
     });
   }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
+  const shopAvailabilityForCalendar = useMemo(
+    () => (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+    [shopAvailabilityRows],
+  );
+  const isShopClosedDate = (date: Date) => periodsForShop({
+    dayOfWeek: date.getDay(),
+    shopAvailabilityRows: shopAvailabilityForCalendar,
+  }).length === 0;
+  const selectedDateIsShopClosed = selectedDate ? isShopClosedDate(selectedDate) : false;
 
   const availableDateKeys = useMemo(() => {
     if (!selectedService || selectedBarberId === null) return new Set<string>();
@@ -423,11 +432,11 @@ export default function Booking() {
     const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
     const appointments = calendarAppointments ?? [];
     const availability = (availabilityRows as AvailabilityRow[] | undefined) ?? [];
-    const shopAvailability = (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [];
     const availableKeys = new Set<string>();
 
     eachDayOfInterval({ start: calendarStart, end: calendarEnd }).forEach((date) => {
       if (date < today) return;
+      if (periodsForShop({ dayOfWeek: date.getDay(), shopAvailabilityRows: shopAvailabilityForCalendar }).length === 0) return;
 
       const slots = getAvailableTimeSlots({
         selectedService,
@@ -435,7 +444,7 @@ export default function Booking() {
         selectedBarberId,
         visibleBarbers,
         availabilityRows: availability,
-        shopAvailabilityRows: shopAvailability,
+        shopAvailabilityRows: shopAvailabilityForCalendar,
         existingAppointments: appointments,
       });
 
@@ -450,7 +459,7 @@ export default function Booking() {
     calendarAppointments,
     selectedBarberId,
     selectedService,
-    shopAvailabilityRows,
+    shopAvailabilityForCalendar,
     visibleBarbers,
     visibleCalendarMonth,
   ]);
@@ -772,7 +781,7 @@ export default function Booking() {
                         setSelectedTime(null);
                         setShowTimeError(false);
                       }}
-                      disabled={(date) => date < startOfToday()}
+                      disabled={(date) => date < startOfToday() || isShopClosedDate(date)}
                       initialFocus
                       className="w-full rounded-md px-1 py-2 md:px-3 md:py-3"
                       locale={pt}
@@ -818,6 +827,10 @@ export default function Booking() {
                       <div className="flex justify-center mt-10">
                         <Loader2 className="w-6 h-6 animate-spin text-primary" />
                       </div>
+                    ) : selectedDateIsShopClosed ? (
+                      <p className="text-gray-500 text-center mt-10">
+                        A barbearia está fechada neste dia. Escolha outro dia com horários disponíveis.
+                      </p>
                     ) : timeSlots.length === 0 ? (
                       <p className="text-gray-500 text-center mt-10">
                         Não existem horários disponíveis para esta data. Escolha outro dia.
