@@ -570,7 +570,7 @@ export function WeeklyAgenda({
                           />
                           {dayWindow.hasExtraHours && (
                             <span
-                              className="absolute left-3 z-10 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
+                              className="pointer-events-none absolute right-3 z-[1] max-w-[calc(100%-1.5rem)] truncate rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
                               style={{ top: Math.max(6, dayTop + 6) }}
                             >
                               Horário extraordinário

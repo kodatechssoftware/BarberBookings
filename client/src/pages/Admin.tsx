@@ -1789,6 +1789,18 @@ export default function Admin() {
   const selectedBlockDuration = blockData.isManualBooking && blockData.serviceId
     ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
     : 30;
+
+  const createBlockStartTime = (date: Date, timeStr: string) => {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    const startTime = new Date(date);
+    startTime.setHours(hours, minutes, 0, 0);
+    return startTime;
+  };
+
+  const isPastBlockStart = (date: Date, timeStr: string) => (
+    createBlockStartTime(date, timeStr).getTime() < Date.now()
+  );
+
   const availableBlockTimes = useMemo(() => {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
     const barberId = Number(blockData.barberId);
@@ -1798,6 +1810,10 @@ export default function Admin() {
       : blockTimeOptions;
 
     return timeOptions.filter((time) => {
+      if (blockData.isManualBooking && blockData.allowOutsideHours && isPastBlockStart(blockData.date, time)) {
+        return false;
+      }
+
       if (!blockData.allowOutsideHours && !isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
         return false;
       }
@@ -1868,14 +1884,25 @@ export default function Admin() {
       return;
     }
 
+    const hasPastOutsideHoursTime = blockData.isManualBooking
+      && blockData.allowOutsideHours
+      && blockData.times.some((timeStr) => isPastBlockStart(blockData.date, timeStr));
+    if (hasPastOutsideHoursTime) {
+      toast({ title: "Erro", description: "Escolha uma hora futura para marcações fora do horário.", variant: "destructive" });
+      return;
+    }
+
     try {
       const promises: any[] = [];
       
       if (blockData.isRecurring) {
         const timeStr = blockData.times[0];
-        const [hours, minutes] = timeStr.split(':').map(Number);
-        const startTime = new Date(blockData.date);
-        startTime.setHours(hours, minutes, 0, 0);
+        const startTime = createBlockStartTime(blockData.date, timeStr);
+
+        if (startTime.getTime() < Date.now()) {
+          toast({ title: "Erro", description: "A recorrência deve começar numa data e hora futuras.", variant: "destructive" });
+          return;
+        }
 
         await apiRequest("POST", "/api/appointments/block", {
           barberId: Number(blockData.barberId),
@@ -1902,9 +1929,7 @@ export default function Admin() {
         
         for (const date of datesToBlock) {
           for (const timeStr of blockData.times) {
-            const [hours, minutes] = timeStr.split(':').map(Number);
-            const startTime = new Date(date);
-            startTime.setHours(hours, minutes, 0, 0);
+            const startTime = createBlockStartTime(date, timeStr);
             
             const payload = {
               barberId: Number(blockData.barberId),

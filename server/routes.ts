@@ -229,6 +229,10 @@ function isBeforeShopToday(date: Date) {
   return getShopDateParts(date).dateKey < getShopDateParts(new Date()).dateKey;
 }
 
+function isBeforeNow(date: Date) {
+  return date.getTime() < Date.now();
+}
+
 function addDaysToShopCalendarDate(year: number, month: number, day: number, days: number) {
   const date = new Date(Date.UTC(year, month - 1, day + days));
   return {
@@ -1662,6 +1666,12 @@ export async function registerRoutes(
       }
       if (isRecurring && isBeforeShopToday(start)) {
         return res.status(400).json({ message: "A recorrência deve começar hoje ou numa data futura." });
+      }
+      if (isRecurring && isBeforeNow(start)) {
+        return res.status(400).json({ message: "A recorrência deve começar numa data e hora futuras." });
+      }
+      if (!isRecurring && isManualBooking && allowOutsideHours && isBeforeNow(start)) {
+        return res.status(400).json({ message: "Escolha uma hora futura para marcações fora do horário." });
       }
 
       const occurrences = (isRecurring && recurringWeeks && recurringMonths)
