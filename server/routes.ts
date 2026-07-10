@@ -13,6 +13,7 @@ import {
   sendBookingWhatsAppCancellation,
   sendBookingWhatsAppConfirmation,
 } from "./whatsapp";
+import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
@@ -42,6 +43,35 @@ const useMemoryStorage = process.env.USE_MEMORY_STORAGE === "true";
 const databaseSchema = process.env.DATABASE_SCHEMA?.trim();
 const sessionSchemaName =
   databaseSchema && databaseSchema !== "public" ? databaseSchema : undefined;
+
+function quoteSqlIdentifier(identifier: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+    throw new Error(`Unsafe database identifier: ${identifier}`);
+  }
+
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+async function ensureSessionStoreTable() {
+  if (useMemoryStorage) return;
+
+  const schemaName = sessionSchemaName || "public";
+  const qualifiedTableName = `${quoteSqlIdentifier(schemaName)}.${quoteSqlIdentifier("session")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
+      sid varchar NOT NULL COLLATE "default",
+      sess json NOT NULL,
+      expire timestamp(6) NOT NULL,
+      CONSTRAINT session_pkey PRIMARY KEY (sid)
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire"
+    ON ${qualifiedTableName} (expire)
+  `);
+}
 
 const shopDateFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: SHOP_TIME_ZONE,
@@ -866,10 +896,11 @@ export async function registerRoutes(
   };
 
   if (!useMemoryStorage) {
+    await ensureSessionStoreTable();
     sessionConfig.store = new PostgresSessionStore({
       conObject: { connectionString: process.env.DATABASE_URL },
       schemaName: sessionSchemaName,
-      createTableIfMissing: true,
+      createTableIfMissing: false,
     });
   }
 
