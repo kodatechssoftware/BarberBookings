@@ -1727,6 +1727,9 @@ export default function Admin() {
     }
     return allBarbers;
   }, [barbers, selectedBarberFilter, user]);
+  const weeklyAgendaBarberOptions = user?.role === "barber"
+    ? activeBarberColumns
+    : (barbers || []);
 
   const dayAppointmentSummary = useMemo(() => ({
     total: appointmentList.length,
@@ -2142,7 +2145,7 @@ export default function Admin() {
             <WeeklyAgenda
               weekStartDate={weeklyStartDate}
               appointments={filteredWeeklyAppointmentList}
-              barbers={activeBarberColumns}
+              barbers={weeklyAgendaBarberOptions}
               services={services}
               isLoading={isLoadingWeeklyAppointments}
               selectedBarberFilter={selectedBarberFilter}
