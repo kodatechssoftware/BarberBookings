@@ -1,8 +1,8 @@
 import { type Dispatch, type SetStateAction } from "react";
-import { format } from "date-fns";
+import { format, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { AlertTriangle, Calendar as CalendarIcon, User } from "lucide-react";
-import { blockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
+import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -36,9 +36,6 @@ type AppointmentBlockDialogProps = {
   onSubmit: () => void;
 };
 
-const morningBlockTimes = blockTimeOptions.filter((time) => time < "13:00");
-const afternoonBlockTimes = blockTimeOptions.filter((time) => time >= "14:00");
-
 export function AppointmentBlockDialog({
   open,
   onOpenChange,
@@ -53,6 +50,13 @@ export function AppointmentBlockDialog({
   onSubmit,
 }: AppointmentBlockDialogProps) {
   const isSingleTimeMode = blockData.isManualBooking && blockData.isRecurring;
+  const visibleBlockTimeOptions = blockData.isManualBooking && blockData.allowOutsideHours
+    ? outsideHoursBlockTimeOptions
+    : blockTimeOptions;
+  const morningBlockTimes = visibleBlockTimeOptions.filter((time) => time < "13:00");
+  const afternoonBlockTimes = visibleBlockTimeOptions.filter((time) => time >= "14:00");
+  const today = startOfToday();
+  const recurringStartsInPast = blockData.isRecurring && blockData.date < today;
 
   const setQuickBlockTimes = (times: string[]) => {
     const available = times.filter((time) => availableBlockTimes.includes(time));
@@ -123,21 +127,41 @@ export function AppointmentBlockDialog({
               )}
 
               {blockData.isManualBooking && (
-                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
-                  <div>
-                    <Label htmlFor="recurring" className="cursor-pointer text-sm font-medium">Repetir marcação</Label>
-                    <p className="text-xs text-gray-500">Reserva automática para clientes fixos.</p>
+                <div className="mt-4 grid gap-3">
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
+                    <div>
+                      <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Marcar fora do horário</Label>
+                      <p className="text-xs text-gray-500">Para pedidos combinados diretamente com o barbeiro antes da abertura ou depois do fecho.</p>
+                    </div>
+                    <Switch
+                      id="outsideHours"
+                      checked={blockData.allowOutsideHours}
+                      onCheckedChange={(checked) => onBlockDataChange({
+                        ...blockData,
+                        allowOutsideHours: checked,
+                        times: [],
+                      })}
+                    />
                   </div>
-                  <Switch
-                    id="recurring"
-                    checked={blockData.isRecurring}
-                    onCheckedChange={(checked) => onBlockDataChange({
-                      ...blockData,
-                      isRecurring: checked,
-                      isMultiDay: false,
-                      times: checked ? blockData.times.slice(0, 1) : blockData.times,
-                    })}
-                  />
+
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
+                    <div>
+                      <Label htmlFor="recurring" className="cursor-pointer text-sm font-medium">Repetir marcação</Label>
+                      <p className="text-xs text-gray-500">Reserva automática para clientes fixos.</p>
+                    </div>
+                    <Switch
+                      id="recurring"
+                      checked={blockData.isRecurring}
+                      onCheckedChange={(checked) => onBlockDataChange({
+                        ...blockData,
+                        date: checked && blockData.date < today ? today : blockData.date,
+                        endDate: checked && blockData.endDate < today ? today : blockData.endDate,
+                        isRecurring: checked,
+                        isMultiDay: false,
+                        times: checked ? blockData.times.slice(0, 1) : blockData.times,
+                      })}
+                    />
+                  </div>
                 </div>
               )}
             </div>
@@ -189,11 +213,15 @@ export function AppointmentBlockDialog({
                         onBlockDataChange({ ...blockData, date });
                         onCalendarOpenChange(false);
                       }}
+                      disabled={blockData.isRecurring ? (date) => date < today : undefined}
                       locale={pt}
                       initialFocus
                     />
                   </PopoverContent>
                 </Popover>
+                {recurringStartsInPast && (
+                  <p className="text-xs text-red-300">A recorrência deve começar hoje ou numa data futura.</p>
+                )}
               </div>
 
               {blockData.isMultiDay && (
@@ -273,7 +301,7 @@ export function AppointmentBlockDialog({
                     <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(afternoonBlockTimes)}>
                       Tarde
                     </Button>
-                    <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(blockTimeOptions)}>
+                    <Button type="button" variant="outline" size="sm" className="h-10 text-xs sm:h-8" onClick={() => setQuickBlockTimes(visibleBlockTimeOptions)}>
                       Dia inteiro
                     </Button>
                     <Button type="button" variant="ghost" size="sm" className="h-10 text-xs text-gray-400 sm:h-8" onClick={() => onBlockDataChange({ ...blockData, times: [] })}>
@@ -290,7 +318,7 @@ export function AppointmentBlockDialog({
               )}
 
               <div className="grid max-h-[34dvh] grid-cols-3 gap-2 overflow-y-auto p-1 scrollbar-thin min-[380px]:grid-cols-4 sm:max-h-48 sm:grid-cols-5">
-                {blockTimeOptions.map((time) => {
+                {visibleBlockTimeOptions.map((time) => {
                   const isAvailable = availableBlockTimes.includes(time);
 
                   return (

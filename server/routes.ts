@@ -225,6 +225,10 @@ function getShopDateParts(date: Date) {
   };
 }
 
+function isBeforeShopToday(date: Date) {
+  return getShopDateParts(date).dateKey < getShopDateParts(new Date()).dateKey;
+}
+
 function addDaysToShopCalendarDate(year: number, month: number, day: number, days: number) {
   const date = new Date(Date.UTC(year, month - 1, day + days));
   return {
@@ -1620,7 +1624,7 @@ export async function registerRoutes(
 
   app.post("/api/appointments/block", requireAdmin, async (req, res) => {
     try {
-      const { barberId, startTime, name, phone, serviceId, isManualBooking, isRecurring, recurringWeeks, recurringMonths } = req.body;
+      const { barberId, startTime, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
       const start = new Date(startTime);
       const appointments: Array<Parameters<typeof storage.createAppointment>[0]> = [];
       const conflicts = [];
@@ -1656,6 +1660,9 @@ export async function registerRoutes(
       ) {
         return res.status(400).json({ message: "Repetição inválida." });
       }
+      if (isRecurring && isBeforeShopToday(start)) {
+        return res.status(400).json({ message: "A recorrência deve começar hoje ou numa data futura." });
+      }
 
       const occurrences = (isRecurring && recurringWeeks && recurringMonths)
         ? Math.floor((recurringMonthsNumber * 4.33) / recurringWeeksNumber)
@@ -1667,7 +1674,10 @@ export async function registerRoutes(
           : new Date(start);
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
         const workingPeriods = await getBarberWorkingPeriods(Number(barberId), getShopDateParts(currentStart).weekday);
-        const scheduleError = getScheduleValidationError(currentStart, duration, workingPeriods);
+        const canBypassSchedule = Boolean(isManualBooking && allowOutsideHours);
+        const scheduleError = canBypassSchedule
+          ? null
+          : getScheduleValidationError(currentStart, duration, workingPeriods);
         if (scheduleError) {
           return res.status(400).json({
             message: `${scheduleError} (${formatShopDateTime(currentStart)}, ${duration} min).`,
@@ -2843,7 +2853,7 @@ export async function registerRoutes(
         17: dateTimeFormat,
       });
 
-      const fileName = `Relat\u00f3rio_de_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;
+      const fileName = `Relatório_de_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;
       const fallbackFileName = fileName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

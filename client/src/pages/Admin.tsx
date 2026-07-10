@@ -32,7 +32,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AppointmentsTab, blockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
+import { AppointmentsTab, blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
@@ -408,7 +408,7 @@ function TodayOverviewPanel({
 }
 
 function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
-  const busiestBarber = [...data.barbers].sort((a, b) => b.booked - a.booked || b.appointments - a.appointments)[0];
+  const busiestBarber = [...data.barbers].sort((a, b) => b.booked - a.booked)[0];
   const topServices = data.services.slice(0, 5);
   const noShowsByMonth = Array.from(
     data.daily.reduce((map, day) => {
@@ -1217,6 +1217,7 @@ export default function Admin() {
     endDate: startOfToday(),
     isMultiDay: false,
     isManualBooking: false,
+    allowOutsideHours: false,
     isRecurring: false,
     recurringWeeks: "2",
     recurringMonths: "6",
@@ -1323,7 +1324,6 @@ export default function Admin() {
       link.click();
       link.remove();
       URL.revokeObjectURL(downloadUrl);
-
       toast({ title: "Sucesso", description: "O relatorio foi descarregado." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Falha ao gerar o relatorio.", variant: "destructive" });
@@ -1524,6 +1524,7 @@ export default function Admin() {
       endDate: date || current.endDate,
       isMultiDay: false,
       isManualBooking: mode === "manual",
+      allowOutsideHours: false,
       isRecurring: false,
     }));
     setIsBlocking(true);
@@ -1792,8 +1793,12 @@ export default function Admin() {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
     const barberId = Number(blockData.barberId);
 
-    return blockTimeOptions.filter((time) => {
-      if (!isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
+    const timeOptions = blockData.isManualBooking && blockData.allowOutsideHours
+      ? outsideHoursBlockTimeOptions
+      : blockTimeOptions;
+
+    return timeOptions.filter((time) => {
+      if (!blockData.allowOutsideHours && !isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
         return false;
       }
 
@@ -1811,6 +1816,8 @@ export default function Admin() {
     blockAppointmentList,
     blockData.barberId,
     blockData.date,
+    blockData.allowOutsideHours,
+    blockData.isManualBooking,
     hasLoadedBlockAppointments,
     selectedBlockDuration,
     services,
@@ -1820,6 +1827,8 @@ export default function Admin() {
   const selectedBlockTimesKey = blockData.times.join("|");
 
   useEffect(() => {
+    if (blockData.isManualBooking && blockData.allowOutsideHours) return;
+
     setBlockData((current) => {
       const availableTimes = new Set(availableBlockTimes);
       const validTimes = current.times.filter((time) => availableTimes.has(time));
@@ -1854,6 +1863,11 @@ export default function Admin() {
       return;
     }
 
+    if (blockData.isRecurring && format(blockData.date, "yyyy-MM-dd") < format(startOfToday(), "yyyy-MM-dd")) {
+      toast({ title: "Erro", description: "A recorrência deve começar hoje ou numa data futura.", variant: "destructive" });
+      return;
+    }
+
     try {
       const promises: any[] = [];
       
@@ -1872,7 +1886,8 @@ export default function Admin() {
           isManualBooking: true,
           isRecurring: true,
           recurringWeeks: Number(blockData.recurringWeeks),
-          recurringMonths: Number(blockData.recurringMonths)
+          recurringMonths: Number(blockData.recurringMonths),
+          allowOutsideHours: blockData.allowOutsideHours,
         });
       } else {
         let datesToBlock = [blockData.date];
@@ -1898,6 +1913,7 @@ export default function Admin() {
               name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
               phone: blockData.phone || "900000000",
               isManualBooking: blockData.isManualBooking,
+              allowOutsideHours: blockData.allowOutsideHours,
             };
 
             promises.push(apiRequest("POST", "/api/appointments/block", payload));
@@ -1908,7 +1924,7 @@ export default function Admin() {
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
       setIsBlocking(false);
-      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", serviceId: "", isMultiDay: false, isManualBooking: false, isRecurring: false });
+      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", serviceId: "", isMultiDay: false, isManualBooking: false, allowOutsideHours: false, isRecurring: false });
       refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {

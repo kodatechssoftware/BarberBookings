@@ -56,19 +56,11 @@ function colorWithAlpha(color: string | undefined | null, alpha: number) {
 
 const weeklyAgendaStartHour = 9;
 const weeklyAgendaEndHour = 20;
+const weeklyAgendaStartMinutes = weeklyAgendaStartHour * 60;
+const weeklyAgendaEndMinutes = weeklyAgendaEndHour * 60;
 const weeklyAgendaPixelsPerMinute = 1.12;
 const weeklyAgendaBottomPadding = 24;
-const weeklyAgendaHeight =
-  (weeklyAgendaEndHour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute + weeklyAgendaBottomPadding;
-const weeklyAgendaHours = Array.from(
-  { length: weeklyAgendaEndHour - weeklyAgendaStartHour + 1 },
-  (_, index) => weeklyAgendaStartHour + index,
-);
 const weeklyAgendaSlotMinutes = 30;
-const weeklyAgendaSlots = Array.from(
-  { length: ((weeklyAgendaEndHour - weeklyAgendaStartHour) * 60) / weeklyAgendaSlotMinutes },
-  (_, index) => weeklyAgendaStartHour * 60 + index * weeklyAgendaSlotMinutes,
-);
 
 export type WeeklyAgendaBarber = {
   id: number;
@@ -99,10 +91,56 @@ function getAgendaMinutes(date: Date) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
-function isAppointmentVisibleOnGrid(appointment: WeeklyAgendaAppointment) {
+function getAgendaWindowHeight(startMinutes: number, endMinutes: number) {
+  return (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute + weeklyAgendaBottomPadding;
+}
+
+function createAgendaHours(startMinutes: number, endMinutes: number) {
+  const startHour = Math.floor(startMinutes / 60);
+  const endHour = Math.ceil(endMinutes / 60);
+  return Array.from({ length: endHour - startHour + 1 }, (_, index) => startHour + index);
+}
+
+function createAgendaSlots(startMinutes: number, endMinutes: number) {
+  const firstSlot = Math.ceil(startMinutes / weeklyAgendaSlotMinutes) * weeklyAgendaSlotMinutes;
+  const slotCount = Math.max(0, Math.floor((endMinutes - firstSlot) / weeklyAgendaSlotMinutes));
+  return Array.from({ length: slotCount }, (_, index) => firstSlot + index * weeklyAgendaSlotMinutes);
+}
+
+function getDayAgendaWindow(appointments: WeeklyAgendaAppointment[]) {
+  const activeAppointments = appointments.filter((appointment) => appointment.status === "booked");
+
+  if (activeAppointments.length === 0) {
+    return {
+      startMinutes: weeklyAgendaStartMinutes,
+      endMinutes: weeklyAgendaEndMinutes,
+      hasExtraHours: false,
+    };
+  }
+
+  const appointmentStartMinutes = activeAppointments.map((appointment) => getAgendaMinutes(parseISO(appointment.startTime)));
+  const appointmentEndMinutes = activeAppointments.map((appointment) => {
+    const start = parseISO(appointment.startTime);
+    const end = getWeeklyAppointmentEnd(appointment);
+    const endMinutes = getAgendaMinutes(end);
+    return format(start, "yyyy-MM-dd") === format(end, "yyyy-MM-dd") ? endMinutes : 24 * 60;
+  });
+  const earliestAppointment = Math.min(...appointmentStartMinutes);
+  const latestAppointmentEnd = Math.max(...appointmentEndMinutes);
+  const startMinutes = Math.max(0, Math.min(weeklyAgendaStartMinutes, Math.floor(earliestAppointment / 60) * 60));
+  const endMinutes = Math.min(24 * 60, Math.max(weeklyAgendaEndMinutes, Math.ceil(latestAppointmentEnd / 60) * 60));
+
+  return {
+    startMinutes,
+    endMinutes,
+    hasExtraHours: startMinutes < weeklyAgendaStartMinutes || endMinutes > weeklyAgendaEndMinutes,
+  };
+}
+
+function isAppointmentVisibleOnGrid(appointment: WeeklyAgendaAppointment, startMinutes: number, endMinutes: number) {
   const start = parseISO(appointment.startTime);
   const end = getWeeklyAppointmentEnd(appointment);
-  return getAgendaMinutes(end) > weeklyAgendaStartHour * 60 && getAgendaMinutes(start) < weeklyAgendaEndHour * 60;
+  return getAgendaMinutes(end) > startMinutes && getAgendaMinutes(start) < endMinutes;
 }
 
 function getAppointmentStartSlotKey(appointment: WeeklyAgendaAppointment) {
@@ -248,6 +286,28 @@ export function WeeklyAgenda({
 
     return grouped;
   }, [appointments, calendarDays]);
+
+  const agendaWindowsByDay = useMemo(() => {
+    const windows = new Map<string, ReturnType<typeof getDayAgendaWindow>>();
+    calendarDays.forEach((day) => {
+      const key = getDateKey(day);
+      windows.set(key, getDayAgendaWindow(appointmentsByDay.get(key) || []));
+    });
+    return windows;
+  }, [appointmentsByDay, calendarDays]);
+  const globalAgendaStartMinutes = useMemo(
+    () => Math.min(...Array.from(agendaWindowsByDay.values()).map((window) => window.startMinutes), weeklyAgendaStartMinutes),
+    [agendaWindowsByDay],
+  );
+  const globalAgendaEndMinutes = useMemo(
+    () => Math.max(...Array.from(agendaWindowsByDay.values()).map((window) => window.endMinutes), weeklyAgendaEndMinutes),
+    [agendaWindowsByDay],
+  );
+  const weeklyAgendaHeight = getAgendaWindowHeight(globalAgendaStartMinutes, globalAgendaEndMinutes);
+  const weeklyAgendaHours = useMemo(
+    () => createAgendaHours(globalAgendaStartMinutes, globalAgendaEndMinutes),
+    [globalAgendaStartMinutes, globalAgendaEndMinutes],
+  );
 
   const handleDragStart = (event: DragEvent, appointment: WeeklyAgendaAppointment) => {
     if (appointment.status !== "booked") return;
@@ -478,7 +538,7 @@ export function WeeklyAgenda({
                         <span
                           key={hour}
                           className="absolute right-3 -translate-y-2 text-xs text-gray-500"
-                          style={{ top: (hour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute }}
+                          style={{ top: (hour * 60 - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute }}
                         >
                           {String(hour).padStart(2, "0")}:00
                         </span>
@@ -487,20 +547,45 @@ export function WeeklyAgenda({
 
                     {calendarDays.map((day) => {
                       const key = getDateKey(day);
-                      const dayAppointments = (appointmentsByDay.get(key) || []).filter(isAppointmentVisibleOnGrid);
+                      const dayWindow = agendaWindowsByDay.get(key) || {
+                        startMinutes: weeklyAgendaStartMinutes,
+                        endMinutes: weeklyAgendaEndMinutes,
+                        hasExtraHours: false,
+                      };
+                      const dayAppointments = (appointmentsByDay.get(key) || []).filter((appointment) =>
+                        isAppointmentVisibleOnGrid(appointment, dayWindow.startMinutes, dayWindow.endMinutes),
+                      );
+                      const dayTop = (dayWindow.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute;
+                      const dayHeight = getAgendaWindowHeight(dayWindow.startMinutes, dayWindow.endMinutes);
+                      const daySlots = createAgendaSlots(dayWindow.startMinutes, dayWindow.endMinutes);
 
                       return (
                         <div key={key} className="relative border-r border-white/10 last:border-r-0" style={{ height: weeklyAgendaHeight }}>
-                          {weeklyAgendaHours.map((hour) => (
+                          <div
+                            className={cn(
+                              "absolute left-0 right-0 rounded-lg",
+                              dayWindow.hasExtraHours && "bg-primary/[0.03] ring-1 ring-primary/10",
+                            )}
+                            style={{ top: dayTop, height: dayHeight }}
+                          />
+                          {dayWindow.hasExtraHours && (
+                            <span
+                              className="absolute left-3 z-10 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
+                              style={{ top: Math.max(6, dayTop + 6) }}
+                            >
+                              Horário extraordinário
+                            </span>
+                          )}
+                          {createAgendaHours(dayWindow.startMinutes, dayWindow.endMinutes).map((hour) => (
                             <div
                               key={hour}
                               className="absolute left-0 right-0 border-t border-white/5"
-                              style={{ top: (hour - weeklyAgendaStartHour) * 60 * weeklyAgendaPixelsPerMinute }}
+                              style={{ top: (hour * 60 - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute }}
                             />
                           ))}
-                          {weeklyAgendaSlots.map((slotMinutes) => {
+                          {daySlots.map((slotMinutes) => {
                             const time = formatAgendaMinutes(slotMinutes);
-                            const top = (slotMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute;
+                            const top = (slotMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute;
                             const height = weeklyAgendaSlotMinutes * weeklyAgendaPixelsPerMinute;
                             return (
                               <button
@@ -522,14 +607,14 @@ export function WeeklyAgenda({
                             const start = parseISO(appointment.startTime);
                             const end = getWeeklyAppointmentEnd(appointment);
                             const startMinutes = Math.max(
-                              weeklyAgendaStartHour * 60,
+                              dayWindow.startMinutes,
                               getAgendaMinutes(start),
                             );
                             const endMinutes = Math.min(
-                              weeklyAgendaEndHour * 60,
+                              dayWindow.endMinutes,
                               getAgendaMinutes(end),
                             );
-                            const top = (startMinutes - weeklyAgendaStartHour * 60) * weeklyAgendaPixelsPerMinute + 4;
+                            const top = (startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 4;
                             const height = Math.max(44, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
                             const slotKey = getAppointmentStartSlotKey(appointment);
                             const sameSlot = dayAppointments.filter((item) => getAppointmentStartSlotKey(item) === slotKey);
