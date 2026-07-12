@@ -100,7 +100,7 @@ export interface IStorage {
   getBarberByEmail(email: string): Promise<Barber | undefined>;
   createBarber(barber: CreateBarberRequest): Promise<Barber>;
   updateBarber(id: number, barber: Partial<CreateBarberRequest>): Promise<Barber | undefined>;
-  deleteBarber(id: number): Promise<void>;
+  deleteBarber(id: number): Promise<"deleted" | "hidden">;
 
   // Services
   getServices(): Promise<Service[]>;
@@ -230,22 +230,38 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async deleteBarber(id: number): Promise<void> {
-    const [appointment] = await db
+  async deleteBarber(id: number): Promise<"deleted" | "hidden"> {
+    const [futureAppointment] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(and(
+        eq(appointments.barberId, id),
+        eq(appointments.status, "booked"),
+        gte(appointments.startTime, new Date()),
+      ))
+      .limit(1);
+
+    if (futureAppointment) {
+      const error = new Error("Barber has future appointments") as Error & { code?: string };
+      error.code = "BARBER_HAS_FUTURE_APPOINTMENTS";
+      throw error;
+    }
+
+    const [historicalAppointment] = await db
       .select({ id: appointments.id })
       .from(appointments)
       .where(eq(appointments.barberId, id))
       .limit(1);
 
-    if (appointment) {
-      const error = new Error("Barber has appointments") as Error & { code?: string };
-      error.code = "23503";
-      throw error;
+    if (historicalAppointment) {
+      await db.update(barbers).set({ isVisible: false }).where(eq(barbers.id, id));
+      return "hidden";
     }
 
     await db.delete(barberServices).where(eq(barberServices.barberId, id));
     await db.delete(barberAvailability).where(eq(barberAvailability.barberId, id));
     await db.delete(barbers).where(eq(barbers.id, id));
+    return "deleted";
   }
 
   async getServices(): Promise<Service[]> {
@@ -691,15 +707,27 @@ export class MemoryStorage implements IStorage {
     return this.barbers[index];
   }
 
-  async deleteBarber(id: number): Promise<void> {
-    if (this.appointments.some((appointment) => appointment.barberId === id)) {
-      const error = new Error("Barber has appointments") as Error & { code?: string };
-      error.code = "23503";
+  async deleteBarber(id: number): Promise<"deleted" | "hidden"> {
+    const now = new Date();
+    if (this.appointments.some((appointment) =>
+      appointment.barberId === id &&
+      shouldProtectAppointment(appointment.status) &&
+      new Date(appointment.startTime) >= now
+    )) {
+      const error = new Error("Barber has future appointments") as Error & { code?: string };
+      error.code = "BARBER_HAS_FUTURE_APPOINTMENTS";
       throw error;
+    }
+    if (this.appointments.some((appointment) => appointment.barberId === id)) {
+      this.barbers = this.barbers.map((barber) =>
+        barber.id === id ? { ...barber, isVisible: false } : barber,
+      );
+      return "hidden";
     }
     this.barbers = this.barbers.filter((barber) => barber.id !== id);
     this.barberAvailability = this.barberAvailability.filter((row) => row.barberId !== id);
     this.barberServices = this.barberServices.filter((row) => row.barberId !== id);
+    return "deleted";
   }
 
   async getServices(): Promise<Service[]> {

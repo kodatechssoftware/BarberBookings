@@ -2329,15 +2329,16 @@ export default function Admin() {
                     <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
                     <ConfirmAction
                       title={`Remover ${barber.name}?`}
-                      description="O barbeiro só será removido se não tiver marcações associadas."
+                      description="Se tiver marcações futuras, reatribua-as primeiro. Se tiver apenas histórico, será ocultado para preservar relatórios."
                       confirmLabel="Remover"
                       confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       onConfirm={async () => {
                         try {
-                          await apiRequest("DELETE", `/api/barbers/${barber.id}`);
+                          const response = await apiRequest("DELETE", `/api/barbers/${barber.id}`);
+                          const result = await response.json().catch(() => null);
                           await refreshBarbersCache();
                           queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                          toast({ title: "Sucesso", description: "Barbeiro removido." });
+                          toast({ title: "Sucesso", description: result?.message || "Barbeiro removido." });
                         } catch (err: any) {
                           toast({ title: "Erro", description: err.message || "Não foi possível remover o barbeiro.", variant: "destructive" });
                         }

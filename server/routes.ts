@@ -1132,17 +1132,29 @@ export async function registerRoutes(
     try {
       const barberId = Number(req.params.id);
       const barber = await storage.getBarber(barberId);
-      await storage.deleteBarber(barberId);
+      const result = await storage.deleteBarber(barberId);
+      const wasHidden = result === "hidden";
       await recordAuditLog(req, {
-        action: "barber.deleted",
+        action: wasHidden ? "barber.hidden" : "barber.deleted",
         entityType: "barber",
         entityId: barberId,
-        summary: `Barbeiro removido: ${barber?.name || barberId}`,
+        summary: wasHidden
+          ? `Barbeiro ocultado por ter histórico: ${barber?.name || barberId}`
+          : `Barbeiro removido: ${barber?.name || barberId}`,
       });
-      res.json({ message: "Barbeiro removido" });
+      res.json({
+        message: wasHidden
+          ? "O barbeiro foi ocultado porque tem histórico de marcações. Não aparece no site nem pode receber novas reservas."
+          : "Barbeiro removido.",
+      });
     } catch (error: any) {
+      if (error?.code === "BARBER_HAS_FUTURE_APPOINTMENTS") {
+        return res.status(409).json({
+          message: "Este barbeiro tem marcações futuras. Reatribua ou cancele essas marcações antes de o remover.",
+        });
+      }
       if (error?.code === "23503") {
-        return res.status(409).json({ message: "Não é possível remover um barbeiro com marcações associadas." });
+        return res.status(409).json({ message: "Não é possível remover este barbeiro porque existem dados associados." });
       }
       res.status(500).json({ message: "Erro ao remover barbeiro" });
     }
