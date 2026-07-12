@@ -1686,12 +1686,7 @@ export default function Admin() {
   };
 
   const openBarberRemovalFlow = async (barber: BarberListItem) => {
-    const response = await apiFetch(`/api/barbers/${barber.id}/future-appointments`);
-    if (!response.ok) {
-      const fallbackMessage = await response.text().catch(() => "");
-      throw new Error(fallbackMessage || "Não foi possível confirmar as marcações futuras.");
-    }
-
+    const response = await apiRequest("GET", `/api/barbers/${barber.id}/future-appointments`);
     const futureAppointments = (await response.json()) as AdminAppointment[];
     if (futureAppointments.length === 0) {
       await removeBarber(barber);
