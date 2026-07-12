@@ -1812,8 +1812,12 @@ export async function registerRoutes(
   app.get("/api/appointments/public", async (req, res) => {
     const barberId = req.query.barberId ? Number(req.query.barberId) : undefined;
     const date = req.query.date as string | undefined;
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
-    const appointments = await storage.getAppointments(effectiveBarberId, date);
+    const appointments = date
+      ? await storage.getAppointments(effectiveBarberId, date)
+      : await storage.getAppointmentsRange(effectiveBarberId, startDate, endDate);
     const visibleBarberIds = new Set(
       (await storage.getBarbers())
         .filter((barber) => barber.isVisible)

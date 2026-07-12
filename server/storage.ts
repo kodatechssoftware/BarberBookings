@@ -111,6 +111,7 @@ export interface IStorage {
 
   // Appointments
   getAppointments(barberId?: number, date?: string): Promise<Appointment[]>;
+  getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]>;
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
@@ -314,6 +315,35 @@ export class DatabaseStorage implements IStorage {
     }
 
     return await db.select().from(appointments).orderBy(appointments.startTime);
+  }
+
+  async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]> {
+    const conditions: SQL[] = [];
+    if (barberId !== undefined) {
+      conditions.push(eq(appointments.barberId, barberId));
+    }
+
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      conditions.push(gte(appointments.startTime, start));
+    }
+
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      conditions.push(lte(appointments.startTime, end));
+    }
+
+    if (conditions.length === 0) {
+      return this.getAppointments();
+    }
+
+    return await db
+      .select()
+      .from(appointments)
+      .where(and(...conditions))
+      .orderBy(appointments.startTime);
   }
 
   async getAppointmentByToken(token: string): Promise<Appointment | undefined> {
@@ -779,6 +809,21 @@ export class MemoryStorage implements IStorage {
         if (!start || !end) return true;
         const appointmentDate = new Date(appointment.startTime);
         return appointmentDate >= start && appointmentDate <= end;
+      })
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }
+
+  async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]> {
+    const start = startDate ? new Date(startDate) : null;
+    if (start) start.setHours(0, 0, 0, 0);
+    const end = endDate ? new Date(endDate) : null;
+    if (end) end.setHours(23, 59, 59, 999);
+
+    return this.appointments
+      .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
+      .filter((appointment) => {
+        const appointmentDate = new Date(appointment.startTime);
+        return (!start || appointmentDate >= start) && (!end || appointmentDate <= end);
       })
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }

@@ -61,6 +61,8 @@ export type CancelAppointmentResponse = {
 type AppointmentQueryParams = {
   barberId?: string;
   date?: string;
+  startDate?: string;
+  endDate?: string;
   enabled?: boolean;
   refetchInterval?: number | false;
 };
@@ -68,11 +70,13 @@ type AppointmentQueryParams = {
 const PUBLIC_APPOINTMENTS_PATH = "/api/appointments/public";
 
 function appendAppointmentQuery(path: string, params?: AppointmentQueryParams) {
-  if (!params?.barberId && !params?.date) return path;
+  if (!params?.barberId && !params?.date && !params?.startDate && !params?.endDate) return path;
 
   const queryParams = new URLSearchParams();
   if (params.barberId) queryParams.append("barberId", params.barberId);
   if (params.date) queryParams.append("date", params.date);
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
   return `${path}?${queryParams.toString()}`;
 }
 

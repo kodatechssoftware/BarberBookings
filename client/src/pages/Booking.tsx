@@ -332,13 +332,23 @@ export default function Booking() {
   }, [selectedBarber, selectedBarberId, visibleBarbers, visibleServices]);
 
   // Fetch appointments for selected date/barber to block slots
-  const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
+  const { data: existingAppointments, isLoading: loadingAppointments, isError: appointmentsError } = usePublicAppointments({
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
     date: selectedDate ? format(selectedDate, 'yyyy-MM-dd') : undefined,
   });
 
-  const { data: calendarAppointments } = usePublicAppointments({
+  const monthStart = startOfMonth(visibleCalendarMonth);
+  const monthEnd = endOfMonth(visibleCalendarMonth);
+  const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
+  const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
+  const {
+    data: calendarAppointments,
+    isLoading: loadingCalendarAppointments,
+    isError: calendarAppointmentsError,
+  } = usePublicAppointments({
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()),
+    startDate: format(calendarStart, "yyyy-MM-dd"),
+    endDate: format(calendarEnd, "yyyy-MM-dd"),
     enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId),
   });
 
@@ -424,13 +434,10 @@ export default function Booking() {
 
   const availableDateKeys = useMemo(() => {
     if (!selectedService || selectedBarberId === null) return new Set<string>();
+    if (loadingCalendarAppointments || calendarAppointmentsError || !calendarAppointments) return new Set<string>();
 
     const today = startOfToday();
-    const monthStart = startOfMonth(visibleCalendarMonth);
-    const monthEnd = endOfMonth(visibleCalendarMonth);
-    const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
-    const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
-    const appointments = calendarAppointments ?? [];
+    const appointments = calendarAppointments;
     const availability = (availabilityRows as AvailabilityRow[] | undefined) ?? [];
     const availableKeys = new Set<string>();
 
@@ -457,11 +464,14 @@ export default function Booking() {
   }, [
     availabilityRows,
     calendarAppointments,
+    calendarAppointmentsError,
+    calendarEnd,
+    calendarStart,
+    loadingCalendarAppointments,
     selectedBarberId,
     selectedService,
     shopAvailabilityForCalendar,
     visibleBarbers,
-    visibleCalendarMonth,
   ]);
 
   const handleNext = () => {
@@ -827,6 +837,10 @@ export default function Booking() {
                       <div className="flex justify-center mt-10">
                         <Loader2 className="w-6 h-6 animate-spin text-primary" />
                       </div>
+                    ) : appointmentsError ? (
+                      <p className="text-gray-500 text-center mt-10">
+                        Não foi possível carregar os horários desta data. Atualize a página ou tente novamente.
+                      </p>
                     ) : selectedDateIsShopClosed ? (
                       <p className="text-gray-500 text-center mt-10">
                         A barbearia está fechada neste dia. Escolha outro dia com horários disponíveis.
