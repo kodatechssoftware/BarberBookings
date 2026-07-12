@@ -467,6 +467,22 @@ async function getBarbersWithServiceIds() {
   }));
 }
 
+async function freezeUniversalBarberServiceAssignments(existingServiceIds: number[]) {
+  if (existingServiceIds.length === 0) return;
+
+  const [barbers, serviceRows] = await Promise.all([
+    storage.getBarbers(),
+    storage.getAllBarberServices(),
+  ]);
+  const barberServiceMap = buildBarberServiceMap(serviceRows);
+
+  await Promise.all(
+    barbers
+      .filter((barber) => (barberServiceMap.get(barber.id) || []).length === 0)
+      .map((barber) => storage.replaceBarberServices(barber.id, existingServiceIds)),
+  );
+}
+
 function sanitizeBarberForResponse<T extends { email?: unknown; password?: unknown }>(
   barber: T,
   includePrivateFields = false,
@@ -1286,6 +1302,8 @@ export async function registerRoutes(
   app.post("/api/services", requireAdmin, async (req, res) => {
     try {
       const input = insertServiceSchema.parse(req.body);
+      const existingServiceIds = (await storage.getServices()).map((service) => service.id);
+      await freezeUniversalBarberServiceAssignments(existingServiceIds);
       const service = await storage.createService(input);
       await recordAuditLog(req, {
         action: "service.created",
