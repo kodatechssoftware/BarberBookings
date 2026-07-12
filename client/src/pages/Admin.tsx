@@ -723,6 +723,16 @@ type ServiceListItem = {
   isVisible?: boolean | null;
 };
 
+type BarberListItem = {
+  id: number;
+  name: string;
+  specialty?: string | null;
+  avatar?: string | null;
+  color?: string | null;
+  isVisible?: boolean | null;
+  serviceIds?: number[] | null;
+};
+
 type ServiceMutationResponse = {
   id?: number;
   agendaLabel?: string | null;
@@ -1066,6 +1076,10 @@ export default function Admin() {
   const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
+  const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
+  const [futureRemovalAppointments, setFutureRemovalAppointments] = useState<AdminAppointment[]>([]);
+  const [barberReassignments, setBarberReassignments] = useState<Record<number, string>>({});
+  const [isReassigningBarber, setIsReassigningBarber] = useState(false);
   const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
@@ -1659,6 +1673,102 @@ export default function Admin() {
     no_show: "text-rose-300 border-rose-400/20 bg-rose-500/10",
   }[status] || "text-gray-300 border-white/10 bg-white/5");
 
+  const removeBarber = async (barber: BarberListItem) => {
+    const response = await apiRequest("DELETE", `/api/barbers/${barber.id}`);
+    const result = await response.json().catch(() => null);
+    await refreshBarbersCache();
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
+    if (selectedBarberFilter === String(barber.id)) setSelectedBarberFilter("all");
+    if (dashboardBarberFilter === String(barber.id)) setDashboardBarberFilter("all");
+    toast({ title: "Sucesso", description: result?.message || "Barbeiro removido." });
+  };
+
+  const openBarberRemovalFlow = async (barber: BarberListItem) => {
+    const response = await apiFetch(`/api/barbers/${barber.id}/future-appointments`);
+    if (!response.ok) {
+      const fallbackMessage = await response.text().catch(() => "");
+      throw new Error(fallbackMessage || "Não foi possível confirmar as marcações futuras.");
+    }
+
+    const futureAppointments = (await response.json()) as AdminAppointment[];
+    if (futureAppointments.length === 0) {
+      await removeBarber(barber);
+      return;
+    }
+
+    setBarberRemovalCandidate(barber);
+    setFutureRemovalAppointments(futureAppointments);
+    setBarberReassignments({});
+  };
+
+  const getCompatibleReplacementBarbers = (appointment: AdminAppointment) => {
+    return (barbers || []).filter((barber) =>
+      barber.id !== barberRemovalCandidate?.id &&
+      barber.isVisible !== false &&
+      canBarberPerformService(barber, appointment.serviceId)
+    );
+  };
+
+  const handleBulkReassignmentChange = (barberId: string) => {
+    const replacement = barbers?.find((barber) => String(barber.id) === barberId);
+    if (!replacement) return;
+
+    setBarberReassignments((current) => {
+      const next = { ...current };
+      futureRemovalAppointments.forEach((appointment) => {
+        if (canBarberPerformService(replacement, appointment.serviceId)) {
+          next[appointment.id] = barberId;
+        }
+      });
+      return next;
+    });
+  };
+
+  const closeBarberRemovalFlow = () => {
+    setBarberRemovalCandidate(null);
+    setFutureRemovalAppointments([]);
+    setBarberReassignments({});
+    setIsReassigningBarber(false);
+  };
+
+  const handleReassignFutureAppointmentsAndRemoveBarber = async () => {
+    if (!barberRemovalCandidate) return;
+
+    const missingAppointment = futureRemovalAppointments.find((appointment) => !barberReassignments[appointment.id]);
+    if (missingAppointment) {
+      toast({
+        title: "Falta escolher barbeiro",
+        description: `Escolha um novo barbeiro para ${missingAppointment.customerName}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsReassigningBarber(true);
+    try {
+      for (const appointment of futureRemovalAppointments) {
+        const newBarberId = Number(barberReassignments[appointment.id]);
+        await apiRequest("PATCH", `/api/appointments/${appointment.id}`, { barberId: newBarberId });
+      }
+
+      await removeBarber(barberRemovalCandidate);
+      closeBarberRemovalFlow();
+      toast({
+        title: "Marcações reatribuídas",
+        description: "As marcações futuras foram passadas para outro barbeiro.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Não foi possível reatribuir",
+        description: err.message || "Confirme os horários e tente novamente.",
+        variant: "destructive",
+      });
+      setIsReassigningBarber(false);
+    }
+  };
+
   const handleStatusChange = (appointmentId: number, status: AppointmentStatus) => {
     updateStatus.mutate(
       { id: appointmentId, status },
@@ -2088,6 +2198,107 @@ export default function Admin() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={!!barberRemovalCandidate} onOpenChange={(open) => {
+          if (!open) closeBarberRemovalFlow();
+        }}>
+          <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Reatribuir marcações de {barberRemovalCandidate?.name}</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-5 pt-2">
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-4">
+                <p className="text-sm text-amber-100">
+                  Este barbeiro ainda tem {futureRemovalAppointments.length} marcação(ões) futura(s). Escolha outro barbeiro para cada uma antes de remover.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Atribuir todas as compatíveis a</Label>
+                <Select onValueChange={handleBulkReassignmentChange}>
+                  <SelectTrigger className="bg-background border-white/10">
+                    <SelectValue placeholder="Escolher barbeiro" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-card border-white/10 text-white">
+                    {(barbers || [])
+                      .filter((barber) => barber.id !== barberRemovalCandidate?.id && barber.isVisible !== false)
+                      .map((barber) => (
+                        <SelectItem key={barber.id} value={String(barber.id)}>
+                          {barber.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500">
+                  Se algum barbeiro não fizer o serviço de uma marcação, essa linha fica por escolher manualmente.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {futureRemovalAppointments.map((appointment) => {
+                  const compatibleBarbers = getCompatibleReplacementBarbers(appointment);
+                  return (
+                    <div key={appointment.id} className="grid gap-3 rounded-lg border border-white/10 bg-background/50 p-4 md:grid-cols-[1fr_260px] md:items-center">
+                      <div>
+                        <p className="font-semibold text-white">{appointment.customerName}</p>
+                        <p className="mt-1 text-sm text-gray-300">
+                          {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getServiceName(appointment.serviceId)}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">{appointment.customerPhone}</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs text-gray-400">Novo barbeiro</Label>
+                        <Select
+                          value={barberReassignments[appointment.id]}
+                          onValueChange={(value) => setBarberReassignments((current) => ({
+                            ...current,
+                            [appointment.id]: value,
+                          }))}
+                          disabled={compatibleBarbers.length === 0 || isReassigningBarber}
+                        >
+                          <SelectTrigger className="bg-background border-white/10">
+                            <SelectValue placeholder={compatibleBarbers.length === 0 ? "Sem opção compatível" : "Escolher"} />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card border-white/10 text-white">
+                            {compatibleBarbers.map((barber) => (
+                              <SelectItem key={barber.id} value={String(barber.id)}>
+                                {barber.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={closeBarberRemovalFlow}
+                  disabled={isReassigningBarber}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  variant="gold"
+                  onClick={handleReassignFutureAppointmentsAndRemoveBarber}
+                  disabled={
+                    isReassigningBarber ||
+                    futureRemovalAppointments.length === 0 ||
+                    futureRemovalAppointments.some((appointment) => !barberReassignments[appointment.id])
+                  }
+                >
+                  {isReassigningBarber ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {isReassigningBarber ? "A reatribuir..." : "Reatribuir e remover"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <AppointmentDetailsDialog
           appointment={selectedAppointmentDetails}
           open={!!selectedAppointmentDetails}
@@ -2334,11 +2545,7 @@ export default function Admin() {
                       confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       onConfirm={async () => {
                         try {
-                          const response = await apiRequest("DELETE", `/api/barbers/${barber.id}`);
-                          const result = await response.json().catch(() => null);
-                          await refreshBarbersCache();
-                          queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                          toast({ title: "Sucesso", description: result?.message || "Barbeiro removido." });
+                          await openBarberRemovalFlow(barber);
                         } catch (err: any) {
                           toast({ title: "Erro", description: err.message || "Não foi possível remover o barbeiro.", variant: "destructive" });
                         }

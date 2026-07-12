@@ -1128,6 +1128,31 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/barbers/:id/future-appointments", requireAdmin, async (req, res) => {
+    try {
+      const barberId = Number(req.params.id);
+      if (!Number.isFinite(barberId) || barberId <= 0) {
+        return res.status(400).json({ message: "Barbeiro inválido." });
+      }
+
+      const barber = await storage.getBarber(barberId);
+      if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado" });
+
+      const now = new Date();
+      const futureAppointments = (await storage.getAppointments(barberId))
+        .filter((appointment) =>
+          appointment.status === "booked" &&
+          new Date(appointment.startTime).getTime() >= now.getTime()
+        )
+        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+
+      res.json(futureAppointments);
+    } catch (error) {
+      console.error("Future barber appointments error:", error);
+      res.status(500).json({ message: "Erro ao carregar marcações futuras do barbeiro" });
+    }
+  });
+
   app.delete("/api/barbers/:id", requireAdmin, async (req, res) => {
     try {
       const barberId = Number(req.params.id);
