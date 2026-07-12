@@ -3,8 +3,22 @@ import { apiFetch } from "@/lib/api";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const text = await res.text();
+    if (text) {
+      let serverMessage: string | undefined;
+      try {
+        const payload = JSON.parse(text);
+        if (typeof payload?.message === "string" && payload.message.trim()) {
+          serverMessage = payload.message;
+        }
+      } catch (error) {
+        serverMessage = undefined;
+      }
+
+      throw new Error(serverMessage || text);
+    }
+
+    throw new Error(res.statusText || "Não foi possível concluir o pedido.");
   }
 }
 
