@@ -373,6 +373,29 @@ function normalizePhone(value?: string | null) {
   return normalizePortuguesePhone(value);
 }
 
+function normalizeCustomerPhoneForStorage(value?: string | null) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return "";
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) return "";
+
+  if (trimmed.startsWith("+")) {
+    return `+${digits}`;
+  }
+
+  if (trimmed.startsWith("00")) {
+    return `+${digits.slice(2)}`;
+  }
+
+  const portuguesePhone = normalizePortuguesePhone(trimmed);
+  if (/^9\d{8}$/.test(portuguesePhone)) {
+    return `+351${portuguesePhone}`;
+  }
+
+  return digits;
+}
+
 function normalizeCustomerName(value?: string | null) {
   return (value || "")
     .normalize("NFD")
@@ -1554,15 +1577,7 @@ export async function registerRoutes(
       const requestedDuration = getAppointmentDurationMinutes(input.serviceId, serviceDurations);
       const requestedEndTime = new Date(input.startTime.getTime() + requestedDuration * 60000);
       const dateStr = getShopDateParts(input.startTime).dateKey;
-      const trimmedCustomerPhone = input.customerPhone.trim();
-      const customerPhoneDigits = normalizePhone(trimmedCustomerPhone);
-      const normalizedCustomerPhone = trimmedCustomerPhone.startsWith("+")
-        ? `+${customerPhoneDigits}`
-        : trimmedCustomerPhone.startsWith("00")
-          ? `+${customerPhoneDigits.slice(2)}`
-          : customerPhoneDigits.length === 9 && customerPhoneDigits.startsWith("9")
-            ? `+351${customerPhoneDigits}`
-            : customerPhoneDigits;
+      const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(input.customerPhone);
       const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
       const previousAppointments = await storage.getAppointments();
       const depositRecommendation = getDepositRecommendation({
@@ -1716,6 +1731,7 @@ export async function registerRoutes(
     try {
       const { barberId, startTime, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
       const start = new Date(startTime);
+      const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(phone);
       const appointments: Array<Parameters<typeof storage.createAppointment>[0]> = [];
       const conflicts = [];
       const services = await storage.getServices();
@@ -1732,7 +1748,7 @@ export async function registerRoutes(
       const depositRecommendation = isManualBooking
         ? getDepositRecommendation({
             previousAppointments: await storage.getAppointments(),
-            customerPhone: phone,
+            customerPhone: normalizedCustomerPhone,
             customerEmail: null,
             serviceDurationMinutes: duration,
           })
@@ -1803,7 +1819,7 @@ export async function registerRoutes(
           serviceId: serviceId ? Number(serviceId) : null,
           startTime: currentStart,
           customerName: isManualBooking ? name : (occurrences > 1 ? `RECORRENTE: ${name}` : (name || "BLOQUEIO MANUAL")),
-          customerPhone: phone || "",
+          customerPhone: isManualBooking ? normalizedCustomerPhone : "",
           customerEmail: "",
           durationMinutes: duration,
           status: "booked",

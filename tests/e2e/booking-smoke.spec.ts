@@ -895,6 +895,32 @@ test.describe("booking rules", () => {
     expect(createBody.message).toContain("Não é possível realizar a marcação online");
   });
 
+  test("preserves Portuguese country code when storing customer phone", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(8, 16, 30),
+        customerName: "QA Indicativo",
+        customerPhone: "+351912695704",
+        customerEmail: "qa-indicativo@example.com",
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+
+    const createdAppointment = await createResponse.json();
+    expect(createdAppointment.customerPhone).toBe("+351912695704");
+  });
+
   test("assigns no-preference bookings to the least busy available barber", async ({ request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
