@@ -1093,6 +1093,7 @@ export default function Admin() {
   const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
+  const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
   const [futureRemovalAppointments, setFutureRemovalAppointments] = useState<AdminAppointment[]>([]);
   const [barberReassignments, setBarberReassignments] = useState<Record<number, string>>({});
@@ -1124,6 +1125,14 @@ export default function Admin() {
     refetchInterval: 10000,
   });
   const { data: barbers } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
+  const activeBarbers = useMemo(
+    () => (barbers || []).filter((barber) => barber.isVisible !== false),
+    [barbers],
+  );
+  const archivedBarbers = useMemo(
+    () => (barbers || []).filter((barber) => barber.isVisible === false),
+    [barbers],
+  );
   const { data: services } = useServices({ enabled: user?.authorized === true, includeHidden: true });
   const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist"],
@@ -1704,6 +1713,23 @@ export default function Admin() {
     toast({ title: "Sucesso", description: result?.message || "Barbeiro removido." });
   };
 
+  const updateBarberVisibility = async (barber: BarberListItem, isVisible: boolean) => {
+    const response = await apiRequest("PATCH", `/api/barbers/${barber.id}`, { isVisible });
+    const updatedBarber = await response.json();
+    await refreshBarbersCache(updatedBarber);
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
+    if (!isVisible && selectedBarberFilter === String(barber.id)) setSelectedBarberFilter("all");
+    if (!isVisible && dashboardBarberFilter === String(barber.id)) setDashboardBarberFilter("all");
+    toast({
+      title: "Sucesso",
+      description: isVisible
+        ? "Barbeiro reativado e visível na operação."
+        : "Barbeiro arquivado. Não aparece no site nem recebe novas reservas.",
+    });
+  };
+
   const openBarberRemovalFlow = async (barber: BarberListItem) => {
     const response = await apiRequest("GET", `/api/barbers/${barber.id}/future-appointments`);
     const futureAppointments = (await response.json()) as AdminAppointment[];
@@ -1938,7 +1964,7 @@ export default function Admin() {
   };
 
   const activeBarberColumns = useMemo(() => {
-    const allBarbers = barbers || [];
+    const allBarbers = user?.role === "barber" ? (barbers || []) : activeBarbers;
     if (user?.role === "barber") {
       return allBarbers.filter((barber) => barber.id === user.id);
     }
@@ -1946,10 +1972,10 @@ export default function Admin() {
       return allBarbers.filter((barber) => String(barber.id) === selectedBarberFilter);
     }
     return allBarbers;
-  }, [barbers, selectedBarberFilter, user]);
+  }, [activeBarbers, barbers, selectedBarberFilter, user]);
   const weeklyAgendaBarberOptions = user?.role === "barber"
     ? activeBarberColumns
-    : (barbers || []);
+    : activeBarbers;
 
   const dayAppointmentSummary = useMemo(() => ({
     total: appointmentList.length,
@@ -2500,7 +2526,7 @@ export default function Admin() {
         <AppointmentBlockDialog
           open={isBlocking}
           onOpenChange={setIsBlocking}
-          barbers={barbers}
+          barbers={activeBarbers}
           manualBookingServices={manualBookingServices}
           blockData={blockData}
           onBlockDataChange={setBlockData}
@@ -2584,7 +2610,7 @@ export default function Admin() {
                     </SelectTrigger>
                     <SelectContent className="bg-card border-white/10 text-white">
                       <SelectItem value="all">Todos os barbeiros</SelectItem>
-                      {barbers?.map((barber) => (
+                      {activeBarbers.map((barber) => (
                         <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>
                       ))}
                     </SelectContent>
@@ -2611,7 +2637,7 @@ export default function Admin() {
           <TabsContent value="appointments" className="space-y-6 outline-none">
             <AppointmentsTab
               user={user}
-              barbers={barbers}
+              barbers={activeBarbers}
               appointmentList={appointmentList}
               filteredAppointmentList={filteredAppointmentList}
               appointmentViewMode={appointmentViewMode}
@@ -2634,8 +2660,23 @@ export default function Admin() {
           </TabsContent>
 
           <TabsContent value="barbers" className="outline-none">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-white">Equipa de Barbeiros</h2>
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-white">Equipa de Barbeiros</h2>
+                <p className="text-sm text-gray-400">
+                  Barbeiros ativos aparecem no site, na agenda e nas reservas.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                {archivedBarbers.length > 0 ? (
+                  <Button
+                    variant="outline"
+                    className="border-white/10 text-sm"
+                    onClick={() => setShowArchivedBarbers((current) => !current)}
+                  >
+                    {showArchivedBarbers ? "Ocultar arquivados" : `Mostrar arquivados (${archivedBarbers.length})`}
+                  </Button>
+                ) : null}
               <Dialog open={isAddingBarber} onOpenChange={setIsAddingBarber}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="gap-2">
@@ -2712,9 +2753,10 @@ export default function Admin() {
                   </div>
                 </DialogContent>
               </Dialog>
+              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {barbers?.map(barber => (
+              {activeBarbers.map(barber => (
                 <Card key={barber.id} className="bg-card border-white/10 overflow-hidden text-white">
                   <div className="aspect-square bg-muted relative">
                     <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
@@ -2884,6 +2926,54 @@ export default function Admin() {
                 </Card>
               ))}
             </div>
+            {activeBarbers.length === 0 ? (
+              <div className="mt-6 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
+                Não há barbeiros ativos neste momento.
+              </div>
+            ) : null}
+            {showArchivedBarbers && archivedBarbers.length > 0 ? (
+              <div className="mt-8 space-y-3">
+                <div>
+                  <h3 className="text-base font-semibold text-white">Barbeiros arquivados</h3>
+                  <p className="text-sm text-gray-400">
+                    Ficam guardados para histórico e relatórios, mas não aparecem no site, na agenda nem nas novas reservas.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {archivedBarbers.map((barber) => (
+                    <div key={barber.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-card p-3 text-white">
+                      <img
+                        src={getBarberAvatar(barber)}
+                        className="h-14 w-14 rounded-md object-cover"
+                        alt=""
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold">{barber.name}</p>
+                        <p className="truncate text-sm text-gray-400">{barber.specialty}</p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-white/10"
+                        onClick={async () => {
+                          try {
+                            await updateBarberVisibility(barber, true);
+                          } catch (err: any) {
+                            toast({
+                              title: "Erro",
+                              description: err.message || "Não foi possível reativar o barbeiro.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        Reativar
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="blacklist" className="outline-none">
