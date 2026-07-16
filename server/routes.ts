@@ -142,6 +142,7 @@ const blacklistInputSchema = z.object({
     .transform((value) => normalizeEmail(value))
     .refine(isValidOptionalEmail, emailValidationMessage),
   reason: z.string().trim().max(500).optional(),
+  cancelFutureAppointments: z.boolean().optional(),
 });
 
 function getAppSession(req: Request) {
@@ -440,6 +441,40 @@ function getStatusPatch(status: Appointment["status"]) {
   }
 
   return patch;
+}
+
+async function getFutureBookedCustomerAppointments(phone: string, email?: string) {
+  const now = new Date();
+  return (await storage.getAppointments())
+    .filter((appointment) =>
+      appointment.status === "booked" &&
+      new Date(appointment.startTime).getTime() >= now.getTime() &&
+      customerContactMatches(appointment, phone, email)
+    )
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+}
+
+async function getBlacklistAppointmentSummaries(appointments: Appointment[]) {
+  const [barbers, services] = await Promise.all([
+    storage.getBarbers(),
+    storage.getServices(),
+  ]);
+  const barbersById = new Map(barbers.map((barber) => [barber.id, barber]));
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+
+  return appointments.map((appointment) => ({
+    id: appointment.id,
+    barberId: appointment.barberId,
+    barberName: barbersById.get(appointment.barberId)?.name || "Barbeiro desconhecido",
+    serviceId: appointment.serviceId,
+    serviceName: appointment.serviceId
+      ? servicesById.get(appointment.serviceId)?.name || "Serviço indisponível"
+      : "Sem serviço",
+    startTime: appointment.startTime,
+    durationMinutes: appointment.durationMinutes,
+    customerName: appointment.customerName,
+    customerPhone: appointment.customerPhone,
+  }));
 }
 
 function buildBarberServiceMap(rows: Array<{ barberId: number; serviceId: number }>) {
@@ -2419,19 +2454,49 @@ export async function registerRoutes(
   app.post("/api/admin/blacklist", requireAdmin, async (req, res) => {
     try {
       const input = blacklistInputSchema.parse(req.body);
+      const futureAppointments = await getFutureBookedCustomerAppointments(input.phone, input.email || undefined);
+
+      if (futureAppointments.length > 0 && input.cancelFutureAppointments === undefined) {
+        return res.status(409).json({
+          code: "CUSTOMER_HAS_FUTURE_APPOINTMENTS",
+          message: "Este cliente tem marcações futuras.",
+          futureAppointments: await getBlacklistAppointmentSummaries(futureAppointments),
+        });
+      }
+
       const entry = await storage.addToBlacklist({
         phone: input.phone,
         email: input.email || null,
         reason: input.reason || undefined,
       });
+      let cancelledAppointments: Appointment[] = [];
+
+      if (input.cancelFutureAppointments === true && futureAppointments.length > 0) {
+        for (const appointment of futureAppointments) {
+          const updated = await storage.updateAppointment(appointment.id, getStatusPatch("cancelled"));
+          if (updated) cancelledAppointments.push(updated);
+        }
+      }
+
       await recordAuditLog(req, {
         action: "customer.blocked",
         entityType: "blacklist",
         entityId: entry.id,
-        summary: `Cliente bloqueado: ${entry.phone}`,
-        metadata: { email: entry.email, reason: entry.reason },
+        summary: cancelledAppointments.length > 0
+          ? `Cliente bloqueado e ${cancelledAppointments.length} marcação(ões) futura(s) cancelada(s): ${entry.phone}`
+          : `Cliente bloqueado: ${entry.phone}`,
+        metadata: {
+          email: entry.email,
+          reason: entry.reason,
+          futureAppointmentIds: futureAppointments.map((appointment) => appointment.id),
+          cancelledAppointmentIds: cancelledAppointments.map((appointment) => appointment.id),
+        },
       });
-      res.status(201).json(entry);
+      res.status(201).json({
+        ...entry,
+        futureAppointments: await getBlacklistAppointmentSummaries(futureAppointments),
+        cancelledAppointments: await getBlacklistAppointmentSummaries(cancelledAppointments),
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({

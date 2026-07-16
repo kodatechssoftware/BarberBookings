@@ -921,6 +921,129 @@ test.describe("booking rules", () => {
     expect(createdAppointment.customerPhone).toBe("+351912695704");
   });
 
+  test("asks before cancelling future appointments when blocking a customer", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const startTime = futureThursdayIso(9, 11, 30);
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        customerName: "QA Blacklist Futuro",
+        customerPhone: "+351912695740",
+        customerEmail: "qa-blacklist-futuro@example.com",
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+
+    const blockResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone: "912695740",
+        email: "qa-blacklist-futuro@example.com",
+        reason: "Teste com marcacao futura",
+      },
+    });
+    expect(blockResponse.status()).toBe(409);
+    const blockBody = await blockResponse.json();
+    expect(blockBody.code).toBe("CUSTOMER_HAS_FUTURE_APPOINTMENTS");
+    expect(blockBody.futureAppointments).toHaveLength(1);
+  });
+
+  test("keeps future appointments when blocking customer without cancelling", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const startTime = futureThursdayIso(10, 16, 30);
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        customerName: "QA Blacklist Manter",
+        customerPhone: "+351912695741",
+        customerEmail: "qa-blacklist-manter@example.com",
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    const appointment = await createResponse.json();
+
+    const blockResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone: "912695741",
+        email: "qa-blacklist-manter@example.com",
+        reason: "Teste manter marcacao futura",
+        cancelFutureAppointments: false,
+      },
+    });
+    expect(blockResponse.ok(), await blockResponse.text()).toBe(true);
+    const blockBody = await blockResponse.json();
+    expect(blockBody.cancelledAppointments).toHaveLength(0);
+
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    expect(appointments.find((item: any) => item.id === appointment.id)?.status).toBe("booked");
+  });
+
+  test("cancels future appointments when blocking customer with cancellation", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const startTime = futureThursdayIso(11, 14, 30);
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        customerName: "QA Blacklist Cancelar",
+        customerPhone: "+351912695742",
+        customerEmail: "qa-blacklist-cancelar@example.com",
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    const appointment = await createResponse.json();
+
+    const blockResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone: "912695742",
+        email: "qa-blacklist-cancelar@example.com",
+        reason: "Teste cancelar marcacao futura",
+        cancelFutureAppointments: true,
+      },
+    });
+    expect(blockResponse.ok(), await blockResponse.text()).toBe(true);
+    const blockBody = await blockResponse.json();
+    expect(blockBody.cancelledAppointments).toHaveLength(1);
+
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    expect(appointments.find((item: any) => item.id === appointment.id)?.status).toBe("cancelled");
+  });
+
   test("assigns no-preference bookings to the least busy available barber", async ({ request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),

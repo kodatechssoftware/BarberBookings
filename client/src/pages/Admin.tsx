@@ -78,6 +78,23 @@ type AdminAppointment = {
   depositRequired?: boolean;
   depositReason?: string | null;
 };
+type FutureBlacklistAppointment = {
+  id: number;
+  barberId: number;
+  barberName: string;
+  serviceId: number | null;
+  serviceName: string;
+  startTime: string;
+  durationMinutes: number;
+  customerName: string;
+  customerPhone: string;
+};
+type PendingBlacklistAction = {
+  phone: string;
+  email?: string;
+  reason: string;
+  futureAppointments: FutureBlacklistAppointment[];
+};
 type DashboardData = {
   range: {
     startDate: string;
@@ -1261,6 +1278,8 @@ export default function Admin() {
     barberId: "all"
   });
   const [blacklistForm, setBlacklistForm] = useState({ phone: "", email: "" });
+  const [pendingBlacklistAction, setPendingBlacklistAction] = useState<PendingBlacklistAction | null>(null);
+  const [isSubmittingBlacklist, setIsSubmittingBlacklist] = useState(false);
   const [shopAvailabilityForm, setShopAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
   const [isSavingShopAvailability, setIsSavingShopAvailability] = useState(false);
   const [customerHistory, setCustomerHistory] = useState<any | null>(null);
@@ -1822,6 +1841,102 @@ export default function Admin() {
     toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
   };
 
+  const refreshBlacklistData = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+  };
+
+  const submitBlacklistEntryWithFutureCheck = async (
+    payload: { phone: string; email?: string; reason: string },
+    options?: { cancelFutureAppointments?: boolean; clearForm?: boolean },
+  ) => {
+    setIsSubmittingBlacklist(true);
+    try {
+      const response = await apiFetch("/api/admin/blacklist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...payload,
+          cancelFutureAppointments: options?.cancelFutureAppointments,
+        }),
+      });
+      const responseBody = await response.json().catch(() => ({}));
+
+      if (response.status === 409 && responseBody?.code === "CUSTOMER_HAS_FUTURE_APPOINTMENTS") {
+        setPendingBlacklistAction({
+          ...payload,
+          futureAppointments: responseBody.futureAppointments || [],
+        });
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(responseBody?.message || "Não foi possível bloquear o cliente.");
+      }
+
+      const cancelledCount = Array.isArray(responseBody?.cancelledAppointments)
+        ? responseBody.cancelledAppointments.length
+        : 0;
+
+      refreshBlacklistData();
+      setPendingBlacklistAction(null);
+      if (options?.clearForm) {
+        setBlacklistForm({ phone: "", email: "" });
+      }
+
+      toast({
+        title: "Cliente bloqueado",
+        description: cancelledCount > 0
+          ? `${cancelledCount} marcação(ões) futura(s) foram cancelada(s).`
+          : "Cliente adicionado à lista de bloqueio.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Erro",
+        description: err.message || "Não foi possível bloquear o cliente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmittingBlacklist(false);
+    }
+  };
+
+  const handleBlockCustomerWithFutureCheck = async (appointment: AdminAppointment) => {
+    await submitBlacklistEntryWithFutureCheck({
+      phone: appointment.customerPhone,
+      email: appointment.customerEmail || undefined,
+      reason: `Faltou à marcação de ${format(parseISO(appointment.startTime), "dd/MM/yyyy HH:mm")}`,
+    });
+  };
+
+  const handleAddBlacklistEntryWithFutureCheck = async () => {
+    const phone = blacklistForm.phone;
+    const email = blacklistForm.email;
+    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedEmail = normalizeEmail(email);
+
+    if (!phone.trim()) {
+      toast({ title: "Erro", description: "O telemóvel é obrigatório.", variant: "destructive" });
+      return;
+    }
+
+    if (!isValidPortugueseMobile(phone)) {
+      toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
+      return;
+    }
+
+    if (!isValidOptionalEmail(email)) {
+      toast({ title: "Email inválido", description: emailValidationMessage, variant: "destructive" });
+      return;
+    }
+
+    await submitBlacklistEntryWithFutureCheck({
+      phone: normalizedPhone,
+      email: normalizedEmail || undefined,
+      reason: "Bloqueio manual pelo administrador",
+    }, { clearForm: true });
+  };
+
   const activeBarberColumns = useMemo(() => {
     const allBarbers = barbers || [];
     if (user?.role === "barber") {
@@ -2309,8 +2424,78 @@ export default function Admin() {
           getStatusClass={getStatusClass}
           onOpenHistory={openCustomerHistory}
           onStatusChange={handleStatusChange}
-          onBlockCustomer={handleBlockCustomer}
+          onBlockCustomer={handleBlockCustomerWithFutureCheck}
         />
+
+        <Dialog
+          open={!!pendingBlacklistAction}
+          onOpenChange={(open) => {
+            if (!open && !isSubmittingBlacklist) setPendingBlacklistAction(null);
+          }}
+        >
+          <DialogContent className="max-h-[90vh] overflow-y-auto border-white/10 bg-card text-white sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Cliente com marcações futuras</DialogTitle>
+              <p className="text-sm text-gray-400">
+                Este cliente ainda tem marcações futuras. Escolha se pretende manter ou cancelar essas marcações ao bloquear o cliente.
+              </p>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              {pendingBlacklistAction?.futureAppointments.map((appointment) => (
+                <div key={appointment.id} className="rounded-xl border border-white/10 bg-background/60 p-3">
+                  <p className="font-semibold text-white">
+                    {format(parseISO(appointment.startTime), "dd/MM/yyyy 'as' HH:mm", { locale: pt })}
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    {appointment.barberName} · {appointment.serviceName}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {appointment.customerName} · {appointment.customerPhone}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
+              <Button
+                variant="outline"
+                disabled={isSubmittingBlacklist}
+                onClick={() => setPendingBlacklistAction(null)}
+              >
+                Voltar
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={isSubmittingBlacklist || !pendingBlacklistAction}
+                onClick={() => pendingBlacklistAction && submitBlacklistEntryWithFutureCheck(
+                  {
+                    phone: pendingBlacklistAction.phone,
+                    email: pendingBlacklistAction.email,
+                    reason: pendingBlacklistAction.reason,
+                  },
+                  { cancelFutureAppointments: false, clearForm: true },
+                )}
+              >
+                Bloquear e manter marcações
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={isSubmittingBlacklist || !pendingBlacklistAction}
+                onClick={() => pendingBlacklistAction && submitBlacklistEntryWithFutureCheck(
+                  {
+                    phone: pendingBlacklistAction.phone,
+                    email: pendingBlacklistAction.email,
+                    reason: pendingBlacklistAction.reason,
+                  },
+                  { cancelFutureAppointments: true, clearForm: true },
+                )}
+              >
+                {isSubmittingBlacklist ? "A bloquear..." : "Bloquear e cancelar marcações"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <AppointmentBlockDialog
           open={isBlocking}
@@ -2739,37 +2924,7 @@ export default function Admin() {
                       />
                     </div>
                     <div className="flex items-end">
-                      <Button variant="destructive" className="w-full" onClick={async () => {
-                        const phone = blacklistForm.phone;
-                        const email = blacklistForm.email;
-                        const normalizedPhone = normalizePortuguesePhone(phone);
-                        const normalizedEmail = normalizeEmail(email);
-
-                        if (!phone.trim()) {
-                          toast({ title: "Erro", description: "O telemóvel é obrigatório.", variant: "destructive" });
-                          return;
-                        }
-
-                        if (!isValidPortugueseMobile(phone)) {
-                          toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
-                          return;
-                        }
-
-                        if (!isValidOptionalEmail(email)) {
-                          toast({ title: "Email inválido", description: emailValidationMessage, variant: "destructive" });
-                          return;
-                        }
-
-                        await apiRequest("POST", "/api/admin/blacklist", {
-                          phone: normalizedPhone,
-                          email: normalizedEmail || undefined,
-                          reason: "Bloqueio manual pelo administrador",
-                        });
-                        queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
-                        queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                        setBlacklistForm({ phone: "", email: "" });
-                        toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
-                      }}>Bloquear Cliente</Button>
+                      <Button variant="destructive" className="w-full" disabled={isSubmittingBlacklist} onClick={handleAddBlacklistEntryWithFutureCheck}>Bloquear Cliente</Button>
                     </div>
                   </div>
 
