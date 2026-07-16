@@ -512,6 +512,16 @@ async function normalizeBarberServiceIds(serviceIds: number[] | undefined) {
   return uniqueServiceIds.length >= allServices.length ? [] : uniqueServiceIds;
 }
 
+function normalizeBarberEmail<T extends { email?: string | null }>(barberInput: T) {
+  if (!("email" in barberInput)) return barberInput;
+
+  const email = typeof barberInput.email === "string" ? barberInput.email.trim() : barberInput.email;
+  return {
+    ...barberInput,
+    email: email || null,
+  };
+}
+
 async function getBarbersWithServiceIds() {
   const [barbers, serviceRows] = await Promise.all([
     storage.getBarbers(),
@@ -1092,7 +1102,7 @@ export async function registerRoutes(
     try {
       const input = api.barbers.create.input.parse(req.body);
       const { serviceIds, ...barberInput } = input;
-      const barber = await storage.createBarber(barberInput);
+      const barber = await storage.createBarber(normalizeBarberEmail(barberInput));
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);
       if (normalizedServiceIds !== undefined) {
         await storage.replaceBarberServices(barber.id, normalizedServiceIds);
@@ -1130,7 +1140,7 @@ export async function registerRoutes(
 
       const hasBarberPatch = Object.keys(barberPatch).length > 0;
       const barber = hasBarberPatch
-        ? await storage.updateBarber(barberId, barberPatch)
+        ? await storage.updateBarber(barberId, normalizeBarberEmail(barberPatch))
         : existing;
 
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);

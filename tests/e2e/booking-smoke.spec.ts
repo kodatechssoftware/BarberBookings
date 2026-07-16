@@ -843,6 +843,32 @@ test.describe("booking rules", () => {
     expect(privateBarbers[0]).not.toHaveProperty("password");
   });
 
+  test("allows creating multiple barbers without login email", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const createPayload = (name: string) => ({
+      name,
+      specialty: "Teste",
+      bio: "",
+      avatar: null,
+      email: "",
+      color: "#F97316",
+      serviceIds: [],
+    });
+
+    const firstResponse = await request.post("/api/barbers", {
+      data: createPayload(`Sem Email A ${Date.now()}`),
+    });
+    expect(firstResponse.status()).toBe(201);
+    expect((await firstResponse.json()).email).toBeNull();
+
+    const secondResponse = await request.post("/api/barbers", {
+      data: createPayload(`Sem Email B ${Date.now()}`),
+    });
+    expect(secondResponse.status()).toBe(201);
+    expect((await secondResponse.json()).email).toBeNull();
+  });
+
   test("records admin actions in the audit log", async ({ request }) => {
     await loginAdminRequest(request);
 
