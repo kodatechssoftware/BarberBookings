@@ -1115,6 +1115,7 @@ export async function registerRoutes(
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
         return res.status(400).json({ message: error.message });
       }
+      console.error("Create barber error:", error);
       res.status(500).json({ message: "Erro ao criar barbeiro" });
     }
   });
@@ -1165,6 +1166,7 @@ export async function registerRoutes(
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
         return res.status(400).json({ message: error.message });
       }
+      console.error("Update barber error:", error);
       res.status(500).json({ message: "Erro ao atualizar barbeiro" });
     }
   });

@@ -80,3 +80,20 @@ export async function ensureServiceAgendaLabelColumn() {
     ADD COLUMN IF NOT EXISTS agenda_label text
   `);
 }
+
+export async function ensureBarberServicesTable() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_services")}`;
+  const qualifiedBarbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
+  const qualifiedServicesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
+      barber_id integer NOT NULL REFERENCES ${qualifiedBarbersTable}(id) ON DELETE CASCADE,
+      service_id integer NOT NULL REFERENCES ${qualifiedServicesTable}(id) ON DELETE CASCADE,
+      PRIMARY KEY (barber_id, service_id)
+    )
+  `);
+}
