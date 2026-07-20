@@ -988,6 +988,35 @@ test.describe("admin navigation", () => {
   });
 });
 
+test.describe("admin list stability", () => {
+  test("keeps admin lists from flashing empty while data is loading", async ({ page }) => {
+    await page.route("**/api/barbers?includeHidden=true", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await route.continue();
+    });
+
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Equipa" }).click();
+
+    await expect(page.getByText(/barbeiros ativos neste momento/)).toHaveCount(0);
+    await expect(page.getByText("A carregar barbeiros...")).toBeVisible();
+    await expect(page.getByText("A carregar barbeiros...")).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/barbeiros ativos neste momento/)).toHaveCount(0);
+  });
+
+  test("marks API list responses as non-cacheable", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const barbersResponse = await request.get("/api/barbers?includeHidden=true");
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+
+    expect(barbersResponse.ok(), await barbersResponse.text()).toBe(true);
+    expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+    expect(barbersResponse.headers()["cache-control"]).toContain("no-store");
+    expect(servicesResponse.headers()["cache-control"]).toContain("no-store");
+  });
+});
+
 test.describe("booking rules", () => {
   test("exports a management-ready Excel report with numeric revenue", async ({ request }) => {
     await loginAdminRequest(request);

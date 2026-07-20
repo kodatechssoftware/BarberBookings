@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateBarberRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 
@@ -10,10 +10,16 @@ export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolea
       const url = options?.includeHidden
         ? `${api.barbers.list.path}?includeHidden=true`
         : api.barbers.list.path;
-      const res = await apiFetch(url);
+      const res = await apiFetch(url, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache" },
+      });
       if (!res.ok) throw new Error("Failed to fetch barbers");
       return api.barbers.list.responses[200].parse(await res.json());
     },
+    placeholderData: keepPreviousData,
+    retry: 2,
+    retryDelay: 800,
   });
 }
 

@@ -1139,7 +1139,12 @@ export default function Admin() {
     barberId: user?.role === "barber" ? (user.id ? String(user.id) : undefined) : undefined,
     refetchInterval: 10000,
   });
-  const { data: barbers, isLoading: isLoadingBarbers } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
+  const {
+    data: barbers,
+    isLoading: isLoadingBarbers,
+    isFetching: isFetchingBarbers,
+    isError: isBarbersError,
+  } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
   const activeBarbers = useMemo(
     () => (barbers || []).filter((barber) => barber.isVisible !== false),
     [barbers],
@@ -1148,7 +1153,12 @@ export default function Admin() {
     () => (barbers || []).filter((barber) => barber.isVisible === false),
     [barbers],
   );
-  const { data: services, isLoading: isLoadingServices } = useServices({ enabled: user?.authorized === true, includeHidden: true });
+  const {
+    data: services,
+    isLoading: isLoadingServices,
+    isFetching: isFetchingServices,
+    isError: isServicesError,
+  } = useServices({ enabled: user?.authorized === true, includeHidden: true });
   const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist"],
     enabled: user?.role === "admin"
@@ -3029,7 +3039,18 @@ export default function Admin() {
                 </Card>
               ))}
             </div>
-            {activeBarbers.length === 0 ? (
+            {activeBarbers.length === 0 && (isLoadingBarbers || isFetchingBarbers) ? (
+              <div className="mt-6 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                A carregar barbeiros...
+              </div>
+            ) : null}
+            {activeBarbers.length === 0 && isBarbersError ? (
+              <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center text-sm text-red-100">
+                NÃ£o foi possÃ­vel carregar a equipa. Atualize a pÃ¡gina e tente novamente.
+              </div>
+            ) : null}
+            {activeBarbers.length === 0 && !isLoadingBarbers && !isFetchingBarbers && !isBarbersError ? (
               <div className="mt-6 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
                 Não há barbeiros ativos neste momento.
               </div>
@@ -3333,6 +3354,22 @@ export default function Admin() {
                 </Card>
               ))}
             </div>
+            {(!services || services.length === 0) && (isLoadingServices || isFetchingServices) ? (
+              <div className="mt-6 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                A carregar serviÃ§os...
+              </div>
+            ) : null}
+            {(!services || services.length === 0) && isServicesError ? (
+              <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center text-sm text-red-100">
+                NÃ£o foi possÃ­vel carregar os serviÃ§os. Atualize a pÃ¡gina e tente novamente.
+              </div>
+            ) : null}
+            {services && services.length === 0 && !isLoadingServices && !isFetchingServices && !isServicesError ? (
+              <div className="mt-6 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
+                NÃ£o hÃ¡ serviÃ§os ativos neste momento.
+              </div>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="settings" className="outline-none">

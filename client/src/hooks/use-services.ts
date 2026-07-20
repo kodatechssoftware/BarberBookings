@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type CreateServiceRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 
@@ -10,10 +10,16 @@ export function useServices(options?: { enabled?: boolean; includeHidden?: boole
       const url = options?.includeHidden
         ? `${api.services.list.path}?includeHidden=true`
         : api.services.list.path;
-      const res = await apiFetch(url);
+      const res = await apiFetch(url, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache" },
+      });
       if (!res.ok) throw new Error("Failed to fetch services");
       return api.services.list.responses[200].parse(await res.json());
     },
+    placeholderData: keepPreviousData,
+    retry: 2,
+    retryDelay: 800,
   });
 }
 
