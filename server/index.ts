@@ -8,6 +8,8 @@ const app = express();
 const httpServer = createServer(app);
 const isProduction = process.env.NODE_ENV === "production";
 
+app.set("etag", false);
+
 function getSafeDatabaseTarget() {
   const rawUrl = process.env.DATABASE_URL;
   if (!rawUrl) return "DATABASE_URL is not set";

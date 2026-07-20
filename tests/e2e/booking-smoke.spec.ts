@@ -1009,11 +1009,18 @@ test.describe("admin list stability", () => {
 
     const barbersResponse = await request.get("/api/barbers?includeHidden=true");
     const servicesResponse = await request.get("/api/services?includeHidden=true");
+    const conditionalBarbersResponse = await request.get("/api/barbers?includeHidden=true", {
+      headers: { "If-None-Match": '"forced-stale-etag"' },
+    });
 
     expect(barbersResponse.ok(), await barbersResponse.text()).toBe(true);
     expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+    expect(conditionalBarbersResponse.ok(), await conditionalBarbersResponse.text()).toBe(true);
     expect(barbersResponse.headers()["cache-control"]).toContain("no-store");
     expect(servicesResponse.headers()["cache-control"]).toContain("no-store");
+    expect(barbersResponse.headers()["etag"]).toBeUndefined();
+    expect(servicesResponse.headers()["etag"]).toBeUndefined();
+    expect(conditionalBarbersResponse.status()).toBe(200);
   });
 });
 
