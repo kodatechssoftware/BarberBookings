@@ -36,6 +36,19 @@ type AppointmentBlockDialogProps = {
   onSubmit: () => void;
 };
 
+const PORTUGAL_DIAL_CODE = "+351";
+const PORTUGAL_PHONE_DIGIT_LIMIT = 9;
+
+function getManualPhoneLocalValue(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+
+  if (digits.startsWith("351") && digits.length > PORTUGAL_PHONE_DIGIT_LIMIT) {
+    return digits.slice(3, 3 + PORTUGAL_PHONE_DIGIT_LIMIT);
+  }
+
+  return digits.slice(0, PORTUGAL_PHONE_DIGIT_LIMIT);
+}
+
 export function AppointmentBlockDialog({
   open,
   onOpenChange,
@@ -364,12 +377,22 @@ export function AppointmentBlockDialog({
               {blockData.isManualBooking && (
                 <div className="space-y-3">
                   <Label className="text-sm font-medium text-gray-300">Telemóvel</Label>
-                  <Input
-                    value={blockData.phone}
-                    onChange={(event) => onBlockDataChange({ ...blockData, phone: event.target.value })}
-                    className="h-12 rounded-xl border-white/10 bg-background/50 text-white"
-                    placeholder="912..."
-                  />
+                  <div className="flex h-12 overflow-hidden rounded-xl border border-white/10 bg-background/50 focus-within:border-primary">
+                    <div className="flex items-center border-r border-white/10 px-3 text-sm font-semibold text-primary">
+                      {PORTUGAL_DIAL_CODE}
+                    </div>
+                    <Input
+                      id="manual-booking-phone"
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      value={getManualPhoneLocalValue(blockData.phone)}
+                      onChange={(event) => onBlockDataChange({ ...blockData, phone: getManualPhoneLocalValue(event.target.value) })}
+                      className="h-full rounded-none border-0 bg-transparent text-white focus-visible:ring-0 focus-visible:ring-offset-0"
+                      placeholder="912 345 678"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">O indicativo +351 vai ser adicionado automaticamente.</p>
                 </div>
               )}
             </div>

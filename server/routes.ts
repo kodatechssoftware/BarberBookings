@@ -1626,14 +1626,6 @@ export async function registerRoutes(
       const dateStr = getShopDateParts(input.startTime).dateKey;
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(input.customerPhone);
       const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
-      const previousAppointments = await storage.getAppointments();
-      const depositRecommendation = getDepositRecommendation({
-        previousAppointments,
-        customerPhone: normalizedCustomerPhone,
-        customerEmail: normalizedCustomerEmail || null,
-        serviceDurationMinutes: requestedDuration,
-      });
-
       // Check for blacklist
       const isBlacklisted = await storage.isBlacklisted(normalizedCustomerEmail || undefined, normalizedCustomerPhone);
       if (isBlacklisted) {
@@ -1722,8 +1714,8 @@ export async function registerRoutes(
         customerEmail: normalizedCustomerEmail || null,
         cancelToken,
         durationMinutes: requestedDuration,
-        depositRequired: depositRecommendation.required,
-        depositReason: depositRecommendation.reason,
+        depositRequired: false,
+        depositReason: null,
       });
       await recordAuditLog(req, {
         actorType: "client",
@@ -1792,15 +1784,6 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Este barbeiro não executa o serviço escolhido." });
         }
       }
-      const depositRecommendation = isManualBooking
-        ? getDepositRecommendation({
-            previousAppointments: await storage.getAppointments(),
-            customerPhone: normalizedCustomerPhone,
-            customerEmail: null,
-            serviceDurationMinutes: duration,
-          })
-        : { required: false, reason: null };
-
       // Determine how many occurrences
       const recurringWeeksNumber = Number(recurringWeeks);
       const recurringMonthsNumber = Number(recurringMonths);
@@ -1871,8 +1854,8 @@ export async function registerRoutes(
           durationMinutes: duration,
           status: "booked",
           cancelToken: randomUUID(),
-          depositRequired: depositRecommendation.required,
-          depositReason: depositRecommendation.reason,
+          depositRequired: false,
+          depositReason: null,
         });
       }
 
@@ -2610,7 +2593,7 @@ export async function registerRoutes(
         noShows: metrics.noShows,
         lastPresence: metrics.lastPresence,
         lastVisit: metrics.lastPresence,
-        depositRecommended: metrics.noShows + metrics.lateCancelled >= DEPOSIT_RISK_THRESHOLD,
+        depositRecommended: false,
       },
       appointments: appointmentsWithDetails,
     });
@@ -3001,8 +2984,6 @@ export async function registerRoutes(
         "Valor serviço (€)",
         "Receita realizada (€)",
         "Receita prevista (€)",
-        "Sinal recomendado",
-        "Motivo do sinal",
         "Criada em",
       ];
       addTable(
@@ -3032,18 +3013,16 @@ export async function registerRoutes(
             centsToEuros(priceCents),
             centsToEuros(realizedCents),
             centsToEuros(projectedCents),
-            appointment.depositRequired ? "Sim" : "Não",
-            appointment.depositReason || "",
             appointment.createdAt ? new Date(appointment.createdAt) : null,
           ];
         }),
       );
-      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 18, 34, 18], {
+      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 18], {
         1: dateFormat,
         12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
-        17: dateTimeFormat,
+        15: dateTimeFormat,
       });
 
       const fileName = `Relatório_de_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;

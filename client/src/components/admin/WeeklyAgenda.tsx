@@ -165,6 +165,89 @@ function groupAppointmentsByStart(appointments: WeeklyAgendaAppointment[]) {
     .sort((a, b) => a.slotKey.localeCompare(b.slotKey));
 }
 
+type WeeklyAgendaAppointmentLayout = {
+  laneIndex: number;
+  laneCount: number;
+};
+
+function getClippedAppointmentMinutes(
+  appointment: WeeklyAgendaAppointment,
+  startMinutes: number,
+  endMinutes: number,
+) {
+  const start = parseISO(appointment.startTime);
+  const end = getWeeklyAppointmentEnd(appointment);
+
+  return {
+    startMinutes: Math.max(startMinutes, getAgendaMinutes(start)),
+    endMinutes: Math.min(endMinutes, getAgendaMinutes(end)),
+  };
+}
+
+function createAppointmentLayouts(
+  appointments: WeeklyAgendaAppointment[],
+  startMinutes: number,
+  endMinutes: number,
+) {
+  const layouts = new Map<number, WeeklyAgendaAppointmentLayout>();
+  const sortedAppointments = appointments
+    .map((appointment) => ({
+      appointment,
+      ...getClippedAppointmentMinutes(appointment, startMinutes, endMinutes),
+    }))
+    .filter((item) => item.endMinutes > item.startMinutes)
+    .sort((a, b) =>
+      a.startMinutes - b.startMinutes ||
+      a.endMinutes - b.endMinutes ||
+      a.appointment.barberId - b.appointment.barberId ||
+      a.appointment.customerName.localeCompare(b.appointment.customerName),
+    );
+
+  const commitCluster = (cluster: typeof sortedAppointments) => {
+    const laneEndMinutes: number[] = [];
+    const clusterLayouts = new Map<number, WeeklyAgendaAppointmentLayout>();
+
+    cluster.forEach((item) => {
+      const laneIndex = laneEndMinutes.findIndex((laneEnd) => laneEnd <= item.startMinutes);
+      const resolvedLaneIndex = laneIndex === -1 ? laneEndMinutes.length : laneIndex;
+      laneEndMinutes[resolvedLaneIndex] = item.endMinutes;
+      clusterLayouts.set(item.appointment.id, { laneIndex: resolvedLaneIndex, laneCount: 1 });
+    });
+
+    const laneCount = Math.max(1, laneEndMinutes.length);
+    clusterLayouts.forEach((layout, appointmentId) => {
+      layouts.set(appointmentId, { ...layout, laneCount });
+    });
+  };
+
+  let currentCluster: typeof sortedAppointments = [];
+  let currentClusterEndMinutes = 0;
+
+  sortedAppointments.forEach((item) => {
+    if (currentCluster.length === 0) {
+      currentCluster = [item];
+      currentClusterEndMinutes = item.endMinutes;
+      return;
+    }
+
+    if (item.startMinutes < currentClusterEndMinutes) {
+      currentCluster.push(item);
+      currentClusterEndMinutes = Math.max(currentClusterEndMinutes, item.endMinutes);
+      return;
+    }
+
+    commitCluster(currentCluster);
+    currentCluster = [item];
+    currentClusterEndMinutes = item.endMinutes;
+  });
+
+  if (currentCluster.length > 0) {
+    commitCluster(currentCluster);
+  }
+
+  return layouts;
+}
+
 function getDailyAppointmentLabel(count: number) {
   if (count === 0) return "Livre";
   return `${count} no dia`;
@@ -209,11 +292,13 @@ function getServiceBadge(service?: WeeklyAgendaService) {
 export function getAppointmentContactLinks(phone: string) {
   const trimmedPhone = phone.trim();
   const digits = trimmedPhone.replace(/\D/g, "");
-  const whatsappDigits = digits.length === 9 && digits.startsWith("9") ? `351${digits}` : digits;
+  const normalizedDigits = digits.length === 9 && digits.startsWith("9") ? `351${digits}` : digits;
+  const displayPhone = normalizedDigits ? `+${normalizedDigits}` : trimmedPhone;
 
   return {
-    tel: trimmedPhone ? `tel:${trimmedPhone}` : "",
-    whatsapp: whatsappDigits ? `https://wa.me/${whatsappDigits}` : "",
+    displayPhone,
+    tel: normalizedDigits ? `tel:+${normalizedDigits}` : "",
+    whatsapp: normalizedDigits ? `https://wa.me/${normalizedDigits}` : "",
   };
 }
 
@@ -558,6 +643,11 @@ export function WeeklyAgenda({
                       const dayTop = (dayWindow.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute;
                       const dayHeight = getAgendaWindowHeight(dayWindow.startMinutes, dayWindow.endMinutes);
                       const daySlots = createAgendaSlots(dayWindow.startMinutes, dayWindow.endMinutes);
+                      const appointmentLayouts = createAppointmentLayouts(
+                        dayAppointments,
+                        dayWindow.startMinutes,
+                        dayWindow.endMinutes,
+                      );
 
                       return (
                         <div key={key} className="relative border-r border-white/10 last:border-r-0" style={{ height: weeklyAgendaHeight }}>
@@ -598,20 +688,18 @@ export function WeeklyAgenda({
                           {dayAppointments.map((appointment) => {
                             const start = parseISO(appointment.startTime);
                             const end = getWeeklyAppointmentEnd(appointment);
-                            const startMinutes = Math.max(
+                            const { startMinutes, endMinutes } = getClippedAppointmentMinutes(
+                              appointment,
                               dayWindow.startMinutes,
-                              getAgendaMinutes(start),
-                            );
-                            const endMinutes = Math.min(
                               dayWindow.endMinutes,
-                              getAgendaMinutes(end),
                             );
-                            const top = (startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 4;
-                            const height = Math.max(44, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 8);
-                            const slotKey = getAppointmentStartSlotKey(appointment);
-                            const sameSlot = dayAppointments.filter((item) => getAppointmentStartSlotKey(item) === slotKey);
-                            const laneIndex = Math.max(0, sameSlot.findIndex((item) => item.id === appointment.id));
-                            const laneWidth = 100 / Math.max(1, sameSlot.length);
+                            const top = (startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
+                            const height = Math.max(10, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 6);
+                            const layout = appointmentLayouts.get(appointment.id) || { laneIndex: 0, laneCount: 1 };
+                            const laneIndex = layout.laneIndex;
+                            const laneWidth = 100 / layout.laneCount;
+                            const isCompact = height < 34 || laneWidth < 52;
+                            const isTiny = height < 20 || laneWidth < 40;
                             const barber = barbersById.get(appointment.barberId);
                             const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                             const color = normalizeBarberColor(barber?.color);
@@ -629,7 +717,9 @@ export function WeeklyAgenda({
                                 onClick={() => onSelectAppointment(appointment)}
                                 className={cn(
                                   "absolute z-10 overflow-hidden rounded-lg border text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-                                  "flex flex-col justify-center gap-0.5 px-1.5 py-1",
+                                  isCompact
+                                    ? "flex items-center gap-1 px-1.5 py-0.5"
+                                    : "flex flex-col justify-center gap-0.5 px-1.5 py-1",
                                   appointment.status !== "booked" && "opacity-70",
                                 )}
                                 style={{
@@ -643,13 +733,19 @@ export function WeeklyAgenda({
                                 }}
                               >
                                 <span
-                                  className="inline-flex h-5 max-w-full items-center gap-1 rounded-full border border-white/10 bg-black/15 px-1.5 font-semibold uppercase text-[9px] text-gray-100"
+                                  className={cn(
+                                    "inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-black/15 font-semibold uppercase text-gray-100",
+                                    isCompact ? "h-4 shrink-0 px-1 text-[8px]" : "h-5 px-1.5 text-[9px]",
+                                  )}
                                 >
                                   <Scissors className="h-3 w-3 shrink-0" />
-                                  <span className="truncate">{serviceBadge}</span>
+                                  {!isTiny && <span className="truncate">{serviceBadge}</span>}
                                 </span>
                                 <span
-                                  className="block truncate text-[11px] font-semibold leading-tight text-white"
+                                  className={cn(
+                                    "block truncate font-semibold leading-tight text-white",
+                                    isCompact ? "text-[10px]" : "text-[11px]",
+                                  )}
                                 >
                                   {appointment.customerName}
                                 </span>

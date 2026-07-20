@@ -53,6 +53,12 @@ function futureThursdayIso(weeksAhead = 3, hour = 10, minute = 0) {
   return date.toISOString();
 }
 
+function futureWeekdayIso(dayOffsetFromThursday: number, weeksAhead = 3, hour = 10, minute = 0) {
+  const date = new Date(futureThursdayIso(weeksAhead, hour, minute));
+  date.setDate(date.getDate() + dayOffsetFromThursday);
+  return date.toISOString();
+}
+
 function dateKeyFromIso(isoDate: string) {
   return isoDate.slice(0, 10);
 }
@@ -266,15 +272,15 @@ test.describe("public booking flow", () => {
 
   test("shows availability dots on next-month days visible in the calendar grid", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/book?barberId=1&serviceId=1&date=2026-06-30");
+    await page.goto("/book?barberId=1&serviceId=1&date=2026-07-31");
 
-    await expect(page.getByText("junho 2026")).toBeVisible();
+    await expect(page.getByText("julho 2026")).toBeVisible();
 
     await expect.poll(async () => page.evaluate(() => {
       return Array.from(document.querySelectorAll<HTMLElement>(".booking-day-available.day-outside"))
         .map((element) => Number(element.textContent?.trim()))
         .filter((day) => Number.isFinite(day));
-    })).toEqual(expect.arrayContaining([1, 2, 3, 4]));
+    })).toEqual(expect.arrayContaining([1]));
   });
 
   test("shows inline validation in the customer details step", async ({ page }) => {
@@ -357,6 +363,8 @@ test.describe("admin navigation", () => {
     const appointmentDialog = page.getByRole("dialog");
     await expect(appointmentDialog).toContainText("Detalhes da marcação");
     await expect(appointmentDialog.getByRole("heading", { name: "Agenda Click QA" })).toBeVisible();
+    await expect(appointmentDialog.getByText("+351912695705")).toBeVisible();
+    await expect(appointmentDialog.getByRole("link", { name: /Ligar/ })).toHaveAttribute("href", "tel:+351912695705");
     await page.keyboard.press("Escape");
 
     await expect(page.getByRole("button", { name: "Mostrar atividade recente" })).toBeVisible();
@@ -398,6 +406,60 @@ test.describe("admin navigation", () => {
     }
   });
 
+  test("waits for barber and service names before showing appointment rows", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+    expect(servicesResponse.ok()).toBe(true);
+    const [service] = await servicesResponse.json();
+    expect(service).toBeTruthy();
+
+    const createBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: "Slow Reference Barber",
+        specialty: "Teste de carregamento",
+        color: "#38BDF8",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(createBarberResponse.ok()).toBe(true);
+    const barber = await createBarberResponse.json();
+
+    const createAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: currentWeekThursdayIso(17, 0),
+        name: "Slow Reference QA",
+        phone: "912695706",
+        isManualBooking: true,
+      },
+    });
+    expect(createAppointmentResponse.ok(), await createAppointmentResponse.text()).toBe(true);
+
+    await page.route("**/api/barbers?includeHidden=true", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.continue();
+    });
+    await page.route("**/api/services?includeHidden=true", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.continue();
+    });
+
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Marcações" }).click();
+    await page.getByRole("button", { name: "Próximas" }).click();
+
+    await expect(page.getByText("Lista de marcações")).not.toBeVisible();
+    await expect(page.getByText("Desconhecido")).not.toBeVisible();
+    await expect(page.getByText("Serviço indisponível")).not.toBeVisible();
+
+    await expect(page.getByText("Lista de marcações")).toBeVisible();
+    await expect(page.getByText("Slow Reference QA")).toBeVisible();
+    await expect(page.getByText("Desconhecido")).not.toBeVisible();
+    await expect(page.getByText("Serviço indisponível")).not.toBeVisible();
+  });
+
   test("keeps recurring manual bookings to a single selected time", async ({ page, request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
@@ -415,6 +477,9 @@ test.describe("admin navigation", () => {
 
     const dialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("+351", { exact: true })).toBeVisible();
+    await dialog.locator("#manual-booking-phone").fill("912695703");
+    await expect(dialog.locator("#manual-booking-phone")).toHaveValue("912695703");
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
     await dialog.getByLabel("Repetir marcação").click();
@@ -428,6 +493,67 @@ test.describe("admin navigation", () => {
     await dialog.getByRole("button", { name: "14:30", exact: true }).click();
     await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+  });
+
+  test("warns before manually booking a blacklisted customer", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const blacklistedPhone = "912696001";
+    const blacklistResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone: blacklistedPhone,
+        reason: "Teste aviso marcacao manual",
+      },
+    });
+    expect(blacklistResponse.ok(), await blacklistResponse.text()).toBe(true);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Agenda" }).click();
+    await page.getByRole("button", { name: /manual/i }).click();
+
+    const dialog = page.getByRole("dialog", { name: /manual/i });
+    await expect(dialog).toBeVisible();
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+    await dialog.locator("#manual-booking-phone").fill(blacklistedPhone);
+    await dialog.getByRole("button", { name: "14:00", exact: true }).click();
+    await dialog.getByRole("button", { name: /Criar/i }).click();
+
+    const warningDialog = page.getByRole("alertdialog", { name: "Cliente na blacklist" });
+    await expect(warningDialog).toBeVisible();
+    await expect(warningDialog).toContainText("+351912696001");
+    await expect(warningDialog).toContainText("Para criar esta marcacao, remova primeiro o cliente da blacklist.");
+    await expect(warningDialog.getByRole("button", { name: "Criar na mesma" })).toHaveCount(0);
+    await expect(warningDialog.getByRole("button", { name: "Remover da blacklist e criar" })).toBeVisible();
+    await warningDialog.getByRole("button", { name: "Remover da blacklist e criar" }).click();
+    await expect(warningDialog).not.toBeVisible();
+    await expect(page.getByText("Registo(s) processado(s) com sucesso.", { exact: true })).toBeVisible();
+
+    const blacklistAfterResponse = await request.get("/api/admin/blacklist");
+    expect(blacklistAfterResponse.ok()).toBe(true);
+    const blacklistAfter = await blacklistAfterResponse.json();
+    expect(blacklistAfter.some((entry: any) => entry.phone === blacklistedPhone)).toBe(false);
+
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    expect(appointments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        customerPhone: "+351912696001",
+        customerName: "Cliente Manual",
+      }),
+    ]));
   });
 
   test("uses manual and automatic service agenda labels", async ({ page, request }) => {
@@ -470,6 +596,16 @@ test.describe("admin navigation", () => {
     expect(madeixasServiceResponse.ok(), await madeixasServiceResponse.text()).toBe(true);
     const madeixasService = await madeixasServiceResponse.json();
     expect(madeixasService.agendaLabel ?? null).toBe(null);
+
+    const assignedServiceIds = Array.from(new Set([
+      ...services.map((item: any) => item.id),
+      service.id,
+      madeixasService.id,
+    ]));
+    const assignServicesResponse = await request.patch(`/api/barbers/${barber.id}/services`, {
+      data: { serviceIds: assignedServiceIds },
+    });
+    expect(assignServicesResponse.ok(), await assignServicesResponse.text()).toBe(true);
 
     const createResponse = await request.post("/api/appointments/block", {
       data: {
@@ -729,6 +865,127 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Grupo Agenda 1").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
+
+  test("keeps overlapping weekly agenda cards in separate visual lanes", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const services = await servicesResponse.json();
+    expect(services[0]).toBeTruthy();
+
+    const createLongServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Lane Longo ${Date.now()}`,
+        description: "Teste de lanes da agenda",
+        price: 1000,
+        duration: 60,
+      },
+    });
+    expect(createLongServiceResponse.ok(), await createLongServiceResponse.text()).toBe(true);
+    const longService = await createLongServiceResponse.json();
+
+    const createShortServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Lane Curto ${Date.now()}`,
+        description: "Teste de lanes da agenda",
+        price: 800,
+        duration: 30,
+      },
+    });
+    expect(createShortServiceResponse.ok(), await createShortServiceResponse.text()).toBe(true);
+    const shortService = await createShortServiceResponse.json();
+
+    const barbers = [];
+    for (const [index, color] of ["#22C55E", "#8B5CF6"].entries()) {
+      const createBarberResponse = await request.post("/api/barbers", {
+        data: {
+          name: `Agenda Lane Barbeiro ${index + 1} ${Date.now()}`,
+          specialty: "Teste de agenda",
+          color,
+          isVisible: true,
+          serviceIds: [longService.id, shortService.id],
+        },
+      });
+      expect(createBarberResponse.ok(), await createBarberResponse.text()).toBe(true);
+      barbers.push(await createBarberResponse.json());
+    }
+
+    const appointments = [
+      {
+        barberId: barbers[0].id,
+        serviceId: longService.id,
+        startTime: currentWeekThursdayIso(11, 0),
+        name: "Lane Agenda Longo QA",
+        phone: "912695761",
+      },
+      {
+        barberId: barbers[1].id,
+        serviceId: shortService.id,
+        startTime: currentWeekThursdayIso(11, 30),
+        name: "Lane Agenda Sobreposto QA",
+        phone: "912695762",
+      },
+      {
+        barberId: barbers[1].id,
+        serviceId: shortService.id,
+        startTime: currentWeekThursdayIso(12, 0),
+        name: "Lane Agenda Seguinte QA",
+        phone: "912695763",
+      },
+    ];
+
+    for (const appointment of appointments) {
+      const createResponse = await request.post("/api/appointments/block", {
+        data: {
+          ...appointment,
+          isManualBooking: true,
+        },
+      });
+      expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    const longAppointment = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Lane Agenda Longo QA/,
+    }).first();
+    const overlappingAppointment = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Lane Agenda Sobreposto QA/,
+    }).first();
+    const nextAppointment = page.getByRole("button", {
+      name: /Abrir detalhes da marcação de Lane Agenda Seguinte QA/,
+    }).first();
+
+    await expect(longAppointment).toBeVisible();
+    await expect(overlappingAppointment).toBeVisible();
+    await expect(nextAppointment).toBeVisible();
+
+    const boxes = await Promise.all([
+      longAppointment.boundingBox(),
+      overlappingAppointment.boundingBox(),
+      nextAppointment.boundingBox(),
+    ]);
+    expect(boxes.every(Boolean)).toBe(true);
+    const [longBox, overlappingBox, nextBox] = boxes as NonNullable<typeof boxes[number]>[];
+
+    const intersects = (first: typeof longBox, second: typeof longBox) =>
+      first.x < second.x + second.width &&
+      first.x + first.width > second.x &&
+      first.y < second.y + second.height &&
+      first.y + first.height > second.y;
+
+    expect(intersects(longBox, overlappingBox)).toBe(false);
+    expect(intersects(overlappingBox, nextBox)).toBe(false);
+    expect(nextBox.width).toBeGreaterThan(overlappingBox.width);
+    await expectNoHorizontalOverflow(page);
+  });
 });
 
 test.describe("booking rules", () => {
@@ -867,6 +1124,26 @@ test.describe("booking rules", () => {
     });
     expect(secondResponse.status()).toBe(201);
     expect((await secondResponse.json()).email).toBeNull();
+  });
+
+  test("rejects creating barbers without required profile fields", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const response = await request.post("/api/barbers", {
+      data: {
+        name: "   ",
+        specialty: "",
+        bio: "",
+        avatar: null,
+        email: "",
+        color: "#F97316",
+        serviceIds: [],
+      },
+    });
+
+    expect(response.status()).toBe(400);
+    const body = await response.json();
+    expect(body.message).toContain("Indique");
   });
 
   test("records admin actions in the audit log", async ({ request }) => {
@@ -1045,7 +1322,7 @@ test.describe("booking rules", () => {
         serviceId: service.id,
         startTime,
         customerName: "QA Blacklist Cancelar",
-        customerPhone: "+351912695742",
+        customerPhone: "+351912695752",
         customerEmail: "qa-blacklist-cancelar@example.com",
       },
     });
@@ -1054,7 +1331,7 @@ test.describe("booking rules", () => {
 
     const blockResponse = await request.post("/api/admin/blacklist", {
       data: {
-        phone: "912695742",
+        phone: "912695752",
         email: "qa-blacklist-cancelar@example.com",
         reason: "Teste cancelar marcacao futura",
         cancelFutureAppointments: true,
@@ -1068,6 +1345,98 @@ test.describe("booking rules", () => {
     expect(appointmentsResponse.ok()).toBe(true);
     const appointments = await appointmentsResponse.json();
     expect(appointments.find((item: any) => item.id === appointment.id)?.status).toBe("cancelled");
+  });
+
+  test("supports the full public booking reschedule and cancellation lifecycle", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const uniqueWeeksAhead = 18 + (Math.floor(Date.now() / 1000) % 10);
+    const originalStart = futureThursdayIso(uniqueWeeksAhead, 10, 0);
+    const rescheduledStart = futureWeekdayIso(1, uniqueWeeksAhead, 11, 0);
+
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: originalStart,
+        customerName: "Fluxo Completo QA",
+        customerPhone: "912695753",
+        customerEmail: "fluxo-completo@example.com",
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    const appointment = await createResponse.json();
+    expect(appointment.cancelToken).toBeTruthy();
+
+    const tokenDetailsResponse = await request.get(`/api/appointments/token/${appointment.cancelToken}`);
+    expect(tokenDetailsResponse.ok(), await tokenDetailsResponse.text()).toBe(true);
+    expect((await tokenDetailsResponse.json()).status).toBe("booked");
+
+    const duplicateResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: originalStart,
+        customerName: "Duplicado QA",
+        customerPhone: "912695754",
+        customerEmail: null,
+      },
+    });
+    expect(duplicateResponse.status()).toBe(409);
+
+    const rescheduleResponse = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
+      data: { startTime: rescheduledStart },
+    });
+    expect(rescheduleResponse.ok(), await rescheduleResponse.text()).toBe(true);
+    expect(new Date((await rescheduleResponse.json()).startTime).getTime()).toBe(new Date(rescheduledStart).getTime());
+
+    const oldDateAppointmentsResponse = await request.get(
+      `/api/appointments/public?barberId=${barber.id}&date=${dateKeyFromIso(originalStart)}`,
+    );
+    expect(oldDateAppointmentsResponse.ok()).toBe(true);
+    expect((await oldDateAppointmentsResponse.json()).some((item: any) => item.id === appointment.id)).toBe(false);
+
+    const newDateAppointmentsResponse = await request.get(
+      `/api/appointments/public?barberId=${barber.id}&date=${dateKeyFromIso(rescheduledStart)}`,
+    );
+    expect(newDateAppointmentsResponse.ok()).toBe(true);
+    expect((await newDateAppointmentsResponse.json()).some((item: any) => item.id === appointment.id)).toBe(true);
+
+    const invalidRescheduleResponse = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
+      data: { startTime: "not-a-date" },
+    });
+    expect(invalidRescheduleResponse.status()).toBe(400);
+
+    const outsideScheduleResponse = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
+      data: { startTime: futureWeekdayIso(1, uniqueWeeksAhead, 6, 0) },
+    });
+    expect(outsideScheduleResponse.status()).toBe(400);
+
+    const cancelResponse = await request.post(`/api/appointments/cancel/${appointment.cancelToken}`);
+    expect(cancelResponse.ok(), await cancelResponse.text()).toBe(true);
+    expect(["cancelled", "late_cancelled"]).toContain((await cancelResponse.json()).status);
+
+    const repeatedCancelResponse = await request.post(`/api/appointments/cancel/${appointment.cancelToken}`);
+    expect(repeatedCancelResponse.ok(), await repeatedCancelResponse.text()).toBe(true);
+    expect((await repeatedCancelResponse.json()).alreadyCancelled).toBe(true);
+
+    const cancelledRescheduleResponse = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
+      data: { startTime: futureWeekdayIso(1, uniqueWeeksAhead, 13, 0) },
+    });
+    expect(cancelledRescheduleResponse.status()).toBe(409);
+
+    const publicAfterCancelResponse = await request.get(
+      `/api/appointments/public?barberId=${barber.id}&date=${dateKeyFromIso(rescheduledStart)}`,
+    );
+    expect(publicAfterCancelResponse.ok()).toBe(true);
+    expect((await publicAfterCancelResponse.json()).some((item: any) => item.id === appointment.id)).toBe(false);
   });
 
   test("assigns no-preference bookings to the least busy available barber", async ({ request }) => {
@@ -1206,7 +1575,7 @@ test.describe("booking rules", () => {
       data: {
         barberId: barber.id,
         serviceId: service.id,
-        startTime: "2026-03-19T14:00:00.000Z",
+        startTime: "2027-03-18T14:00:00.000Z",
         name: "Recorrente Hora Inverno QA",
         phone: "912695739",
         isManualBooking: true,
@@ -1218,7 +1587,7 @@ test.describe("booking rules", () => {
 
     expect(response.ok(), await response.text()).toBe(true);
 
-    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=2026-04-02`);
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=2027-04-01`);
     expect(appointmentsResponse.ok()).toBe(true);
     const appointments = await appointmentsResponse.json();
     const daylightSavingAppointment = appointments.find((appointment: any) =>
@@ -1227,7 +1596,7 @@ test.describe("booking rules", () => {
     expect(daylightSavingAppointment).toBeTruthy();
 
     const parts = lisbonDateTimeParts(daylightSavingAppointment.startTime);
-    expect(`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`).toBe("2026-04-02 14:00");
+    expect(`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`).toBe("2027-04-01 14:00");
   });
 
   test("allows only one concurrent booking for the same barber and slot", async ({ request }) => {

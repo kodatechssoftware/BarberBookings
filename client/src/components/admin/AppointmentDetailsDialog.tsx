@@ -358,7 +358,7 @@ export function AppointmentDetailsDialog({
               <div className="min-w-0">
                 <p className="text-2xl font-display font-bold text-primary">{format(start, "HH:mm")}</p>
                 <h3 className="mt-1 truncate text-lg font-bold text-white">{appointment.customerName}</h3>
-                <p className="text-sm text-gray-400">{appointment.customerPhone}</p>
+                <p className="text-sm text-gray-400">{contactLinks.displayPhone || appointment.customerPhone}</p>
               </div>
               <span className={cn("shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide", getStatusClass(appointment.status))}>
                 {getStatusLabel(appointment.status)}
@@ -375,12 +375,6 @@ export function AppointmentDetailsDialog({
                 <p className="mt-1 font-semibold text-white">{getServiceName(appointment.serviceId)}</p>
               </div>
             </div>
-
-            {appointment.depositRequired && (
-              <p className="mt-3 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-primary">
-                Depósito recomendado: {appointment.depositReason || "regra operacional"}
-              </p>
-            )}
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-background/50 p-4">
@@ -454,7 +448,7 @@ export function AppointmentDetailsDialog({
                 </Button>
                 <ConfirmAction
                   title="Bloquear cliente?"
-                  description={`${appointment.customerName} (${appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
+                  description={`${appointment.customerName} (${contactLinks.displayPhone || appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
                   confirmLabel="Bloquear"
                   confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   onConfirm={() => onBlockCustomer(appointment)}

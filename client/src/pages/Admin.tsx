@@ -35,7 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppointmentsTab, blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
-import { WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
+import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch } from "@/lib/api";
 import {
@@ -78,6 +78,17 @@ type AdminAppointment = {
   depositRequired?: boolean;
   depositReason?: string | null;
 };
+
+function normalizeManualBookingPhoneForSubmit(phone: string) {
+  const normalizedPhone = normalizePortuguesePhone(phone);
+
+  if (/^9\d{8}$/.test(normalizedPhone)) {
+    return `+351${normalizedPhone}`;
+  }
+
+  return phone.trim() || "900000000";
+}
+
 type FutureBlacklistAppointment = {
   id: number;
   barberId: number;
@@ -94,6 +105,10 @@ type PendingBlacklistAction = {
   email?: string;
   reason: string;
   futureAppointments: FutureBlacklistAppointment[];
+};
+type PendingManualBookingBlacklistWarning = {
+  entryId: number;
+  phone: string;
 };
 type DashboardData = {
   range: {
@@ -1124,7 +1139,7 @@ export default function Admin() {
     barberId: user?.role === "barber" ? (user.id ? String(user.id) : undefined) : undefined,
     refetchInterval: 10000,
   });
-  const { data: barbers } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
+  const { data: barbers, isLoading: isLoadingBarbers } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
   const activeBarbers = useMemo(
     () => (barbers || []).filter((barber) => barber.isVisible !== false),
     [barbers],
@@ -1133,7 +1148,7 @@ export default function Admin() {
     () => (barbers || []).filter((barber) => barber.isVisible === false),
     [barbers],
   );
-  const { data: services } = useServices({ enabled: user?.authorized === true, includeHidden: true });
+  const { data: services, isLoading: isLoadingServices } = useServices({ enabled: user?.authorized === true, includeHidden: true });
   const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist"],
     enabled: user?.role === "admin"
@@ -1288,7 +1303,9 @@ export default function Admin() {
   });
   const [blacklistForm, setBlacklistForm] = useState({ phone: "", email: "" });
   const [pendingBlacklistAction, setPendingBlacklistAction] = useState<PendingBlacklistAction | null>(null);
+  const [pendingManualBookingBlacklistWarning, setPendingManualBookingBlacklistWarning] = useState<PendingManualBookingBlacklistWarning | null>(null);
   const [isSubmittingBlacklist, setIsSubmittingBlacklist] = useState(false);
+  const [isResolvingManualBookingBlacklistWarning, setIsResolvingManualBookingBlacklistWarning] = useState(false);
   const [shopAvailabilityForm, setShopAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
   const [isSavingShopAvailability, setIsSavingShopAvailability] = useState(false);
   const [customerHistory, setCustomerHistory] = useState<any | null>(null);
@@ -1684,8 +1701,15 @@ export default function Admin() {
     }
   };
 
-  const getBarberName = (id: number) => barbers?.find(b => b.id === id)?.name || "Desconhecido";
-  const getServiceName = (id?: number | null) => services?.find(s => s.id === id)?.name || "Serviço indisponível";
+  const getBarberName = (id: number) => {
+    if (!barbers && isLoadingBarbers) return "A carregar...";
+    return barbers?.find(b => b.id === id)?.name || "Desconhecido";
+  };
+  const getServiceName = (id?: number | null) => {
+    if (!id) return "Serviço indisponível";
+    if (!services && isLoadingServices) return "A carregar...";
+    return services?.find(s => s.id === id)?.name || "Serviço indisponível";
+  };
   const getStatusLabel = (status: string) => ({
     booked: "Marcada",
     completed: "Concluída",
@@ -2110,7 +2134,18 @@ export default function Admin() {
 
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
-  const handleBlockTime = async () => {
+  const findManualBookingBlacklistEntry = () => {
+    if (!blockData.isManualBooking) return null;
+
+    const phone = normalizePortuguesePhone(blockData.phone);
+    if (!phone) return null;
+
+    return blacklistEntries?.find((entry: any) =>
+      normalizePortuguesePhone(entry.phone) === phone,
+    ) || null;
+  };
+
+  const handleBlockTime = async (options?: { skipBlacklistCheck?: boolean }) => {
     if (!blockData.barberId) {
       toast({ title: "Erro", description: "Selecione um barbeiro.", variant: "destructive" });
       return;
@@ -2141,6 +2176,17 @@ export default function Admin() {
       return;
     }
 
+    if (!options?.skipBlacklistCheck) {
+      const blacklistEntry = findManualBookingBlacklistEntry();
+      if (blacklistEntry) {
+        setPendingManualBookingBlacklistWarning({
+          entryId: blacklistEntry.id,
+          phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
+        });
+        return;
+      }
+    }
+
     try {
       const promises: any[] = [];
       
@@ -2158,7 +2204,7 @@ export default function Admin() {
           serviceId: Number(blockData.serviceId),
           startTime: startTime,
           name: blockData.name || "Cliente Manual",
-          phone: blockData.phone || "900000000",
+          phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
           isManualBooking: true,
           isRecurring: true,
           recurringWeeks: Number(blockData.recurringWeeks),
@@ -2185,7 +2231,7 @@ export default function Admin() {
               serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
               startTime: startTime,
               name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
-              phone: blockData.phone || "900000000",
+              phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
               isManualBooking: blockData.isManualBooking,
               allowOutsideHours: blockData.allowOutsideHours,
             };
@@ -2203,6 +2249,30 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleCreateManualBookingWithBlacklistedCustomer = async (options?: { removeFromBlacklist?: boolean }) => {
+    const pendingWarning = pendingManualBookingBlacklistWarning;
+    if (!pendingWarning) return;
+
+    setIsResolvingManualBookingBlacklistWarning(true);
+    try {
+      if (options?.removeFromBlacklist) {
+        await apiRequest("DELETE", `/api/admin/blacklist/${pendingWarning.entryId}`);
+        refreshBlacklistData();
+      }
+
+      setPendingManualBookingBlacklistWarning(null);
+      await handleBlockTime({ skipBlacklistCheck: true });
+    } catch (err: any) {
+      toast({
+        title: "Erro",
+        description: err.message || "Nao foi possivel continuar com a marcacao.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResolvingManualBookingBlacklistWarning(false);
     }
   };
 
@@ -2276,9 +2346,6 @@ export default function Admin() {
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
                   Última presença: {customerHistory.stats.lastPresence ? format(parseISO(customerHistory.stats.lastPresence), "dd/MM/yyyy HH:mm") : "sem presença registada"}
-                  {customerHistory.stats.depositRecommended && (
-                    <span className="ml-2 text-primary">Depósito recomendado nas próximas marcações.</span>
-                  )}
                 </div>
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -2380,7 +2447,7 @@ export default function Admin() {
                         <p className="mt-1 text-sm text-gray-300">
                           {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getServiceName(appointment.serviceId)}
                         </p>
-                        <p className="mt-1 text-xs text-gray-500">{appointment.customerPhone}</p>
+                        <p className="mt-1 text-xs text-gray-500">{getAppointmentContactLinks(appointment.customerPhone).displayPhone}</p>
                       </div>
 
                       <div className="space-y-2">
@@ -2477,7 +2544,7 @@ export default function Admin() {
                     {appointment.barberName} · {appointment.serviceName}
                   </p>
                   <p className="mt-1 text-xs text-gray-500">
-                    {appointment.customerName} · {appointment.customerPhone}
+                    {appointment.customerName} · {getAppointmentContactLinks(appointment.customerPhone).displayPhone}
                   </p>
                 </div>
               ))}
@@ -2523,6 +2590,42 @@ export default function Admin() {
           </DialogContent>
         </Dialog>
 
+        <AlertDialog
+          open={!!pendingManualBookingBlacklistWarning}
+          onOpenChange={(open) => {
+            if (!open && !isResolvingManualBookingBlacklistWarning) {
+              setPendingManualBookingBlacklistWarning(null);
+            }
+          }}
+        >
+          <AlertDialogContent className="border-white/10 bg-card text-white">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Cliente na blacklist</AlertDialogTitle>
+              <AlertDialogDescription className="text-gray-400">
+                Este numero ({pendingManualBookingBlacklistWarning
+                  ? getAppointmentContactLinks(pendingManualBookingBlacklistWarning.phone).displayPhone
+                  : ""}) esta na blacklist. Para criar esta marcacao, remova primeiro o cliente da blacklist.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="gap-2 sm:gap-2">
+              <AlertDialogCancel
+                className="border-white/10 bg-background text-white hover:bg-white/10"
+                disabled={isResolvingManualBookingBlacklistWarning}
+              >
+                Voltar
+              </AlertDialogCancel>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isResolvingManualBookingBlacklistWarning}
+                onClick={() => handleCreateManualBookingWithBlacklistedCustomer({ removeFromBlacklist: true })}
+              >
+                {isResolvingManualBookingBlacklistWarning ? "A processar..." : "Remover da blacklist e criar"}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         <AppointmentBlockDialog
           open={isBlocking}
           onOpenChange={setIsBlocking}
@@ -2564,7 +2667,7 @@ export default function Admin() {
               appointments={filteredWeeklyAppointmentList}
               barbers={weeklyAgendaBarberOptions}
               services={services}
-              isLoading={isLoadingWeeklyAppointments}
+              isLoading={isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices}
               selectedBarberFilter={selectedBarberFilter}
               selectedStatusFilter={selectedAgendaStatusFilter}
               canFilterBarbers={user.role === "admin"}
@@ -2648,7 +2751,7 @@ export default function Admin() {
               onSelectedBarberFilterChange={setSelectedBarberFilter}
               selectedStatusFilter={selectedStatusFilter}
               onSelectedStatusFilterChange={setSelectedStatusFilter}
-              isLoadingAppointments={isLoadingAppointments}
+              isLoadingAppointments={isLoadingAppointments || isLoadingBarbers || isLoadingServices}
               dayAppointmentSummary={dayAppointmentSummary}
               onOpenManualBooking={() => openManualBookingDialog()}
               onSelectAppointment={(appointment) => setSelectedAppointment(appointment)}

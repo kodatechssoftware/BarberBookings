@@ -11,6 +11,8 @@ import {
 
 const serviceIdsInputSchema = z.array(z.number().int().positive()).optional();
 export const barberInputSchema = insertBarberSchema.extend({
+  name: z.string().trim().min(1, "Indique o nome do barbeiro."),
+  specialty: z.string().trim().min(1, "Indique a especialidade do barbeiro."),
   serviceIds: serviceIdsInputSchema,
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida. Use formato hexadecimal.").optional(),
 });

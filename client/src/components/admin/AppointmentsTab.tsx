@@ -8,7 +8,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { AppointmentDaySummary } from "@/components/admin/AppointmentDaySummary";
-import type { WeeklyAgendaAppointment } from "@/components/admin/WeeklyAgenda";
+import { getAppointmentContactLinks, type WeeklyAgendaAppointment } from "@/components/admin/WeeklyAgenda";
 
 export type AppointmentStatusFilter = AppointmentStatus | "all";
 export type AppointmentViewMode = "day" | "upcoming";
@@ -263,7 +263,7 @@ export function AppointmentsTab({
                         </div>
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">{appointment.customerName}</p>
-                          <p className="truncate text-xs text-gray-400">{appointment.customerPhone || "Sem telemÃ³vel"}</p>
+                          <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
                         </div>
                         <div className="min-w-0">
                           <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Barbeiro</p>
