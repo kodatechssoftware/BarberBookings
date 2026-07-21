@@ -182,6 +182,7 @@ type WeeklyAgendaCrowdedGroup = {
 
 const crowdedGroupThreshold = 4;
 const startSummaryHeightPx = 46;
+const doubleSummaryHeightPx = 58;
 const startSummaryGapPx = 6;
 const startSummaryGroupColor = "#94a3b8";
 
@@ -353,9 +354,12 @@ function createStartSummaryAppointmentGroups(
         ),
       );
       const hasMultipleAppointments = sortedAppointments.length > 1;
-      const heightPx = hasMultipleAppointments
-        ? startSummaryHeightPx
-        : Math.max(34, (clippedEndMinutes - groupStartMinutes) * weeklyAgendaPixelsPerMinute - 6);
+      const heightPx =
+        sortedAppointments.length === 2
+          ? doubleSummaryHeightPx
+          : hasMultipleAppointments
+            ? startSummaryHeightPx
+            : Math.max(34, (clippedEndMinutes - groupStartMinutes) * weeklyAgendaPixelsPerMinute - 6);
       const timeTopPx = (groupStartMinutes - globalStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
       const topPx = Math.max(timeTopPx, previousBottomPx + startSummaryGapPx);
       previousBottomPx = topPx + heightPx;
@@ -878,8 +882,9 @@ export function WeeklyAgenda({
                               group.appointments.length === 1
                                 ? `${format(start, "HH:mm")} · ${firstAppointment.customerName}`
                                 : group.appointments.length === 2
-                                  ? `${format(start, "HH:mm")} · ${group.appointments.map((appointment) => appointment.customerName).join(" / ")}`
+                                  ? group.appointments.map((appointment) => appointment.customerName).join(" / ")
                                   : `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`;
+                            const isDoubleSummary = group.appointments.length === 2;
 
                             return (
                               <button
@@ -888,7 +893,12 @@ export function WeeklyAgenda({
                                 aria-label={groupLabel}
                                 title={groupLabel}
                                 onClick={() => setSelectedCrowdedGroup(group)}
-                                className="absolute left-1 right-1 z-10 flex items-center justify-between gap-2 overflow-hidden rounded-lg border px-2 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                                className={cn(
+                                  "absolute left-1 right-1 z-10 overflow-hidden rounded-lg border px-2 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                                  isDoubleSummary
+                                    ? "flex flex-col justify-center gap-0.5"
+                                    : "flex items-center justify-between gap-2",
+                                )}
                                 style={{
                                   top,
                                   height,
@@ -897,21 +907,32 @@ export function WeeklyAgenda({
                                   boxShadow: `0 12px 24px ${colorWithAlpha(representativeColor, 0.12)}`,
                                 }}
                               >
-                                <span className="min-w-0 truncate text-xs font-bold text-white">
-                                  {summaryText}
-                                </span>
-                                <span className="flex shrink-0 -space-x-1">
-                                  {group.appointments.slice(0, 5).map((appointment) => {
-                                    const barber = barbersById.get(appointment.barberId);
-                                    return (
-                                      <span
-                                        key={appointment.id}
-                                        className="h-3 w-3 rounded-full border border-background"
-                                        style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
-                                      />
-                                    );
-                                  })}
-                                </span>
+                                {isDoubleSummary ? (
+                                  <>
+                                    <span className="text-xs font-bold text-white">{format(start, "HH:mm")}</span>
+                                    <span className="min-w-0 truncate text-[11px] font-semibold text-gray-100">
+                                      {summaryText}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="min-w-0 truncate text-xs font-bold text-white">
+                                      {summaryText}
+                                    </span>
+                                    <span className="flex shrink-0 -space-x-1">
+                                      {group.appointments.slice(0, 5).map((appointment) => {
+                                        const barber = barbersById.get(appointment.barberId);
+                                        return (
+                                          <span
+                                            key={appointment.id}
+                                            className="h-3 w-3 rounded-full border border-background"
+                                            style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                          />
+                                        );
+                                      })}
+                                    </span>
+                                  </>
+                                )}
                               </button>
                             );
                           })}
