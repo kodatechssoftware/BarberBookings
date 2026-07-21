@@ -874,9 +874,12 @@ export function WeeklyAgenda({
                               ? startSummaryGroupColor
                               : normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
                             const groupLabel = `Ver ${formatAppointmentCount(group.appointments.length)} às ${format(start, "HH:mm")}`;
-                            const summaryText = hasMultipleAppointments
-                              ? `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`
-                              : `${format(start, "HH:mm")} · ${firstAppointment.customerName}`;
+                            const summaryText =
+                              group.appointments.length === 1
+                                ? `${format(start, "HH:mm")} · ${firstAppointment.customerName}`
+                                : group.appointments.length === 2
+                                  ? `${format(start, "HH:mm")} · ${group.appointments.map((appointment) => appointment.customerName).join(" / ")}`
+                                  : `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`;
 
                             return (
                               <button
