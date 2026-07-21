@@ -1630,11 +1630,11 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-      toast({ title: "MarcaÃ§Ã£o movida", description: `Nova hora: ${format(startTime, "dd/MM HH:mm")}.` });
+      toast({ title: "Marcação movida", description: `Nova hora: ${format(startTime, "dd/MM HH:mm")}.` });
     } catch (err: any) {
       toast({
-        title: "NÃ£o foi possÃ­vel mover",
-        description: err.message || "Verifique se o horÃ¡rio estÃ¡ livre.",
+        title: "Não foi possível mover",
+        description: err.message || "Verifique se o horário está livre.",
         variant: "destructive",
       });
     }
@@ -3047,7 +3047,7 @@ export default function Admin() {
             ) : null}
             {activeBarbers.length === 0 && isBarbersError ? (
               <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center text-sm text-red-100">
-                NÃ£o foi possÃ­vel carregar a equipa. Atualize a pÃ¡gina e tente novamente.
+                Não foi possível carregar a equipa. Atualize a página e tente novamente.
               </div>
             ) : null}
             {activeBarbers.length === 0 && !isLoadingBarbers && !isFetchingBarbers && !isBarbersError ? (
@@ -3357,17 +3357,17 @@ export default function Admin() {
             {(!services || services.length === 0) && (isLoadingServices || isFetchingServices) ? (
               <div className="mt-6 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                A carregar serviÃ§os...
+                A carregar serviços...
               </div>
             ) : null}
             {(!services || services.length === 0) && isServicesError ? (
               <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center text-sm text-red-100">
-                NÃ£o foi possÃ­vel carregar os serviÃ§os. Atualize a pÃ¡gina e tente novamente.
+                Não foi possível carregar os serviços. Atualize a página e tente novamente.
               </div>
             ) : null}
             {services && services.length === 0 && !isLoadingServices && !isFetchingServices && !isServicesError ? (
               <div className="mt-6 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
-                NÃ£o hÃ¡ serviÃ§os ativos neste momento.
+                Não há serviços ativos neste momento.
               </div>
             ) : null}
           </TabsContent>
