@@ -866,6 +866,58 @@ test.describe("admin navigation", () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  test("summarizes crowded weekly agenda slots instead of shrinking cards", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+    expect(servicesResponse.ok()).toBe(true);
+    const [service] = await servicesResponse.json();
+    expect(service).toBeTruthy();
+
+    const createdBarbers = [];
+    for (const [index, color] of ["#22C55E", "#38BDF8", "#8B5CF6", "#F97316"].entries()) {
+      const createBarberResponse = await request.post("/api/barbers", {
+        data: {
+          name: `Agenda Resumo Barbeiro ${index + 1} ${Date.now()}`,
+          specialty: "Teste de resumo",
+          color,
+          isVisible: true,
+          serviceIds: [service.id],
+        },
+      });
+      expect(createBarberResponse.ok(), await createBarberResponse.text()).toBe(true);
+      createdBarbers.push(await createBarberResponse.json());
+    }
+
+    for (const [index, barber] of createdBarbers.entries()) {
+      const createResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: currentWeekThursdayIso(16, 30),
+          name: `Resumo Agenda Cliente ${index + 1}`,
+          phone: `91269578${index}`,
+          isManualBooking: true,
+        },
+      });
+      expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    const summaryButton = page.getByRole("button", { name: /Ver \d+ marcações às 16:30/ }).first();
+    await expect(summaryButton).toBeVisible();
+    await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Resumo Agenda Cliente 1/ })).toHaveCount(0);
+
+    await summaryButton.click();
+    const summaryDialog = page.getByRole("dialog");
+    await expect(summaryDialog.getByRole("heading", { name: /\d+ marcações/ })).toBeVisible();
+    await expect(summaryDialog.getByText("Resumo Agenda Cliente 1")).toBeVisible();
+    await expect(summaryDialog.getByText("Resumo Agenda Cliente 4")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
   test("keeps overlapping weekly agenda cards in separate visual lanes", async ({ page, request }) => {
     await loginAdminRequest(request);
 
