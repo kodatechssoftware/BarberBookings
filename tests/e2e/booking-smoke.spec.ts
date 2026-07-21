@@ -838,24 +838,16 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const firstConcurrent = page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Grupo Agenda 1/,
-    }).first();
-    const secondConcurrent = page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Grupo Agenda 2/,
-    }).first();
-    const thirdConcurrent = page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Grupo Agenda 3/,
-    }).first();
+    const summaryButton = page.getByRole("button", { name: "Ver 3 marcações às 11:00" }).first();
 
-    await expect(firstConcurrent).toBeVisible();
-    await expect(secondConcurrent).toBeVisible();
-    await expect(thirdConcurrent).toBeVisible();
-    await expect(page.getByRole("button", { name: "Ver 3 marcações às 11:00" })).toHaveCount(0);
+    await expect(summaryButton).toBeVisible();
+    await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Grupo Agenda 1/ })).toHaveCount(0);
 
-    await firstConcurrent.click();
+    await summaryButton.click();
     const appointmentDialog = page.getByRole("dialog");
-    await expect(appointmentDialog.getByRole("heading", { name: "Grupo Agenda 1" })).toBeVisible();
+    await expect(appointmentDialog.getByRole("heading", { name: "11:00 · 3 marcações" })).toBeVisible();
+    await expect(appointmentDialog.getByText("Grupo Agenda 1")).toBeVisible();
+    await expect(appointmentDialog.getByText("Grupo Agenda 3")).toBeVisible();
     await page.keyboard.press("Escape");
     await expectNoHorizontalOverflow(page);
 
@@ -1005,15 +997,9 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const longAppointment = page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Lane Agenda Longo QA/,
-    }).first();
-    const overlappingAppointment = page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Lane Agenda Sobreposto QA/,
-    }).first();
-    const nextAppointment = page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Lane Agenda Seguinte QA/,
-    }).first();
+    const longAppointment = page.locator('button[aria-label^="Ver "][aria-label*="11:00"]').first();
+    const overlappingAppointment = page.locator('button[aria-label^="Ver "][aria-label*="11:30"]').first();
+    const nextAppointment = page.locator('button[aria-label^="Ver "][aria-label*="12:00"]').first();
 
     await expect(longAppointment).toBeVisible();
     await expect(overlappingAppointment).toBeVisible();
@@ -1035,7 +1021,11 @@ test.describe("admin navigation", () => {
 
     expect(intersects(longBox, overlappingBox)).toBe(false);
     expect(intersects(overlappingBox, nextBox)).toBe(false);
-    expect(nextBox.width).toBeGreaterThan(overlappingBox.width);
+    expect(nextBox.width).toBeGreaterThan(120);
+
+    await overlappingAppointment.click();
+    const appointmentDialog = page.getByRole("dialog");
+    await expect(appointmentDialog.getByText("Lane Agenda Sobreposto QA")).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 });

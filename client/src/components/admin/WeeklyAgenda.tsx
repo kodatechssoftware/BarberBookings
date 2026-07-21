@@ -176,9 +176,13 @@ type WeeklyAgendaCrowdedGroup = {
   appointments: WeeklyAgendaAppointment[];
   startMinutes: number;
   endMinutes: number;
+  topPx?: number;
+  heightPx?: number;
 };
 
 const crowdedGroupThreshold = 4;
+const startSummaryHeightPx = 46;
+const startSummaryGapPx = 6;
 
 function getClippedAppointmentMinutes(
   appointment: WeeklyAgendaAppointment,
@@ -314,6 +318,56 @@ function createCrowdedAppointmentGroups(
   }
 
   return groups;
+}
+
+function createStartSummaryAppointmentGroups(
+  appointments: WeeklyAgendaAppointment[],
+  startMinutes: number,
+  endMinutes: number,
+  globalStartMinutes: number,
+) {
+  const grouped = new Map<number, WeeklyAgendaAppointment[]>();
+
+  appointments.forEach((appointment) => {
+    const clipped = getClippedAppointmentMinutes(appointment, startMinutes, endMinutes);
+    if (clipped.endMinutes <= clipped.startMinutes) return;
+
+    const appointmentStartMinutes = getAgendaMinutes(parseISO(appointment.startTime));
+    const list = grouped.get(appointmentStartMinutes) || [];
+    list.push(appointment);
+    grouped.set(appointmentStartMinutes, list);
+  });
+
+  let previousBottomPx = -Infinity;
+
+  return Array.from(grouped.entries())
+    .sort(([firstStart], [secondStart]) => firstStart - secondStart)
+    .map(([groupStartMinutes, groupAppointments]) => {
+      const sortedAppointments = groupAppointments.sort(
+        (a, b) => a.barberId - b.barberId || a.customerName.localeCompare(b.customerName),
+      );
+      const clippedEndMinutes = Math.max(
+        ...sortedAppointments.map((appointment) =>
+          getClippedAppointmentMinutes(appointment, startMinutes, endMinutes).endMinutes,
+        ),
+      );
+      const timeTopPx = (groupStartMinutes - globalStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
+      const topPx = Math.max(timeTopPx, previousBottomPx + startSummaryGapPx);
+      previousBottomPx = topPx + startSummaryHeightPx;
+
+      return {
+        id: `start-${groupStartMinutes}-${sortedAppointments.map((appointment) => appointment.id).join("-")}`,
+        appointments: sortedAppointments,
+        startMinutes: groupStartMinutes,
+        endMinutes: clippedEndMinutes,
+        topPx,
+        heightPx: startSummaryHeightPx,
+      };
+    });
+}
+
+function formatAppointmentCount(count: number) {
+  return `${count} ${count === 1 ? "marcação" : "marcações"}`;
 }
 
 function getDailyAppointmentLabel(count: number) {
@@ -744,11 +798,19 @@ export function WeeklyAgenda({
                       const dayTop = (dayWindow.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute;
                       const dayHeight = getAgendaWindowHeight(dayWindow.startMinutes, dayWindow.endMinutes);
                       const daySlots = createAgendaSlots(dayWindow.startMinutes, dayWindow.endMinutes);
-                      const crowdedGroups = createCrowdedAppointmentGroups(
-                        dayAppointments,
-                        dayWindow.startMinutes,
-                        dayWindow.endMinutes,
-                      );
+                      const shouldUseStartSummaries = selectedBarberFilter === "all";
+                      const crowdedGroups = shouldUseStartSummaries
+                        ? createStartSummaryAppointmentGroups(
+                            dayAppointments,
+                            dayWindow.startMinutes,
+                            dayWindow.endMinutes,
+                            globalAgendaStartMinutes,
+                          )
+                        : createCrowdedAppointmentGroups(
+                            dayAppointments,
+                            dayWindow.startMinutes,
+                            dayWindow.endMinutes,
+                          );
                       const crowdedAppointmentIds = new Set(
                         crowdedGroups.flatMap((group) => group.appointments.map((appointment) => appointment.id)),
                       );
@@ -796,12 +858,14 @@ export function WeeklyAgenda({
                             );
                           })}
                           {crowdedGroups.map((group) => {
-                            const top = (group.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
-                            const height = Math.max(34, (group.endMinutes - group.startMinutes) * weeklyAgendaPixelsPerMinute - 6);
+                            const top = group.topPx ?? (group.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
+                            const height =
+                              group.heightPx ??
+                              Math.max(34, (group.endMinutes - group.startMinutes) * weeklyAgendaPixelsPerMinute - 6);
                             const firstAppointment = group.appointments[0];
                             const start = parseISO(firstAppointment.startTime);
                             const representativeColor = normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
-                            const groupLabel = `Ver ${group.appointments.length} marcações às ${format(start, "HH:mm")}`;
+                            const groupLabel = `Ver ${formatAppointmentCount(group.appointments.length)} às ${format(start, "HH:mm")}`;
 
                             return (
                               <button
@@ -820,7 +884,7 @@ export function WeeklyAgenda({
                                 }}
                               >
                                 <span className="min-w-0 truncate text-xs font-bold text-white">
-                                  {format(start, "HH:mm")} · {group.appointments.length} marcações
+                                  {format(start, "HH:mm")} · {formatAppointmentCount(group.appointments.length)}
                                 </span>
                                 <span className="flex shrink-0 -space-x-1">
                                   {group.appointments.slice(0, 5).map((appointment) => {
@@ -924,7 +988,7 @@ export function WeeklyAgenda({
           <DialogHeader>
             <DialogTitle>
               {selectedCrowdedGroup
-                ? `${format(parseISO(selectedCrowdedGroup.appointments[0].startTime), "HH:mm")} · ${selectedCrowdedGroup.appointments.length} marcações`
+                ? `${format(parseISO(selectedCrowdedGroup.appointments[0].startTime), "HH:mm")} · ${formatAppointmentCount(selectedCrowdedGroup.appointments.length)}`
                 : "Marcações"}
             </DialogTitle>
           </DialogHeader>
