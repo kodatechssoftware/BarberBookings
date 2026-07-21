@@ -838,39 +838,44 @@ test.describe("admin navigation", () => {
     expect(optimizedSize).toBeLessThanOrEqual(900 * 1024);
   });
 
-  test("groups busy weekly slots with several barbers at the same time", async ({ page, request }) => {
+  test("splits simultaneous weekly appointments into horizontal lanes", async ({ page, request }) => {
     await createConcurrentManualAppointmentsForCurrentWeek(request);
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const summaryButton = page.getByRole("button", { name: "Ver 3 marcações às 11:00" }).first();
+    const firstAppointment = page.getByRole("button", { name: /Grupo Agenda 1/ }).first();
+    const secondAppointment = page.getByRole("button", { name: /Grupo Agenda 2/ }).first();
+    const thirdAppointment = page.getByRole("button", { name: /Grupo Agenda 3/ }).first();
 
-    await expect(summaryButton).toBeVisible();
-    await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Grupo Agenda 1/ })).toHaveCount(0);
+    await expect(firstAppointment).toBeVisible();
+    await expect(secondAppointment).toBeVisible();
+    await expect(thirdAppointment).toBeVisible();
 
-    await summaryButton.click();
-    const appointmentDialog = page.getByRole("dialog");
-    await expect(appointmentDialog.getByRole("heading", { name: "11:00 · 3 marcações" })).toBeVisible();
-    await expect(appointmentDialog.getByText("Grupo Agenda 1")).toBeVisible();
-    await expect(appointmentDialog.getByText("Grupo Agenda 3")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expectNoHorizontalOverflow(page);
+    const boxes = await Promise.all([
+      firstAppointment.boundingBox(),
+      secondAppointment.boundingBox(),
+      thirdAppointment.boundingBox(),
+    ]);
+    expect(boxes.every(Boolean)).toBe(true);
+    const [firstBox, secondBox, thirdBox] = boxes as NonNullable<typeof boxes[number]>[];
 
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.reload();
-    await expect(page.getByText("11:00 · 3 marcações").first()).toBeVisible();
-    await expect(page.getByText("Grupo Agenda 1").first()).toBeVisible();
+    expect(firstBox.y).toBeCloseTo(secondBox.y, 0);
+    expect(firstBox.y).toBeCloseTo(thirdBox.y, 0);
+    expect(firstBox.height).toBeCloseTo(secondBox.height, 0);
+    expect(firstBox.height).toBeCloseTo(thirdBox.height, 0);
+    expect(firstBox.x).toBeLessThan(secondBox.x);
+    expect(secondBox.x).toBeLessThan(thirdBox.x);
     await expectNoHorizontalOverflow(page);
   });
 
-  test("summarizes crowded weekly agenda slots instead of shrinking cards", async ({ page, request }) => {
+  test("keeps dense weekly appointments at their real vertical time while splitting width", async ({ page, request }) => {
     await loginAdminRequest(request);
 
     const createServiceResponse = await request.post("/api/services", {
       data: {
-        name: `Agenda Resumo Longo ${Date.now()}`,
-        description: "Teste de altura do resumo",
+        name: `Agenda Lanes Longo ${Date.now()}`,
+        description: "Teste de lanes densos",
         price: 1200,
         duration: 60,
       },
@@ -882,8 +887,8 @@ test.describe("admin navigation", () => {
     for (const [index, color] of ["#22C55E", "#38BDF8", "#8B5CF6", "#F97316"].entries()) {
       const createBarberResponse = await request.post("/api/barbers", {
         data: {
-          name: `Agenda Resumo Barbeiro ${index + 1} ${Date.now()}`,
-          specialty: "Teste de resumo",
+          name: `Agenda Lanes Barbeiro ${index + 1} ${Date.now()}`,
+          specialty: "Teste de lanes",
           color,
           isVisible: true,
           serviceIds: [service.id],
@@ -899,7 +904,7 @@ test.describe("admin navigation", () => {
           barberId: barber.id,
           serviceId: service.id,
           startTime: currentWeekThursdayIso(16, 30),
-          name: `Resumo Agenda Cliente ${index + 1}`,
+          name: `Agenda Lane Cliente ${index + 1}`,
           phone: `91269578${index}`,
           isManualBooking: true,
         },
@@ -907,48 +912,27 @@ test.describe("admin navigation", () => {
       expect(createResponse.ok(), await createResponse.text()).toBe(true);
     }
 
-    const createLaterBarberResponse = await request.post("/api/barbers", {
-      data: {
-        name: `Agenda Resumo Barbeiro 5 ${Date.now()}`,
-        specialty: "Teste de resumo",
-        color: "#F59E0B",
-        isVisible: true,
-        serviceIds: [service.id],
-      },
-    });
-    expect(createLaterBarberResponse.ok(), await createLaterBarberResponse.text()).toBe(true);
-    const laterBarber = await createLaterBarberResponse.json();
-
-    const createOverlappingResponse = await request.post("/api/appointments/block", {
-      data: {
-        barberId: laterBarber.id,
-        serviceId: service.id,
-        startTime: currentWeekThursdayIso(17, 0),
-        name: "Resumo Agenda Seguinte",
-        phone: "912695790",
-        isManualBooking: true,
-      },
-    });
-    expect(createOverlappingResponse.ok(), await createOverlappingResponse.text()).toBe(true);
-
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const summaryButton = page.getByRole("button", { name: /Ver \d+ marcações às 16:30/ }).first();
-    await expect(summaryButton).toBeVisible();
-    const summaryBox = await summaryButton.boundingBox();
-    expect(summaryBox?.width).toBeGreaterThan(150);
-    const nextSummaryButton = page.getByRole("button", { name: /Ver 1 marcação às 17:00/ }).first();
-    await expect(nextSummaryButton).toBeVisible();
-    const nextSummaryBox = await nextSummaryButton.boundingBox();
-    expect(nextSummaryBox!.y).toBeGreaterThan(summaryBox!.y);
-    await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Resumo Agenda Cliente 1/ })).toHaveCount(0);
+    const sameStartBoxes = await Promise.all(
+      [1, 2, 3, 4].map(async (index) => {
+        const appointment = page.getByRole("button", { name: new RegExp(`Agenda Lane Cliente ${index}`) }).first();
+        await expect(appointment).toBeVisible();
+        const box = await appointment.boundingBox();
+        expect(box).toBeTruthy();
+        return box!;
+      }),
+    );
 
-    await summaryButton.click();
-    const summaryDialog = page.getByRole("dialog");
-    await expect(summaryDialog.getByRole("heading", { name: /\d+ marcações/ })).toBeVisible();
-    await expect(summaryDialog.getByText("Resumo Agenda Cliente 1")).toBeVisible();
-    await expect(summaryDialog.getByText("Resumo Agenda Cliente 4")).toBeVisible();
+    const firstTop = sameStartBoxes[0].y;
+    sameStartBoxes.forEach((box) => {
+      expect(box.y).toBeCloseTo(firstTop, 0);
+      expect(box.height).toBeCloseTo(sameStartBoxes[0].height, 0);
+    });
+    for (let index = 1; index < sameStartBoxes.length; index += 1) {
+      expect(sameStartBoxes[index - 1].x).toBeLessThan(sameStartBoxes[index].x);
+    }
     await expectNoHorizontalOverflow(page);
   });
 
@@ -1039,9 +1023,9 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const longAppointment = page.locator('button[aria-label^="Ver "][aria-label*="11:00"]').first();
-    const overlappingAppointment = page.locator('button[aria-label^="Ver "][aria-label*="11:30"]').first();
-    const nextAppointment = page.locator('button[aria-label^="Ver "][aria-label*="12:00"]').first();
+    const longAppointment = page.getByRole("button", { name: /Lane Agenda Longo QA/ }).first();
+    const overlappingAppointment = page.getByRole("button", { name: /Lane Agenda Sobreposto QA/ }).first();
+    const nextAppointment = page.getByRole("button", { name: /Lane Agenda Seguinte QA/ }).first();
 
     await expect(longAppointment).toBeVisible();
     await expect(overlappingAppointment).toBeVisible();

@@ -864,23 +864,9 @@ export function WeeklyAgenda({
                       const dayTop = getAgendaTopPx(dayWindow.startMinutes, globalAgendaStartMinutes);
                       const dayHeight = getAgendaWindowHeight(dayWindow.startMinutes, dayWindow.endMinutes);
                       const daySlots = createAgendaSlots(dayWindow.startMinutes, dayWindow.endMinutes);
-                      const shouldUseStartSummaries = selectedBarberFilter === "all";
-                      const crowdedGroups = shouldUseStartSummaries
-                        ? createStartSummaryAppointmentGroups(
-                            dayAppointments,
-                            dayWindow.startMinutes,
-                            dayWindow.endMinutes,
-                            globalAgendaStartMinutes,
-                          )
-                        : createCrowdedAppointmentGroups(
-                            dayAppointments,
-                            dayWindow.startMinutes,
-                            dayWindow.endMinutes,
-                          );
-                      const crowdedAppointmentIds = new Set(
-                        crowdedGroups.flatMap((group) => group.appointments.map((appointment) => appointment.id)),
-                      );
-                      const standaloneAppointments = dayAppointments.filter((appointment) => !crowdedAppointmentIds.has(appointment.id));
+                      const shouldUseStartSummaries = false;
+                      const crowdedGroups: WeeklyAgendaCrowdedGroup[] = [];
+                      const standaloneAppointments = dayAppointments;
                       const appointmentLayouts = createAppointmentLayouts(
                         standaloneAppointments,
                         dayWindow.startMinutes,
@@ -1097,7 +1083,7 @@ export function WeeklyAgenda({
                               dayWindow.endMinutes,
                             );
                             const top = getAgendaTopPx(startMinutes, globalAgendaStartMinutes);
-                            const height = Math.max(10, getAgendaHeightPx(startMinutes, endMinutes));
+                            const height = getAgendaHeightPx(startMinutes, endMinutes);
                             const layout = appointmentLayouts.get(appointment.id) || { laneIndex: 0, laneCount: 1 };
                             const laneIndex = layout.laneIndex;
                             const laneWidth = 100 / layout.laneCount;
