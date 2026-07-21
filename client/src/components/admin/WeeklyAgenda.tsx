@@ -352,9 +352,13 @@ function createStartSummaryAppointmentGroups(
           getClippedAppointmentMinutes(appointment, startMinutes, endMinutes).endMinutes,
         ),
       );
+      const hasMultipleAppointments = sortedAppointments.length > 1;
+      const heightPx = hasMultipleAppointments
+        ? startSummaryHeightPx
+        : Math.max(34, (clippedEndMinutes - groupStartMinutes) * weeklyAgendaPixelsPerMinute - 6);
       const timeTopPx = (groupStartMinutes - globalStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
       const topPx = Math.max(timeTopPx, previousBottomPx + startSummaryGapPx);
-      previousBottomPx = topPx + startSummaryHeightPx;
+      previousBottomPx = topPx + heightPx;
 
       return {
         id: `start-${groupStartMinutes}-${sortedAppointments.map((appointment) => appointment.id).join("-")}`,
@@ -362,7 +366,7 @@ function createStartSummaryAppointmentGroups(
         startMinutes: groupStartMinutes,
         endMinutes: clippedEndMinutes,
         topPx,
-        heightPx: startSummaryHeightPx,
+        heightPx,
       };
     });
 }
