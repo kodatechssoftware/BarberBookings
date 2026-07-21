@@ -918,7 +918,80 @@ export function WeeklyAgenda({
                               />
                             );
                           })}
-                          {crowdedGroups.map((group) => {
+                          {shouldUseStartSummaries ? (
+                            <div className="absolute inset-x-2 top-3 z-10 space-y-2">
+                              {crowdedGroups.map((group) => {
+                                const firstAppointment = group.appointments[0];
+                                const hasMultipleAppointments = group.appointments.length > 1;
+                                const representativeColor = hasMultipleAppointments
+                                  ? startSummaryGroupColor
+                                  : normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
+                                const groupLabel = `Ver ${formatAppointmentCount(group.appointments.length)} às ${formatAgendaMinutes(group.startMinutes)}`;
+                                const timeRange = `${formatAgendaMinutes(group.startMinutes)}-${formatAgendaMinutes(group.endMinutes)}`;
+                                const isDetailedSummary = group.appointments.length <= 2;
+                                const summaryText =
+                                  group.appointments.length === 1
+                                    ? `${timeRange} · ${firstAppointment.customerName}`
+                                    : `${timeRange} · ${formatAppointmentCount(group.appointments.length)}`;
+
+                                return (
+                                  <button
+                                    key={group.id}
+                                    type="button"
+                                    aria-label={groupLabel}
+                                    title={groupLabel}
+                                    onClick={() => setSelectedCrowdedGroup(group)}
+                                    className="w-full rounded-lg border px-2.5 py-2 text-left shadow-sm transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                                    style={{
+                                      borderColor: colorWithAlpha(representativeColor, 0.65),
+                                      backgroundColor: colorWithAlpha(representativeColor, 0.15),
+                                      boxShadow: `0 12px 24px ${colorWithAlpha(representativeColor, 0.12)}`,
+                                    }}
+                                  >
+                                    <span className="flex min-w-0 items-center justify-between gap-2">
+                                      <span className="min-w-0 truncate text-xs font-bold text-white">
+                                        {summaryText}
+                                      </span>
+                                      <span className="flex shrink-0 -space-x-1">
+                                        {group.appointments.slice(0, 5).map((appointment) => {
+                                          const barber = barbersById.get(appointment.barberId);
+                                          return (
+                                            <span
+                                              key={appointment.id}
+                                              className="h-3 w-3 rounded-full border border-background"
+                                              style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                            />
+                                          );
+                                        })}
+                                      </span>
+                                    </span>
+                                    {isDetailedSummary && (
+                                      <span className="mt-1 flex min-w-0 flex-col gap-0.5">
+                                        {group.appointments.map((appointment) => {
+                                          const barber = barbersById.get(appointment.barberId);
+                                          const barberColor = normalizeBarberColor(barber?.color);
+                                          return (
+                                            <span
+                                              key={appointment.id}
+                                              className="flex min-w-0 items-center gap-1 text-[10px] font-semibold leading-tight text-gray-100"
+                                            >
+                                              <span
+                                                className="h-2 w-2 shrink-0 rounded-full"
+                                                style={{ backgroundColor: barberColor }}
+                                              />
+                                              <span className="min-w-0 truncate">
+                                                {getCompactBarberName(barber?.name)} · {appointment.customerName}
+                                              </span>
+                                            </span>
+                                          );
+                                        })}
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : crowdedGroups.map((group) => {
                             const top = group.topPx ?? (group.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
                             const height =
                               group.heightPx ??

@@ -937,12 +937,11 @@ test.describe("admin navigation", () => {
     const summaryButton = page.getByRole("button", { name: /Ver \d+ marcações às 16:30/ }).first();
     await expect(summaryButton).toBeVisible();
     const summaryBox = await summaryButton.boundingBox();
-    expect(summaryBox?.height).toBeGreaterThan(55);
+    expect(summaryBox?.width).toBeGreaterThan(150);
     const nextSummaryButton = page.getByRole("button", { name: /Ver 1 marcação às 17:00/ }).first();
     await expect(nextSummaryButton).toBeVisible();
     const nextSummaryBox = await nextSummaryButton.boundingBox();
-    expect(nextSummaryBox!.y - summaryBox!.y).toBeGreaterThan(20);
-    expect(nextSummaryBox!.y - summaryBox!.y).toBeLessThan(50);
+    expect(nextSummaryBox!.y).toBeGreaterThan(summaryBox!.y);
     await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Resumo Agenda Cliente 1/ })).toHaveCount(0);
 
     await summaryButton.click();
