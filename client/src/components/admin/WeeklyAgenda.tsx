@@ -183,6 +183,7 @@ type WeeklyAgendaCrowdedGroup = {
 const crowdedGroupThreshold = 4;
 const startSummaryHeightPx = 46;
 const startSummaryGapPx = 6;
+const startSummaryGroupColor = "#94a3b8";
 
 function getClippedAppointmentMinutes(
   appointment: WeeklyAgendaAppointment,
@@ -864,8 +865,14 @@ export function WeeklyAgenda({
                               Math.max(34, (group.endMinutes - group.startMinutes) * weeklyAgendaPixelsPerMinute - 6);
                             const firstAppointment = group.appointments[0];
                             const start = parseISO(firstAppointment.startTime);
-                            const representativeColor = normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
+                            const hasMultipleAppointments = group.appointments.length > 1;
+                            const representativeColor = hasMultipleAppointments
+                              ? startSummaryGroupColor
+                              : normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
                             const groupLabel = `Ver ${formatAppointmentCount(group.appointments.length)} às ${format(start, "HH:mm")}`;
+                            const summaryText = hasMultipleAppointments
+                              ? `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`
+                              : `${format(start, "HH:mm")} · ${firstAppointment.customerName}`;
 
                             return (
                               <button
@@ -884,7 +891,7 @@ export function WeeklyAgenda({
                                 }}
                               >
                                 <span className="min-w-0 truncate text-xs font-bold text-white">
-                                  {format(start, "HH:mm")} · {formatAppointmentCount(group.appointments.length)}
+                                  {summaryText}
                                 </span>
                                 <span className="flex shrink-0 -space-x-1">
                                   {group.appointments.slice(0, 5).map((appointment) => {
