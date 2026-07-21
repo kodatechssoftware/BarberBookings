@@ -989,6 +989,18 @@ test.describe("admin navigation", () => {
 });
 
 test.describe("weekly agenda interaction", () => {
+  test("locks the admin navigation tabs to horizontal panning", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginAdmin(page);
+
+    const adminTabs = page.locator(".admin-tabs-horizontal-scroll");
+    await expect(adminTabs).toBeVisible();
+    await expect(adminTabs).toHaveCSS("overflow-x", "auto");
+    await expect(adminTabs).toHaveCSS("overflow-y", "hidden");
+    await expect(adminTabs).toHaveCSS("touch-action", "pan-x");
+    await expect(adminTabs).toHaveCSS("height", "48px");
+  });
+
   test("locks the desktop agenda scroller to horizontal panning", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);

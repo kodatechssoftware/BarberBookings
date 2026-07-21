@@ -2651,7 +2651,7 @@ export default function Admin() {
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="scrollbar-none sticky top-2 z-30 w-full justify-start overflow-x-auto rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:static md:shadow-none">
+          <TabsList className="admin-tabs-horizontal-scroll scrollbar-none sticky top-2 z-30 w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:static md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {user.role === "admin" && (
