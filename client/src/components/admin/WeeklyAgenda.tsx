@@ -182,7 +182,7 @@ type WeeklyAgendaCrowdedGroup = {
 
 const crowdedGroupThreshold = 4;
 const startSummaryHeightPx = 46;
-const doubleSummaryHeightPx = 58;
+const doubleSummaryHeightPx = 74;
 const startSummaryGapPx = 6;
 const startSummaryGroupColor = "#94a3b8";
 
@@ -377,6 +377,10 @@ function createStartSummaryAppointmentGroups(
 
 function formatAppointmentCount(count: number) {
   return `${count} ${count === 1 ? "marcação" : "marcações"}`;
+}
+
+function getCompactBarberName(name?: string | null) {
+  return name?.trim().split(/\s+/)[0] || "Barbeiro";
 }
 
 function getDailyAppointmentLabel(count: number) {
@@ -881,9 +885,7 @@ export function WeeklyAgenda({
                             const summaryText =
                               group.appointments.length === 1
                                 ? `${format(start, "HH:mm")} · ${firstAppointment.customerName}`
-                                : group.appointments.length === 2
-                                  ? group.appointments.map((appointment) => appointment.customerName).join(" / ")
-                                  : `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`;
+                                : `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`;
                             const isDoubleSummary = group.appointments.length === 2;
 
                             return (
@@ -909,9 +911,28 @@ export function WeeklyAgenda({
                               >
                                 {isDoubleSummary ? (
                                   <>
-                                    <span className="text-xs font-bold text-white">{format(start, "HH:mm")}</span>
-                                    <span className="min-w-0 truncate text-[11px] font-semibold text-gray-100">
-                                      {summaryText}
+                                    <span className="text-[11px] font-bold leading-tight text-white">
+                                      {format(start, "HH:mm")} · 2 marcações
+                                    </span>
+                                    <span className="flex min-w-0 flex-col gap-0.5">
+                                      {group.appointments.slice(0, 2).map((appointment) => {
+                                        const barber = barbersById.get(appointment.barberId);
+                                        const barberColor = normalizeBarberColor(barber?.color);
+                                        return (
+                                          <span
+                                            key={appointment.id}
+                                            className="flex min-w-0 items-center gap-1 text-[10px] font-semibold leading-tight text-gray-100"
+                                          >
+                                            <span
+                                              className="h-2 w-2 shrink-0 rounded-full"
+                                              style={{ backgroundColor: barberColor }}
+                                            />
+                                            <span className="min-w-0 truncate">
+                                              {getCompactBarberName(barber?.name)} · {appointment.customerName}
+                                            </span>
+                                          </span>
+                                        );
+                                      })}
                                     </span>
                                   </>
                                 ) : (
