@@ -1070,6 +1070,105 @@ test.describe("admin navigation", () => {
     await expect(appointmentDialog.getByText("Lane Agenda Sobreposto QA")).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
+
+  test("positions weekly agenda cards proportionally to their real start time and duration", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const timestamp = Date.now();
+    const createFortyFiveMinuteServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Minutos 45 ${timestamp}`,
+        description: "Teste de posicao da agenda",
+        price: 900,
+        duration: 45,
+      },
+    });
+    expect(createFortyFiveMinuteServiceResponse.ok(), await createFortyFiveMinuteServiceResponse.text()).toBe(true);
+    const fortyFiveMinuteService = await createFortyFiveMinuteServiceResponse.json();
+
+    const createFiftyMinuteServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Minutos 50 ${timestamp}`,
+        description: "Teste de posicao da agenda",
+        price: 1000,
+        duration: 50,
+      },
+    });
+    expect(createFiftyMinuteServiceResponse.ok(), await createFiftyMinuteServiceResponse.text()).toBe(true);
+    const fiftyMinuteService = await createFiftyMinuteServiceResponse.json();
+
+    const createBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Agenda Minutos Barbeiro ${timestamp}`,
+        specialty: "Teste de escala",
+        color: "#38BDF8",
+        isVisible: true,
+        serviceIds: [fortyFiveMinuteService.id, fiftyMinuteService.id],
+      },
+    });
+    expect(createBarberResponse.ok(), await createBarberResponse.text()).toBe(true);
+    const barber = await createBarberResponse.json();
+
+    const appointments = [
+      {
+        barberId: barber.id,
+        serviceId: fortyFiveMinuteService.id,
+        startTime: currentWeekThursdayIso(9, 30),
+        name: "Agenda Minutos Meio",
+        phone: "912695771",
+      },
+      {
+        barberId: barber.id,
+        serviceId: fiftyMinuteService.id,
+        startTime: currentWeekThursdayIso(10, 30),
+        name: "Agenda Minutos Cinquenta",
+        phone: "912695772",
+      },
+    ];
+
+    for (const appointment of appointments) {
+      const createResponse = await request.post("/api/appointments/block", {
+        data: {
+          ...appointment,
+          isManualBooking: true,
+        },
+      });
+      expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    await page.getByText("Todos os barbeiros").first().click();
+    await page.getByRole("option", { name: barber.name }).click();
+
+    const halfHourAppointment = page.getByRole("button", { name: /Agenda Minutos Meio/ }).first();
+    const fiftyMinuteAppointment = page.getByRole("button", { name: /Agenda Minutos Cinquenta/ }).first();
+
+    await expect(halfHourAppointment).toBeVisible();
+    await expect(fiftyMinuteAppointment).toBeVisible();
+
+    const halfHourGeometry = await halfHourAppointment.evaluate((element) => {
+      const htmlElement = element as HTMLElement;
+      return {
+        top: parseFloat(htmlElement.style.top),
+        height: parseFloat(htmlElement.style.height),
+      };
+    });
+    const fiftyMinuteGeometry = await fiftyMinuteAppointment.evaluate((element) => {
+      const htmlElement = element as HTMLElement;
+      return {
+        top: parseFloat(htmlElement.style.top),
+        height: parseFloat(htmlElement.style.height),
+      };
+    });
+
+    const pixelsPerMinute = 1.12;
+    expect(halfHourGeometry.top).toBeCloseTo(30 * pixelsPerMinute, 1);
+    expect(halfHourGeometry.height).toBeCloseTo(45 * pixelsPerMinute, 1);
+    expect(fiftyMinuteGeometry.top).toBeCloseTo(90 * pixelsPerMinute, 1);
+    expect(fiftyMinuteGeometry.height).toBeCloseTo(50 * pixelsPerMinute, 1);
+  });
 });
 
 test.describe("weekly agenda interaction", () => {

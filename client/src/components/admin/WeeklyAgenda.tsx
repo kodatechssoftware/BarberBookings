@@ -92,8 +92,16 @@ function getAgendaMinutes(date: Date) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
+function getAgendaTopPx(minutesFromDayStart: number, gridStartMinutes: number) {
+  return (minutesFromDayStart - gridStartMinutes) * weeklyAgendaPixelsPerMinute;
+}
+
+function getAgendaHeightPx(startMinutes: number, endMinutes: number) {
+  return Math.max(0, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute);
+}
+
 function getAgendaWindowHeight(startMinutes: number, endMinutes: number) {
-  return (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute + weeklyAgendaBottomPadding;
+  return getAgendaHeightPx(startMinutes, endMinutes) + weeklyAgendaBottomPadding;
 }
 
 function createAgendaHours(startMinutes: number, endMinutes: number) {
@@ -353,17 +361,14 @@ function createStartSummaryAppointmentGroups(
         ),
       );
       const hasMultipleAppointments = sortedAppointments.length > 1;
-      const durationHeightPx = Math.max(
-        34,
-        (clippedEndMinutes - groupStartMinutes) * weeklyAgendaPixelsPerMinute - 6,
-      );
+      const durationHeightPx = Math.max(34, getAgendaHeightPx(groupStartMinutes, clippedEndMinutes));
       const heightPx =
         sortedAppointments.length === 2
           ? Math.max(doubleSummaryHeightPx, durationHeightPx)
           : hasMultipleAppointments
             ? Math.max(startSummaryHeightPx, durationHeightPx)
             : durationHeightPx;
-      const timeTopPx = (groupStartMinutes - globalStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
+      const timeTopPx = getAgendaTopPx(groupStartMinutes, globalStartMinutes);
 
       return {
         id: `start-${groupStartMinutes}-${sortedAppointments.map((appointment) => appointment.id).join("-")}`,
@@ -839,7 +844,7 @@ export function WeeklyAgenda({
                         <span
                           key={hour}
                           className="absolute right-3 -translate-y-2 text-xs text-gray-500"
-                          style={{ top: (hour * 60 - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute }}
+                          style={{ top: getAgendaTopPx(hour * 60, globalAgendaStartMinutes) }}
                         >
                           {String(hour).padStart(2, "0")}:00
                         </span>
@@ -856,7 +861,7 @@ export function WeeklyAgenda({
                       const dayAppointments = (appointmentsByDay.get(key) || []).filter((appointment) =>
                         isAppointmentVisibleOnGrid(appointment, dayWindow.startMinutes, dayWindow.endMinutes),
                       );
-                      const dayTop = (dayWindow.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute;
+                      const dayTop = getAgendaTopPx(dayWindow.startMinutes, globalAgendaStartMinutes);
                       const dayHeight = getAgendaWindowHeight(dayWindow.startMinutes, dayWindow.endMinutes);
                       const daySlots = createAgendaSlots(dayWindow.startMinutes, dayWindow.endMinutes);
                       const shouldUseStartSummaries = selectedBarberFilter === "all";
@@ -895,13 +900,13 @@ export function WeeklyAgenda({
                             <div
                               key={hour}
                               className="absolute left-0 right-0 border-t border-white/5"
-                              style={{ top: (hour * 60 - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute }}
+                              style={{ top: getAgendaTopPx(hour * 60, globalAgendaStartMinutes) }}
                             />
                           ))}
                           {daySlots.map((slotMinutes) => {
                             const time = formatAgendaMinutes(slotMinutes);
-                            const top = (slotMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute;
-                            const height = weeklyAgendaSlotMinutes * weeklyAgendaPixelsPerMinute;
+                            const top = getAgendaTopPx(slotMinutes, globalAgendaStartMinutes);
+                            const height = getAgendaHeightPx(slotMinutes, slotMinutes + weeklyAgendaSlotMinutes);
                             return (
                               <button
                                 key={`slot-${key}-${time}`}
@@ -992,10 +997,10 @@ export function WeeklyAgenda({
                               })}
                             </div>
                           ) : crowdedGroups.map((group) => {
-                            const top = group.topPx ?? (group.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
+                            const top = group.topPx ?? getAgendaTopPx(group.startMinutes, globalAgendaStartMinutes);
                             const height =
                               group.heightPx ??
-                              Math.max(34, (group.endMinutes - group.startMinutes) * weeklyAgendaPixelsPerMinute - 6);
+                              Math.max(34, getAgendaHeightPx(group.startMinutes, group.endMinutes));
                             const firstAppointment = group.appointments[0];
                             const start = parseISO(firstAppointment.startTime);
                             const hasMultipleAppointments = group.appointments.length > 1;
@@ -1091,8 +1096,8 @@ export function WeeklyAgenda({
                               dayWindow.startMinutes,
                               dayWindow.endMinutes,
                             );
-                            const top = (startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
-                            const height = Math.max(10, (endMinutes - startMinutes) * weeklyAgendaPixelsPerMinute - 6);
+                            const top = getAgendaTopPx(startMinutes, globalAgendaStartMinutes);
+                            const height = Math.max(10, getAgendaHeightPx(startMinutes, endMinutes));
                             const layout = appointmentLayouts.get(appointment.id) || { laneIndex: 0, laneCount: 1 };
                             const laneIndex = layout.laneIndex;
                             const laneWidth = 100 / layout.laneCount;
