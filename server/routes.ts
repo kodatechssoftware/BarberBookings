@@ -982,7 +982,7 @@ export async function registerRoutes(
   if (!useMemoryStorage) {
     await ensureSessionStoreTable();
     sessionConfig.store = new PostgresSessionStore({
-      conObject: { connectionString: process.env.DATABASE_URL },
+      pool,
       schemaName: sessionSchemaName,
       createTableIfMissing: false,
     });

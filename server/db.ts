@@ -9,6 +9,11 @@ const { Pool } = pg;
 const useMemoryStorage = process.env.USE_MEMORY_STORAGE === "true";
 const fallbackMemoryDatabaseUrl = "postgresql://memory:memory@127.0.0.1:1/memory";
 
+function getPositiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(value || "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 if (!process.env.DATABASE_URL && !useMemoryStorage) {
   throw new Error(
     "DATABASE_URL must be set. Did you forget to provision a database?",
@@ -17,7 +22,21 @@ if (!process.env.DATABASE_URL && !useMemoryStorage) {
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL || fallbackMemoryDatabaseUrl,
+  max: getPositiveInteger(process.env.DATABASE_POOL_MAX, 5),
+  connectionTimeoutMillis: getPositiveInteger(
+    process.env.DATABASE_CONNECTION_TIMEOUT_MS,
+    10_000,
+  ),
+  idleTimeoutMillis: getPositiveInteger(
+    process.env.DATABASE_IDLE_TIMEOUT_MS,
+    30_000,
+  ),
 });
+
+pool.on("error", (error) => {
+  console.error("Unexpected idle PostgreSQL client error", error);
+});
+
 export const db = drizzle(pool, { schema });
 
 function quoteIdentifier(identifier: string) {
