@@ -797,7 +797,7 @@ export function WeeklyAgenda({
                           })}
                           {crowdedGroups.map((group) => {
                             const top = (group.startMinutes - globalAgendaStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
-                            const height = Math.max(42, (group.endMinutes - group.startMinutes) * weeklyAgendaPixelsPerMinute - 6);
+                            const height = Math.max(34, (group.endMinutes - group.startMinutes) * weeklyAgendaPixelsPerMinute - 6);
                             const firstAppointment = group.appointments[0];
                             const start = parseISO(firstAppointment.startTime);
                             const representativeColor = normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
@@ -810,7 +810,7 @@ export function WeeklyAgenda({
                                 aria-label={groupLabel}
                                 title={groupLabel}
                                 onClick={() => setSelectedCrowdedGroup(group)}
-                                className="absolute left-1 right-1 z-10 overflow-hidden rounded-lg border px-2 py-1.5 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                                className="absolute left-1 right-1 z-10 flex items-center justify-between gap-2 overflow-hidden rounded-lg border px-2 text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                                 style={{
                                   top,
                                   height,
@@ -819,35 +819,21 @@ export function WeeklyAgenda({
                                   boxShadow: `0 12px 24px ${colorWithAlpha(representativeColor, 0.12)}`,
                                 }}
                               >
-                                <div className="flex min-w-0 items-center justify-between gap-2">
-                                  <span className="truncate text-xs font-bold text-white">
-                                    {format(start, "HH:mm")} · {group.appointments.length} marcações
-                                  </span>
-                                  <span className="flex -space-x-1">
-                                    {group.appointments.slice(0, 5).map((appointment) => {
-                                      const barber = barbersById.get(appointment.barberId);
-                                      return (
-                                        <span
-                                          key={appointment.id}
-                                          className="h-3 w-3 rounded-full border border-background"
-                                          style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
-                                        />
-                                      );
-                                    })}
-                                  </span>
-                                </div>
-                                <div className="mt-1 grid gap-0.5">
-                                  {group.appointments.slice(0, 2).map((appointment) => (
-                                    <p key={appointment.id} className="truncate text-[11px] font-semibold text-gray-200">
-                                      {barbersById.get(appointment.barberId)?.name || "Barbeiro"} · {appointment.customerName}
-                                    </p>
-                                  ))}
-                                  {group.appointments.length > 2 && (
-                                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                                      +{group.appointments.length - 2} restantes
-                                    </p>
-                                  )}
-                                </div>
+                                <span className="min-w-0 truncate text-xs font-bold text-white">
+                                  {format(start, "HH:mm")} · {group.appointments.length} marcações
+                                </span>
+                                <span className="flex shrink-0 -space-x-1">
+                                  {group.appointments.slice(0, 5).map((appointment) => {
+                                    const barber = barbersById.get(appointment.barberId);
+                                    return (
+                                      <span
+                                        key={appointment.id}
+                                        className="h-3 w-3 rounded-full border border-background"
+                                        style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                      />
+                                    );
+                                  })}
+                                </span>
                               </button>
                             );
                           })}
