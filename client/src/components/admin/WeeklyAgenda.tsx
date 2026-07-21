@@ -178,12 +178,13 @@ type WeeklyAgendaCrowdedGroup = {
   endMinutes: number;
   topPx?: number;
   heightPx?: number;
+  laneIndex?: number;
+  laneCount?: number;
 };
 
 const crowdedGroupThreshold = 4;
 const startSummaryHeightPx = 46;
 const doubleSummaryHeightPx = 58;
-const startSummaryGapPx = 6;
 const startSummaryGroupColor = "#94a3b8";
 
 function getClippedAppointmentMinutes(
@@ -340,9 +341,7 @@ function createStartSummaryAppointmentGroups(
     grouped.set(appointmentStartMinutes, list);
   });
 
-  let previousBottomPx = -Infinity;
-
-  return Array.from(grouped.entries())
+  const groups: WeeklyAgendaCrowdedGroup[] = Array.from(grouped.entries())
     .sort(([firstStart], [secondStart]) => firstStart - secondStart)
     .map(([groupStartMinutes, groupAppointments]) => {
       const sortedAppointments = groupAppointments.sort(
@@ -365,18 +364,63 @@ function createStartSummaryAppointmentGroups(
             ? Math.max(startSummaryHeightPx, durationHeightPx)
             : durationHeightPx;
       const timeTopPx = (groupStartMinutes - globalStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
-      const topPx = Math.max(timeTopPx, previousBottomPx + startSummaryGapPx);
-      previousBottomPx = topPx + heightPx;
 
       return {
         id: `start-${groupStartMinutes}-${sortedAppointments.map((appointment) => appointment.id).join("-")}`,
         appointments: sortedAppointments,
         startMinutes: groupStartMinutes,
         endMinutes: clippedEndMinutes,
-        topPx,
+        topPx: timeTopPx,
         heightPx,
       };
     });
+
+  const commitCluster = (cluster: typeof groups) => {
+    const laneEndMinutes: number[] = [];
+
+    cluster.forEach((group) => {
+      const laneIndex = laneEndMinutes.findIndex((laneEnd) => laneEnd <= group.startMinutes);
+      const resolvedLaneIndex = laneIndex === -1 ? laneEndMinutes.length : laneIndex;
+      const visualEndMinutes = group.startMinutes + (group.heightPx || 0) / weeklyAgendaPixelsPerMinute;
+      laneEndMinutes[resolvedLaneIndex] = Math.max(group.endMinutes, visualEndMinutes);
+      group.laneIndex = resolvedLaneIndex;
+    });
+
+    const laneCount = Math.max(1, laneEndMinutes.length);
+    cluster.forEach((group) => {
+      group.laneCount = laneCount;
+    });
+  };
+
+  let currentCluster: typeof groups = [];
+  let currentClusterEndMinutes = 0;
+
+  groups.forEach((group) => {
+    const visualEndMinutes = group.startMinutes + (group.heightPx || 0) / weeklyAgendaPixelsPerMinute;
+    const effectiveEndMinutes = Math.max(group.endMinutes, visualEndMinutes);
+
+    if (currentCluster.length === 0) {
+      currentCluster = [group];
+      currentClusterEndMinutes = effectiveEndMinutes;
+      return;
+    }
+
+    if (group.startMinutes < currentClusterEndMinutes) {
+      currentCluster.push(group);
+      currentClusterEndMinutes = Math.max(currentClusterEndMinutes, effectiveEndMinutes);
+      return;
+    }
+
+    commitCluster(currentCluster);
+    currentCluster = [group];
+    currentClusterEndMinutes = effectiveEndMinutes;
+  });
+
+  if (currentCluster.length > 0) {
+    commitCluster(currentCluster);
+  }
+
+  return groups;
 }
 
 function formatAppointmentCount(count: number) {
@@ -891,6 +935,9 @@ export function WeeklyAgenda({
                                 ? `${format(start, "HH:mm")} · ${firstAppointment.customerName}`
                                 : `${format(start, "HH:mm")} · ${formatAppointmentCount(group.appointments.length)}`;
                             const isDoubleSummary = group.appointments.length === 2;
+                            const laneIndex = group.laneIndex ?? 0;
+                            const laneCount = group.laneCount ?? 1;
+                            const laneWidthPercent = 100 / laneCount;
 
                             return (
                               <button
@@ -907,6 +954,8 @@ export function WeeklyAgenda({
                                 )}
                                 style={{
                                   top,
+                                  left: `calc(${laneIndex * laneWidthPercent}% + 0.25rem)`,
+                                  right: `calc(${(laneCount - laneIndex - 1) * laneWidthPercent}% + 0.25rem)`,
                                   height,
                                   borderColor: colorWithAlpha(representativeColor, 0.65),
                                   backgroundColor: colorWithAlpha(representativeColor, 0.15),

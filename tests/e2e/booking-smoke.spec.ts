@@ -867,10 +867,16 @@ test.describe("admin navigation", () => {
   test("summarizes crowded weekly agenda slots instead of shrinking cards", async ({ page, request }) => {
     await loginAdminRequest(request);
 
-    const servicesResponse = await request.get("/api/services?includeHidden=true");
-    expect(servicesResponse.ok()).toBe(true);
-    const [service] = await servicesResponse.json();
-    expect(service).toBeTruthy();
+    const createServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Resumo Longo ${Date.now()}`,
+        description: "Teste de altura do resumo",
+        price: 1200,
+        duration: 60,
+      },
+    });
+    expect(createServiceResponse.ok(), await createServiceResponse.text()).toBe(true);
+    const service = await createServiceResponse.json();
 
     const createdBarbers = [];
     for (const [index, color] of ["#22C55E", "#38BDF8", "#8B5CF6", "#F97316"].entries()) {
@@ -901,6 +907,30 @@ test.describe("admin navigation", () => {
       expect(createResponse.ok(), await createResponse.text()).toBe(true);
     }
 
+    const createLaterBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Agenda Resumo Barbeiro 5 ${Date.now()}`,
+        specialty: "Teste de resumo",
+        color: "#F59E0B",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(createLaterBarberResponse.ok(), await createLaterBarberResponse.text()).toBe(true);
+    const laterBarber = await createLaterBarberResponse.json();
+
+    const createOverlappingResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: laterBarber.id,
+        serviceId: service.id,
+        startTime: currentWeekThursdayIso(17, 0),
+        name: "Resumo Agenda Seguinte",
+        phone: "912695790",
+        isManualBooking: true,
+      },
+    });
+    expect(createOverlappingResponse.ok(), await createOverlappingResponse.text()).toBe(true);
+
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
@@ -908,6 +938,11 @@ test.describe("admin navigation", () => {
     await expect(summaryButton).toBeVisible();
     const summaryBox = await summaryButton.boundingBox();
     expect(summaryBox?.height).toBeGreaterThan(55);
+    const nextSummaryButton = page.getByRole("button", { name: /Ver 1 marcação às 17:00/ }).first();
+    await expect(nextSummaryButton).toBeVisible();
+    const nextSummaryBox = await nextSummaryButton.boundingBox();
+    expect(nextSummaryBox!.y - summaryBox!.y).toBeGreaterThan(20);
+    expect(nextSummaryBox!.y - summaryBox!.y).toBeLessThan(50);
     await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Resumo Agenda Cliente 1/ })).toHaveCount(0);
 
     await summaryButton.click();
@@ -1029,7 +1064,7 @@ test.describe("admin navigation", () => {
 
     expect(intersects(longBox, overlappingBox)).toBe(false);
     expect(intersects(overlappingBox, nextBox)).toBe(false);
-    expect(nextBox.width).toBeGreaterThan(120);
+    expect(nextBox.width).toBeGreaterThan(80);
 
     await overlappingAppointment.click();
     const appointmentDialog = page.getByRole("dialog");
