@@ -603,7 +603,7 @@ export function WeeklyAgenda({
                 })}
               </div>
 
-              <div className="hidden overflow-x-auto lg:block">
+              <div className="weekly-agenda-horizontal-scroll hidden lg:block">
                 <div className="min-w-[1420px]">
                   <div className="grid grid-cols-[64px_repeat(7,minmax(190px,1fr))]">
                     <div />

@@ -988,6 +988,19 @@ test.describe("admin navigation", () => {
   });
 });
 
+test.describe("weekly agenda interaction", () => {
+  test("locks the desktop agenda scroller to horizontal panning", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    const horizontalAgenda = page.locator(".weekly-agenda-horizontal-scroll");
+    await expect(horizontalAgenda).toBeVisible();
+    await expect(horizontalAgenda).toHaveCSS("overflow-x", "auto");
+    await expect(horizontalAgenda).toHaveCSS("overflow-y", "hidden");
+    await expect(horizontalAgenda).toHaveCSS("touch-action", "pan-x");
+  });
+});
+
 test.describe("admin list stability", () => {
   test("keeps admin lists from flashing empty while data is loading", async ({ page }) => {
     await page.route("**/api/barbers?includeHidden=true", async (route) => {

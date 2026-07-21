@@ -87,6 +87,16 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
+
+  .weekly-agenda-horizontal-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: none;
+    scrollbar-gutter: stable;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 /* Utilities for gold gradients */
