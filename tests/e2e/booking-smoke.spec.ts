@@ -408,10 +408,16 @@ test.describe("admin navigation", () => {
 
   test("waits for barber and service names before showing appointment rows", async ({ page, request }) => {
     await loginAdminRequest(request);
-    const servicesResponse = await request.get("/api/services?includeHidden=true");
-    expect(servicesResponse.ok()).toBe(true);
-    const [service] = await servicesResponse.json();
-    expect(service).toBeTruthy();
+    const createServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Resumo Longo ${Date.now()}`,
+        description: "Teste de altura do resumo",
+        price: 1200,
+        duration: 60,
+      },
+    });
+    expect(createServiceResponse.ok(), await createServiceResponse.text()).toBe(true);
+    const service = await createServiceResponse.json();
 
     const createBarberResponse = await request.post("/api/barbers", {
       data: {
@@ -900,6 +906,8 @@ test.describe("admin navigation", () => {
 
     const summaryButton = page.getByRole("button", { name: /Ver \d+ marcações às 16:30/ }).first();
     await expect(summaryButton).toBeVisible();
+    const summaryBox = await summaryButton.boundingBox();
+    expect(summaryBox?.height).toBeGreaterThan(55);
     await expect(page.getByRole("button", { name: /Abrir detalhes da marcação de Resumo Agenda Cliente 1/ })).toHaveCount(0);
 
     await summaryButton.click();

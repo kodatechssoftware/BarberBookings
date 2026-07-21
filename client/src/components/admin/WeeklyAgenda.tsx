@@ -182,7 +182,7 @@ type WeeklyAgendaCrowdedGroup = {
 
 const crowdedGroupThreshold = 4;
 const startSummaryHeightPx = 46;
-const doubleSummaryHeightPx = 74;
+const doubleSummaryHeightPx = 58;
 const startSummaryGapPx = 6;
 const startSummaryGroupColor = "#94a3b8";
 
@@ -354,12 +354,16 @@ function createStartSummaryAppointmentGroups(
         ),
       );
       const hasMultipleAppointments = sortedAppointments.length > 1;
+      const durationHeightPx = Math.max(
+        34,
+        (clippedEndMinutes - groupStartMinutes) * weeklyAgendaPixelsPerMinute - 6,
+      );
       const heightPx =
         sortedAppointments.length === 2
-          ? doubleSummaryHeightPx
+          ? Math.max(doubleSummaryHeightPx, durationHeightPx)
           : hasMultipleAppointments
-            ? startSummaryHeightPx
-            : Math.max(34, (clippedEndMinutes - groupStartMinutes) * weeklyAgendaPixelsPerMinute - 6);
+            ? Math.max(startSummaryHeightPx, durationHeightPx)
+            : durationHeightPx;
       const timeTopPx = (groupStartMinutes - globalStartMinutes) * weeklyAgendaPixelsPerMinute + 3;
       const topPx = Math.max(timeTopPx, previousBottomPx + startSummaryGapPx);
       previousBottomPx = topPx + heightPx;
