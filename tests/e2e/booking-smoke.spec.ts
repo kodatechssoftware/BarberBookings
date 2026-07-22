@@ -1065,6 +1065,65 @@ test.describe("admin navigation", () => {
     }
   });
 
+  test("creates a completed historical manual booking through the admin UI", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const pastThursday = new Date();
+    const daysBackToPreviousThursday = ((pastThursday.getDay() - 4 + 7) % 7) || 7;
+    pastThursday.setDate(pastThursday.getDate() - daysBackToPreviousThursday);
+    pastThursday.setHours(18, 30, 0, 0);
+    const pastDateKey = dateKeyFromIso(pastThursday.toISOString());
+    const customerName = `Histórico manual UI ${Date.now()}`;
+    let appointmentId: number | undefined;
+
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await loginAdmin(page);
+      for (let day = 0; day < daysBackToPreviousThursday; day += 1) {
+        await page.getByRole("button", { name: "Dia anterior" }).click();
+      }
+
+      await page.getByRole("button", { name: /Marcação manual/i }).click();
+      const dialog = page.getByRole("dialog", { name: /Marcação manual/i });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByText("Esta marcação será registada como concluída e incluída nos relatórios.")).toBeVisible();
+
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await selectDialogOption(page, dialog, 1, service.name);
+      await dialog.getByPlaceholder("João").fill(customerName);
+      await dialog.locator("#manual-booking-phone").fill("912695743");
+      const timeButton = dialog.getByRole("button", { name: "18:30", exact: true });
+      await expect(timeButton).toBeEnabled();
+      await timeButton.click();
+      await dialog.getByRole("button", { name: /Criar marcação/i }).click();
+      await expect(dialog).not.toBeVisible();
+
+      const appointmentsResponse = await request.get(
+        `/api/appointments?barberId=${barber.id}&date=${pastDateKey}`,
+      );
+      expect(appointmentsResponse.ok()).toBe(true);
+      const appointment = (await appointmentsResponse.json()).find((item: any) =>
+        item.customerName === customerName,
+      );
+      expect(appointment).toBeTruthy();
+      expect(appointment.status).toBe("completed");
+      appointmentId = appointment.id;
+    } finally {
+      if (appointmentId) {
+        await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
+      }
+    }
+  });
+
   test("warns before manually booking a blacklisted customer", async ({ page, request }) => {
     await loginAdminRequest(request);
 
@@ -1913,6 +1972,106 @@ test.describe("booking rules", () => {
     expect(bookedRow!.getCell(statusCol).value).toBe("Marcada");
     expect(bookedRow!.getCell(realizedCol).value).toBe(0);
     expect(bookedRow!.getCell(projectedCol).value).toBe(bookedServiceValue);
+  });
+
+  test("records a historical manual booking as completed and includes it in the Excel report", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const pastStart = futureThursdayIso(-6, 17, 0);
+    const dateKey = dateKeyFromIso(pastStart);
+    const customerName = `Registo histórico QA ${Date.now()}`;
+    let createdAppointments: any[] = [];
+
+    try {
+      const createResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: pastStart,
+          name: customerName,
+          phone: "+351912695740",
+          isManualBooking: true,
+        },
+      });
+      expect(createResponse.status(), await createResponse.text()).toBe(201);
+
+      const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+      expect(appointmentsResponse.ok()).toBe(true);
+      createdAppointments = (await appointmentsResponse.json()).filter((appointment: any) =>
+        appointment.customerName === customerName,
+      );
+      expect(createdAppointments).toHaveLength(1);
+      expect(createdAppointments[0].status).toBe("completed");
+
+      const duplicateResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: pastStart,
+          name: `${customerName} duplicado`,
+          phone: "+351912695741",
+          isManualBooking: true,
+        },
+      });
+      expect(duplicateResponse.status(), await duplicateResponse.text()).toBe(400);
+
+      const recurringResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: futureThursdayIso(-6, 15, 0),
+          name: `${customerName} recorrente`,
+          phone: "+351912695742",
+          isManualBooking: true,
+          isRecurring: true,
+          recurringWeeks: 1,
+          recurringMonths: 1,
+        },
+      });
+      expect(recurringResponse.status(), await recurringResponse.text()).toBe(400);
+
+      const exportResponse = await request.get(
+        `/api/admin/export?startDate=${dateKey}&endDate=${dateKey}&barberId=${barber.id}`,
+      );
+      expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await exportResponse.body());
+      const detailSheet = workbook.getWorksheet("Detalhe Completo");
+      expect(detailSheet).toBeTruthy();
+
+      const headers = detailSheet!.getRow(1).values as unknown[];
+      const customerColumn = headers.indexOf("Cliente");
+      const realizedColumn = headers.findIndex((value) => String(value).startsWith("Receita realizada"));
+      let detailRow: ExcelJS.Row | undefined;
+      detailSheet!.eachRow((row, rowNumber) => {
+        if (rowNumber > 1 && row.getCell(customerColumn).value === customerName) detailRow = row;
+      });
+
+      expect(detailRow).toBeTruthy();
+      expect(detailRow!.getCell(realizedColumn).value).toBe(service.price / 100);
+    } finally {
+      if (createdAppointments.length === 0) {
+        const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+        if (appointmentsResponse.ok()) {
+          createdAppointments = (await appointmentsResponse.json()).filter((appointment: any) =>
+            appointment.customerName === customerName,
+          );
+        }
+      }
+
+      await Promise.all(createdAppointments.map((appointment: any) =>
+        request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),
+      ));
+    }
   });
 
   test("rejects malformed phone numbers sent directly to the booking API", async ({ request }) => {

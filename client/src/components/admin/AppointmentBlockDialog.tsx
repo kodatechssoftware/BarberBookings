@@ -65,6 +65,7 @@ export function AppointmentBlockDialog({
   const afternoonBlockTimes = visibleBlockTimeOptions.filter((time) => time >= "14:00");
   const today = startOfToday();
   const recurringStartsInPast = blockData.isRecurring && blockData.date < today;
+  const isHistoricalManualBooking = blockData.isManualBooking && !blockData.isRecurring && blockData.date < today;
   const manualPhoneParts = splitStoredPhone(blockData.phone);
   const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
 
@@ -231,6 +232,11 @@ export function AppointmentBlockDialog({
                 </Popover>
                 {recurringStartsInPast && (
                   <p className="text-xs text-red-300">A recorrência deve começar hoje ou numa data futura.</p>
+                )}
+                {isHistoricalManualBooking && (
+                  <p className="text-xs text-emerald-300">
+                    Esta marcação será registada como concluída e incluída nos relatórios.
+                  </p>
                 )}
               </div>
 

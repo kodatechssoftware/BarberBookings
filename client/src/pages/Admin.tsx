@@ -247,9 +247,11 @@ function hasAdminAppointmentConflict({
   const start = new Date(date);
   start.setHours(hours, minutes, 0, 0);
   const end = new Date(start.getTime() + duration * 60000);
+  const isHistoricalTime = end.getTime() <= Date.now();
 
   return appointments.some((appointment) => {
-    if (appointment.barberId !== barberId || appointment.status !== "booked") return false;
+    if (appointment.barberId !== barberId) return false;
+    if (appointment.status !== "booked" && !(isHistoricalTime && appointment.status === "completed")) return false;
 
     const appointmentStart = parseISO(appointment.startTime);
     const appointmentDuration = getAdminAppointmentDurationMinutes(appointment, services);
@@ -2107,10 +2109,6 @@ export default function Admin() {
     return startTime;
   };
 
-  const isPastBlockStart = (date: Date, timeStr: string) => (
-    createBlockStartTime(date, timeStr).getTime() < Date.now()
-  );
-
   const availableBlockTimes = useMemo(() => {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
     const barberId = Number(blockData.barberId);
@@ -2120,10 +2118,6 @@ export default function Admin() {
       : blockTimeOptions;
 
     return timeOptions.filter((time) => {
-      if (blockData.isManualBooking && isPastBlockStart(blockData.date, time)) {
-        return false;
-      }
-
       if (!blockData.allowOutsideHours && !isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
         return false;
       }
@@ -2202,14 +2196,6 @@ export default function Admin() {
 
     if (blockData.isRecurring && format(blockData.date, "yyyy-MM-dd") < format(startOfToday(), "yyyy-MM-dd")) {
       toast({ title: "Erro", description: "A recorrência deve começar hoje ou numa data futura.", variant: "destructive" });
-      return;
-    }
-
-    const hasPastOutsideHoursTime = blockData.isManualBooking
-      && blockData.allowOutsideHours
-      && blockData.times.some((timeStr) => isPastBlockStart(blockData.date, timeStr));
-    if (hasPastOutsideHoursTime) {
-      toast({ title: "Erro", description: "Escolha uma hora futura para marcações fora do horário.", variant: "destructive" });
       return;
     }
 

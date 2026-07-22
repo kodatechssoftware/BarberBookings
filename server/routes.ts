@@ -972,6 +972,9 @@ type AppointmentLike = {
   status?: string;
 };
 
+const activeAppointmentConflictStatuses: ReadonlySet<string> = new Set(["booked"]);
+const historicalAppointmentConflictStatuses: ReadonlySet<string> = new Set(["booked", "completed"]);
+
 function toDate(value: Date | string) {
   return value instanceof Date ? value : new Date(value);
 }
@@ -1022,10 +1025,11 @@ function hasAppointmentConflict(
   endTime: Date,
   serviceDurations: Map<number, number>,
   ignoreAppointmentId?: number,
+  conflictStatuses: ReadonlySet<string> = activeAppointmentConflictStatuses,
 ) {
   return appointments.some((appointment) => {
     if (appointment.barberId !== barberId) return false;
-    if ((appointment.status || "booked") !== "booked") return false;
+    if (!conflictStatuses.has(appointment.status || "booked")) return false;
     if (ignoreAppointmentId !== undefined && appointment.id === ignoreAppointmentId) return false;
 
     const appointmentStart = toDate(appointment.startTime);
@@ -2171,7 +2175,7 @@ export async function registerRoutes(
       if (isRecurring && isBeforeNow(start)) {
         return res.status(400).json({ message: "A recorrência deve começar numa data e hora futuras." });
       }
-      if (!isRecurring && requestedStarts.some((value: Date) => isBeforeNow(value))) {
+      if (!isRecurring && !isManualBooking && requestedStarts.some((value: Date) => isBeforeNow(value))) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
 
@@ -2181,11 +2185,15 @@ export async function registerRoutes(
       const occurrenceStarts = isRecurring
         ? Array.from({ length: occurrences }, (_, index) => addWeeksPreservingShopTime(start, index * recurringWeeksNumber))
         : requestedStarts;
+      const requestTimestamp = Date.now();
       const workingPeriodsByWeekday = new Map<number, MinutePeriod[]>();
       const existingAppointmentsByDate = new Map<string, Appointment[]>();
 
       for (const currentStart of occurrenceStarts) {
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
+        const isHistoricalManualBooking = Boolean(
+          isManualBooking && !isRecurring && currentEnd.getTime() <= requestTimestamp,
+        );
         const shopDateParts = getShopDateParts(currentStart);
         const canBypassSchedule = Boolean(isManualBooking && allowOutsideHours);
         let workingPeriods = workingPeriodsByWeekday.get(shopDateParts.weekday);
@@ -2215,6 +2223,10 @@ export async function registerRoutes(
             currentStart,
             currentEnd,
             serviceDurations,
+            undefined,
+            isHistoricalManualBooking
+              ? historicalAppointmentConflictStatuses
+              : activeAppointmentConflictStatuses,
           )
         ) {
           conflicts.push(formatShopDateTime(currentStart));
@@ -2229,7 +2241,7 @@ export async function registerRoutes(
           customerPhone: isManualBooking ? normalizedCustomerPhone : "",
           customerEmail: "",
           durationMinutes: duration,
-          status: "booked",
+          status: isHistoricalManualBooking ? "completed" : "booked",
           cancelToken: randomUUID(),
           depositRequired: false,
           depositReason: null,
