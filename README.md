@@ -100,7 +100,7 @@ Variaveis minimas para a app no Railway:
 
 - `DATABASE_URL`: URL do Postgres
 - `DATABASE_SCHEMA=public`
-- `DATABASE_POOL_MAX=5`: limite total de ligacoes partilhadas pela app e pelas sessoes
+- `DATABASE_POOL_MAX=2`: limite total de ligacoes partilhadas pela app e pelas sessoes
 - `SESSION_SECRET`: segredo forte para sessoes
 - `PUBLIC_URL`: dominio publico da app
 - `ALLOWED_ORIGINS`: mesmo dominio publico da app

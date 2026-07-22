@@ -22,7 +22,7 @@ if (!process.env.DATABASE_URL && !useMemoryStorage) {
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL || fallbackMemoryDatabaseUrl,
-  max: getPositiveInteger(process.env.DATABASE_POOL_MAX, 5),
+  max: getPositiveInteger(process.env.DATABASE_POOL_MAX, 2),
   connectionTimeoutMillis: getPositiveInteger(
     process.env.DATABASE_CONNECTION_TIMEOUT_MS,
     10_000,
