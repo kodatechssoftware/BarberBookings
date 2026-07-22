@@ -1943,8 +1943,10 @@ export default function Admin() {
       }
 
       toast({
-        title: "Cliente bloqueado",
-        description: cancelledCount > 0
+        title: responseBody?.alreadyBlacklisted ? "Cliente já bloqueado" : "Cliente bloqueado",
+        description: responseBody?.alreadyBlacklisted
+          ? "Este contacto já se encontrava na lista de bloqueio. Não foi criado um duplicado."
+          : cancelledCount > 0
           ? `${cancelledCount} marcação(ões) futura(s) foram cancelada(s).`
           : "Cliente adicionado à lista de bloqueio.",
       });
@@ -2091,7 +2093,7 @@ export default function Admin() {
       : blockTimeOptions;
 
     return timeOptions.filter((time) => {
-      if (blockData.isManualBooking && blockData.allowOutsideHours && isPastBlockStart(blockData.date, time)) {
+      if (blockData.isManualBooking && isPastBlockStart(blockData.date, time)) {
         return false;
       }
 

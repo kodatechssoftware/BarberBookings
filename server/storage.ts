@@ -116,8 +116,17 @@ export interface IStorage {
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
-  updateAppointment(id: number, appointment: Partial<Omit<Appointment, "id">>): Promise<Appointment | undefined>;
+  updateAppointment(
+    id: number,
+    appointment: Partial<Omit<Appointment, "id">>,
+    expectedStatus?: AppointmentStatus,
+  ): Promise<Appointment | undefined>;
   updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined>;
+  updateAppointmentStatusIfCurrent(
+    id: number,
+    currentStatus: AppointmentStatus,
+    status: AppointmentStatus,
+  ): Promise<Appointment | undefined>;
   
   // Admins
   getAdminByUsername(username: string): Promise<Admin | undefined>;
@@ -377,13 +386,18 @@ export class DatabaseStorage implements IStorage {
   async updateAppointment(
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
+    expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined> {
     try {
       return await db.transaction(async (tx) => {
+        const appointmentConditions = [eq(appointments.id, id)];
+        if (expectedStatus) {
+          appointmentConditions.push(eq(appointments.status, expectedStatus));
+        }
         const [current] = await tx
           .select()
           .from(appointments)
-          .where(eq(appointments.id, id))
+          .where(and(...appointmentConditions))
           .limit(1);
 
         if (!current) return undefined;
@@ -401,7 +415,7 @@ export class DatabaseStorage implements IStorage {
         const [updated] = await tx
           .update(appointments)
           .set(appointment)
-          .where(eq(appointments.id, id))
+          .where(and(...appointmentConditions))
           .returning();
         return updated;
       });
@@ -423,6 +437,27 @@ export class DatabaseStorage implements IStorage {
     }
 
     return this.updateAppointment(id, updateData);
+  }
+
+  async updateAppointmentStatusIfCurrent(
+    id: number,
+    currentStatus: AppointmentStatus,
+    status: AppointmentStatus,
+  ): Promise<Appointment | undefined> {
+    const updateData: { status: AppointmentStatus; cancelledAt?: Date | null } = { status };
+    if (status === "cancelled" || status === "late_cancelled") {
+      updateData.cancelledAt = new Date();
+    }
+    if (status === "booked" || status === "completed") {
+      updateData.cancelledAt = null;
+    }
+
+    const [updated] = await db
+      .update(appointments)
+      .set(updateData)
+      .where(and(eq(appointments.id, id), eq(appointments.status, currentStatus)))
+      .returning();
+    return updated;
   }
 
   async getAdminByUsername(username: string): Promise<Admin | undefined> {
@@ -862,9 +897,11 @@ export class MemoryStorage implements IStorage {
   async updateAppointment(
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
+    expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
+    if (expectedStatus && this.appointments[index].status !== expectedStatus) return undefined;
     const updatedAppointment = { ...this.appointments[index], ...appointment };
     this.assertNoAppointmentConflict(updatedAppointment, id);
     this.appointments[index] = updatedAppointment;
@@ -880,6 +917,16 @@ export class MemoryStorage implements IStorage {
       patch.cancelledAt = null;
     }
     return this.updateAppointment(id, patch);
+  }
+
+  async updateAppointmentStatusIfCurrent(
+    id: number,
+    currentStatus: AppointmentStatus,
+    status: AppointmentStatus,
+  ): Promise<Appointment | undefined> {
+    const current = this.appointments.find((appointment) => appointment.id === id);
+    if (!current || current.status !== currentStatus) return undefined;
+    return this.updateAppointmentStatus(id, status);
   }
 
   async getAdminByUsername(username: string): Promise<Admin | undefined> {

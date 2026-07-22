@@ -199,7 +199,11 @@ export const barberServicesRelations = relations(barberServices, ({ one }) => ({
 
 export const insertBarberSchema = createInsertSchema(barbers).omit({ id: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true }).extend({
+  name: z.string().trim().min(1, "Indique o nome do serviço.").max(100, "O nome não pode ter mais de 100 caracteres."),
+  description: z.string().trim().max(500, "A descrição não pode ter mais de 500 caracteres.").optional().nullable(),
   agendaLabel: z.string().trim().max(40, "A etiqueta da agenda nao pode ter mais de 40 caracteres.").optional().nullable(),
+  price: z.number().int("O preço deve ser um número inteiro de cêntimos.").min(0, "O preço não pode ser negativo.").max(1_000_000, "O preço indicado é demasiado elevado."),
+  duration: z.number().int("A duração deve ser um número inteiro de minutos.").min(1, "A duração deve ser superior a zero.").max(720, "A duração não pode exceder 12 horas."),
 });
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;

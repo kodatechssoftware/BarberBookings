@@ -82,6 +82,23 @@ async function selectAgendaDay(page: Page, isoDate = currentWeekThursdayIso()) {
   await dayButton.click();
 }
 
+async function advanceAgendaToNextOpenDay(page: Page, minimumDaysAhead = 1) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(today);
+  target.setDate(target.getDate() + minimumDaysAhead);
+  while (target.getDay() === 0) {
+    target.setDate(target.getDate() + 1);
+  }
+
+  const daysAhead = Math.round((target.getTime() - today.getTime()) / 86_400_000);
+  for (let day = 0; day < daysAhead; day += 1) {
+    await page.getByRole("button", { name: "Dia seguinte" }).click();
+  }
+
+  return target;
+}
+
 function lisbonDateTimeParts(isoDate: string) {
   return Object.fromEntries(
     new Intl.DateTimeFormat("en-GB", {
@@ -238,6 +255,110 @@ async function selectDialogOption(page: Page, dialog: Locator, index: number, op
 }
 
 test.describe("public booking flow", () => {
+  test("completes a real customer booking and cancellation through the UI", async ({ page, request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const barbers = await barbersResponse.json();
+    const services = await servicesResponse.json();
+    const barber = barbers.find((item: any) =>
+      item.isVisible !== false && services.some((service: any) =>
+        !Array.isArray(item.serviceIds) || item.serviceIds.length === 0 || item.serviceIds.includes(service.id),
+      ),
+    );
+    const service = services.find((item: any) =>
+      !Array.isArray(barber?.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    expect(barber).toBeTruthy();
+    expect(service).toBeTruthy();
+
+    const startTime = futureThursdayIso(38, 16, 0);
+    const createResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith("/api/appointments") && response.request().method() === "POST",
+    );
+    await page.goto(
+      `/book?barberId=${barber.id}&serviceId=${service.id}&date=${dateKeyFromIso(startTime)}&time=16:00`,
+    );
+    await expect(page.getByText("Resumo da Marcação")).toBeVisible();
+    await page.getByPlaceholder("O seu nome").fill("Fluxo UI QA");
+    await page.getByPlaceholder("912 345 678").fill("912695760");
+    await page.getByPlaceholder("exemplo@email.com").fill("fluxo-ui@example.com");
+    await page.getByRole("button", { name: "Confirmar" }).click();
+
+    const createResponse = await createResponsePromise;
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const appointment = await createResponse.json();
+    await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
+
+    await page.goto(`/cancel/${appointment.cancelToken}`);
+    await expect(page.getByRole("heading", { name: "Cancelar marcação" })).toBeVisible();
+    await expect(page.getByText(barber.name)).toBeVisible();
+    await expect(page.getByText(service.name)).toBeVisible();
+    await page.getByRole("button", { name: "Cancelar marcação" }).click();
+    await expect(page.getByRole("heading", { name: "Marcação Cancelada" })).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Marcação Cancelada" })).toBeVisible();
+    await expect(page.getByText(/já se encontra cancelada/i)).toBeVisible();
+  });
+
+  test("refuses a blacklisted contact in the real public booking UI without occupying the slot", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const phone = "912695759";
+    const email = "blacklist-ui@example.com";
+    const blockResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone,
+        email,
+        reason: "Teste público pela interface",
+        cancelFutureAppointments: false,
+      },
+    });
+    expect(blockResponse.status(), await blockResponse.text()).toBe(201);
+    const blacklistEntry = await blockResponse.json();
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    const startTime = futureThursdayIso(37, 15, 0);
+
+    await page.goto(
+      `/book?barberId=${barber.id}&serviceId=${service.id}&date=${dateKeyFromIso(startTime)}&time=15:00`,
+    );
+    await page.getByPlaceholder("O seu nome").fill("Bloqueado UI QA");
+    await page.getByPlaceholder("912 345 678").fill(phone);
+    await page.getByPlaceholder("exemplo@email.com").fill(email.toUpperCase());
+    const rejectedResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith("/api/appointments") && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Confirmar" }).click();
+    const rejectedResponse = await rejectedResponsePromise;
+    expect(rejectedResponse.status()).toBe(403);
+    await expect(page.getByText("Erro na marcação", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Notifications (F8)").getByText(
+      "Não é possível realizar a marcação online. Contacte a barbearia.",
+      { exact: true },
+    )).toBeVisible();
+    await expect(page.getByText("Resumo da Marcação")).toBeVisible();
+
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    expect((await appointmentsResponse.json()).some((item: any) => item.customerName === "Bloqueado UI QA")).toBe(false);
+
+    const cleanupResponse = await request.delete(`/api/admin/blacklist/${blacklistEntry.id}`);
+    expect(cleanupResponse.ok()).toBe(true);
+  });
+
   test("opens /booking and stays responsive on desktop and mobile", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/booking");
@@ -382,6 +503,16 @@ test.describe("admin navigation", () => {
     await expect(page.getByRole("cell", { name: "+34 612 698 764" })).toBeVisible();
     await expect(phoneInput).toHaveValue("");
     await expect(countrySelect).toHaveValue("PT");
+
+    await countrySelect.selectOption("ES");
+    await phoneInput.fill(localPhone);
+    await page.getByRole("button", { name: "Bloquear Cliente" }).click();
+    await expect(page.getByText("Cliente já bloqueado", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Notifications (F8)").getByText(
+      "Este contacto já se encontrava na lista de bloqueio. Não foi criado um duplicado.",
+      { exact: true },
+    )).toBeVisible();
+    await expect(page.getByRole("cell", { name: "+34 612 698 764" })).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
 
     if (process.env.VISUAL_QA === "true") {
@@ -549,7 +680,11 @@ test.describe("admin navigation", () => {
     expect(barbersResponse.ok(), await barbersResponse.text()).toBe(true);
     expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
     const [barber] = await barbersResponse.json();
-    const [service] = await servicesResponse.json();
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    expect(service).toBeTruthy();
     expect(barber).toBeTruthy();
     expect(service).toBeTruthy();
 
@@ -850,6 +985,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await advanceAgendaToNextOpenDay(page);
     await page.getByRole("button", { name: "Marcação manual" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Marcação manual" });
@@ -916,6 +1052,7 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
     await page.getByRole("tab", { name: "Agenda" }).click();
+    await advanceAgendaToNextOpenDay(page, 7);
     await page.getByRole("button", { name: /manual/i }).click();
 
     const dialog = page.getByRole("dialog", { name: /manual/i });
@@ -1868,7 +2005,7 @@ test.describe("booking rules", () => {
       data: {
         barberId: barber.id,
         serviceId: service.id,
-        startTime: "2026-06-11T16:30:00.000Z",
+        startTime: futureThursdayIso(47, 16, 30),
         customerName: "QA Blacklist",
         customerPhone: "+34912695703",
         customerEmail: "qa-blacklist@example.com",
@@ -1899,7 +2036,7 @@ test.describe("booking rules", () => {
       data: {
         barberId: barber.id,
         serviceId: service.id,
-        startTime: "2026-06-11T17:00:00.000Z",
+        startTime: futureThursdayIso(47, 17, 0),
         customerName: "QA Country Isolation",
         customerPhone: "+34912695702",
         customerEmail: "qa-country-isolation@example.com",
@@ -2349,6 +2486,404 @@ test.describe("booking rules", () => {
 
     const statuses = responses.map((response) => response.status()).sort();
     expect(statuses).toEqual([201, 409]);
+  });
+
+  test("rejects public bookings and reschedules in the past", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const bookedStart = futureThursdayIso(39, 10, 0);
+
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: bookedStart,
+        customerName: "Passado QA",
+        customerPhone: "912695761",
+        customerEmail: null,
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const appointment = await createResponse.json();
+
+    const pastThursday = futureThursdayIso(-3, 10, 0);
+    const pastCreateResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: pastThursday,
+        customerName: "Passado Direto QA",
+        customerPhone: "912695762",
+        customerEmail: null,
+      },
+    });
+    expect(pastCreateResponse.status()).toBe(400);
+    expect((await pastCreateResponse.json()).message).toContain("futura");
+
+    const pastRescheduleResponse = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
+      data: { startTime: pastThursday },
+    });
+    expect(pastRescheduleResponse.status()).toBe(400);
+    expect((await pastRescheduleResponse.json()).message).toContain("futura");
+  });
+
+  test("uses different free barbers for simultaneous no-preference bookings", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const barbers = (await barbersResponse.json()).filter((barber: any) => barber.isVisible !== false);
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      barbers.filter((barber: any) =>
+        !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+      ).length >= 2,
+    );
+    expect(service).toBeTruthy();
+    const startTime = futureThursdayIso(40, 15, 0);
+
+    const responses = await Promise.all([
+      request.post("/api/appointments", {
+        data: {
+          barberId: 0,
+          serviceId: service.id,
+          startTime,
+          customerName: "Sem Preferência A",
+          customerPhone: "912695763",
+          customerEmail: null,
+        },
+      }),
+      request.post("/api/appointments", {
+        data: {
+          barberId: 0,
+          serviceId: service.id,
+          startTime,
+          customerName: "Sem Preferência B",
+          customerPhone: "912695764",
+          customerEmail: null,
+        },
+      }),
+    ]);
+
+    expect(responses.map((response) => response.status()).sort()).toEqual([201, 201]);
+    const created = await Promise.all(responses.map((response) => response.json()));
+    expect(new Set(created.map((appointment) => appointment.barberId)).size).toBe(2);
+  });
+
+  test("keeps blacklist additions idempotent even with normalized and concurrent duplicates", async ({ request }) => {
+    await loginAdminRequest(request);
+    const phone = "912695765";
+    const email = "blacklist-duplicate@example.com";
+    const payload = {
+      phone,
+      email,
+      reason: "Teste de duplicado",
+      cancelFutureAppointments: false,
+    };
+
+    const [firstResponse, concurrentResponse] = await Promise.all([
+      request.post("/api/admin/blacklist", { data: payload }),
+      request.post("/api/admin/blacklist", {
+        data: { ...payload, phone: "+351 912 695 765", email: " BLACKLIST-DUPLICATE@EXAMPLE.COM " },
+      }),
+    ]);
+    expect([firstResponse.status(), concurrentResponse.status()].sort()).toEqual([200, 201]);
+    const bodies = await Promise.all([firstResponse.json(), concurrentResponse.json()]);
+    expect(bodies.filter((body) => body.alreadyBlacklisted === true)).toHaveLength(1);
+
+    const repeatedResponse = await request.post("/api/admin/blacklist", {
+      data: { ...payload, email: "Blacklist-Duplicate@Example.com" },
+    });
+    expect(repeatedResponse.status()).toBe(200);
+    expect((await repeatedResponse.json()).alreadyBlacklisted).toBe(true);
+
+    const listResponse = await request.get("/api/admin/blacklist");
+    const entries = (await listResponse.json()).filter((entry: any) =>
+      entry.phone === phone || entry.email?.toLowerCase() === email,
+    );
+    expect(entries).toHaveLength(1);
+
+    const blockedByEmailResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: 1,
+        serviceId: 1,
+        startTime: futureThursdayIso(41, 16, 0),
+        customerName: "Email Bloqueado QA",
+        customerPhone: "912695766",
+        customerEmail: "BLACKLIST-DUPLICATE@EXAMPLE.COM",
+      },
+    });
+    expect(blockedByEmailResponse.status()).toBe(403);
+
+    const deleteResponse = await request.delete(`/api/admin/blacklist/${entries[0].id}`);
+    expect(deleteResponse.ok()).toBe(true);
+    const repeatedDeleteResponse = await request.delete(`/api/admin/blacklist/${entries[0].id}`);
+    expect(repeatedDeleteResponse.status()).toBe(404);
+  });
+
+  test("rejects partial overlaps but permits an appointment exactly at the previous end", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    const originalStart = futureThursdayIso(42, 10, 0);
+    const originalEnd = new Date(new Date(originalStart).getTime() + service.duration * 60_000).toISOString();
+    const partialStart = new Date(new Date(originalStart).getTime() + 30 * 60_000).toISOString();
+
+    const originalResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: originalStart,
+        customerName: "Limite Original QA",
+        customerPhone: "912695767",
+        customerEmail: null,
+      },
+    });
+    expect(originalResponse.status(), await originalResponse.text()).toBe(201);
+
+    const overlapResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: partialStart,
+        customerName: "Sobreposição Parcial QA",
+        customerPhone: "912695768",
+        customerEmail: null,
+      },
+    });
+    expect(overlapResponse.status()).toBe(409);
+
+    const adjacentResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: originalEnd,
+        customerName: "Limite Adjacente QA",
+        customerPhone: "912695769",
+        customerEmail: null,
+      },
+    });
+    expect(adjacentResponse.status(), await adjacentResponse.text()).toBe(201);
+  });
+
+  test("rejects malformed manual bookings without returning 500 or storing broken data", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const validStart = futureThursdayIso(43, 16, 0);
+    const basePayload = {
+      barberId: barber.id,
+      serviceId: service.id,
+      startTime: validStart,
+      name: "Manual Inválida QA",
+      phone: "912695771",
+      isManualBooking: true,
+      allowOutsideHours: false,
+    };
+
+    const cases = [
+      { payload: { ...basePayload, startTime: "not-a-date" }, message: /data|hora/i },
+      { payload: { ...basePayload, phone: "123" }, message: /telemóvel/i },
+      { payload: { ...basePayload, barberId: 999999, serviceId: null, isManualBooking: false }, message: /barbeiro/i },
+      { payload: { ...basePayload, allowOutsideHours: "false" }, message: /inválid/i },
+      {
+        payload: {
+          ...basePayload,
+          isRecurring: true,
+          recurringWeeks: 1,
+          recurringMonths: 999999,
+        },
+        message: /repetição/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const response = await request.post("/api/appointments/block", { data: testCase.payload });
+      expect(response.status()).toBe(400);
+      expect((await response.json()).message).toMatch(testCase.message);
+    }
+
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(validStart)}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    expect((await appointmentsResponse.json()).some((item: any) => item.customerName === basePayload.name)).toBe(false);
+  });
+
+  test("does not allow direct public bookings with hidden barbers or services", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    const [visibleBarber] = await barbersResponse.json();
+    const visibleServices = await servicesResponse.json();
+    const [visibleService] = visibleServices;
+
+    const hiddenBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: "Barbeiro Oculto QA",
+        specialty: "Não publicável",
+        color: "#334455",
+        isVisible: false,
+        serviceIds: [visibleService.id],
+      },
+    });
+    expect(hiddenBarberResponse.status(), await hiddenBarberResponse.text()).toBe(201);
+    const hiddenBarber = await hiddenBarberResponse.json();
+
+    const hiddenServiceResponse = await request.post("/api/services", {
+      data: {
+        name: "Serviço Oculto QA",
+        description: "Não publicável",
+        price: 1000,
+        duration: 30,
+        isVisible: false,
+      },
+    });
+    expect(hiddenServiceResponse.status(), await hiddenServiceResponse.text()).toBe(201);
+    const hiddenService = await hiddenServiceResponse.json();
+    const assignResponse = await request.patch(`/api/barbers/${visibleBarber.id}/services`, {
+      data: { serviceIds: Array.from(new Set([...visibleServices.map((service: any) => service.id), hiddenService.id])) },
+    });
+    expect(assignResponse.ok(), await assignResponse.text()).toBe(true);
+
+    const hiddenBarberBooking = await request.post("/api/appointments", {
+      data: {
+        barberId: hiddenBarber.id,
+        serviceId: visibleService.id,
+        startTime: futureThursdayIso(44, 15, 0),
+        customerName: "Oculto Barbeiro QA",
+        customerPhone: "912695772",
+        customerEmail: null,
+      },
+    });
+    expect(hiddenBarberBooking.status()).toBe(400);
+    expect((await hiddenBarberBooking.json()).message).toMatch(/barbeiro.*indisponível/i);
+
+    const hiddenServiceBooking = await request.post("/api/appointments", {
+      data: {
+        barberId: visibleBarber.id,
+        serviceId: hiddenService.id,
+        startTime: futureThursdayIso(44, 16, 0),
+        customerName: "Oculto Serviço QA",
+        customerPhone: "912695773",
+        customerEmail: null,
+      },
+    });
+    expect(hiddenServiceBooking.status()).toBe(400);
+    expect((await hiddenServiceBooking.json()).message).toMatch(/serviço.*indisponível/i);
+  });
+
+  test("validates service name, price and duration at the API boundary", async ({ request }) => {
+    await loginAdminRequest(request);
+    const invalidServices = [
+      { name: "", description: "Sem nome", price: 1000, duration: 30, isVisible: true },
+      { name: "Preço Negativo", description: "Inválido", price: -1, duration: 30, isVisible: true },
+      { name: "Duração Zero", description: "Inválido", price: 1000, duration: 0, isVisible: true },
+      { name: "Duração Absurda", description: "Inválido", price: 1000, duration: 100000, isVisible: true },
+    ];
+
+    for (const payload of invalidServices) {
+      const response = await request.post("/api/services", { data: payload });
+      expect(response.status()).toBe(400);
+    }
+
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+    const [service] = await servicesResponse.json();
+    const invalidUpdateResponse = await request.patch(`/api/services/${service.id}`, {
+      data: { duration: -30 },
+    });
+    expect(invalidUpdateResponse.status()).toBe(400);
+  });
+
+  test("handles two simultaneous cancellations idempotently", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    expect(service).toBeTruthy();
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(45, 16, 0),
+        customerName: "Cancelamento Concorrente QA",
+        customerPhone: "912695774",
+        customerEmail: null,
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const appointment = await createResponse.json();
+
+    const responses = await Promise.all([
+      request.post(`/api/appointments/cancel/${appointment.cancelToken}`),
+      request.post(`/api/appointments/cancel/${appointment.cancelToken}`),
+    ]);
+    expect(responses.map((response) => response.status())).toEqual([200, 200]);
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+    expect(bodies.filter((body) => body.alreadyCancelled === true)).toHaveLength(1);
+    expect(bodies.filter((body) => body.alreadyCancelled !== true)).toHaveLength(1);
+  });
+
+  test("keeps simultaneous cancellation and reschedule results internally consistent", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    const originalStart = futureThursdayIso(46, 15, 0);
+    const requestedStart = futureWeekdayIso(1, 46, 15, 0);
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: originalStart,
+        customerName: "Cancelar Reagendar QA",
+        customerPhone: "912695775",
+        customerEmail: null,
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const appointment = await createResponse.json();
+
+    const [rescheduleResponse, cancelResponse] = await Promise.all([
+      request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
+        data: { startTime: requestedStart },
+      }),
+      request.post(`/api/appointments/cancel/${appointment.cancelToken}`),
+    ]);
+    expect(cancelResponse.status()).toBe(200);
+    expect([200, 409]).toContain(rescheduleResponse.status());
+
+    const detailsResponse = await request.get(`/api/appointments/token/${appointment.cancelToken}`);
+    expect(detailsResponse.ok()).toBe(true);
+    const details = await detailsResponse.json();
+    expect(["cancelled", "late_cancelled"]).toContain(details.status);
+    expect(new Date(details.startTime).getTime()).toBe(
+      new Date(rescheduleResponse.status() === 200 ? requestedStart : originalStart).getTime(),
+    );
   });
 
   test("marks overlapping slots unavailable using the existing appointment duration", () => {

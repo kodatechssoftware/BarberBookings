@@ -30,6 +30,7 @@ import {
 import {
   normalizeSupportedPhone,
   supportedPhoneValidationMessage,
+  supportedPhonesMatch,
 } from "@shared/phone-countries";
 
 const PostgresSessionStore = connectPg(session);
@@ -149,6 +150,23 @@ const blacklistInputSchema = z.object({
   reason: z.string().trim().max(500).optional(),
   cancelFutureAppointments: z.boolean().optional(),
 });
+
+let blacklistMutationQueue: Promise<void> = Promise.resolve();
+
+async function withBlacklistMutationLock<T>(callback: () => Promise<T>): Promise<T> {
+  const previousMutation = blacklistMutationQueue;
+  let releaseMutation!: () => void;
+  blacklistMutationQueue = new Promise<void>((resolve) => {
+    releaseMutation = resolve;
+  });
+
+  await previousMutation;
+  try {
+    return await callback();
+  } finally {
+    releaseMutation();
+  }
+}
 
 function getAppSession(req: Request) {
   return req.session as AppSession;
@@ -1629,10 +1647,18 @@ export async function registerRoutes(
       const input = api.appointments.create.input.parse(body);
       const normalizedCustomerEmail = normalizeEmail(input.customerEmail);
 
+      if (isBeforeNow(input.startTime)) {
+        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+      }
+
       if (!isValidOptionalEmail(input.customerEmail)) {
         return res.status(400).json({ message: emailValidationMessage, field: "customerEmail" });
       }
       const services = await storage.getServices();
+      const requestedService = services.find((service) => service.id === input.serviceId && service.isVisible);
+      if (!requestedService) {
+        return res.status(400).json({ message: "Serviço indisponível para marcação online." });
+      }
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const requestedDuration = getAppointmentDurationMinutes(input.serviceId, serviceDurations);
       const requestedEndTime = new Date(input.startTime.getTime() + requestedDuration * 60000);
@@ -1696,6 +1722,10 @@ export async function registerRoutes(
         })[0];
         finalBarberId = availableBarber.id;
       } else {
+        const selectedBarber = await storage.getBarber(finalBarberId);
+        if (!selectedBarber?.isVisible) {
+          return res.status(400).json({ message: "Barbeiro indisponível para marcação online." });
+        }
         if (!barberCanPerformService(barberServiceMap, finalBarberId, input.serviceId)) {
           return res.status(400).json({ message: "Este barbeiro não executa o serviço escolhido." });
         }
@@ -1782,18 +1812,62 @@ export async function registerRoutes(
   app.post("/api/appointments/block", requireAdmin, async (req, res) => {
     try {
       const { barberId, startTime, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
+      if (
+        (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
+        (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
+        (isRecurring !== undefined && typeof isRecurring !== "boolean")
+      ) {
+        return res.status(400).json({ message: "Pedido de marcação inválido." });
+      }
+
+      const barberIdNumber = Number(barberId);
+      if (!Number.isInteger(barberIdNumber) || barberIdNumber <= 0 || !await storage.getBarber(barberIdNumber)) {
+        return res.status(400).json({ message: "Barbeiro inválido." });
+      }
+
       const start = new Date(startTime);
+      if (Number.isNaN(start.getTime())) {
+        return res.status(400).json({ message: "Data ou hora inválida." });
+      }
+
+      const serviceIdNumber = serviceId === null || serviceId === undefined || serviceId === ""
+        ? null
+        : Number(serviceId);
+      if (serviceIdNumber !== null && (!Number.isInteger(serviceIdNumber) || serviceIdNumber <= 0)) {
+        return res.status(400).json({ message: "Serviço inválido." });
+      }
+      if (isManualBooking && serviceIdNumber === null) {
+        return res.status(400).json({ message: "Selecione um serviço para a marcação manual." });
+      }
+
+      const normalizedName = typeof name === "string" ? name.trim() : "";
+      if (isManualBooking && !normalizedName) {
+        return res.status(400).json({ message: "Indique o nome do cliente." });
+      }
+      if (isManualBooking && !normalizeSupportedPhone(phone)) {
+        return res.status(400).json({ message: supportedPhoneValidationMessage });
+      }
+      if (isRecurring && !isManualBooking) {
+        return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
+      }
+      if (allowOutsideHours && !isManualBooking) {
+        return res.status(400).json({ message: "A exceção de horário só está disponível para marcações manuais." });
+      }
+
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(phone);
       const appointments: Array<Parameters<typeof storage.createAppointment>[0]> = [];
       const conflicts = [];
       const services = await storage.getServices();
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
-      const duration = serviceId
-        ? getAppointmentDurationMinutes(Number(serviceId), serviceDurations)
+      if (serviceIdNumber !== null && !services.some((service) => service.id === serviceIdNumber)) {
+        return res.status(400).json({ message: "Serviço não encontrado." });
+      }
+      const duration = serviceIdNumber
+        ? getAppointmentDurationMinutes(serviceIdNumber, serviceDurations)
         : DEFAULT_APPOINTMENT_DURATION_MINUTES;
-      if (isManualBooking && serviceId) {
+      if (isManualBooking && serviceIdNumber) {
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
-        if (!barberCanPerformService(barberServiceMap, Number(barberId), Number(serviceId))) {
+        if (!barberCanPerformService(barberServiceMap, barberIdNumber, serviceIdNumber)) {
           return res.status(400).json({ message: "Este barbeiro não executa o serviço escolhido." });
         }
       }
@@ -1803,9 +1877,13 @@ export async function registerRoutes(
       if (
         isRecurring &&
         (!Number.isFinite(recurringWeeksNumber) ||
+          !Number.isInteger(recurringWeeksNumber) ||
           recurringWeeksNumber <= 0 ||
+          recurringWeeksNumber > 52 ||
           !Number.isFinite(recurringMonthsNumber) ||
-          recurringMonthsNumber <= 0)
+          !Number.isInteger(recurringMonthsNumber) ||
+          recurringMonthsNumber <= 0 ||
+          recurringMonthsNumber > 24)
       ) {
         return res.status(400).json({ message: "Repetição inválida." });
       }
@@ -1815,12 +1893,12 @@ export async function registerRoutes(
       if (isRecurring && isBeforeNow(start)) {
         return res.status(400).json({ message: "A recorrência deve começar numa data e hora futuras." });
       }
-      if (!isRecurring && isManualBooking && allowOutsideHours && isBeforeNow(start)) {
-        return res.status(400).json({ message: "Escolha uma hora futura para marcações fora do horário." });
+      if (!isRecurring && isManualBooking && isBeforeNow(start)) {
+        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
 
       const occurrences = (isRecurring && recurringWeeks && recurringMonths)
-        ? Math.floor((recurringMonthsNumber * 4.33) / recurringWeeksNumber)
+        ? Math.max(1, Math.floor((recurringMonthsNumber * 4.33) / recurringWeeksNumber))
         : 1;
 
       for (let i = 0; i < occurrences; i++) {
@@ -1828,7 +1906,7 @@ export async function registerRoutes(
           ? addWeeksPreservingShopTime(start, i * recurringWeeksNumber)
           : new Date(start);
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
-        const workingPeriods = await getBarberWorkingPeriods(Number(barberId), getShopDateParts(currentStart).weekday);
+        const workingPeriods = await getBarberWorkingPeriods(barberIdNumber, getShopDateParts(currentStart).weekday);
         const canBypassSchedule = Boolean(isManualBooking && allowOutsideHours);
         const scheduleError = canBypassSchedule
           ? null
@@ -1840,14 +1918,14 @@ export async function registerRoutes(
         }
 
         const existingAppointments = await storage.getAppointments(
-          Number(barberId),
+          barberIdNumber,
           getShopDateParts(currentStart).dateKey,
         );
 
         if (
           hasAppointmentConflict(
             existingAppointments,
-            Number(barberId),
+            barberIdNumber,
             currentStart,
             currentEnd,
             serviceDurations,
@@ -1858,10 +1936,10 @@ export async function registerRoutes(
         }
 
         appointments.push({
-          barberId: Number(barberId),
-          serviceId: serviceId ? Number(serviceId) : null,
+          barberId: barberIdNumber,
+          serviceId: serviceIdNumber,
           startTime: currentStart,
-          customerName: isManualBooking ? name : (occurrences > 1 ? `RECORRENTE: ${name}` : (name || "BLOQUEIO MANUAL")),
+          customerName: isManualBooking ? normalizedName : (occurrences > 1 ? `RECORRENTE: ${normalizedName}` : (normalizedName || "BLOQUEIO MANUAL")),
           customerPhone: isManualBooking ? normalizedCustomerPhone : "",
           customerEmail: "",
           durationMinutes: duration,
@@ -1895,8 +1973,8 @@ export async function registerRoutes(
           : `${createdAppointments.length} ausência criada`,
         metadata: {
           count: createdAppointments.length,
-          barberId: Number(barberId),
-          serviceId: serviceId ? Number(serviceId) : null,
+          barberId: barberIdNumber,
+          serviceId: serviceIdNumber,
           recurring: Boolean(isRecurring),
         },
       });
@@ -1959,6 +2037,10 @@ export async function registerRoutes(
 
       if (Number.isNaN(newStartTime.getTime())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
+      }
+
+      if (startTime && isBeforeNow(newStartTime)) {
+        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
 
       if (!Number.isFinite(newBarberId) || newBarberId <= 0) {
@@ -2138,6 +2220,10 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Data ou hora inválida." });
       }
 
+      if (isBeforeNow(startTime)) {
+        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+      }
+
       const services = await storage.getServices();
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const duration = getEffectiveAppointmentDurationMinutes(appointment, serviceDurations);
@@ -2170,7 +2256,10 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Este horário já está reservado." });
       }
 
-      const updated = await storage.updateAppointment(appointment.id, { startTime });
+      const updated = await storage.updateAppointment(appointment.id, { startTime }, "booked");
+      if (!updated) {
+        return res.status(409).json({ message: "Esta marcação já não pode ser reagendada." });
+      }
 
       res.json(updated);
     } catch (error) {
@@ -2203,7 +2292,20 @@ export async function registerRoutes(
 
     const lateCancellation = isLateCancellation(appointment.startTime);
     const status = lateCancellation ? "late_cancelled" : "cancelled";
-    await storage.updateAppointmentStatus(appointment.id, status);
+    const cancelledAppointment = await storage.updateAppointmentStatusIfCurrent(appointment.id, "booked", status);
+    if (!cancelledAppointment) {
+      const latestAppointment = await storage.getAppointment(appointment.id);
+      if (latestAppointment?.status === "cancelled" || latestAppointment?.status === "late_cancelled") {
+        return res.json({
+          message: "Esta marcação já estava cancelada.",
+          status: latestAppointment.status,
+          alreadyCancelled: true,
+          notificationChannel: "none" satisfies NotificationChannel,
+          notificationSent: false,
+        });
+      }
+      return res.status(409).json({ message: "Esta marcação já não pode ser cancelada." });
+    }
 
     runNotificationJob("Booking cancellation", async () => {
       const [barber, service] = await Promise.all([
@@ -2462,48 +2564,64 @@ export async function registerRoutes(
   app.post("/api/admin/blacklist", requireAdmin, async (req, res) => {
     try {
       const input = blacklistInputSchema.parse(req.body);
-      const futureAppointments = await getFutureBookedCustomerAppointments(input.phone, input.email || undefined);
-
-      if (futureAppointments.length > 0 && input.cancelFutureAppointments === undefined) {
-        return res.status(409).json({
-          code: "CUSTOMER_HAS_FUTURE_APPOINTMENTS",
-          message: "Este cliente tem marcações futuras.",
-          futureAppointments: await getBlacklistAppointmentSummaries(futureAppointments),
-        });
-      }
-
-      const entry = await storage.addToBlacklist({
-        phone: input.phone,
-        email: input.email || null,
-        reason: input.reason || undefined,
-      });
-      let cancelledAppointments: Appointment[] = [];
-
-      if (input.cancelFutureAppointments === true && futureAppointments.length > 0) {
-        for (const appointment of futureAppointments) {
-          const updated = await storage.updateAppointment(appointment.id, getStatusPatch("cancelled"));
-          if (updated) cancelledAppointments.push(updated);
+      await withBlacklistMutationLock(async () => {
+        const existingEntry = (await storage.getBlacklist()).find((entry) =>
+          supportedPhonesMatch(entry.phone, input.phone) ||
+          Boolean(input.email && normalizeEmail(entry.email) === input.email),
+        );
+        if (existingEntry) {
+          return res.status(200).json({
+            ...existingEntry,
+            alreadyBlacklisted: true,
+            futureAppointments: [],
+            cancelledAppointments: [],
+          });
         }
-      }
 
-      await recordAuditLog(req, {
-        action: "customer.blocked",
-        entityType: "blacklist",
-        entityId: entry.id,
-        summary: cancelledAppointments.length > 0
-          ? `Cliente bloqueado e ${cancelledAppointments.length} marcação(ões) futura(s) cancelada(s): ${entry.phone}`
-          : `Cliente bloqueado: ${entry.phone}`,
-        metadata: {
-          email: entry.email,
-          reason: entry.reason,
-          futureAppointmentIds: futureAppointments.map((appointment) => appointment.id),
-          cancelledAppointmentIds: cancelledAppointments.map((appointment) => appointment.id),
-        },
-      });
-      res.status(201).json({
-        ...entry,
-        futureAppointments: await getBlacklistAppointmentSummaries(futureAppointments),
-        cancelledAppointments: await getBlacklistAppointmentSummaries(cancelledAppointments),
+        const futureAppointments = await getFutureBookedCustomerAppointments(input.phone, input.email || undefined);
+
+        if (futureAppointments.length > 0 && input.cancelFutureAppointments === undefined) {
+          return res.status(409).json({
+            code: "CUSTOMER_HAS_FUTURE_APPOINTMENTS",
+            message: "Este cliente tem marcações futuras.",
+            futureAppointments: await getBlacklistAppointmentSummaries(futureAppointments),
+          });
+        }
+
+        const entry = await storage.addToBlacklist({
+          phone: input.phone,
+          email: input.email || null,
+          reason: input.reason || undefined,
+        });
+        const cancelledAppointments: Appointment[] = [];
+
+        if (input.cancelFutureAppointments === true && futureAppointments.length > 0) {
+          for (const appointment of futureAppointments) {
+            const updated = await storage.updateAppointment(appointment.id, getStatusPatch("cancelled"));
+            if (updated) cancelledAppointments.push(updated);
+          }
+        }
+
+        await recordAuditLog(req, {
+          action: "customer.blocked",
+          entityType: "blacklist",
+          entityId: entry.id,
+          summary: cancelledAppointments.length > 0
+            ? `Cliente bloqueado e ${cancelledAppointments.length} marcação(ões) futura(s) cancelada(s): ${entry.phone}`
+            : `Cliente bloqueado: ${entry.phone}`,
+          metadata: {
+            email: entry.email,
+            reason: entry.reason,
+            futureAppointmentIds: futureAppointments.map((appointment) => appointment.id),
+            cancelledAppointmentIds: cancelledAppointments.map((appointment) => appointment.id),
+          },
+        });
+        return res.status(201).json({
+          ...entry,
+          alreadyBlacklisted: false,
+          futureAppointments: await getBlacklistAppointmentSummaries(futureAppointments),
+          cancelledAppointments: await getBlacklistAppointmentSummaries(cancelledAppointments),
+        });
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -2518,7 +2636,13 @@ export async function registerRoutes(
 
   const removeBlacklistEntry = async (req: Request, res: Response) => {
     const entryId = Number(req.params.id);
+    if (!Number.isInteger(entryId) || entryId <= 0) {
+      return res.status(400).json({ message: "Entrada da lista de bloqueio inválida." });
+    }
     const entry = (await storage.getBlacklist()).find((item) => item.id === entryId);
+    if (!entry) {
+      return res.status(404).json({ message: "Cliente não encontrado na lista de bloqueio." });
+    }
     await storage.removeFromBlacklist(entryId);
     await recordAuditLog(req, {
       action: "customer.unblocked",
