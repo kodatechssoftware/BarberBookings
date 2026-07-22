@@ -555,10 +555,13 @@ export function WeeklyAgenda({
             </div>
             <div className="grid overflow-hidden rounded-b-xl border-x border-b border-white/10 bg-background/35" style={{ gridTemplateColumns }}>
               <div className="relative border-r border-white/10 bg-background/75" style={{ height: dayAgendaHeight }}>
-                {daySlots.map((slotMinutes) => (
+                {daySlots.map((slotMinutes, slotIndex) => (
                   <span
                     key={slotMinutes}
-                    className="absolute right-3 -translate-y-2 text-[11px] text-gray-500"
+                    className={cn(
+                      "absolute right-3 text-[11px] text-gray-500",
+                      slotIndex === 0 ? "translate-y-1" : "-translate-y-2",
+                    )}
                     style={{ top: getAgendaTopPx(slotMinutes, dayWindow.startMinutes) }}
                   >
                     {formatAgendaMinutes(slotMinutes)}

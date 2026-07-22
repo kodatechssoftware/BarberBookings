@@ -539,6 +539,16 @@ test.describe("admin navigation", () => {
     const rightGap = agendaBox!.x + agendaBox!.width - focusedAgendaBox!.x - focusedAgendaBox!.width;
     expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(10);
 
+    const timelineGrid = focusedAgenda.locator(":scope > .grid").nth(1);
+    const firstTimeLabel = timelineGrid.getByText("09:00", { exact: true });
+    const [timelineGridBox, firstTimeLabelBox] = await Promise.all([
+      timelineGrid.boundingBox(),
+      firstTimeLabel.boundingBox(),
+    ]);
+    expect(timelineGridBox).toBeTruthy();
+    expect(firstTimeLabelBox).toBeTruthy();
+    expect(firstTimeLabelBox!.y).toBeGreaterThanOrEqual(timelineGridBox!.y + 1);
+
     const appointment = page.getByRole("button", { name: /Agenda Filtered Card QA/ }).first();
     await expect(appointment).toBeVisible();
     await expect(appointment).toContainText("14:00–15:50");
