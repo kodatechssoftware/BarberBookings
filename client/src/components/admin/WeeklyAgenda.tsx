@@ -434,10 +434,7 @@ export function WeeklyAgenda({
           </span>
         ) : (
           <>
-            <span className="flex w-full min-w-0 items-center justify-between gap-2">
-              <span className={cn("truncate font-bold text-white", isCompact ? "text-[11px]" : "text-sm")}>{appointment.customerName}</span>
-              <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>
-            </span>
+            <span className={cn("w-full truncate font-bold text-white", isCompact ? "text-[11px]" : "text-sm")}>{appointment.customerName}</span>
             <span className={cn("mt-0.5 flex w-full min-w-0 items-center gap-1.5 text-white/80", isCompact ? "text-[9px]" : "text-xs")}>
               <Scissors className="h-3 w-3 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{serviceLabel}</span>
@@ -457,8 +454,12 @@ export function WeeklyAgenda({
       return <div className="rounded-xl border border-dashed border-white/10 py-16 text-center text-sm text-gray-500">Sem barbeiros ativos para mostrar.</div>;
     }
 
-    const gridTemplateColumns = `72px repeat(${displayedBarbers.length}, minmax(230px, 1fr))`;
-    const minWidth = 72 + displayedBarbers.length * 230;
+    const isSingleBarberView = displayedBarbers.length === 1;
+    const singleBarberColumnWidth = 520;
+    const gridTemplateColumns = isSingleBarberView
+      ? `72px ${singleBarberColumnWidth}px`
+      : `72px repeat(${displayedBarbers.length}, minmax(230px, 1fr))`;
+    const minWidth = 72 + displayedBarbers.length * (isSingleBarberView ? singleBarberColumnWidth : 230);
 
     return (
       <>
@@ -526,7 +527,7 @@ export function WeeklyAgenda({
         </div>
 
         <div className="day-agenda-horizontal-scroll hidden md:block" data-testid="day-agenda-grid">
-          <div style={{ minWidth }}>
+          <div style={{ minWidth, width: isSingleBarberView ? minWidth : undefined }}>
             <div className="grid" style={{ gridTemplateColumns }}>
               <div className="border-b border-r border-white/10 bg-background/75" />
               {displayedBarbers.map((barber) => {

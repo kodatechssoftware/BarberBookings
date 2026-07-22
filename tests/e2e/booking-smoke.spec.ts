@@ -477,6 +477,65 @@ test.describe("admin navigation", () => {
     await expect(dialog.getByRole("combobox").first()).toContainText(barber.name);
   });
 
+  test("keeps a filtered barber agenda compact and shows the time range only once", async ({ page, request }) => {
+    const appointmentStart = currentWeekThursdayIso(14, 0);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok(), await barbersResponse.text()).toBe(true);
+    expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    expect(barber).toBeTruthy();
+    expect(service).toBeTruthy();
+
+    await page.route(/\/api\/appointments(?:\?.*)?$/, async (route) => {
+      const response = await route.fetch();
+      const appointments = await response.json();
+      await route.fulfill({
+        response,
+        json: [
+          ...appointments,
+          {
+            id: 999_991,
+            barberId: barber.id,
+            serviceId: service.id,
+            startTime: appointmentStart,
+            durationMinutes: 110,
+            status: "booked",
+            customerName: "Agenda Filtered Card QA",
+            customerPhone: "+351912695798",
+            customerEmail: null,
+            depositRequired: false,
+            depositReason: null,
+          },
+        ],
+      });
+    });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await selectAgendaDay(page, appointmentStart);
+
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: barber.name, exact: true }).click();
+
+    const barberHeaders = page.getByTestId("day-agenda-barber-header");
+    await expect(barberHeaders).toHaveCount(1);
+    const headerBox = await barberHeaders.boundingBox();
+    expect(headerBox).toBeTruthy();
+    expect(headerBox!.width).toBeLessThanOrEqual(520.5);
+
+    const appointment = page.getByRole("button", { name: /Agenda Filtered Card QA/ }).first();
+    await expect(appointment).toBeVisible();
+    await expect(appointment).toContainText("14:00–15:50");
+    const startTimeOccurrences = await appointment.evaluate((element) =>
+      (element.textContent?.match(/14:00/g) || []).length,
+    );
+    expect(startTimeOccurrences).toBe(1);
+  });
+
   test("adds and removes barber columns responsively across desktop, tablet and mobile", async ({ page, request }) => {
     await loginAdminRequest(request);
     const initialBarbersResponse = await request.get("/api/barbers");
