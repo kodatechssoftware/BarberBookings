@@ -1278,6 +1278,12 @@ test.describe("admin navigation", () => {
     await expect(nextAppointment).toContainText("12:00–12:30");
     await expect(tinyAppointment).toContainText("12:30–12:45");
 
+    const compactServiceBox = await overlappingAppointment.getByText(shortService.name).boundingBox();
+    const compactTimeRangeBox = await overlappingAppointment.getByText("11:30–12:00").boundingBox();
+    expect(compactServiceBox).toBeTruthy();
+    expect(compactTimeRangeBox).toBeTruthy();
+    expect(compactTimeRangeBox!.y).toBeGreaterThan(compactServiceBox!.y);
+
     const cardContentMetrics = await Promise.all([longAppointment, overlappingAppointment, nextAppointment, tinyAppointment].map((appointment) =>
       appointment.evaluate((element) => ({
         clientHeight: element.clientHeight,
@@ -1409,7 +1415,7 @@ test.describe("admin navigation", () => {
       };
     });
 
-    const pixelsPerMinute = 1.5;
+    const pixelsPerMinute = 1.8;
     expect(halfHourGeometry.top).toBeCloseTo(30 * pixelsPerMinute, 1);
     expect(halfHourGeometry.height).toBeCloseTo(45 * pixelsPerMinute, 1);
     expect(fiftyMinuteGeometry.top).toBeCloseTo(90 * pixelsPerMinute, 1);

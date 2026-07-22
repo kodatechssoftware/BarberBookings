@@ -77,7 +77,7 @@ const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; la
 const agendaStartMinutes = 9 * 60;
 const agendaEndMinutes = 20 * 60;
 const agendaSlotMinutes = 30;
-const agendaPixelsPerMinute = 1.5;
+const agendaPixelsPerMinute = 1.8;
 const agendaBottomPadding = 18;
 const defaultBarberColor = "#D4AF37";
 
@@ -436,19 +436,16 @@ export function WeeklyAgenda({
           <>
             <span className="flex w-full min-w-0 items-center justify-between gap-2">
               <span className={cn("truncate font-bold text-white", isCompact ? "text-[11px]" : "text-sm")}>{appointment.customerName}</span>
-              {!isCompact && <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>}
+              <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>
             </span>
             <span className={cn("mt-0.5 flex w-full min-w-0 items-center gap-1.5 text-white/80", isCompact ? "text-[9px]" : "text-xs")}>
               <Scissors className="h-3 w-3 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{serviceLabel}</span>
-              {isCompact && <span className="shrink-0 font-semibold text-white/65">{timeRangeLabel}</span>}
             </span>
-            {!isCompact && (
-              <span className="mt-auto flex w-full items-center justify-between gap-2 pt-1 text-[10px] text-white/60">
-                <span>{timeRangeLabel}</span>
-                <span>{formatServicePrice(service?.price)}</span>
-              </span>
-            )}
+            <span className="mt-auto flex w-full items-center justify-between gap-2 pt-1 text-[10px] text-white/60">
+              <span>{timeRangeLabel}</span>
+              {!isCompact && <span>{formatServicePrice(service?.price)}</span>}
+            </span>
           </>
         )}
       </button>
