@@ -377,7 +377,8 @@ test.describe("public booking flow", () => {
 
   test("keeps the details step usable on mobile", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/book?barberId=1&serviceId=1&date=2026-06-11&time=15:30");
+    const bookingDate = dateKeyFromIso(futureThursdayIso(8, 15, 30));
+    await page.goto(`/book?barberId=1&serviceId=1&date=${bookingDate}&time=15:30`);
 
     await expect(page.getByText("Total:")).toBeVisible();
     await expect(page.getByPlaceholder("O seu nome")).toBeVisible();
@@ -408,9 +409,20 @@ test.describe("public booking flow", () => {
 
   test("shows availability dots on next-month days visible in the calendar grid", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/book?barberId=1&serviceId=1&date=2026-07-31");
+    const now = new Date();
+    let monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    while (new Date(monthEnd.getFullYear(), monthEnd.getMonth() + 1, 1).getDay() === 0) {
+      monthEnd = new Date(monthEnd.getFullYear(), monthEnd.getMonth() + 2, 0);
+    }
+    const selectedDate = [
+      monthEnd.getFullYear(),
+      String(monthEnd.getMonth() + 1).padStart(2, "0"),
+      String(monthEnd.getDate()).padStart(2, "0"),
+    ].join("-");
+    const monthName = new Intl.DateTimeFormat("pt-PT", { month: "long" }).format(monthEnd);
+    await page.goto(`/book?barberId=1&serviceId=1&date=${selectedDate}`);
 
-    await expect(page.getByText("julho 2026")).toBeVisible();
+    await expect(page.getByText(new RegExp(`${monthName}.*${monthEnd.getFullYear()}`, "i"))).toBeVisible();
 
     await expect.poll(async () => page.evaluate(() => {
       return Array.from(document.querySelectorAll<HTMLElement>(".booking-day-available.day-outside"))
@@ -420,7 +432,8 @@ test.describe("public booking flow", () => {
   });
 
   test("shows inline validation in the customer details step", async ({ page }) => {
-    await page.goto("/book?barberId=1&serviceId=1&date=2026-06-11&time=15:30");
+    const bookingDate = dateKeyFromIso(futureThursdayIso(9, 15, 30));
+    await page.goto(`/book?barberId=1&serviceId=1&date=${bookingDate}&time=15:30`);
 
     await page.getByRole("button", { name: "Confirmar" }).click();
     await expect(page.getByText("Indique o nome para a marcação.")).toBeVisible();
@@ -1965,6 +1978,42 @@ test.describe("booking rules", () => {
     expect(body.message).toContain("Indique");
   });
 
+  test("rejects invalid barber assignments without leaving partial changes", async ({ request }) => {
+    await loginAdminRequest(request);
+    const marker = `Atomic Barber QA ${Date.now()}`;
+    const invalidCreateResponse = await request.post("/api/barbers", {
+      data: {
+        name: marker,
+        specialty: "QA",
+        email: "",
+        color: "#F97316",
+        serviceIds: [999_999],
+      },
+    });
+    expect(invalidCreateResponse.status(), await invalidCreateResponse.text()).toBe(400);
+
+    const barbersResponse = await request.get("/api/barbers?includeHidden=true");
+    const barbers = await barbersResponse.json();
+    expect(barbers.some((barber: any) => barber.name === marker)).toBe(false);
+
+    const [barber] = barbers;
+    const originalName = barber.name;
+    const invalidUpdateResponse = await request.patch(`/api/barbers/${barber.id}`, {
+      data: {
+        name: `${originalName} alteração indevida`,
+        serviceIds: [999_999],
+      },
+    });
+    expect(invalidUpdateResponse.status(), await invalidUpdateResponse.text()).toBe(400);
+
+    const refreshedResponse = await request.get("/api/barbers?includeHidden=true");
+    const refreshedBarber = (await refreshedResponse.json()).find((item: any) => item.id === barber.id);
+    expect(refreshedBarber.name).toBe(originalName);
+
+    const missingDeleteResponse = await request.delete("/api/barbers/999999");
+    expect(missingDeleteResponse.status(), await missingDeleteResponse.text()).toBe(404);
+  });
+
   test("records admin actions in the audit log", async ({ request }) => {
     await loginAdminRequest(request);
 
@@ -2698,6 +2747,7 @@ test.describe("booking rules", () => {
     const cases = [
       { payload: { ...basePayload, startTime: "not-a-date" }, message: /data|hora/i },
       { payload: { ...basePayload, phone: "123" }, message: /telemóvel/i },
+      { payload: { ...basePayload, name: "N".repeat(81) }, message: /nome/i },
       { payload: { ...basePayload, barberId: 999999, serviceId: null, isManualBooking: false }, message: /barbeiro/i },
       { payload: { ...basePayload, allowOutsideHours: "false" }, message: /inválid/i },
       {
@@ -2716,6 +2766,11 @@ test.describe("booking rules", () => {
       expect(response.status()).toBe(400);
       expect((await response.json()).message).toMatch(testCase.message);
     }
+
+    const nullBodyResponse = await request.post("/api/appointments/block", {
+      data: null,
+    });
+    expect(nullBodyResponse.status(), await nullBodyResponse.text()).toBe(400);
 
     const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(validStart)}`);
     expect(appointmentsResponse.ok()).toBe(true);
@@ -2913,5 +2968,300 @@ test.describe("booking rules", () => {
     expect(byTime.get("09:00")).toBe(false);
     expect(byTime.get("09:30")).toBe(false);
     expect(byTime.get("10:00")).toBe(true);
+  });
+
+  test("stores different blocked phone numbers even when they share the same email", async ({ request }) => {
+    await loginAdminRequest(request);
+    const suffix = String(Date.now()).slice(-7);
+    const email = `blacklist-shared-${suffix}@example.com`;
+    const phones = [`+35191${suffix}`, `+35192${suffix}`];
+
+    try {
+      const firstResponse = await request.post("/api/admin/blacklist", {
+        data: { phone: phones[0], email, cancelFutureAppointments: false },
+      });
+      const secondResponse = await request.post("/api/admin/blacklist", {
+        data: { phone: phones[1], email, cancelFutureAppointments: false },
+      });
+
+      expect(firstResponse.status(), await firstResponse.text()).toBe(201);
+      expect(secondResponse.status(), await secondResponse.text()).toBe(201);
+
+      const blacklistResponse = await request.get("/api/admin/blacklist");
+      expect(blacklistResponse.ok()).toBe(true);
+      const matchingEntries = (await blacklistResponse.json()).filter(
+        (entry: any) => entry.email === email,
+      );
+      expect(matchingEntries.map((entry: any) => entry.phone).sort()).toEqual(
+        phones.map((phone) => phone.slice(4)).sort(),
+      );
+    } finally {
+      const blacklistResponse = await request.get("/api/admin/blacklist");
+      if (blacklistResponse.ok()) {
+        const entries = await blacklistResponse.json();
+        await Promise.all(
+          entries
+            .filter((entry: any) => entry.email === email)
+            .map((entry: any) => request.delete(`/api/admin/blacklist/${entry.id}`)),
+        );
+      }
+    }
+  });
+
+  test("allows only one simultaneous removal of the same blacklist entry", async ({ request }) => {
+    await loginAdminRequest(request);
+    const suffix = String(Date.now()).slice(-7);
+    const createResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone: `+35193${suffix}`,
+        email: `blacklist-delete-${suffix}@example.com`,
+        cancelFutureAppointments: false,
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const entry = await createResponse.json();
+
+    const responses = await Promise.all([
+      request.delete(`/api/admin/blacklist/${entry.id}`),
+      request.delete(`/api/admin/blacklist/${entry.id}`),
+    ]);
+
+    expect(responses.map((response) => response.status()).sort()).toEqual([200, 404]);
+  });
+
+  test("rejects impossible or reversed appointment date filters", async ({ request }) => {
+    const impossibleDate = await request.get("/api/appointments/public?date=2027-02-31");
+    const invalidBarber = await request.get("/api/appointments/public?barberId=not-a-number&date=2027-08-12");
+    const reversedRange = await request.get(
+      "/api/appointments/public?startDate=2027-08-20&endDate=2027-08-10",
+    );
+
+    for (const response of [impossibleDate, invalidBarber, reversedRange]) {
+      expect(response.status(), await response.text()).toBe(400);
+    }
+  });
+
+  test("does not advance manipulated booking URLs with impossible or past dates", async ({ page, request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const service = (await servicesResponse.json()).find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    expect(barber).toBeTruthy();
+    expect(service).toBeTruthy();
+
+    await page.goto(
+      `/booking?barberId=${barber.id}&serviceId=${service.id}&date=2027-02-31&time=10:00`,
+    );
+    await expect(page.getByText("Resumo da Marcação")).not.toBeVisible();
+    await expect(page.getByText(/março.*2027/i)).not.toBeVisible();
+    await expect(page.getByText("Data e hora", { exact: true }).first()).toBeVisible();
+
+    await page.goto(
+      `/booking?barberId=${barber.id}&serviceId=${service.id}&date=2020-01-02&time=10:00`,
+    );
+    await expect(page.getByText("Resumo da Marcação")).not.toBeVisible();
+    await expect(page.getByText(/janeiro.*2020/i)).not.toBeVisible();
+    await expect(page.getByText("Data e hora", { exact: true }).first()).toBeVisible();
+  });
+
+  test("rejects moving an appointment to a missing or invalid barber", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const service = (await servicesResponse.json()).find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    const startTime = futureThursdayIso(18, 10, 0);
+    const name = `Missing Barber QA ${Date.now()}`;
+    const createResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        name,
+        phone: "+351912345671",
+        isManualBooking: true,
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+    const appointment = (await appointmentsResponse.json()).find((item: any) => item.customerName === name);
+    expect(appointment).toBeTruthy();
+
+    try {
+      const missingBarberResponse = await request.patch(`/api/appointments/${appointment.id}`, {
+        data: { barberId: 999_999 },
+      });
+      const zeroBarberResponse = await request.patch(`/api/appointments/${appointment.id}`, {
+        data: { barberId: 0 },
+      });
+      expect(missingBarberResponse.status(), await missingBarberResponse.text()).toBe(400);
+      expect(zeroBarberResponse.status(), await zeroBarberResponse.text()).toBe(400);
+    } finally {
+      await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "cancelled" },
+      });
+    }
+  });
+
+  test("rejects duplicate barber login emails without returning a server error", async ({ request }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const email = `duplicate-barber-${suffix}@example.com`;
+    const createdIds: number[] = [];
+
+    try {
+      const invalidEmailResponse = await request.post("/api/barbers", {
+        data: {
+          name: `Email Inválido QA ${suffix}`,
+          specialty: "QA",
+          email: "email-invalido",
+          color: "#EF4444",
+          isVisible: true,
+        },
+      });
+      expect(invalidEmailResponse.status(), await invalidEmailResponse.text()).toBe(400);
+
+      const [firstResponse, duplicateResponse] = await Promise.all([
+        request.post("/api/barbers", {
+          data: {
+            name: `Email QA A ${suffix}`,
+            specialty: "QA",
+            email,
+            color: "#0EA5E9",
+            isVisible: true,
+          },
+        }),
+        request.post("/api/barbers", {
+          data: {
+            name: `Email QA B ${suffix}`,
+            specialty: "QA",
+            email: email.toUpperCase(),
+            color: "#22C55E",
+            isVisible: true,
+          },
+        }),
+      ]);
+      expect([firstResponse.status(), duplicateResponse.status()].sort()).toEqual([201, 409]);
+      const createdResponse = firstResponse.status() === 201 ? firstResponse : duplicateResponse;
+      const rejectedResponse = firstResponse.status() === 409 ? firstResponse : duplicateResponse;
+      createdIds.push((await createdResponse.json()).id);
+
+      const duplicateBody = await rejectedResponse.json();
+      expect(duplicateBody.message).toContain("email");
+    } finally {
+      for (const id of createdIds) {
+        await request.delete(`/api/barbers/${id}`);
+      }
+    }
+  });
+
+  test("protects services used by future bookings and reports missing services", async ({ request }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const createServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Serviço Protegido QA ${suffix}`,
+        description: "Teste de remoção segura",
+        price: 1500,
+        duration: 30,
+        isVisible: true,
+      },
+    });
+    expect(createServiceResponse.status(), await createServiceResponse.text()).toBe(201);
+    const service = await createServiceResponse.json();
+
+    const barbersResponse = await request.get("/api/barbers?includeHidden=true");
+    const [barber] = await barbersResponse.json();
+    const serviceIds = Array.from(new Set([...(barber.serviceIds || []), service.id]));
+    const assignmentResponse = await request.patch(`/api/barbers/${barber.id}/services`, {
+      data: { serviceIds },
+    });
+    expect(assignmentResponse.ok(), await assignmentResponse.text()).toBe(true);
+
+    const startTime = futureThursdayIso(20, 11, 0);
+    const customerName = `Protected Service QA ${suffix}`;
+    const appointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        name: customerName,
+        phone: "+351912345672",
+        isManualBooking: true,
+      },
+    });
+    expect(appointmentResponse.status(), await appointmentResponse.text()).toBe(201);
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+    const appointment = (await appointmentsResponse.json()).find(
+      (item: any) => item.customerName === customerName,
+    );
+    expect(appointment).toBeTruthy();
+
+    try {
+      const protectedDeleteResponse = await request.delete(`/api/services/${service.id}`);
+      expect(protectedDeleteResponse.status(), await protectedDeleteResponse.text()).toBe(409);
+
+      const stillPresentResponse = await request.get("/api/services?includeHidden=true");
+      expect((await stillPresentResponse.json()).some((item: any) => item.id === service.id)).toBe(true);
+    } finally {
+      await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "cancelled" },
+      });
+      await request.delete(`/api/services/${service.id}`);
+    }
+
+    const missingDeleteResponse = await request.delete("/api/services/999999");
+    expect(missingDeleteResponse.status(), await missingDeleteResponse.text()).toBe(404);
+  });
+
+  test("requires authentication for management data and mutations", async ({ playwright }) => {
+    const anonymous = await playwright.request.newContext({
+      baseURL: `http://127.0.0.1:${Number(process.env.E2E_PORT || 5015)}`,
+    });
+    try {
+      const responses = await Promise.all([
+        anonymous.get("/api/appointments"),
+        anonymous.get("/api/admin/dashboard"),
+        anonymous.get("/api/admin/blacklist"),
+        anonymous.get("/api/admin/export"),
+        anonymous.post("/api/services", {
+          data: { name: "Unauthorized", price: 1000, duration: 30 },
+        }),
+        anonymous.post("/api/appointments/block", {
+          data: { barberId: 1, startTime: futureThursdayIso(), isManualBooking: false },
+        }),
+      ]);
+
+      for (const response of responses) {
+        expect(response.status()).toBe(401);
+      }
+    } finally {
+      await anonymous.dispose();
+    }
+  });
+
+  test("rejects malformed login and update bodies without returning 500", async ({ request }) => {
+    const malformedLoginResponse = await request.post("/api/admin/login", { data: null });
+    expect(malformedLoginResponse.status(), await malformedLoginResponse.text()).toBe(400);
+    expect((await malformedLoginResponse.json()).message).toBe("Pedido JSON inválido.");
+
+    await loginAdminRequest(request);
+    const malformedAppointmentResponse = await request.patch("/api/appointments/999999", {
+      data: null,
+    });
+    const malformedStatusResponse = await request.patch("/api/appointments/999999/status", {
+      data: null,
+    });
+    expect(malformedAppointmentResponse.status(), await malformedAppointmentResponse.text()).toBe(400);
+    expect(malformedStatusResponse.status(), await malformedStatusResponse.text()).toBe(400);
   });
 });

@@ -180,15 +180,22 @@ app.use((req, res, next) => {
   }
   const server = await registerRoutes(app, httpServer);
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    console.error("Unhandled request error", err);
-
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) {
       return next(err);
     }
 
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    const isJsonParseError = status === 400 && err.type === "entity.parse.failed";
+    const message = isJsonParseError
+      ? "Pedido JSON inválido."
+      : err.message || "Internal Server Error";
+
+    if (status >= 500) {
+      console.error("Unhandled request error", err);
+    } else if (!req.path.startsWith("/api")) {
+      log(`${req.method} ${req.path} ${status} :: ${JSON.stringify({ message })}`);
+    }
 
     res.status(status).json({ message });
   });

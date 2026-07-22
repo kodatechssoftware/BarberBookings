@@ -151,6 +151,11 @@ const blacklistInputSchema = z.object({
   cancelFutureAppointments: z.boolean().optional(),
 });
 
+const loginInputSchema = z.object({
+  username: z.string().trim().min(1).max(120),
+  password: z.string().min(1).max(200),
+});
+
 let blacklistMutationQueue: Promise<void> = Promise.resolve();
 
 async function withBlacklistMutationLock<T>(callback: () => Promise<T>): Promise<T> {
@@ -546,11 +551,63 @@ async function normalizeBarberServiceIds(serviceIds: number[] | undefined) {
 function normalizeBarberEmail<T extends { email?: string | null }>(barberInput: T) {
   if (!("email" in barberInput)) return barberInput;
 
-  const email = typeof barberInput.email === "string" ? barberInput.email.trim() : barberInput.email;
+  const email = typeof barberInput.email === "string" ? barberInput.email.trim().toLowerCase() : barberInput.email;
   return {
     ...barberInput,
     email: email || null,
   };
+}
+
+async function findBarberByEmail(email: string, excludedBarberId?: number) {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return undefined;
+  return (await storage.getBarbers()).find((barber) =>
+    barber.id !== excludedBarberId && barber.email?.trim().toLowerCase() === normalizedEmail,
+  );
+}
+
+function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function getErrorCode(error: unknown) {
+  if (!error || typeof error !== "object") return undefined;
+  const directCode = (error as { code?: unknown }).code;
+  if (typeof directCode === "string") return directCode;
+  const cause = (error as { cause?: unknown }).cause;
+  return cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
+    ? (cause as { code: string }).code
+    : undefined;
+}
+
+function validateAppointmentFilters(query: Request["query"]) {
+  const barberIdValue = query.barberId;
+  if (barberIdValue !== undefined) {
+    const barberId = Number(barberIdValue);
+    if (!Number.isInteger(barberId) || barberId < 0) {
+      return "Barbeiro inválido.";
+    }
+  }
+
+  for (const field of ["date", "startDate", "endDate"] as const) {
+    const value = query[field];
+    if (value !== undefined && !isCalendarDate(value)) {
+      return "Data inválida.";
+    }
+  }
+
+  if (
+    typeof query.startDate === "string" &&
+    typeof query.endDate === "string" &&
+    query.startDate > query.endDate
+  ) {
+    return "Intervalo de datas inválido.";
+  }
+
+  return null;
 }
 
 async function getBarbersWithServiceIds() {
@@ -1024,7 +1081,11 @@ export async function registerRoutes(
   // === AUTH ===
   app.post("/api/admin/login", async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const parsedLogin = loginInputSchema.safeParse(req.body);
+      if (!parsedLogin.success) {
+        return res.status(400).json({ message: "Indique um utilizador e uma palavra-passe válidos." });
+      }
+      const { username, password } = parsedLogin.data;
       
       // Try admin login first
       const admin = await storage.getAdminByUsername(username);
@@ -1043,7 +1104,7 @@ export async function registerRoutes(
       }
 
       // Try barber login if admin fails
-      const barber = await storage.getBarberByEmail(username);
+        const barber = await findBarberByEmail(username);
       if (barber) {
         if (!barber.password) {
           return res.status(403).json({
@@ -1133,8 +1194,12 @@ export async function registerRoutes(
     try {
       const input = api.barbers.create.input.parse(req.body);
       const { serviceIds, ...barberInput } = input;
-      const barber = await storage.createBarber(normalizeBarberEmail(barberInput));
+      const normalizedBarberInput = normalizeBarberEmail(barberInput);
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);
+      if (normalizedBarberInput.email && await findBarberByEmail(normalizedBarberInput.email)) {
+        return res.status(409).json({ message: "Já existe um barbeiro com este email." });
+      }
+      const barber = await storage.createBarber(normalizedBarberInput);
       if (normalizedServiceIds !== undefined) {
         await storage.replaceBarberServices(barber.id, normalizedServiceIds);
       }
@@ -1156,6 +1221,9 @@ export async function registerRoutes(
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
         return res.status(400).json({ message: error.message });
       }
+      if (getErrorCode(error) === "23505") {
+        return res.status(409).json({ message: "Já existe um barbeiro com este email." });
+      }
       console.error("Create barber error:", error);
       res.status(500).json({ message: "Erro ao criar barbeiro" });
     }
@@ -1169,12 +1237,17 @@ export async function registerRoutes(
       const existing = await storage.getBarber(barberId);
       if (!existing) return res.status(404).json({ message: "Barbeiro não encontrado" });
 
-      const hasBarberPatch = Object.keys(barberPatch).length > 0;
+      const normalizedBarberPatch = normalizeBarberEmail(barberPatch);
+      const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);
+      if (normalizedBarberPatch.email && await findBarberByEmail(normalizedBarberPatch.email, barberId)) {
+        return res.status(409).json({ message: "Já existe um barbeiro com este email." });
+      }
+
+      const hasBarberPatch = Object.keys(normalizedBarberPatch).length > 0;
       const barber = hasBarberPatch
-        ? await storage.updateBarber(barberId, normalizeBarberEmail(barberPatch))
+        ? await storage.updateBarber(barberId, normalizedBarberPatch)
         : existing;
 
-      const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);
       if (normalizedServiceIds !== undefined) {
         await storage.replaceBarberServices(barberId, normalizedServiceIds);
       }
@@ -1206,6 +1279,9 @@ export async function registerRoutes(
       }
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
         return res.status(400).json({ message: error.message });
+      }
+      if (getErrorCode(error) === "23505") {
+        return res.status(409).json({ message: "Já existe um barbeiro com este email." });
       }
       console.error("Update barber error:", error);
       res.status(500).json({ message: "Erro ao atualizar barbeiro" });
@@ -1273,7 +1349,11 @@ export async function registerRoutes(
   app.delete("/api/barbers/:id", requireAdmin, async (req, res) => {
     try {
       const barberId = Number(req.params.id);
+      if (!Number.isInteger(barberId) || barberId <= 0) {
+        return res.status(400).json({ message: "Barbeiro inválido." });
+      }
       const barber = await storage.getBarber(barberId);
+      if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado" });
       const result = await storage.deleteBarber(barberId);
       const wasHidden = result === "hidden";
       await recordAuditLog(req, {
@@ -1452,7 +1532,11 @@ export async function registerRoutes(
   app.delete("/api/services/:id", requireAdmin, async (req, res) => {
     try {
       const serviceId = Number(req.params.id);
+      if (!Number.isInteger(serviceId) || serviceId <= 0) {
+        return res.status(400).json({ message: "Serviço inválido." });
+      }
       const service = await storage.getService(serviceId);
+      if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
       await storage.deleteService(serviceId);
       await recordAuditLog(req, {
         action: "service.deleted",
@@ -1462,6 +1546,11 @@ export async function registerRoutes(
       });
       res.json({ message: "Serviço removido" });
     } catch (error) {
+      if ((error as { code?: string } | null)?.code === "SERVICE_HAS_FUTURE_APPOINTMENTS") {
+        return res.status(409).json({
+          message: "Este serviço tem marcações futuras. Cancele ou altere essas marcações antes de o remover.",
+        });
+      }
       res.status(500).json({ message: "Erro ao remover serviço" });
     }
   });
@@ -1625,6 +1714,8 @@ export async function registerRoutes(
 
   // === APPOINTMENTS ===
   app.get(api.appointments.list.path, requireAuth, async (req, res) => {
+    const filterError = validateAppointmentFilters(req.query);
+    if (filterError) return res.status(400).json({ message: filterError });
     const appSession = getAppSession(req);
     const barberId = appSession.role === "barber"
       ? Number(appSession.barberId)
@@ -1811,6 +1902,9 @@ export async function registerRoutes(
 
   app.post("/api/appointments/block", requireAdmin, async (req, res) => {
     try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        return res.status(400).json({ message: "Pedido de marcação inválido." });
+      }
       const { barberId, startTime, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
@@ -1843,6 +1937,9 @@ export async function registerRoutes(
       const normalizedName = typeof name === "string" ? name.trim() : "";
       if (isManualBooking && !normalizedName) {
         return res.status(400).json({ message: "Indique o nome do cliente." });
+      }
+      if (normalizedName.length > 80) {
+        return res.status(400).json({ message: "O nome não pode ter mais de 80 caracteres." });
       }
       if (isManualBooking && !normalizeSupportedPhone(phone)) {
         return res.status(400).json({ message: supportedPhoneValidationMessage });
@@ -1990,6 +2087,8 @@ export async function registerRoutes(
   });
 
   app.get("/api/appointments/public", async (req, res) => {
+    const filterError = validateAppointmentFilters(req.query);
+    if (filterError) return res.status(400).json({ message: filterError });
     const barberId = req.query.barberId ? Number(req.query.barberId) : undefined;
     const date = req.query.date as string | undefined;
     const startDate = req.query.startDate as string | undefined;
@@ -2020,15 +2119,21 @@ export async function registerRoutes(
   
   app.patch("/api/appointments/:id", requireAdmin, async (req, res) => {
     try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        return res.status(400).json({ message: "Pedido de marcação inválido." });
+      }
       const { startTime, barberId, status } = req.body;
+      const hasStartTimePatch = Object.prototype.hasOwnProperty.call(req.body, "startTime");
+      const hasBarberPatch = Object.prototype.hasOwnProperty.call(req.body, "barberId");
+      const hasStatusPatch = Object.prototype.hasOwnProperty.call(req.body, "status");
       const hasServicePatch = Object.prototype.hasOwnProperty.call(req.body, "serviceId");
       const appointmentId = Number(req.params.id);
       const currentApp = await storage.getAppointment(appointmentId);
 
       if (!currentApp) return res.status(404).json({ message: "Marcação não encontrada" });
 
-      const newStartTime = startTime ? new Date(startTime) : new Date(currentApp.startTime);
-      const newBarberId = barberId ? Number(barberId) : currentApp.barberId;
+      const newStartTime = hasStartTimePatch ? new Date(startTime) : new Date(currentApp.startTime);
+      const newBarberId = hasBarberPatch ? Number(barberId) : currentApp.barberId;
       const services = await storage.getServices();
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const newServiceId = hasServicePatch
@@ -2039,12 +2144,16 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Data ou hora inválida." });
       }
 
-      if (startTime && isBeforeNow(newStartTime)) {
+      if (hasStartTimePatch && isBeforeNow(newStartTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
 
       if (!Number.isFinite(newBarberId) || newBarberId <= 0) {
         return res.status(400).json({ message: "Barbeiro inválido." });
+      }
+
+      if (hasBarberPatch && !await storage.getBarber(newBarberId)) {
+        return res.status(400).json({ message: "Barbeiro não encontrado." });
       }
 
       if (hasServicePatch && newServiceId !== null && (!Number.isFinite(newServiceId) || newServiceId <= 0)) {
@@ -2056,7 +2165,7 @@ export async function registerRoutes(
       }
 
       // Conflict check for re-scheduling or service changes
-      if (startTime || barberId || hasServicePatch) {
+      if (hasStartTimePatch || hasBarberPatch || hasServicePatch) {
         const duration = hasServicePatch
           ? getAppointmentDurationMinutes(newServiceId, serviceDurations)
           : getEffectiveAppointmentDurationMinutes(currentApp, serviceDurations);
@@ -2092,13 +2201,13 @@ export async function registerRoutes(
       }
 
       const updateData: any = {};
-      if (startTime) updateData.startTime = newStartTime;
-      if (barberId) updateData.barberId = newBarberId;
+      if (hasStartTimePatch) updateData.startTime = newStartTime;
+      if (hasBarberPatch) updateData.barberId = newBarberId;
       if (hasServicePatch) {
         updateData.serviceId = newServiceId;
         updateData.durationMinutes = getAppointmentDurationMinutes(newServiceId, serviceDurations);
       }
-      if (status) {
+      if (hasStatusPatch) {
         if (!isKnownAppointmentStatus(status)) {
           return res.status(400).json({ message: "Estado de marcação inválido." });
         }
@@ -2140,6 +2249,9 @@ export async function registerRoutes(
 
   app.patch(api.appointments.updateStatus.path, requireAuth, async (req, res) => {
     try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        return res.status(400).json({ message: "Pedido de marcação inválido." });
+      }
       const status = req.body.status;
       if (!isKnownAppointmentStatus(status)) {
         return res.status(400).json({ message: "Estado de marcação inválido." });
@@ -2566,8 +2678,7 @@ export async function registerRoutes(
       const input = blacklistInputSchema.parse(req.body);
       await withBlacklistMutationLock(async () => {
         const existingEntry = (await storage.getBlacklist()).find((entry) =>
-          supportedPhonesMatch(entry.phone, input.phone) ||
-          Boolean(input.email && normalizeEmail(entry.email) === input.email),
+          supportedPhonesMatch(entry.phone, input.phone),
         );
         if (existingEntry) {
           return res.status(200).json({

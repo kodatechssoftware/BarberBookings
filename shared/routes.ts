@@ -11,8 +11,13 @@ import {
 
 const serviceIdsInputSchema = z.array(z.number().int().positive()).optional();
 export const barberInputSchema = insertBarberSchema.extend({
-  name: z.string().trim().min(1, "Indique o nome do barbeiro."),
-  specialty: z.string().trim().min(1, "Indique a especialidade do barbeiro."),
+  name: z.string().trim().min(1, "Indique o nome do barbeiro.").max(100, "O nome não pode ter mais de 100 caracteres."),
+  specialty: z.string().trim().min(1, "Indique a especialidade do barbeiro.").max(160, "A especialidade não pode ter mais de 160 caracteres."),
+  bio: z.string().trim().max(1000, "A biografia não pode ter mais de 1000 caracteres.").optional().nullable(),
+  email: z.string().trim().max(120, "O email não pode ter mais de 120 caracteres.").refine(
+    (value) => !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+    "Indique um email válido.",
+  ).optional().nullable(),
   serviceIds: serviceIdsInputSchema,
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida. Use formato hexadecimal.").optional(),
 });

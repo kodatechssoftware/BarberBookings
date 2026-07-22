@@ -295,6 +295,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteService(id: number): Promise<void> {
+    const [futureAppointment] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(and(
+        eq(appointments.serviceId, id),
+        eq(appointments.status, "booked"),
+        gte(appointments.startTime, new Date()),
+      ))
+      .limit(1);
+
+    if (futureAppointment) {
+      const error = new Error("Service has future appointments") as Error & { code?: string };
+      error.code = "SERVICE_HAS_FUTURE_APPOINTMENTS";
+      throw error;
+    }
+
     await db.delete(barberServices).where(eq(barberServices.serviceId, id));
     // Set serviceId to null for all appointments linked to this service
     await db.update(appointments).set({ serviceId: null }).where(eq(appointments.serviceId, id));
@@ -751,6 +767,14 @@ export class MemoryStorage implements IStorage {
   }
 
   async createBarber(barber: CreateBarberRequest): Promise<Barber> {
+    if (
+      barber.email &&
+      this.barbers.some((existing) => existing.email?.toLowerCase() === barber.email?.toLowerCase())
+    ) {
+      const error = new Error("Duplicate barber email") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
     const newBarber: Barber = {
       id: this.nextIds.barber++,
       name: barber.name,
@@ -769,6 +793,16 @@ export class MemoryStorage implements IStorage {
   async updateBarber(id: number, barber: Partial<CreateBarberRequest>): Promise<Barber | undefined> {
     const index = this.barbers.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
+    if (
+      barber.email &&
+      this.barbers.some((existing) =>
+        existing.id !== id && existing.email?.toLowerCase() === barber.email?.toLowerCase(),
+      )
+    ) {
+      const error = new Error("Duplicate barber email") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
     this.barbers[index] = { ...this.barbers[index], ...barber };
     return this.barbers[index];
   }
@@ -826,6 +860,17 @@ export class MemoryStorage implements IStorage {
   }
 
   async deleteService(id: number): Promise<void> {
+    const now = new Date();
+    if (this.appointments.some((appointment) =>
+      appointment.serviceId === id &&
+      shouldProtectAppointment(appointment.status) &&
+      new Date(appointment.startTime) >= now
+    )) {
+      const error = new Error("Service has future appointments") as Error & { code?: string };
+      error.code = "SERVICE_HAS_FUTURE_APPOINTMENTS";
+      throw error;
+    }
+
     this.appointments = this.appointments.map((appointment) =>
       appointment.serviceId === id ? { ...appointment, serviceId: null } : appointment,
     );

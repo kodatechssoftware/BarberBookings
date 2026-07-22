@@ -62,7 +62,15 @@ const parseDateParam = (value: string | null) => {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(year, month - 1, day);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
 };
 
 const parseTimeParam = (value: string | null) => {
@@ -116,8 +124,11 @@ const getInitialBookingPreference = (): BookingPreference => {
   const lastBooking = params.get("repeat") === "last" ? readLastBookingPreference() : null;
   const barberId = parseNumericParam(params.get("barberId")) ?? lastBooking?.barberId ?? null;
   const serviceId = parseNumericParam(params.get("serviceId")) ?? lastBooking?.serviceId ?? null;
-  const selectedDate = parseDateParam(params.get("date")) ?? startOfToday();
-  const selectedTime = parseTimeParam(params.get("time"));
+  const today = startOfToday();
+  const parsedDate = parseDateParam(params.get("date"));
+  const validRequestedDate = parsedDate && parsedDate.getTime() >= today.getTime() ? parsedDate : null;
+  const selectedDate = validRequestedDate ?? today;
+  const selectedTime = validRequestedDate ? parseTimeParam(params.get("time")) : null;
   const phonePreference = splitStoredPhone(lastBooking?.customerPhone || "");
 
   return {
