@@ -88,7 +88,8 @@
     display: none;
   }
 
-  .weekly-agenda-horizontal-scroll {
+  .day-agenda-horizontal-scroll,
+  .agenda-date-strip {
     overflow-x: auto;
     overflow-y: hidden;
     overscroll-behavior-x: contain;

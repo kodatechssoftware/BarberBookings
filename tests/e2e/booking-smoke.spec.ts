@@ -72,6 +72,16 @@ function dateLabelFromIso(isoDate: string) {
   ].join("/");
 }
 
+async function selectAgendaDay(page: Page, isoDate = currentWeekThursdayIso()) {
+  const date = new Date(isoDate);
+  const weekday = new Intl.DateTimeFormat("pt-PT", { weekday: "long" }).format(date);
+  const dayButton = page.getByRole("button", {
+    name: new RegExp(`Escolher ${weekday}.*${date.getDate()}.*${date.getFullYear()}`, "i"),
+  });
+  await expect(dayButton).toBeVisible();
+  await dayButton.click();
+}
+
 function lisbonDateTimeParts(isoDate: string) {
   return Object.fromEntries(
     new Intl.DateTimeFormat("en-GB", {
@@ -209,10 +219,11 @@ async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequ
 }
 
 async function openManualBookingFromAgendaSlot(page: Page, isoDate: string, time: string) {
+  await selectAgendaDay(page, isoDate);
   const dateLabel = dateLabelFromIso(isoDate);
-  const slotButton = page.getByRole("button", {
-    name: `Criar marcação em ${dateLabel} às ${time}`,
-  }).first();
+  const slotButton = page.locator(
+    `button[aria-label^="Criar marcação para"][aria-label*="${dateLabel}"][aria-label$="às ${time}"]`,
+  ).first();
   await expect(slotButton).toBeVisible();
   await slotButton.click();
 
@@ -343,7 +354,7 @@ test.describe("admin navigation", () => {
     await loginAdmin(page);
 
     await page.getByRole("tab", { name: "Agenda" }).click();
-    await expect(page.getByText("Agenda semanal")).toBeVisible();
+    await expect(page.getByText("Agenda diária")).toBeVisible();
     await expect(page.getByText("Agenda do dia")).not.toBeVisible();
     await expect(page.getByText("Lista de marcações")).not.toBeVisible();
     await page.getByRole("button", { name: "Marcação manual" }).click();
@@ -355,6 +366,7 @@ test.describe("admin navigation", () => {
     await page.getByRole("button", { name: "Ausência" }).click();
     await expect(page.getByRole("dialog", { name: "Ausência na agenda" })).toBeVisible();
     await page.keyboard.press("Escape");
+    await selectAgendaDay(page);
     const weeklyAppointment = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Agenda Click QA/,
     }).first();
@@ -377,7 +389,7 @@ test.describe("admin navigation", () => {
 
     await page.getByRole("tab", { name: "Marcações" }).click();
     await expect(page.getByText("Lista de marcações")).toBeVisible();
-    await expect(page.getByText("Agenda semanal")).not.toBeVisible();
+    await expect(page.getByText("Agenda diária")).not.toBeVisible();
     await expect(page.getByText("Agenda do dia")).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Ausência" })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
@@ -393,7 +405,7 @@ test.describe("admin navigation", () => {
     for (const adminTab of adminTabs) {
       await page.getByRole("tab", { name: adminTab.name }).click();
       await expect(page.getByText(adminTab.visibleText)).toBeVisible();
-      await expect(page.getByText("Agenda semanal")).not.toBeVisible();
+      await expect(page.getByText("Agenda diária")).not.toBeVisible();
       await expect(page.getByText("Agenda do dia")).not.toBeVisible();
       await expect(page.getByText("Lista de marcações")).not.toBeVisible();
       if (adminTab.name === "Equipa") {
@@ -404,6 +416,65 @@ test.describe("admin navigation", () => {
       }
       await expectNoHorizontalOverflow(page);
     }
+  });
+
+  test("switches between day, week and month agenda views", async ({ page, request }) => {
+    if (process.env.VISUAL_QA === "true") {
+      await createConcurrentManualAppointmentsForCurrentWeek(request);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await selectAgendaDay(page);
+
+    await expect(page.getByTestId("day-agenda-grid")).toBeVisible();
+    await expect(page.getByText("Agenda diária")).toBeVisible();
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.waitForTimeout(250);
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-day-desktop.png" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(page.getByTestId("day-agenda-mobile")).toBeVisible();
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-day-mobile.png" });
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+
+    const viewControls = page.getByRole("group", { name: "Vista da agenda" });
+    await viewControls.getByRole("button", { name: "Semana" }).click();
+    await expect(page.getByText("Resumo semanal")).toBeVisible();
+    await expect(page.getByTestId("week-agenda-summary")).toBeVisible();
+
+    await viewControls.getByRole("button", { name: "Mês" }).click();
+    await expect(page.getByText("Agenda mensal")).toBeVisible();
+    await expect(page.getByTestId("month-agenda-calendar")).toBeVisible();
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-month-desktop.png" });
+    }
+
+    await page.getByRole("button", { name: /Abrir agenda de/i }).first().click();
+    await expect(page.getByText("Agenda diária")).toBeVisible();
+    await expect(page.getByTestId("day-agenda-grid")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("preselects the barber when creating from a daily column", async ({ page, request }) => {
+    const barbersResponse = await request.get("/api/barbers");
+    expect(barbersResponse.ok()).toBe(true);
+    const [barber] = await barbersResponse.json();
+    expect(barber).toBeTruthy();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+
+    const slot = page.getByRole("button", {
+      name: new RegExp(`Criar marcação para ${barber.name} .* às 13:00`),
+    });
+    await expect(slot).toBeVisible();
+    await slot.click();
+
+    const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("combobox").first()).toContainText(barber.name);
   });
 
   test("waits for barber and service names before showing appointment rows", async ({ page, request }) => {
@@ -639,6 +710,7 @@ test.describe("admin navigation", () => {
 
     await page.reload();
     await page.getByRole("tab", { name: "Agenda" }).waitFor({ state: "visible" });
+    await selectAgendaDay(page);
     const agendaAppointment = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Cliente Etiqueta/,
     }).first();
@@ -670,6 +742,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await loginAdmin(page);
+    await selectAgendaDay(page);
 
     await expect(page.getByText("Resumo do dia")).toBeVisible();
     await expect(page.getByText("Dashboard simples")).toBeVisible();
@@ -694,6 +767,7 @@ test.describe("admin navigation", () => {
 
     await page.reload();
     await expect(page.getByText("Resumo do dia")).toBeVisible();
+    await selectAgendaDay(page);
 
     const reloadedAppointmentButton = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Notas Internas QA/,
@@ -838,11 +912,12 @@ test.describe("admin navigation", () => {
     expect(optimizedSize).toBeLessThanOrEqual(900 * 1024);
   });
 
-  test("splits simultaneous weekly appointments into horizontal lanes", async ({ page, request }) => {
+  test("shows simultaneous appointments in separate barber columns", async ({ page, request }) => {
     await createConcurrentManualAppointmentsForCurrentWeek(request);
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectAgendaDay(page);
 
     const firstAppointment = page.getByRole("button", { name: /Grupo Agenda 1/ }).first();
     const secondAppointment = page.getByRole("button", { name: /Grupo Agenda 2/ }).first();
@@ -869,7 +944,7 @@ test.describe("admin navigation", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("keeps dense weekly appointments at their real vertical time while splitting width", async ({ page, request }) => {
+  test("keeps dense daily appointments aligned across barber columns", async ({ page, request }) => {
     await loginAdminRequest(request);
 
     const createServiceResponse = await request.post("/api/services", {
@@ -914,6 +989,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectAgendaDay(page);
 
     const sameStartBoxes = await Promise.all(
       [1, 2, 3, 4].map(async (index) => {
@@ -936,7 +1012,7 @@ test.describe("admin navigation", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("keeps overlapping weekly agenda cards in separate visual lanes", async ({ page, request }) => {
+  test("keeps overlapping daily agenda cards in separate barber columns", async ({ page, request }) => {
     await loginAdminRequest(request);
 
     const [barbersResponse, servicesResponse] = await Promise.all([
@@ -1022,6 +1098,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectAgendaDay(page);
 
     const longAppointment = page.getByRole("button", { name: /Lane Agenda Longo QA/ }).first();
     const overlappingAppointment = page.getByRole("button", { name: /Lane Agenda Sobreposto QA/ }).first();
@@ -1055,7 +1132,7 @@ test.describe("admin navigation", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("positions weekly agenda cards proportionally to their real start time and duration", async ({ page, request }) => {
+  test("positions daily agenda cards proportionally to their real start time and duration", async ({ page, request }) => {
     await loginAdminRequest(request);
 
     const timestamp = Date.now();
@@ -1125,6 +1202,7 @@ test.describe("admin navigation", () => {
 
     await page.getByText("Todos os barbeiros").first().click();
     await page.getByRole("option", { name: barber.name }).click();
+    await selectAgendaDay(page);
 
     const halfHourAppointment = page.getByRole("button", { name: /Agenda Minutos Meio/ }).first();
     const fiftyMinuteAppointment = page.getByRole("button", { name: /Agenda Minutos Cinquenta/ }).first();
@@ -1147,7 +1225,7 @@ test.describe("admin navigation", () => {
       };
     });
 
-    const pixelsPerMinute = 1.12;
+    const pixelsPerMinute = 1.2;
     expect(halfHourGeometry.top).toBeCloseTo(30 * pixelsPerMinute, 1);
     expect(halfHourGeometry.height).toBeCloseTo(45 * pixelsPerMinute, 1);
     expect(fiftyMinuteGeometry.top).toBeCloseTo(90 * pixelsPerMinute, 1);
@@ -1155,7 +1233,7 @@ test.describe("admin navigation", () => {
   });
 });
 
-test.describe("weekly agenda interaction", () => {
+test.describe("agenda interaction", () => {
   test("locks the admin navigation tabs to horizontal panning", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await loginAdmin(page);
@@ -1168,11 +1246,11 @@ test.describe("weekly agenda interaction", () => {
     await expect(adminTabs).toHaveCSS("height", "48px");
   });
 
-  test("locks the desktop agenda scroller to horizontal panning", async ({ page }) => {
+  test("locks the desktop daily agenda scroller to horizontal panning", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
 
-    const horizontalAgenda = page.locator(".weekly-agenda-horizontal-scroll");
+    const horizontalAgenda = page.locator(".day-agenda-horizontal-scroll");
     await expect(horizontalAgenda).toBeVisible();
     await expect(horizontalAgenda).toHaveCSS("overflow-x", "auto");
     await expect(horizontalAgenda).toHaveCSS("overflow-y", "hidden");

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
 import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
-import { addDays, format, parseISO, startOfToday, startOfWeek, subDays } from "date-fns";
+import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
@@ -1123,9 +1123,6 @@ export default function Admin() {
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
   const businessDashboardRef = useRef<HTMLDivElement>(null);
-  const [weeklyStartDate, setWeeklyStartDate] = useState<Date>(() =>
-    startOfWeek(startOfToday(), { weekStartsOn: 1 }),
-  );
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
@@ -1218,30 +1215,23 @@ export default function Admin() {
       : appointmentList.filter((appointment) => appointment.status === selectedStatusFilter),
     [appointmentList, selectedStatusFilter],
   );
-  const weeklyAppointmentList = useMemo(() => {
+  const agendaAppointmentList = useMemo(() => {
     const list = Array.isArray(weeklyAppointments) ? (weeklyAppointments as AdminAppointment[]) : [];
-    const weekEnd = addDays(weeklyStartDate, 7);
-
-    return list
-      .filter((appointment) => {
-        const appointmentDate = parseISO(appointment.startTime);
-        return appointmentDate >= weeklyStartDate && appointmentDate < weekEnd;
-      })
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-  }, [weeklyAppointments, weeklyStartDate]);
-  const filteredWeeklyAppointmentList = useMemo(() => {
-    return weeklyAppointmentList.filter((appointment) => {
+    return [...list].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }, [weeklyAppointments]);
+  const filteredAgendaAppointmentList = useMemo(() => {
+    return agendaAppointmentList.filter((appointment) => {
       const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       const matchesStatus = selectedAgendaStatusFilter === "all"
         ? appointment.status === "booked"
         : appointment.status === selectedAgendaStatusFilter;
       return matchesBarber && matchesStatus;
     });
-  }, [selectedAgendaStatusFilter, selectedBarberFilter, user?.role, weeklyAppointmentList]);
+  }, [agendaAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter, user?.role]);
   const todaySummary = useMemo<TodaySummary>(() => {
     const now = new Date();
     const todayKey = format(startOfToday(), "yyyy-MM-dd");
-    const todayAppointments = weeklyAppointmentList.filter((appointment) => {
+    const todayAppointments = agendaAppointmentList.filter((appointment) => {
       const matchesDay = format(parseISO(appointment.startTime), "yyyy-MM-dd") === todayKey;
       const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       return matchesDay && matchesBarber && isOperationalAdminAppointment(appointment);
@@ -1262,12 +1252,12 @@ export default function Admin() {
         .reduce((total, appointment) => total + getAppointmentServicePriceCents(appointment, services), 0),
       nextAppointment,
     };
-  }, [selectedBarberFilter, services, user?.role, weeklyAppointmentList]);
+  }, [agendaAppointmentList, selectedBarberFilter, services, user?.role]);
   const selectedAppointmentDetails = useMemo(() => {
     if (!selectedAppointment) return null;
-    const candidates = [...weeklyAppointmentList, ...appointmentList];
+    const candidates = [...agendaAppointmentList, ...appointmentList];
     return candidates.find((appointment) => appointment.id === selectedAppointment.id) || selectedAppointment;
-  }, [appointmentList, selectedAppointment, weeklyAppointmentList]);
+  }, [agendaAppointmentList, appointmentList, selectedAppointment]);
   const updateStatus = useUpdateAppointmentStatus();
   const { toast } = useToast();
 
@@ -1608,25 +1598,28 @@ export default function Admin() {
     return selectedBarberFilter !== "all" ? selectedBarberFilter : undefined;
   };
 
-  const openAgendaExceptionDialog = () => {
-    openExceptionDialog(getAgendaSelectedBarberId());
+  const openAgendaExceptionDialog = (date?: Date) => {
+    openExceptionDialog(getAgendaSelectedBarberId(), date);
   };
 
   const openManualBookingDialog = (date?: Date, time?: string) => {
     openScheduleBlockDialog("manual", getAgendaSelectedBarberId(), date, time);
   };
 
-  const openManualBookingAtSlot = (date: Date, time: string) => {
-    openManualBookingDialog(date, time);
+  const openManualBookingAtSlot = (date: Date, time: string, barberId?: number) => {
+    openScheduleBlockDialog("manual", barberId ? String(barberId) : getAgendaSelectedBarberId(), date, time);
   };
 
-  const handleMoveAppointment = async (appointmentId: number, date: Date, time: string) => {
+  const handleMoveAppointment = async (appointmentId: number, date: Date, time: string, barberId?: number) => {
     const [hours, minutes] = time.split(":").map(Number);
     const startTime = new Date(date);
     startTime.setHours(hours, minutes, 0, 0);
 
     try {
-      await apiRequest("PATCH", `/api/appointments/${appointmentId}`, { startTime });
+      await apiRequest("PATCH", `/api/appointments/${appointmentId}`, {
+        startTime,
+        ...(barberId ? { barberId } : {}),
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
@@ -2673,8 +2666,7 @@ export default function Admin() {
             />
 
             <WeeklyAgenda
-              weekStartDate={weeklyStartDate}
-              appointments={filteredWeeklyAppointmentList}
+              appointments={filteredAgendaAppointmentList}
               barbers={weeklyAgendaBarberOptions}
               services={services}
               isLoading={isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices}
@@ -2683,9 +2675,6 @@ export default function Admin() {
               canFilterBarbers={user.role === "admin"}
               onBarberFilterChange={setSelectedBarberFilter}
               onStatusFilterChange={setSelectedAgendaStatusFilter}
-              onPreviousWeek={() => setWeeklyStartDate((current) => addDays(current, -7))}
-              onNextWeek={() => setWeeklyStartDate((current) => addDays(current, 7))}
-              onToday={() => setWeeklyStartDate(startOfWeek(startOfToday(), { weekStartsOn: 1 }))}
               onException={openAgendaExceptionDialog}
               onManualBooking={openManualBookingDialog}
               onCreateAtSlot={openManualBookingAtSlot}
