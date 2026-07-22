@@ -248,6 +248,7 @@ export function AppointmentDetailsDialog({
   onOpenHistory,
   onStatusChange,
   onBlockCustomer,
+  canManageSchedule,
 }: {
   appointment: AdminAppointment | null;
   open: boolean;
@@ -262,6 +263,7 @@ export function AppointmentDetailsDialog({
   onOpenHistory: (appointment: AdminAppointment) => void;
   onStatusChange: (appointmentId: number, status: AppointmentStatus) => void;
   onBlockCustomer: (appointment: AdminAppointment) => Promise<void>;
+  canManageSchedule: boolean;
 }) {
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
@@ -446,23 +448,27 @@ export function AppointmentDetailsDialog({
                 <Button size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">
                   <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
                 </Button>
-                <ConfirmAction
-                  title="Bloquear cliente?"
-                  description={`${appointment.customerName} (${contactLinks.displayPhone || appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
-                  confirmLabel="Bloquear"
-                  confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  onConfirm={() => onBlockCustomer(appointment)}
-                >
-                  <Button size="sm" variant="ghost" className="h-9 text-xs text-destructive hover:text-red-300">
-                    Bloquear
-                  </Button>
-                </ConfirmAction>
-                <EditAppointmentDialog
-                  appointment={appointment}
-                  barbers={barbers}
-                  services={services}
-                  toast={toast}
-                />
+                {canManageSchedule && (
+                  <>
+                    <ConfirmAction
+                      title="Bloquear cliente?"
+                      description={`${appointment.customerName} (${contactLinks.displayPhone || appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
+                      confirmLabel="Bloquear"
+                      confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onConfirm={() => onBlockCustomer(appointment)}
+                    >
+                      <Button size="sm" variant="ghost" className="h-9 text-xs text-destructive hover:text-red-300">
+                        Bloquear
+                      </Button>
+                    </ConfirmAction>
+                    <EditAppointmentDialog
+                      appointment={appointment}
+                      barbers={barbers}
+                      services={services}
+                      toast={toast}
+                    />
+                  </>
+                )}
               </>
             )}
           </div>

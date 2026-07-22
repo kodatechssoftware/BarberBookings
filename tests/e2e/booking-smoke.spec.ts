@@ -3264,4 +3264,329 @@ test.describe("booking rules", () => {
     expect(malformedAppointmentResponse.status(), await malformedAppointmentResponse.text()).toBe(400);
     expect(malformedStatusResponse.status(), await malformedStatusResponse.text()).toBe(400);
   });
+
+  test("keeps barber invitations single-use, replaces older links and accepts only one concurrent password", async ({ request, playwright }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const email = `invite-qa-${suffix}@example.com`;
+    const createBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Convite QA ${suffix}`,
+        specialty: "QA",
+        email,
+        color: "#8B5CF6",
+        isVisible: true,
+        serviceIds: [],
+      },
+    });
+    expect(createBarberResponse.status(), await createBarberResponse.text()).toBe(201);
+    const barber = await createBarberResponse.json();
+
+    try {
+      const [firstInviteResponse, secondInviteResponse] = await Promise.all([
+        request.post(`/api/barbers/${barber.id}/invite`, { data: {} }),
+        request.post(`/api/barbers/${barber.id}/invite`, { data: {} }),
+      ]);
+      expect(firstInviteResponse.status(), await firstInviteResponse.text()).toBe(201);
+      expect(secondInviteResponse.status(), await secondInviteResponse.text()).toBe(201);
+      const firstInvite = await firstInviteResponse.json();
+      const secondInvite = await secondInviteResponse.json();
+      const firstToken = new URL(firstInvite.inviteUrl).pathname.split("/").pop();
+      const secondToken = new URL(secondInvite.inviteUrl).pathname.split("/").pop();
+      expect(firstToken).toBeTruthy();
+      expect(secondToken).toBeTruthy();
+
+      const inviteStatusResponses = await Promise.all([
+        request.get(`/api/barber-invites/${firstToken}`),
+        request.get(`/api/barber-invites/${secondToken}`),
+      ]);
+      expect(inviteStatusResponses.map((response) => response.status()).sort()).toEqual([200, 404]);
+      const activeToken = inviteStatusResponses[0].status() === 200 ? firstToken : secondToken;
+
+      const malformedPasswordResponse = await request.post(`/api/barber-invites/${activeToken}/accept`, {
+        data: { password: { unexpected: true } },
+      });
+      expect(malformedPasswordResponse.status(), await malformedPasswordResponse.text()).toBe(400);
+
+      const baseURL = `http://127.0.0.1:${Number(process.env.E2E_PORT || 5015)}`;
+      const firstGuest = await playwright.request.newContext({ baseURL });
+      const secondGuest = await playwright.request.newContext({ baseURL });
+      const passwords = [`Password-A-${suffix}`, `Password-B-${suffix}`];
+      try {
+        const acceptanceResponses = await Promise.all([
+          firstGuest.post(`/api/barber-invites/${activeToken}/accept`, { data: { password: passwords[0] } }),
+          secondGuest.post(`/api/barber-invites/${activeToken}/accept`, { data: { password: passwords[1] } }),
+        ]);
+        expect(acceptanceResponses.map((response) => response.status()).sort()).toEqual([200, 409]);
+        const acceptedIndex = acceptanceResponses.findIndex((response) => response.status() === 200);
+
+        const usedInviteResponse = await request.get(`/api/barber-invites/${activeToken}`);
+        expect(usedInviteResponse.status(), await usedInviteResponse.text()).toBe(404);
+
+        const loginContext = await playwright.request.newContext({ baseURL });
+        try {
+          const loginResponse = await loginContext.post("/api/admin/login", {
+            data: { username: email.toUpperCase(), password: passwords[acceptedIndex] },
+          });
+          expect(loginResponse.status(), await loginResponse.text()).toBe(200);
+          expect((await loginResponse.json()).role).toBe("barber");
+        } finally {
+          await loginContext.dispose();
+        }
+      } finally {
+        await firstGuest.dispose();
+        await secondGuest.dispose();
+      }
+    } finally {
+      await request.delete(`/api/barbers/${barber.id}`);
+    }
+  });
+
+  test("validates administrator creation and rejects concurrent duplicate usernames", async ({ request, playwright }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const username = `admin-qa-${suffix}`;
+
+    const invalidResponses = await Promise.all([
+      request.post("/api/admin/create", { data: {} }),
+      request.post("/api/admin/create", {
+        data: { username: `${username}-short`, password: "123", email: "" },
+      }),
+      request.post("/api/admin/create", {
+        data: { username: `${username}-email`, password: "Password-123", email: "invalid-email" },
+      }),
+    ]);
+    for (const response of invalidResponses) {
+      expect(response.status(), await response.text()).toBe(400);
+    }
+
+    const responses = await Promise.all([
+      request.post("/api/admin/create", {
+        data: { username, password: "Password-Admin-1", email: `${username}@example.com` },
+      }),
+      request.post("/api/admin/create", {
+        data: { username: username.toUpperCase(), password: "Password-Admin-2", email: null },
+      }),
+    ]);
+    expect(responses.map((response) => response.status()).sort()).toEqual([201, 409]);
+    const acceptedIndex = responses.findIndex((response) => response.status() === 201);
+    const body = await responses[acceptedIndex].json();
+    expect(body).not.toHaveProperty("password");
+
+    const loginContext = await playwright.request.newContext({
+      baseURL: `http://127.0.0.1:${Number(process.env.E2E_PORT || 5015)}`,
+    });
+    try {
+      const loginResponse = await loginContext.post("/api/admin/login", {
+        data: {
+          username: username.toUpperCase(),
+          password: acceptedIndex === 0 ? "Password-Admin-1" : "Password-Admin-2",
+        },
+      });
+      expect(loginResponse.status(), await loginResponse.text()).toBe(200);
+      expect((await loginResponse.json()).role).toBe("admin");
+    } finally {
+      await loginContext.dispose();
+    }
+  });
+
+  test("does not expose other barber emails or hidden profiles to a barber account", async ({ request, playwright }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const createdIds: number[] = [];
+    const createBarber = async (name: string, email: string, isVisible: boolean) => {
+      const response = await request.post("/api/barbers", {
+        data: { name, specialty: "QA", email, color: "#14B8A6", isVisible, serviceIds: [] },
+      });
+      expect(response.status(), await response.text()).toBe(201);
+      const barber = await response.json();
+      createdIds.push(barber.id);
+      return barber;
+    };
+
+    const ownEmail = `barber-own-${suffix}@example.com`;
+    const otherEmail = `barber-other-${suffix}@example.com`;
+    const hiddenEmail = `barber-hidden-${suffix}@example.com`;
+    const ownBarber = await createBarber(`Barber Own ${suffix}`, ownEmail, true);
+    const otherBarber = await createBarber(`Barber Other ${suffix}`, otherEmail, true);
+    const hiddenBarber = await createBarber(`Barber Hidden ${suffix}`, hiddenEmail, false);
+
+    try {
+      const inviteResponse = await request.post(`/api/barbers/${ownBarber.id}/invite`, { data: {} });
+      expect(inviteResponse.status(), await inviteResponse.text()).toBe(201);
+      const invite = await inviteResponse.json();
+      const token = new URL(invite.inviteUrl).pathname.split("/").pop();
+      const barberContext = await playwright.request.newContext({
+        baseURL: `http://127.0.0.1:${Number(process.env.E2E_PORT || 5015)}`,
+      });
+      try {
+        const acceptResponse = await barberContext.post(`/api/barber-invites/${token}/accept`, {
+          data: { password: `Password-${suffix}` },
+        });
+        expect(acceptResponse.status(), await acceptResponse.text()).toBe(200);
+
+        const listResponse = await barberContext.get("/api/barbers?includeHidden=true");
+        expect(listResponse.ok()).toBe(true);
+        const listedBarbers = await listResponse.json();
+        const listedOwn = listedBarbers.find((barber: any) => barber.id === ownBarber.id);
+        const listedOther = listedBarbers.find((barber: any) => barber.id === otherBarber.id);
+        expect(listedOwn.email).toBe(ownEmail);
+        expect(listedOther).not.toHaveProperty("email");
+        expect(listedBarbers.some((barber: any) => barber.id === hiddenBarber.id)).toBe(false);
+
+        const otherResponse = await barberContext.get(`/api/barbers/${otherBarber.id}`);
+        expect(otherResponse.ok()).toBe(true);
+        expect(await otherResponse.json()).not.toHaveProperty("email");
+        const hiddenResponse = await barberContext.get(`/api/barbers/${hiddenBarber.id}`);
+        expect(hiddenResponse.status(), await hiddenResponse.text()).toBe(404);
+      } finally {
+        await barberContext.dispose();
+      }
+    } finally {
+      for (const id of createdIds.reverse()) {
+        await request.delete(`/api/barbers/${id}`);
+      }
+    }
+  });
+
+  test("hides administrator-only agenda actions from a barber session", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const email = `barber-ui-${suffix}@example.com`;
+    const password = `Password-${suffix}`;
+    const customerName = `Cliente Barber UI ${suffix}`;
+    const startTime = futureThursdayIso(4, 10, 0);
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+    expect(servicesResponse.ok()).toBe(true);
+    const [service] = await servicesResponse.json();
+    expect(service).toBeTruthy();
+    const createBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Barber UI ${suffix}`,
+        specialty: "QA",
+        email,
+        color: "#0EA5E9",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(createBarberResponse.status(), await createBarberResponse.text()).toBe(201);
+    const barber = await createBarberResponse.json();
+    let appointmentId: number | undefined;
+
+    try {
+      const appointmentResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime,
+          name: customerName,
+          phone: "+351912345679",
+          isManualBooking: true,
+        },
+      });
+      expect(appointmentResponse.status(), await appointmentResponse.text()).toBe(201);
+      const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+      expect(appointmentsResponse.ok()).toBe(true);
+      appointmentId = (await appointmentsResponse.json()).find(
+        (appointment: any) => appointment.customerName === customerName,
+      )?.id;
+      expect(appointmentId).toBeTruthy();
+
+      const inviteResponse = await request.post(`/api/barbers/${barber.id}/invite`, { data: {} });
+      expect(inviteResponse.status(), await inviteResponse.text()).toBe(201);
+      const invite = await inviteResponse.json();
+      const token = new URL(invite.inviteUrl).pathname.split("/").pop();
+      const acceptResponse = await page.request.post(`/api/barber-invites/${token}/accept`, {
+        data: { password },
+      });
+      expect(acceptResponse.status(), await acceptResponse.text()).toBe(200);
+
+      await page.goto("/admin");
+      await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+      await expect(page.getByText(barber.name, { exact: true }).first()).toBeVisible();
+      await expect(page.getByRole("button", { name: "Ausência" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Marcação manual" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Criar marcação para/ })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Criar" })).toHaveCount(0);
+      await expect(page.getByRole("tab", { name: "Equipa" })).toHaveCount(0);
+      await expect(page.getByRole("tab", { name: "Serviços" })).toHaveCount(0);
+
+      await page.getByRole("tab", { name: "Marcações" }).click();
+      await expect(page.getByRole("button", { name: "Manual", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Próximas" }).click();
+      await page.getByRole("button", { name: new RegExp(`Abrir detalhes da marcação de ${customerName}`) }).click();
+      const detailsDialog = page.getByRole("dialog");
+      await expect(detailsDialog.getByRole("button", { name: "Feita" })).toBeVisible();
+      await expect(detailsDialog.getByRole("button", { name: "Editar", exact: true })).toHaveCount(0);
+      await expect(detailsDialog.getByRole("button", { name: "Bloquear", exact: true })).toHaveCount(0);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      if (appointmentId) {
+        await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
+      }
+      await request.delete(`/api/barbers/${barber.id}`);
+    }
+  });
+
+  test("rejects invalid resource identifiers without taking down the API", async ({ request }) => {
+    const invalidPublicResponses = await Promise.all([
+      request.get("/api/barbers/not-a-number"),
+      request.get("/api/barbers/not-a-number/availability"),
+      request.get(`/api/appointments/public?barberId=not-a-number&date=${dateKeyFromIso(futureThursdayIso())}`),
+    ]);
+    for (const response of invalidPublicResponses) {
+      expect(response.status(), await response.text()).toBe(400);
+    }
+
+    await loginAdminRequest(request);
+    const invalidAdminResponses = await Promise.all([
+      request.patch("/api/barbers/not-a-number", { data: { name: "Nunca" } }),
+      request.patch("/api/barbers/not-a-number/reset-password", { data: {} }),
+      request.patch("/api/services/not-a-number", { data: { name: "Nunca" } }),
+      request.patch("/api/appointments/not-a-number/status", { data: { status: "completed" } }),
+      request.get("/api/admin/dashboard?barberId=not-a-number"),
+    ]);
+    for (const response of invalidAdminResponses) {
+      expect(response.status(), await response.text()).toBe(400);
+    }
+
+    const healthyResponse = await request.get("/api/barbers");
+    expect(healthyResponse.status(), await healthyResponse.text()).toBe(200);
+  });
+
+  test("rejects overlapping shop and barber working periods without losing the saved schedule", async ({ request }) => {
+    await loginAdminRequest(request);
+    const shopResponse = await request.get("/api/shop/availability");
+    const barbersResponse = await request.get("/api/barbers?includeHidden=true");
+    expect(shopResponse.ok()).toBe(true);
+    expect(barbersResponse.ok()).toBe(true);
+    const originalShopRows = await shopResponse.json();
+    const [barber] = await barbersResponse.json();
+    expect(barber).toBeTruthy();
+
+    const barberResponse = await request.get(`/api/barbers/${barber.id}/availability`);
+    expect(barberResponse.ok()).toBe(true);
+    const originalBarberRows = await barberResponse.json();
+
+    const overlappingPeriods = [
+      { dayOfWeek: 1, startTime: "09:00", endTime: "13:00" },
+      { dayOfWeek: 1, startTime: "12:30", endTime: "16:00" },
+    ];
+    const shopPatchResponse = await request.patch("/api/shop/availability", {
+      data: overlappingPeriods.map((row) => ({ ...row, isOpen: true })),
+    });
+    const barberPatchResponse = await request.patch(`/api/barbers/${barber.id}/availability`, {
+      data: overlappingPeriods.map((row) => ({ ...row, isWorking: true })),
+    });
+    expect(shopPatchResponse.status(), await shopPatchResponse.text()).toBe(400);
+    expect(barberPatchResponse.status(), await barberPatchResponse.text()).toBe(400);
+
+    const [shopAfterResponse, barberAfterResponse] = await Promise.all([
+      request.get("/api/shop/availability"),
+      request.get(`/api/barbers/${barber.id}/availability`),
+    ]);
+    expect(await shopAfterResponse.json()).toEqual(originalShopRows);
+    expect(await barberAfterResponse.json()).toEqual(originalBarberRows);
+  });
 });

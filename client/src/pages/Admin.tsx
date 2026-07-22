@@ -2528,6 +2528,7 @@ export default function Admin() {
           onOpenHistory={openCustomerHistory}
           onStatusChange={handleStatusChange}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}
+          canManageSchedule={user.role === "admin"}
         />
 
         <Dialog
@@ -2680,6 +2681,7 @@ export default function Admin() {
               selectedBarberFilter={selectedBarberFilter}
               selectedStatusFilter={selectedAgendaStatusFilter}
               canFilterBarbers={user.role === "admin"}
+              canManageSchedule={user.role === "admin"}
               onBarberFilterChange={setSelectedBarberFilter}
               onStatusFilterChange={setSelectedAgendaStatusFilter}
               onException={openAgendaExceptionDialog}

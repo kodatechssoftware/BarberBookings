@@ -156,6 +156,19 @@ const loginInputSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
+const adminCreateInputSchema = z.object({
+  username: z.string().trim().min(3, "O utilizador deve ter pelo menos 3 caracteres.").max(80),
+  password: z.string().min(8, "A palavra-passe deve ter pelo menos 8 caracteres.").max(200),
+  email: z.string().trim().max(120).refine(
+    (value) => !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+    "Indique um email válido.",
+  ).optional().nullable(),
+});
+
+const barberInvitePasswordSchema = z.object({
+  password: z.string().min(8, "A palavra-passe deve ter pelo menos 8 caracteres.").max(200),
+});
+
 let blacklistMutationQueue: Promise<void> = Promise.resolve();
 
 async function withBlacklistMutationLock<T>(callback: () => Promise<T>): Promise<T> {
@@ -396,6 +409,31 @@ function parseTimeToMinutes(value: string) {
   if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
 
   return hours * 60 + minutes;
+}
+
+function parsePositiveInteger(value: unknown) {
+  const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function hasOverlappingAvailabilityPeriods(
+  rows: Array<{ dayOfWeek: number; startTime: string; endTime: string }>,
+) {
+  const periodsByDay = new Map<number, Array<{ start: number; end: number }>>();
+
+  for (const row of rows) {
+    const start = parseTimeToMinutes(row.startTime);
+    const end = parseTimeToMinutes(row.endTime);
+    if (start === null || end === null) continue;
+    const periods = periodsByDay.get(row.dayOfWeek) || [];
+    periods.push({ start, end });
+    periodsByDay.set(row.dayOfWeek, periods);
+  }
+
+  return Array.from(periodsByDay.values()).some((periods) => {
+    const ordered = [...periods].sort((first, second) => first.start - second.start || first.end - second.end);
+    return ordered.some((period, index) => index > 0 && period.start < ordered[index - 1].end);
+  });
 }
 
 function normalizePhone(value?: string | null) {
@@ -1086,9 +1124,10 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Indique um utilizador e uma palavra-passe válidos." });
       }
       const { username, password } = parsedLogin.data;
+      const normalizedUsername = username.toLowerCase();
       
       // Try admin login first
-      const admin = await storage.getAdminByUsername(username);
+      const admin = await storage.getAdminByUsername(normalizedUsername);
       if (admin && (await bcrypt.compare(password, admin.password))) {
         const appSession = getAppSession(req);
         appSession.adminId = admin.id;
@@ -1104,7 +1143,7 @@ export async function registerRoutes(
       }
 
       // Try barber login if admin fails
-        const barber = await findBarberByEmail(username);
+        const barber = await findBarberByEmail(normalizedUsername);
       if (barber) {
         if (!barber.password) {
           return res.status(403).json({
@@ -1231,7 +1270,8 @@ export async function registerRoutes(
 
   app.patch("/api/barbers/:id", requireAdmin, async (req, res) => {
     try {
-      const barberId = Number(req.params.id);
+      const barberId = parsePositiveInteger(req.params.id);
+      if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
       const input = barberUpdateInputSchema.parse(req.body);
       const { serviceIds, ...barberPatch } = input;
       const existing = await storage.getBarber(barberId);
@@ -1290,7 +1330,8 @@ export async function registerRoutes(
 
   app.patch("/api/barbers/:id/services", requireAdmin, async (req, res) => {
     try {
-      const barberId = Number(req.params.id);
+      const barberId = parsePositiveInteger(req.params.id);
+      if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
       const barber = await storage.getBarber(barberId);
       if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado" });
 
@@ -1323,8 +1364,8 @@ export async function registerRoutes(
 
   app.get("/api/barbers/:id/future-appointments", requireAdmin, async (req, res) => {
     try {
-      const barberId = Number(req.params.id);
-      if (!Number.isFinite(barberId) || barberId <= 0) {
+      const barberId = parsePositiveInteger(req.params.id);
+      if (barberId === null) {
         return res.status(400).json({ message: "Barbeiro inválido." });
       }
 
@@ -1348,8 +1389,8 @@ export async function registerRoutes(
 
   app.delete("/api/barbers/:id", requireAdmin, async (req, res) => {
     try {
-      const barberId = Number(req.params.id);
-      if (!Number.isInteger(barberId) || barberId <= 0) {
+      const barberId = parsePositiveInteger(req.params.id);
+      if (barberId === null) {
         return res.status(400).json({ message: "Barbeiro inválido." });
       }
       const barber = await storage.getBarber(barberId);
@@ -1384,7 +1425,9 @@ export async function registerRoutes(
 
   app.patch("/api/barbers/:id/reset-password", requireAdmin, async (req, res) => {
     try {
-      const updated = await storage.updateBarber(Number(req.params.id), { password: null });
+      const barberId = parsePositiveInteger(req.params.id);
+      if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
+      const updated = await storage.updateBarber(barberId, { password: null });
       if (!updated) return res.status(404).json({ message: "Barbeiro não encontrado" });
       await recordAuditLog(req, {
         action: "barber.password_reset",
@@ -1400,7 +1443,8 @@ export async function registerRoutes(
 
   app.post("/api/barbers/:id/invite", requireAdmin, async (req, res) => {
     try {
-      const barberId = Number(req.params.id);
+      const barberId = parsePositiveInteger(req.params.id);
+      if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
       const barber = await storage.getBarber(barberId);
       if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado" });
       if (!barber.email) {
@@ -1411,8 +1455,7 @@ export async function registerRoutes(
       expiresAt.setDate(expiresAt.getDate() + BARBER_INVITE_EXPIRY_DAYS);
       const token = randomUUID();
 
-      await storage.updateBarber(barberId, { password: null });
-      const invite = await storage.createBarberInvite({ barberId, token, expiresAt, usedAt: null });
+      const invite = await storage.createBarberInviteReplacingActive({ barberId, token, expiresAt, usedAt: null });
       const inviteUrl = buildPublicUrl(`/barber-invite/${invite.token}`);
       await recordAuditLog(req, {
         action: "barber.invite_created",
@@ -1456,21 +1499,28 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Convite inválido ou expirado." });
       }
 
-      const password = String(req.body?.password || "");
-      if (password.length < 8) {
-        return res.status(400).json({ message: "A palavra-passe deve ter pelo menos 8 caracteres." });
+      const parsedPassword = barberInvitePasswordSchema.safeParse(req.body);
+      if (!parsedPassword.success) {
+        return res.status(400).json({
+          message: parsedPassword.error.errors[0]?.message || "Palavra-passe inválida.",
+        });
       }
+      const { password } = parsedPassword.data;
 
       const barber = await storage.getBarber(invite.barberId);
       if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado." });
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      await storage.updateBarber(barber.id, { password: hashedPassword });
-      await storage.markBarberInviteUsed(invite.id);
+      const updatedBarber = await storage.acceptBarberInvite(invite.id, barber.id, hashedPassword);
+      if (!updatedBarber) {
+        return res.status(409).json({ message: "Este convite já foi utilizado ou substituído." });
+      }
 
       const appSession = getAppSession(req);
       appSession.barberId = barber.id;
+      delete appSession.adminId;
       appSession.role = "barber";
+      await saveSession(req);
 
       res.json({ message: "Palavra-passe definida com sucesso.", role: "barber" });
     } catch (error) {
@@ -1508,7 +1558,9 @@ export async function registerRoutes(
   app.patch("/api/services/:id", requireAdmin, async (req, res) => {
     try {
       const input = insertServiceSchema.partial().parse(req.body);
-      const service = await storage.updateService(Number(req.params.id), input);
+      const serviceId = parsePositiveInteger(req.params.id);
+      if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
+      const service = await storage.updateService(serviceId, input);
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
       await recordAuditLog(req, {
         action: "service.updated",
@@ -1531,8 +1583,8 @@ export async function registerRoutes(
 
   app.delete("/api/services/:id", requireAdmin, async (req, res) => {
     try {
-      const serviceId = Number(req.params.id);
-      if (!Number.isInteger(serviceId) || serviceId <= 0) {
+      const serviceId = parsePositiveInteger(req.params.id);
+      if (serviceId === null) {
         return res.status(400).json({ message: "Serviço inválido." });
       }
       const service = await storage.getService(serviceId);
@@ -1558,11 +1610,26 @@ export async function registerRoutes(
   // === ADMIN MGMT ===
   app.post("/api/admin/create", requireAdmin, async (req, res) => {
     try {
-      const { username, password, email } = req.body;
+      const input = adminCreateInputSchema.parse(req.body);
+      const username = input.username.toLowerCase();
+      const email = normalizeEmail(input.email) || null;
+      if (await storage.getAdminByUsername(username)) {
+        return res.status(409).json({ message: "Já existe um administrador com este utilizador." });
+      }
+      const { password } = input;
       const hashedPassword = await bcrypt.hash(password, 10);
       const newAdmin = await storage.createAdmin({ username, password: hashedPassword, email });
       res.status(201).json({ id: newAdmin.id, username: newAdmin.username });
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message || "Dados de administrador inválidos.",
+          field: error.errors[0]?.path.join("."),
+        });
+      }
+      if (getErrorCode(error) === "23505") {
+        return res.status(409).json({ message: "Já existe um administrador com este utilizador ou email." });
+      }
       res.status(500).json({ message: "Erro ao criar administrador" });
     }
   });
@@ -1571,12 +1638,17 @@ export async function registerRoutes(
   app.get(api.barbers.list.path, async (req, res) => {
     const barbers = await getBarbersWithServiceIds();
     const appSession = getAppSession(req);
-    const includeHidden = req.query.includeHidden === "true" &&
-      Boolean(appSession.adminId || appSession.barberId);
+    const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
+    const ownBarberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
+    const includeHidden = req.query.includeHidden === "true" && isAdminSession;
+    const visibleBarbers = includeHidden
+      ? barbers
+      : barbers.filter((barber) => barber.isVisible || barber.id === ownBarberId);
 
     res.json(
-      (includeHidden ? barbers : barbers.filter((barber) => barber.isVisible))
-        .map((barber) => sanitizeBarberForResponse(barber, includeHidden)),
+      visibleBarbers.map((barber) =>
+        sanitizeBarberForResponse(barber, isAdminSession || barber.id === ownBarberId),
+      ),
     );
   });
 
@@ -1615,7 +1687,12 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Horário inválido." });
     }
 
-    const availability = await storage.replaceShopAvailability(rows.filter((row) => row !== null));
+    const validRows = rows.filter((row) => row !== null);
+    if (hasOverlappingAvailabilityPeriods(validRows)) {
+      return res.status(400).json({ message: "Existem períodos de horário sobrepostos no mesmo dia." });
+    }
+
+    const availability = await storage.replaceShopAvailability(validRows);
     await recordAuditLog(req, {
       action: "shop_availability.updated",
       entityType: "shop_availability",
@@ -1631,7 +1708,9 @@ export async function registerRoutes(
   });
 
   app.get("/api/barbers/:id/availability", async (req, res) => {
-    const barber = await storage.getBarber(Number(req.params.id));
+    const barberId = parsePositiveInteger(req.params.id);
+    if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
+    const barber = await storage.getBarber(barberId);
     if (!barber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
@@ -1648,7 +1727,8 @@ export async function registerRoutes(
       isWorking: z.boolean().optional(),
     }));
 
-    const barberId = Number(req.params.id);
+    const barberId = parsePositiveInteger(req.params.id);
+    if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
     const barber = await storage.getBarber(barberId);
     if (!barber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
@@ -1676,7 +1756,12 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Horário inválido." });
     }
 
-    const availability = await storage.replaceBarberAvailability(barberId, rows.filter((row) => row !== null));
+    const validRows = rows.filter((row) => row !== null);
+    if (hasOverlappingAvailabilityPeriods(validRows)) {
+      return res.status(400).json({ message: "Existem períodos de horário sobrepostos no mesmo dia." });
+    }
+
+    const availability = await storage.replaceBarberAvailability(barberId, validRows);
     await recordAuditLog(req, {
       action: "barber_availability.updated",
       entityType: "barber",
@@ -1688,13 +1773,17 @@ export async function registerRoutes(
   });
 
   app.get(api.barbers.get.path, async (req, res) => {
-    const barber = await storage.getBarber(Number(req.params.id));
+    const barberId = parsePositiveInteger(req.params.id);
+    if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
+    const barber = await storage.getBarber(barberId);
     if (!barber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
     const appSession = getAppSession(req);
-    const includePrivateFields = Boolean(appSession.adminId || appSession.barberId);
-    if (!barber.isVisible && !includePrivateFields) {
+    const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
+    const isOwnBarber = appSession.role === "barber" && Number(appSession.barberId) === barber.id;
+    const includePrivateFields = isAdminSession || isOwnBarber;
+    if (!barber.isVisible && !isAdminSession && !isOwnBarber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
 
@@ -2127,7 +2216,8 @@ export async function registerRoutes(
       const hasBarberPatch = Object.prototype.hasOwnProperty.call(req.body, "barberId");
       const hasStatusPatch = Object.prototype.hasOwnProperty.call(req.body, "status");
       const hasServicePatch = Object.prototype.hasOwnProperty.call(req.body, "serviceId");
-      const appointmentId = Number(req.params.id);
+      const appointmentId = parsePositiveInteger(req.params.id);
+      if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
       const currentApp = await storage.getAppointment(appointmentId);
 
       if (!currentApp) return res.status(404).json({ message: "Marcação não encontrada" });
@@ -2257,7 +2347,8 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Estado de marcação inválido." });
       }
 
-      const appointmentId = Number(req.params.id);
+      const appointmentId = parsePositiveInteger(req.params.id);
+      if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
       const currentApp = await storage.getAppointment(appointmentId);
       if (!currentApp) return res.status(404).json({ message: "Marcação não encontrada" });
 
@@ -2464,12 +2555,16 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Intervalo de datas inválido." });
     }
 
-    const requestedBarberId = req.query.barberId && req.query.barberId !== "all"
-      ? Number(req.query.barberId)
+    const hasRequestedBarber = Boolean(req.query.barberId && req.query.barberId !== "all");
+    const requestedBarberId = hasRequestedBarber
+      ? parsePositiveInteger(req.query.barberId)
       : undefined;
+    if (hasRequestedBarber && requestedBarberId === null) {
+      return res.status(400).json({ message: "Barbeiro inválido." });
+    }
     const barberId = appSession.role === "barber"
       ? Number(appSession.barberId)
-      : requestedBarberId;
+      : requestedBarberId ?? undefined;
 
     const [allAppointments, allBarbers, allServices] = await Promise.all([
       storage.getAppointments(barberId),
@@ -2900,8 +2995,9 @@ export async function registerRoutes(
       return res.status(400).json({ message: "A data de início não pode ser posterior à data de fim" });
     }
 
-    const selectedBarberId = barberId && barberId !== "all" ? Number(barberId) : undefined;
-    if (selectedBarberId !== undefined && !Number.isInteger(selectedBarberId)) {
+    const hasSelectedBarber = Boolean(barberId && barberId !== "all");
+    const selectedBarberId = hasSelectedBarber ? parsePositiveInteger(barberId) : undefined;
+    if (hasSelectedBarber && selectedBarberId === null) {
       return res.status(400).json({ message: "Barbeiro inválido" });
     }
 
@@ -2909,7 +3005,7 @@ export async function registerRoutes(
       const [allBarbers, allServices, allAppointments] = await Promise.all([
         storage.getBarbers(),
         storage.getServices(),
-        storage.getAppointments(selectedBarberId),
+        storage.getAppointments(selectedBarberId ?? undefined),
       ]);
 
       const barbersById = new Map(allBarbers.map((barber) => [barber.id, barber]));

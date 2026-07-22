@@ -278,6 +278,7 @@ export function WeeklyAgenda({
   selectedBarberFilter,
   selectedStatusFilter,
   canFilterBarbers,
+  canManageSchedule,
   onBarberFilterChange,
   onStatusFilterChange,
   onException,
@@ -294,6 +295,7 @@ export function WeeklyAgenda({
   selectedBarberFilter: string;
   selectedStatusFilter: AppointmentStatusFilter;
   canFilterBarbers: boolean;
+  canManageSchedule: boolean;
   onBarberFilterChange: (value: string) => void;
   onStatusFilterChange: (value: AppointmentStatusFilter) => void;
   onException: (date?: Date) => void;
@@ -366,12 +368,13 @@ export function WeeklyAgenda({
   };
 
   const handleDragStart = (event: DragEvent, appointment: WeeklyAgendaAppointment) => {
-    if (appointment.status !== "booked") return;
+    if (!canManageSchedule || appointment.status !== "booked") return;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", String(appointment.id));
   };
 
   const handleSlotDrop = (event: DragEvent, day: Date, time: string, barberId?: number) => {
+    if (!canManageSchedule) return;
     event.preventDefault();
     const appointmentId = Number(event.dataTransfer.getData("text/plain"));
     if (Number.isFinite(appointmentId) && appointmentId > 0) {
@@ -405,7 +408,7 @@ export function WeeklyAgenda({
       <button
         key={appointment.id}
         type="button"
-        draggable={appointment.status === "booked"}
+        draggable={canManageSchedule && appointment.status === "booked"}
         aria-label={appointmentLabel}
         title={appointmentLabel}
         onDragStart={(event) => handleDragStart(event, appointment)}
@@ -481,15 +484,17 @@ export function WeeklyAgenda({
                       <p className="text-xs text-gray-500">{formatAppointmentCount(barberAppointments.length)}</p>
                     </div>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1 border-white/10 px-2 text-xs"
-                    onClick={() => onCreateAtSlot(agendaDate, "09:00", barber.id)}
-                  >
-                    <Plus className="h-3.5 w-3.5" /> Criar
-                  </Button>
+                  {canManageSchedule && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1 border-white/10 px-2 text-xs"
+                      onClick={() => onCreateAtSlot(agendaDate, "09:00", barber.id)}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Criar
+                    </Button>
+                  )}
                 </div>
                 <div className="grid gap-2 p-3">
                   {barberAppointments.length > 0 ? barberAppointments.map((appointment) => {
@@ -584,19 +589,28 @@ export function WeeklyAgenda({
                       const top = getAgendaTopPx(slotMinutes, dayWindow.startMinutes);
                       const height = getAgendaHeightPx(slotMinutes, slotMinutes + agendaSlotMinutes);
                       return (
-                        <button
-                          key={`${barber.id}-${time}`}
-                          type="button"
-                          aria-label={`Criar marcação para ${barber.name} em ${format(agendaDate, "dd/MM/yyyy")} às ${time}`}
-                          className="absolute inset-x-0 z-0 border-t border-white/[0.06] text-left transition hover:bg-primary/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                          style={{ top, height }}
-                          onClick={() => onCreateAtSlot(agendaDate, time, barber.id)}
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
-                          }}
-                          onDrop={(event) => handleSlotDrop(event, agendaDate, time, barber.id)}
-                        />
+                        canManageSchedule ? (
+                          <button
+                            key={`${barber.id}-${time}`}
+                            type="button"
+                            aria-label={`Criar marcação para ${barber.name} em ${format(agendaDate, "dd/MM/yyyy")} às ${time}`}
+                            className="absolute inset-x-0 z-0 border-t border-white/[0.06] text-left transition hover:bg-primary/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                            style={{ top, height }}
+                            onClick={() => onCreateAtSlot(agendaDate, time, barber.id)}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                            }}
+                            onDrop={(event) => handleSlotDrop(event, agendaDate, time, barber.id)}
+                          />
+                        ) : (
+                          <div
+                            key={`${barber.id}-${time}`}
+                            aria-hidden="true"
+                            className="pointer-events-none absolute inset-x-0 z-0 border-t border-white/[0.06]"
+                            style={{ top, height }}
+                          />
+                        )
                       );
                     })}
                     {barberAppointments.map((appointment) => renderAppointmentCard(
@@ -725,14 +739,16 @@ export function WeeklyAgenda({
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:flex">
-              <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={() => onException(agendaDate)}>
-                <AlertTriangle className="h-4 w-4" /> Ausência
-              </Button>
-              <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking(agendaDate)}>
-                <Plus className="h-4 w-4" /> Marcação manual
-              </Button>
-            </div>
+            {canManageSchedule && (
+              <div className="grid grid-cols-2 gap-2 sm:flex">
+                <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={() => onException(agendaDate)}>
+                  <AlertTriangle className="h-4 w-4" /> Ausência
+                </Button>
+                <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking(agendaDate)}>
+                  <Plus className="h-4 w-4" /> Marcação manual
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 

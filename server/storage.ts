@@ -36,7 +36,7 @@ import {
   type CreateCustomerNoteRequest,
   type CreateAuditLogRequest
 } from "@shared/schema";
-import { eq, and, gte, lte, sql, desc, type SQL } from "drizzle-orm";
+import { eq, and, gte, gt, lte, isNull, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
 
@@ -150,8 +150,11 @@ export interface IStorage {
 
   // Barber invites
   createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite>;
+  createBarberInviteReplacingActive(invite: CreateBarberInviteRequest): Promise<BarberInvite>;
   getBarberInviteByToken(token: string): Promise<BarberInvite | undefined>;
   markBarberInviteUsed(id: number): Promise<BarberInvite | undefined>;
+  invalidateBarberInvites(barberId: number): Promise<void>;
+  acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined>;
 
   // Customer notes
   getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
@@ -519,13 +522,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async replaceShopAvailability(rows: CreateShopAvailabilityRequest[]): Promise<ShopAvailability[]> {
-    await db.delete(shopAvailability);
+    return await db.transaction(async (tx) => {
+      await tx.delete(shopAvailability);
 
-    if (rows.length === 0) {
-      return [];
-    }
+      if (rows.length === 0) {
+        return [];
+      }
 
-    return await db.insert(shopAvailability).values(rows).returning();
+      return await tx.insert(shopAvailability).values(rows).returning();
+    });
   }
 
   async getBarberAvailability(barberId: number): Promise<BarberAvailability[]> {
@@ -547,16 +552,18 @@ export class DatabaseStorage implements IStorage {
     barberId: number,
     rows: Omit<CreateBarberAvailabilityRequest, "barberId">[],
   ): Promise<BarberAvailability[]> {
-    await db.delete(barberAvailability).where(eq(barberAvailability.barberId, barberId));
+    return await db.transaction(async (tx) => {
+      await tx.delete(barberAvailability).where(eq(barberAvailability.barberId, barberId));
 
-    if (rows.length === 0) {
-      return [];
-    }
+      if (rows.length === 0) {
+        return [];
+      }
 
-    return await db
-      .insert(barberAvailability)
-      .values(rows.map((row) => ({ ...row, barberId })))
-      .returning();
+      return await tx
+        .insert(barberAvailability)
+        .values(rows.map((row) => ({ ...row, barberId })))
+        .returning();
+    });
   }
 
   async getAllBarberServices(): Promise<BarberService[]> {
@@ -577,22 +584,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   async replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]> {
-    await db.delete(barberServices).where(eq(barberServices.barberId, barberId));
+    return await db.transaction(async (tx) => {
+      await tx.delete(barberServices).where(eq(barberServices.barberId, barberId));
 
-    const uniqueServiceIds = Array.from(new Set(serviceIds));
-    if (uniqueServiceIds.length === 0) {
-      return [];
-    }
+      const uniqueServiceIds = Array.from(new Set(serviceIds));
+      if (uniqueServiceIds.length === 0) {
+        return [];
+      }
 
-    return await db
-      .insert(barberServices)
-      .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId } satisfies CreateBarberServiceRequest)))
-      .returning();
+      return await tx
+        .insert(barberServices)
+        .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId } satisfies CreateBarberServiceRequest)))
+        .returning();
+    });
   }
 
   async createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
     const [newInvite] = await db.insert(barberInvites).values(invite).returning();
     return newInvite;
+  }
+
+  async createBarberInviteReplacingActive(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${invite.barberId}, -1)`);
+      await tx
+        .update(barberInvites)
+        .set({ usedAt: new Date() })
+        .where(and(eq(barberInvites.barberId, invite.barberId), isNull(barberInvites.usedAt)));
+      const [newInvite] = await tx.insert(barberInvites).values(invite).returning();
+      return newInvite;
+    });
   }
 
   async getBarberInviteByToken(token: string): Promise<BarberInvite | undefined> {
@@ -607,6 +628,40 @@ export class DatabaseStorage implements IStorage {
       .where(eq(barberInvites.id, id))
       .returning();
     return updated;
+  }
+
+  async invalidateBarberInvites(barberId: number): Promise<void> {
+    await db
+      .update(barberInvites)
+      .set({ usedAt: new Date() })
+      .where(and(eq(barberInvites.barberId, barberId), isNull(barberInvites.usedAt)));
+  }
+
+  async acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [claimedInvite] = await tx
+        .update(barberInvites)
+        .set({ usedAt: now })
+        .where(and(
+          eq(barberInvites.id, inviteId),
+          eq(barberInvites.barberId, barberId),
+          isNull(barberInvites.usedAt),
+          gt(barberInvites.expiresAt, now),
+        ))
+        .returning();
+      if (!claimedInvite) return undefined;
+
+      const [updatedBarber] = await tx
+        .update(barbers)
+        .set({ password })
+        .where(eq(barbers.id, barberId))
+        .returning();
+      if (!updatedBarber) {
+        throw new Error("Barber not found while accepting invite");
+      }
+      return updatedBarber;
+    });
   }
 
   async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
@@ -979,6 +1034,11 @@ export class MemoryStorage implements IStorage {
   }
 
   async createAdmin(admin: CreateAdminRequest): Promise<Admin> {
+    if (this.admins.some((existing) => existing.username.toLowerCase() === admin.username.toLowerCase())) {
+      const error = new Error("Duplicate admin username") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
     const newAdmin: Admin = {
       id: this.nextIds.admin++,
       username: admin.username,
@@ -1103,6 +1163,11 @@ export class MemoryStorage implements IStorage {
     return newInvite;
   }
 
+  async createBarberInviteReplacingActive(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
+    await this.invalidateBarberInvites(invite.barberId);
+    return this.createBarberInvite(invite);
+  }
+
   async getBarberInviteByToken(token: string): Promise<BarberInvite | undefined> {
     return this.barberInvites.find((invite) => invite.token === token);
   }
@@ -1112,6 +1177,28 @@ export class MemoryStorage implements IStorage {
     if (index === -1) return undefined;
     this.barberInvites[index] = { ...this.barberInvites[index], usedAt: new Date() };
     return this.barberInvites[index];
+  }
+
+  async invalidateBarberInvites(barberId: number): Promise<void> {
+    const now = new Date();
+    this.barberInvites = this.barberInvites.map((invite) =>
+      invite.barberId === barberId && !invite.usedAt ? { ...invite, usedAt: now } : invite,
+    );
+  }
+
+  async acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined> {
+    const inviteIndex = this.barberInvites.findIndex((invite) =>
+      invite.id === inviteId &&
+      invite.barberId === barberId &&
+      !invite.usedAt &&
+      invite.expiresAt > new Date(),
+    );
+    const barberIndex = this.barbers.findIndex((barber) => barber.id === barberId);
+    if (inviteIndex === -1 || barberIndex === -1) return undefined;
+
+    this.barberInvites[inviteIndex] = { ...this.barberInvites[inviteIndex], usedAt: new Date() };
+    this.barbers[barberIndex] = { ...this.barbers[barberIndex], password };
+    return this.barbers[barberIndex];
   }
 
   async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
