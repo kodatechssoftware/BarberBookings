@@ -77,7 +77,7 @@ const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; la
 const agendaStartMinutes = 9 * 60;
 const agendaEndMinutes = 20 * 60;
 const agendaSlotMinutes = 30;
-const agendaPixelsPerMinute = 1.2;
+const agendaPixelsPerMinute = 1.5;
 const agendaBottomPadding = 18;
 const defaultBarberColor = "#D4AF37";
 
@@ -395,9 +395,11 @@ export function WeeklyAgenda({
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
     const color = normalizeBarberColor(barber?.color);
-    const isCompact = height < 54 || laneWidth < 55;
-    const isTiny = height < 34 || laneWidth < 42;
-    const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
+    const serviceLabel = getServiceBadge(service);
+    const isSingleLine = height < 40;
+    const isCompact = height < 84 || laneWidth < 55;
+    const isNarrow = laneWidth < 42;
+    const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${serviceLabel}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
     return (
       <button
@@ -409,8 +411,8 @@ export function WeeklyAgenda({
         onDragStart={(event) => handleDragStart(event, appointment)}
         onClick={() => onSelectAppointment(appointment)}
         className={cn(
-          "absolute z-10 overflow-hidden rounded-lg border text-left shadow-lg transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-          isCompact ? "px-2 py-1" : "px-3 py-2",
+          "absolute z-10 flex min-h-0 overflow-hidden rounded-lg border text-left leading-tight shadow-lg transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+          isSingleLine ? "items-center px-2 py-0.5" : isCompact ? "flex-col px-2 py-1" : "flex-col px-3 py-2",
           appointment.status !== "booked" && "opacity-65",
         )}
         style={{
@@ -423,21 +425,30 @@ export function WeeklyAgenda({
           boxShadow: `0 12px 26px ${colorWithAlpha(color, 0.12)}`,
         }}
       >
-        <span className="flex min-w-0 items-center justify-between gap-2">
-          <span className={cn("truncate font-bold text-white", isCompact ? "text-[11px]" : "text-sm")}>{appointment.customerName}</span>
-          {!isTiny && <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>}
-        </span>
-        {!isTiny && (
-          <span className={cn("mt-0.5 flex min-w-0 items-center gap-1.5 text-white/80", isCompact ? "text-[9px]" : "text-xs")}>
-            <Scissors className="h-3 w-3 shrink-0" />
-            <span className="truncate">{getServiceBadge(service)}</span>
+        {isSingleLine ? (
+          <span className="flex w-full min-w-0 items-center gap-1.5 text-[10px]">
+            <span className="max-w-[46%] truncate font-bold text-white">{appointment.customerName}</span>
+            <span className="shrink-0 text-white/35" aria-hidden="true">·</span>
+            <span className="min-w-0 flex-1 truncate font-medium text-white/80">{serviceLabel}</span>
+            {!isNarrow && <span className="shrink-0 font-semibold text-white/60">{format(start, "HH:mm")}</span>}
           </span>
-        )}
-        {!isCompact && (
-          <span className="mt-1 flex items-center justify-between gap-2 text-[10px] text-white/60">
-            <span>{format(start, "HH:mm")}–{format(end, "HH:mm")}</span>
-            <span>{formatServicePrice(service?.price)}</span>
-          </span>
+        ) : (
+          <>
+            <span className="flex w-full min-w-0 items-center justify-between gap-2">
+              <span className={cn("truncate font-bold text-white", isCompact ? "text-[11px]" : "text-sm")}>{appointment.customerName}</span>
+              <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>
+            </span>
+            <span className={cn("mt-0.5 flex w-full min-w-0 items-center gap-1.5 text-white/80", isCompact ? "text-[9px]" : "text-xs")}>
+              <Scissors className="h-3 w-3 shrink-0" />
+              <span className="truncate">{serviceLabel}</span>
+            </span>
+            {!isCompact && (
+              <span className="mt-auto flex w-full items-center justify-between gap-2 pt-1 text-[10px] text-white/60">
+                <span>{format(start, "HH:mm")}–{format(end, "HH:mm")}</span>
+                <span>{formatServicePrice(service?.price)}</span>
+              </span>
+            )}
+          </>
         )}
       </button>
     );

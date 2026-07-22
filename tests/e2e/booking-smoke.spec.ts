@@ -1047,6 +1047,17 @@ test.describe("admin navigation", () => {
     expect(createShortServiceResponse.ok(), await createShortServiceResponse.text()).toBe(true);
     const shortService = await createShortServiceResponse.json();
 
+    const createTinyServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Agenda Lane Minimo ${Date.now()}`,
+        description: "Teste de lanes da agenda",
+        price: 500,
+        duration: 15,
+      },
+    });
+    expect(createTinyServiceResponse.ok(), await createTinyServiceResponse.text()).toBe(true);
+    const tinyService = await createTinyServiceResponse.json();
+
     const barbers = [];
     for (const [index, color] of ["#22C55E", "#8B5CF6"].entries()) {
       const createBarberResponse = await request.post("/api/barbers", {
@@ -1055,7 +1066,7 @@ test.describe("admin navigation", () => {
           specialty: "Teste de agenda",
           color,
           isVisible: true,
-          serviceIds: [longService.id, shortService.id],
+          serviceIds: [longService.id, shortService.id, tinyService.id],
         },
       });
       expect(createBarberResponse.ok(), await createBarberResponse.text()).toBe(true);
@@ -1084,6 +1095,13 @@ test.describe("admin navigation", () => {
         name: "Lane Agenda Seguinte QA",
         phone: "912695763",
       },
+      {
+        barberId: barbers[1].id,
+        serviceId: tinyService.id,
+        startTime: currentWeekThursdayIso(12, 30),
+        name: "Lane Agenda Minimo QA",
+        phone: "912695764",
+      },
     ];
 
     for (const appointment of appointments) {
@@ -1103,10 +1121,28 @@ test.describe("admin navigation", () => {
     const longAppointment = page.getByRole("button", { name: /Lane Agenda Longo QA/ }).first();
     const overlappingAppointment = page.getByRole("button", { name: /Lane Agenda Sobreposto QA/ }).first();
     const nextAppointment = page.getByRole("button", { name: /Lane Agenda Seguinte QA/ }).first();
+    const tinyAppointment = page.getByRole("button", { name: /Lane Agenda Minimo QA/ }).first();
 
     await expect(longAppointment).toBeVisible();
     await expect(overlappingAppointment).toBeVisible();
     await expect(nextAppointment).toBeVisible();
+    await expect(tinyAppointment).toBeVisible();
+    await expect(overlappingAppointment).toContainText(shortService.name);
+    await expect(tinyAppointment).toContainText(tinyService.name);
+
+    const cardContentMetrics = await Promise.all([longAppointment, overlappingAppointment, nextAppointment, tinyAppointment].map((appointment) =>
+      appointment.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      })),
+    ));
+    cardContentMetrics.forEach(({ clientHeight, scrollHeight }) => {
+      expect(scrollHeight).toBeLessThanOrEqual(clientHeight + 1);
+    });
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-short-cards-desktop.png" });
+    }
 
     const boxes = await Promise.all([
       longAppointment.boundingBox(),
@@ -1225,7 +1261,7 @@ test.describe("admin navigation", () => {
       };
     });
 
-    const pixelsPerMinute = 1.2;
+    const pixelsPerMinute = 1.5;
     expect(halfHourGeometry.top).toBeCloseTo(30 * pixelsPerMinute, 1);
     expect(halfHourGeometry.height).toBeCloseTo(45 * pixelsPerMinute, 1);
     expect(fiftyMinuteGeometry.top).toBeCloseTo(90 * pixelsPerMinute, 1);
