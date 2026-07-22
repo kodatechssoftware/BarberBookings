@@ -3,7 +3,13 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
-import { ensureAppointmentOverlapProtection, ensureBarberServicesTable, ensureServiceAgendaLabelColumn, pool } from "./db";
+import {
+  ensureAppointmentOverlapProtection,
+  ensureBarberServicesTable,
+  ensureServiceAgendaLabelColumn,
+  pool,
+  repairKnownTextEncodingArtifacts,
+} from "./db";
 
 const app = express();
 const httpServer = createServer(app);
@@ -168,6 +174,10 @@ app.use((req, res, next) => {
   await ensureServiceAgendaLabelColumn();
   await ensureBarberServicesTable();
   await ensureAppointmentOverlapProtection();
+  const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
+  if (repairedEncodingRows > 0) {
+    log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
+  }
   const server = await registerRoutes(app, httpServer);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

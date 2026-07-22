@@ -116,3 +116,64 @@ export async function ensureBarberServicesTable() {
     )
   `);
 }
+
+const knownTextEncodingRepairs = [
+  ["Corte cl?ssico e barba", "Corte clássico e barba"],
+  ["Perfil de demonstra??o DEV", "Perfil de demonstração DEV"],
+  ["Perfil de demonstra\uFFFD\uFFFDo DEV", "Perfil de demonstração DEV"],
+  ["Jo?o Mendes", "João Mendes"],
+  ["Lu?s Freitas", "Luís Freitas"],
+  ["Tom?s Almeida", "Tomás Almeida"],
+  ["S?rgio Matos", "Sérgio Matos"],
+  ["Gon?alo Reis", "Gonçalo Reis"],
+  ["C?sar Monteiro", "César Monteiro"],
+  ["F?bio Lopes", "Fábio Lopes"],
+  ["Sim?o Pires", "Simão Pires"],
+  ["Andr\uFFFD Silva (DEV)", "André Silva (DEV)"],
+  ["Gon\uFFFDalo Costa (DEV)", "Gonçalo Costa (DEV)"],
+] as const;
+
+const encodingRepairTargets = [
+  ["barbers", "name"],
+  ["barbers", "specialty"],
+  ["barbers", "bio"],
+  ["appointments", "customer_name"],
+  ["audit_logs", "actor_name"],
+  ["audit_logs", "summary"],
+  ["audit_logs", "metadata"],
+] as const;
+
+export async function repairKnownTextEncodingArtifacts() {
+  if (useMemoryStorage) return 0;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const client = await pool.connect();
+  let repairedRows = 0;
+
+  try {
+    await client.query("BEGIN");
+
+    for (const [tableName, columnName] of encodingRepairTargets) {
+      const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
+      const quotedColumnName = quoteIdentifier(columnName);
+
+      for (const [corruptedText, correctedText] of knownTextEncodingRepairs) {
+        const result = await client.query(
+          `UPDATE ${qualifiedTableName}
+           SET ${quotedColumnName} = replace(${quotedColumnName}, $1, $2)
+           WHERE position($1 in ${quotedColumnName}) > 0`,
+          [corruptedText, correctedText],
+        );
+        repairedRows += result.rowCount || 0;
+      }
+    }
+
+    await client.query("COMMIT");
+    return repairedRows;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
