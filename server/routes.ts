@@ -24,11 +24,13 @@ import { appointmentStatuses, insertServiceSchema, type Appointment } from "@sha
 import {
   emailValidationMessage,
   isValidOptionalEmail,
-  isValidPortugueseMobile,
   normalizeEmail,
   normalizePortuguesePhone,
-  phoneValidationMessage,
 } from "@shared/customer-validation";
+import {
+  normalizeSupportedPhone,
+  supportedPhoneValidationMessage,
+} from "@shared/phone-countries";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -134,8 +136,11 @@ const barberUpdateInputSchema = api.barbers.create.input.partial();
 const blacklistInputSchema = z.object({
   phone: z
     .string()
-    .transform(normalizePortuguesePhone)
-    .refine(isValidPortugueseMobile, phoneValidationMessage),
+    .transform((value) => {
+      const normalizedPhone = normalizeSupportedPhone(value);
+      return normalizedPhone.startsWith("+351") ? normalizedPhone.slice(4) : normalizedPhone;
+    })
+    .refine((value) => Boolean(normalizeSupportedPhone(value)), supportedPhoneValidationMessage),
   email: z
     .string()
     .nullish()
@@ -371,7 +376,15 @@ function parseTimeToMinutes(value: string) {
 }
 
 function normalizePhone(value?: string | null) {
-  return normalizePortuguesePhone(value);
+  const supportedPhone = normalizeSupportedPhone(value);
+  if (supportedPhone) return supportedPhone;
+
+  const trimmed = (value || "").trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) return "";
+  if (trimmed.startsWith("+")) return `+${digits}`;
+  if (trimmed.startsWith("00")) return `+${digits.slice(2)}`;
+  return digits;
 }
 
 function normalizeCustomerPhoneForStorage(value?: string | null) {

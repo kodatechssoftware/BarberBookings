@@ -11,6 +11,14 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  PHONE_COUNTRIES,
+  formatPhoneInput,
+  getPhoneCountry,
+  splitStoredPhone,
+  toStoredPhone,
+  type PhoneCountryCode,
+} from "@shared/phone-countries";
 
 type AppointmentBlockBarberOption = {
   id: number;
@@ -36,19 +44,6 @@ type AppointmentBlockDialogProps = {
   onSubmit: () => void;
 };
 
-const PORTUGAL_DIAL_CODE = "+351";
-const PORTUGAL_PHONE_DIGIT_LIMIT = 9;
-
-function getManualPhoneLocalValue(phone: string) {
-  const digits = phone.replace(/\D/g, "");
-
-  if (digits.startsWith("351") && digits.length > PORTUGAL_PHONE_DIGIT_LIMIT) {
-    return digits.slice(3, 3 + PORTUGAL_PHONE_DIGIT_LIMIT);
-  }
-
-  return digits.slice(0, PORTUGAL_PHONE_DIGIT_LIMIT);
-}
-
 export function AppointmentBlockDialog({
   open,
   onOpenChange,
@@ -70,6 +65,8 @@ export function AppointmentBlockDialog({
   const afternoonBlockTimes = visibleBlockTimeOptions.filter((time) => time >= "14:00");
   const today = startOfToday();
   const recurringStartsInPast = blockData.isRecurring && blockData.date < today;
+  const manualPhoneParts = splitStoredPhone(blockData.phone);
+  const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
 
   const setQuickBlockTimes = (times: string[]) => {
     const available = times.filter((time) => availableBlockTimes.includes(time));
@@ -377,22 +374,47 @@ export function AppointmentBlockDialog({
               {blockData.isManualBooking && (
                 <div className="space-y-3">
                   <Label className="text-sm font-medium text-gray-300">Telemóvel</Label>
-                  <div className="flex h-12 overflow-hidden rounded-xl border border-white/10 bg-background/50 focus-within:border-primary">
-                    <div className="flex items-center border-r border-white/10 px-3 text-sm font-semibold text-primary">
-                      {PORTUGAL_DIAL_CODE}
+                  <div className="flex h-12 overflow-hidden rounded-xl border border-white/10 bg-background/50 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40">
+                    <div className="relative shrink-0 border-r border-white/10">
+                      <select
+                        aria-label="País do telemóvel da marcação manual"
+                        className="h-full w-[116px] appearance-none bg-transparent px-3 pr-6 text-sm font-semibold text-primary outline-none"
+                        value={manualPhoneParts.countryCode}
+                        onChange={(event) => {
+                          const country = getPhoneCountry(event.target.value as PhoneCountryCode);
+                          onBlockDataChange({ ...blockData, phone: country.dialCode });
+                        }}
+                      >
+                        {PHONE_COUNTRIES.map((country) => (
+                          <option key={country.code} value={country.code} className="bg-card text-white">
+                            {country.flag} {country.dialCode}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
                     </div>
                     <Input
                       id="manual-booking-phone"
                       type="tel"
                       inputMode="numeric"
-                      autoComplete="tel"
-                      value={getManualPhoneLocalValue(blockData.phone)}
-                      onChange={(event) => onBlockDataChange({ ...blockData, phone: getManualPhoneLocalValue(event.target.value) })}
-                      className="h-full rounded-none border-0 bg-transparent text-white focus-visible:ring-0 focus-visible:ring-offset-0"
-                      placeholder="912 345 678"
+                      autoComplete="tel-national"
+                      maxLength={manualPhoneCountry.maxDigits}
+                      value={manualPhoneParts.localPhone}
+                      onChange={(event) => onBlockDataChange({
+                        ...blockData,
+                        phone: toStoredPhone(
+                          formatPhoneInput(event.target.value, manualPhoneCountry.maxDigits),
+                          manualPhoneParts.countryCode,
+                        ),
+                      })}
+                      className="h-full min-w-0 rounded-none border-0 bg-transparent text-white focus-visible:ring-0 focus-visible:ring-offset-0"
+                      placeholder={manualPhoneCountry.placeholder}
                     />
                   </div>
-                  <p className="text-xs text-gray-500">O indicativo +351 vai ser adicionado automaticamente.</p>
+                  <p className="text-xs text-gray-500">
+                    Escolha o país e escreva apenas o número. O indicativo{" "}
+                    {manualPhoneCountry.dialCode} é adicionado automaticamente.
+                  </p>
                 </div>
               )}
             </div>

@@ -37,7 +37,8 @@ import {
   type CreateAuditLogRequest
 } from "@shared/schema";
 import { eq, and, gte, lte, sql, desc, type SQL } from "drizzle-orm";
-import { normalizeEmail, portugueseMobilePhonesMatch } from "@shared/customer-validation";
+import { normalizeEmail } from "@shared/customer-validation";
+import { supportedPhonesMatch } from "@shared/phone-countries";
 
 type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   cancelToken: string;
@@ -454,7 +455,7 @@ export class DatabaseStorage implements IStorage {
 
     const entries = await db.select().from(blacklist);
     return entries.some((entry) =>
-      (hasPhone && portugueseMobilePhonesMatch(entry.phone, phone)) ||
+      (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }
@@ -924,7 +925,7 @@ export class MemoryStorage implements IStorage {
     if (!normalizedEmail && !hasPhone) return false;
 
     return this.blacklist.some((entry) =>
-      (hasPhone && portugueseMobilePhonesMatch(entry.phone, phone)) ||
+      (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }

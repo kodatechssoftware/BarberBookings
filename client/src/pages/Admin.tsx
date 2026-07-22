@@ -48,11 +48,20 @@ import {
 import {
   emailValidationMessage,
   isValidOptionalEmail,
-  isValidPortugueseMobile,
   normalizeEmail,
-  normalizePortuguesePhone,
-  phoneValidationMessage,
 } from "@shared/customer-validation";
+import {
+  PHONE_COUNTRIES,
+  formatPhoneForDisplay,
+  formatPhoneInput,
+  getPhoneCountry,
+  normalizeSupportedPhone,
+  splitStoredPhone,
+  supportedPhoneValidationMessage,
+  supportedPhonesMatch,
+  toStoredPhone,
+  type PhoneCountryCode,
+} from "@shared/phone-countries";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
@@ -80,31 +89,7 @@ type AdminAppointment = {
 };
 
 function normalizeManualBookingPhoneForSubmit(phone: string) {
-  const normalizedPhone = normalizePortuguesePhone(phone);
-
-  if (/^9\d{8}$/.test(normalizedPhone)) {
-    return `+351${normalizedPhone}`;
-  }
-
-  return phone.trim() || "900000000";
-}
-
-function formatPortuguesePhoneInput(phone: string) {
-  const digits = normalizePortuguesePhone(phone).slice(0, 9);
-
-  return [digits.slice(0, 3), digits.slice(3, 6), digits.slice(6, 9)]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function formatPortuguesePhoneDisplay(phone?: string | null) {
-  const normalizedPhone = normalizePortuguesePhone(phone);
-
-  if (!isValidPortugueseMobile(normalizedPhone)) {
-    return phone || "-";
-  }
-
-  return `+351 ${formatPortuguesePhoneInput(normalizedPhone)}`;
+  return normalizeSupportedPhone(phone) || phone.trim() || "900000000";
 }
 
 type FutureBlacklistAppointment = {
@@ -1320,6 +1305,8 @@ export default function Admin() {
     barberId: "all"
   });
   const [blacklistForm, setBlacklistForm] = useState({ phone: "", email: "" });
+  const blacklistPhoneParts = splitStoredPhone(blacklistForm.phone);
+  const blacklistPhoneCountry = getPhoneCountry(blacklistPhoneParts.countryCode);
   const [pendingBlacklistAction, setPendingBlacklistAction] = useState<PendingBlacklistAction | null>(null);
   const [pendingManualBookingBlacklistWarning, setPendingManualBookingBlacklistWarning] = useState<PendingManualBookingBlacklistWarning | null>(null);
   const [isSubmittingBlacklist, setIsSubmittingBlacklist] = useState(false);
@@ -1883,7 +1870,7 @@ export default function Admin() {
   const handleAddBlacklistEntry = async () => {
     const phone = blacklistForm.phone;
     const email = blacklistForm.email;
-    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedPhone = normalizeSupportedPhone(phone);
     const normalizedEmail = normalizeEmail(email);
 
     if (!phone.trim()) {
@@ -1891,8 +1878,8 @@ export default function Admin() {
       return;
     }
 
-    if (!isValidPortugueseMobile(phone)) {
-      toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
+    if (!normalizedPhone) {
+      toast({ title: "Telemóvel inválido", description: supportedPhoneValidationMessage, variant: "destructive" });
       return;
     }
 
@@ -1902,7 +1889,7 @@ export default function Admin() {
     }
 
     await apiRequest("POST", "/api/admin/blacklist", {
-      phone: normalizeManualBookingPhoneForSubmit(normalizedPhone),
+      phone: normalizedPhone,
       email: normalizedEmail || undefined,
       reason: "Bloqueio manual pelo administrador",
     });
@@ -1983,7 +1970,7 @@ export default function Admin() {
   const handleAddBlacklistEntryWithFutureCheck = async () => {
     const phone = blacklistForm.phone;
     const email = blacklistForm.email;
-    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedPhone = normalizeSupportedPhone(phone);
     const normalizedEmail = normalizeEmail(email);
 
     if (!phone.trim()) {
@@ -1991,8 +1978,8 @@ export default function Admin() {
       return;
     }
 
-    if (!isValidPortugueseMobile(phone)) {
-      toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
+    if (!normalizedPhone) {
+      toast({ title: "Telemóvel inválido", description: supportedPhoneValidationMessage, variant: "destructive" });
       return;
     }
 
@@ -2002,7 +1989,7 @@ export default function Admin() {
     }
 
     await submitBlacklistEntryWithFutureCheck({
-      phone: normalizeManualBookingPhoneForSubmit(normalizedPhone),
+      phone: normalizedPhone,
       email: normalizedEmail || undefined,
       reason: "Bloqueio manual pelo administrador",
     }, { clearForm: true });
@@ -2158,11 +2145,11 @@ export default function Admin() {
   const findManualBookingBlacklistEntry = () => {
     if (!blockData.isManualBooking) return null;
 
-    const phone = normalizePortuguesePhone(blockData.phone);
+    const phone = normalizeSupportedPhone(blockData.phone);
     if (!phone) return null;
 
     return blacklistEntries?.find((entry: any) =>
-      normalizePortuguesePhone(entry.phone) === phone,
+      supportedPhonesMatch(entry.phone, phone),
     ) || null;
   };
 
@@ -3131,26 +3118,40 @@ export default function Admin() {
                     <div className="space-y-2">
                       <Label htmlFor="bl-phone" className="text-xs">Telemóvel (obrigatório)</Label>
                       <div className="flex h-10 overflow-hidden rounded-md border border-white/10 bg-background focus-within:border-red-400/60 focus-within:ring-1 focus-within:ring-red-400/30">
-                        <div
-                          className="flex shrink-0 items-center gap-2 border-r border-white/10 bg-white/5 px-3 text-sm font-semibold text-white"
-                          aria-label="Indicativo de Portugal, mais 351"
-                        >
-                          <span aria-hidden="true">🇵🇹</span>
-                          <span>+351</span>
+                        <div className="relative shrink-0 border-r border-white/10 bg-white/5">
+                          <select
+                            aria-label="País do telemóvel da blacklist"
+                            className="h-full w-[116px] appearance-none bg-transparent px-3 pr-6 text-sm font-semibold text-white outline-none"
+                            value={blacklistPhoneParts.countryCode}
+                            onChange={(event) => {
+                              const country = getPhoneCountry(event.target.value as PhoneCountryCode);
+                              setBlacklistForm((current) => ({ ...current, phone: country.dialCode }));
+                            }}
+                          >
+                            {PHONE_COUNTRIES.map((country) => (
+                              <option key={country.code} value={country.code} className="bg-card text-white">
+                                {country.flag} {country.dialCode}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
                         </div>
                         <Input
                           id="bl-phone"
                           type="tel"
                           inputMode="numeric"
                           autoComplete="tel-national"
-                          maxLength={11}
-                          value={blacklistForm.phone}
+                          maxLength={blacklistPhoneCountry.maxDigits}
+                          value={blacklistPhoneParts.localPhone}
                           onChange={(event) => setBlacklistForm((current) => ({
                             ...current,
-                            phone: formatPortuguesePhoneInput(event.target.value),
+                            phone: toStoredPhone(
+                              formatPhoneInput(event.target.value, blacklistPhoneCountry.maxDigits),
+                              blacklistPhoneParts.countryCode,
+                            ),
                           }))}
                           className="h-full min-w-0 rounded-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
-                          placeholder="912 345 678"
+                          placeholder={blacklistPhoneCountry.placeholder}
                         />
                       </div>
                     </div>
@@ -3184,7 +3185,7 @@ export default function Admin() {
                       <tbody className="divide-y divide-white/5">
                         {blacklistEntries?.map((entry: any) => (
                           <tr key={entry.id} className="hover:bg-white/5">
-                            <td className="px-6 py-4 font-mono whitespace-nowrap">{formatPortuguesePhoneDisplay(entry.phone)}</td>
+                            <td className="px-6 py-4 font-mono whitespace-nowrap">{formatPhoneForDisplay(entry.phone)}</td>
                             <td className="px-6 py-4">{entry.email || "-"}</td>
                             <td className="px-6 py-4 text-gray-400">{format(parseISO(entry.createdAt), "dd/MM/yyyy")}</td>
                             <td className="px-6 py-4 text-right">

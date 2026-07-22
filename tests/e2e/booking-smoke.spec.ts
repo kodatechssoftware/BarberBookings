@@ -261,6 +261,10 @@ test.describe("public booking flow", () => {
     await expect(page.getByText("Total:")).toBeVisible();
     await expect(page.getByPlaceholder("O seu nome")).toBeVisible();
     await expect(page.getByPlaceholder("912 345 678")).toBeVisible();
+    const countrySelect = page.getByLabel("País do telemóvel");
+    await expect(countrySelect.locator("option")).toHaveCount(9);
+    await countrySelect.selectOption("ES");
+    await expect(page.getByPlaceholder("612 345 678")).toBeVisible();
     await expect(page.getByRole("button", { name: "Confirmar" })).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
   });
@@ -347,14 +351,15 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Acesso para Administradores e Barbeiros")).not.toBeVisible();
   });
 
-  test("adds the Portuguese dial code when blocking a customer", async ({ page, request }) => {
-    const phone = "912698764";
+  test("selects an international dial code when blocking a customer", async ({ page, request }) => {
+    const localPhone = "612698764";
+    const storedPhone = "+34612698764";
 
     await loginAdminRequest(request);
     const existingBlacklistResponse = await request.get("/api/admin/blacklist");
     expect(existingBlacklistResponse.ok()).toBe(true);
     const existingBlacklist = await existingBlacklistResponse.json();
-    for (const entry of existingBlacklist.filter((item: any) => item.phone === phone)) {
+    for (const entry of existingBlacklist.filter((item: any) => item.phone === storedPhone)) {
       const cleanupResponse = await request.delete(`/api/admin/blacklist/${entry.id}`);
       expect(cleanupResponse.ok()).toBe(true);
     }
@@ -363,39 +368,42 @@ test.describe("admin navigation", () => {
     await loginAdmin(page);
     await page.getByRole("tab", { name: "Bloqueados" }).click();
 
+    const countrySelect = page.getByLabel("País do telemóvel da blacklist");
     const phoneInput = page.locator("#bl-phone");
-    await expect(page.getByLabel("Indicativo de Portugal, mais 351")).toContainText("+351");
-    await expect(phoneInput).toHaveAttribute("placeholder", "912 345 678");
+    await expect(countrySelect.locator("option")).toHaveCount(9);
+    await countrySelect.selectOption("ES");
+    await expect(phoneInput).toHaveAttribute("placeholder", "612 345 678");
 
-    await phoneInput.fill(phone);
-    await expect(phoneInput).toHaveValue("912 698 764");
+    await phoneInput.fill(localPhone);
+    await expect(phoneInput).toHaveValue(localPhone);
     await page.getByRole("button", { name: "Bloquear Cliente" }).click();
 
     await expect(page.getByText("Cliente bloqueado", { exact: true })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "+351 912 698 764" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "+34 612 698 764" })).toBeVisible();
     await expect(phoneInput).toHaveValue("");
+    await expect(countrySelect).toHaveValue("PT");
     await expectNoHorizontalOverflow(page);
 
     if (process.env.VISUAL_QA === "true") {
       await page.getByText("Clientes Bloqueados").locator("..").locator("..").screenshot({
-        path: "test-results/blacklist-dial-code-desktop.png",
+        path: "test-results/blacklist-country-select-desktop.png",
       });
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByLabel("Indicativo de Portugal, mais 351")).toBeVisible();
+    await expect(countrySelect).toBeVisible();
     await expect(phoneInput).toBeVisible();
     await expect(page.getByRole("button", { name: "Bloquear Cliente" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     if (process.env.VISUAL_QA === "true") {
-      await page.screenshot({ path: "test-results/blacklist-dial-code-mobile.png", fullPage: true });
+      await page.screenshot({ path: "test-results/blacklist-country-select-mobile.png", fullPage: true });
     }
 
     const blacklistResponse = await request.get("/api/admin/blacklist");
     expect(blacklistResponse.ok()).toBe(true);
     const blacklist = await blacklistResponse.json();
-    const entry = blacklist.find((item: any) => item.phone === phone);
+    const entry = blacklist.find((item: any) => item.phone === storedPhone);
     expect(entry).toBeTruthy();
 
     const deleteResponse = await request.delete(`/api/admin/blacklist/${entry.id}`);
@@ -846,7 +854,9 @@ test.describe("admin navigation", () => {
 
     const dialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByText("+351", { exact: true })).toBeVisible();
+    const manualCountrySelect = dialog.getByLabel("País do telemóvel da marcação manual");
+    await expect(manualCountrySelect).toHaveValue("PT");
+    await expect(manualCountrySelect.locator("option")).toHaveCount(9);
     await dialog.locator("#manual-booking-phone").fill("912695703");
     await expect(dialog.locator("#manual-booking-phone")).toHaveValue("912695703");
     await selectDialogOption(page, dialog, 0, barber.name);
@@ -862,12 +872,29 @@ test.describe("admin navigation", () => {
     await dialog.getByRole("button", { name: "14:30", exact: true }).click();
     await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+
+    const manualPhoneInput = dialog.locator("#manual-booking-phone");
+    await manualPhoneInput.scrollIntoViewIfNeeded();
+
+    if (process.env.VISUAL_QA === "true") {
+      await dialog.screenshot({ path: "test-results/manual-booking-country-select-desktop.png" });
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(manualCountrySelect).toBeVisible();
+    await manualPhoneInput.scrollIntoViewIfNeeded();
+    await expect(manualPhoneInput).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    if (process.env.VISUAL_QA === "true") {
+      await dialog.screenshot({ path: "test-results/manual-booking-country-select-mobile.png" });
+    }
   });
 
   test("warns before manually booking a blacklisted customer", async ({ page, request }) => {
     await loginAdminRequest(request);
 
-    const blacklistedPhone = "912696001";
+    const blacklistedPhone = "+34612696001";
     const blacklistResponse = await request.post("/api/admin/blacklist", {
       data: {
         phone: blacklistedPhone,
@@ -895,13 +922,17 @@ test.describe("admin navigation", () => {
     await expect(dialog).toBeVisible();
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
-    await dialog.locator("#manual-booking-phone").fill(blacklistedPhone);
+    const manualCountrySelect = dialog.getByLabel("País do telemóvel da marcação manual");
+    await expect(manualCountrySelect.locator("option")).toHaveCount(9);
+    await manualCountrySelect.selectOption("ES");
+    await expect(dialog.locator("#manual-booking-phone")).toHaveAttribute("placeholder", "612 345 678");
+    await dialog.locator("#manual-booking-phone").fill("612696001");
     await dialog.getByRole("button", { name: "14:00", exact: true }).click();
     await dialog.getByRole("button", { name: /Criar/i }).click();
 
     const warningDialog = page.getByRole("alertdialog", { name: "Cliente na blacklist" });
     await expect(warningDialog).toBeVisible();
-    await expect(warningDialog).toContainText("+351912696001");
+    await expect(warningDialog).toContainText(blacklistedPhone);
     await expect(warningDialog).toContainText("Para criar esta marcacao, remova primeiro o cliente da blacklist.");
     await expect(warningDialog.getByRole("button", { name: "Criar na mesma" })).toHaveCount(0);
     await expect(warningDialog.getByRole("button", { name: "Remover da blacklist e criar" })).toBeVisible();
@@ -919,7 +950,7 @@ test.describe("admin navigation", () => {
     const appointments = await appointmentsResponse.json();
     expect(appointments).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        customerPhone: "+351912696001",
+        customerPhone: blacklistedPhone,
         customerName: "Cliente Manual",
       }),
     ]));
@@ -1815,11 +1846,11 @@ test.describe("booking rules", () => {
     )).toBe(true);
   });
 
-  test("blocks a blacklisted Portuguese phone even with another country prefix", async ({ request }) => {
+  test("blocks a blacklisted international phone with the same country prefix", async ({ request }) => {
     await loginAdminRequest(request);
 
     const blacklistResponse = await request.post("/api/admin/blacklist", {
-      data: { phone: "912695703", reason: "E2E guard" },
+      data: { phone: "+34912695703", reason: "E2E guard" },
     });
     expect(blacklistResponse.ok()).toBe(true);
 
@@ -1847,6 +1878,35 @@ test.describe("booking rules", () => {
     expect(createResponse.status()).toBe(403);
     const createBody = await createResponse.json();
     expect(createBody.message).toContain("Não é possível realizar a marcação online");
+  });
+
+  test("does not confuse the same local phone number between countries", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const blacklistResponse = await request.post("/api/admin/blacklist", {
+      data: { phone: "912695702", reason: "E2E country isolation" },
+    });
+    expect(blacklistResponse.ok()).toBe(true);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+
+    const createResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: "2026-06-11T17:00:00.000Z",
+        customerName: "QA Country Isolation",
+        customerPhone: "+34912695702",
+        customerEmail: "qa-country-isolation@example.com",
+      },
+    });
+
+    expect(createResponse.status()).not.toBe(403);
   });
 
   test("preserves Portuguese country code when storing customer phone", async ({ request }) => {

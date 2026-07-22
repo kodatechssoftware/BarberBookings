@@ -16,6 +16,17 @@ import { Label } from "@/components/ui/label";
 import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
+import {
+  DEFAULT_PHONE_COUNTRY,
+  PHONE_COUNTRIES,
+  formatPhoneInput,
+  getPhoneCountry,
+  isDigitsOnly,
+  isValidPhoneForCountry,
+  splitStoredPhone,
+  toStoredPhone,
+  type PhoneCountryCode,
+} from "@shared/phone-countries";
 
 type BookingPreference = {
   step: number;
@@ -33,69 +44,8 @@ type BookingPreference = {
 
 const lastBookingStorageKey = "baptista:lastBooking";
 const MAX_NAME_LENGTH = 80;
-const MAX_PHONE_LENGTH = 16;
 const MAX_EMAIL_LENGTH = 120;
-const PHONE_COUNTRIES = [
-  { code: "PT", label: "Portugal", flag: "🇵🇹", dialCode: "+351", minDigits: 9, maxDigits: 9, placeholder: "912 345 678" },
-  { code: "ES", label: "Espanha", flag: "🇪🇸", dialCode: "+34", minDigits: 9, maxDigits: 9, placeholder: "612 345 678" },
-  { code: "DE", label: "Alemanha", flag: "🇩🇪", dialCode: "+49", minDigits: 7, maxDigits: 13, placeholder: "151 23456789" },
-  { code: "FR", label: "Franca", flag: "🇫🇷", dialCode: "+33", minDigits: 9, maxDigits: 9, placeholder: "6 12 34 56 78" },
-  { code: "GB", label: "Reino Unido", flag: "🇬🇧", dialCode: "+44", minDigits: 10, maxDigits: 10, placeholder: "7700 900123" },
-  { code: "BR", label: "Brasil", flag: "🇧🇷", dialCode: "+55", minDigits: 10, maxDigits: 11, placeholder: "11 91234 5678" },
-  { code: "AO", label: "Angola", flag: "🇦🇴", dialCode: "+244", minDigits: 9, maxDigits: 9, placeholder: "923 456 789" },
-  { code: "NL", label: "Holanda", flag: "🇳🇱", dialCode: "+31", minDigits: 9, maxDigits: 9, placeholder: "6 12345678" },
-  { code: "IT", label: "Italia", flag: "🇮🇹", dialCode: "+39", minDigits: 9, maxDigits: 11, placeholder: "312 345 6789" },
-] as const;
-
-type PhoneCountryCode = typeof PHONE_COUNTRIES[number]["code"];
 type CustomerField = keyof BookingPreference["customerDetails"];
-
-const DEFAULT_PHONE_COUNTRY = PHONE_COUNTRIES[0];
-
-const formatPhoneInput = (value: string, maxLength = MAX_PHONE_LENGTH) => {
-  return value.replace(/\D/g, "").slice(0, maxLength);
-};
-
-const isDigitsOnly = (value: string) => /^\d*$/.test(value);
-
-const getPhoneCountry = (countryCode: PhoneCountryCode) => (
-  PHONE_COUNTRIES.find((country) => country.code === countryCode) ?? DEFAULT_PHONE_COUNTRY
-);
-
-const splitStoredPhone = (value: string) => {
-  const trimmed = value.trim();
-  const internationalValue = trimmed.startsWith("00")
-    ? `+${trimmed.replace(/\D/g, "").slice(2)}`
-    : trimmed.startsWith("+")
-      ? `+${trimmed.replace(/\D/g, "")}`
-      : trimmed;
-
-  const matchedCountry = PHONE_COUNTRIES.find((country) => internationalValue.startsWith(country.dialCode));
-  if (!matchedCountry) {
-    return {
-      countryCode: DEFAULT_PHONE_COUNTRY.code,
-      localPhone: formatPhoneInput(trimmed, DEFAULT_PHONE_COUNTRY.maxDigits),
-    };
-  }
-
-  return {
-    countryCode: matchedCountry.code,
-    localPhone: formatPhoneInput(internationalValue.slice(matchedCountry.dialCode.length), matchedCountry.maxDigits),
-  };
-};
-
-const isValidBookingPhone = (value: string, countryCode: PhoneCountryCode) => {
-  const country = getPhoneCountry(countryCode);
-  const digits = value.replace(/\D/g, "");
-  if (digits !== value.trim()) return false;
-  if (countryCode === "PT") return /^9\d{8}$/.test(digits);
-  return digits.length >= country.minDigits && digits.length <= country.maxDigits;
-};
-
-const toStoredPhone = (value: string, countryCode: PhoneCountryCode) => {
-  const country = getPhoneCountry(countryCode);
-  return `${country.dialCode}${value.replace(/\D/g, "")}`;
-};
 
 const isValidOptionalEmail = (value: string) => {
   if (!value.trim()) return true;
@@ -365,7 +315,7 @@ export default function Booking() {
       name: customerDetails.name.trim() ? "" : "Indique o nome para a marcação.",
       phone: !digits
         ? "Indique o telemóvel para confirmarmos a marcação."
-        : isValidBookingPhone(customerDetails.phone, selectedPhoneCountry)
+        : isValidPhoneForCountry(customerDetails.phone, selectedPhoneCountry)
           ? ""
           : `Confirme que o número tem ${phoneLengthLabel} para ${selectedPhoneCountryData.label}.`,
       email: isValidOptionalEmail(customerDetails.email)
@@ -952,7 +902,7 @@ export default function Booking() {
                     )}>
                       <div className="relative shrink-0 border-r border-white/10">
                         <select
-                          aria-label="Pais do telemovel"
+                          aria-label="País do telemóvel"
                           className="h-12 w-[116px] appearance-none rounded-l-md bg-transparent px-3 pr-6 text-sm font-medium text-white outline-none"
                           value={selectedPhoneCountry}
                           onChange={(e) => {
