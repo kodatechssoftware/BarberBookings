@@ -2439,7 +2439,7 @@ test.describe("booking rules", () => {
     expect(body.message).toContain("60 min");
   });
 
-  test("keeps recurring manual booking hours across the Lisbon daylight saving change", async ({ request }) => {
+  test("keeps every annual recurring manual booking at 14:00 through both Lisbon daylight saving changes", async ({ request }) => {
     await loginAdminRequest(request);
 
     const [barbersResponse, servicesResponse] = await Promise.all([
@@ -2452,73 +2452,62 @@ test.describe("booking rules", () => {
     const [barber] = await barbersResponse.json();
     const [service] = await servicesResponse.json();
 
-    const response = await request.post("/api/appointments/block", {
-      data: {
-        barberId: barber.id,
-        serviceId: service.id,
-        startTime: "2026-09-24T13:00:00.000Z",
-        name: "Recorrente Hora Verao QA",
-        phone: "912695738",
-        isManualBooking: true,
-        isRecurring: true,
-        recurringWeeks: 1,
-        recurringMonths: 2,
-      },
-    });
+    const customerName = "Recorrente Anual Hora Lisboa QA";
+    let createdSeries: any[] = [];
 
-    expect(response.ok(), await response.text()).toBe(true);
+    try {
+      const response = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          // 14:00 in Lisbon while WEST (UTC+1).
+          startTime: "2026-09-24T13:00:00.000Z",
+          name: customerName,
+          phone: "912695738",
+          isManualBooking: true,
+          isRecurring: true,
+          recurringWeeks: 1,
+          recurringMonths: 12,
+        },
+      });
 
-    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=2026-10-29`);
-    expect(appointmentsResponse.ok()).toBe(true);
-    const appointments = await appointmentsResponse.json();
-    const daylightSavingAppointment = appointments.find((appointment: any) =>
-      appointment.customerName === "Recorrente Hora Verao QA",
-    );
-    expect(daylightSavingAppointment).toBeTruthy();
+      expect(response.status(), await response.text()).toBe(201);
 
-    const parts = lisbonDateTimeParts(daylightSavingAppointment.startTime);
-    expect(`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`).toBe("2026-10-29 14:00");
-  });
+      const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}`);
+      expect(appointmentsResponse.ok()).toBe(true);
+      createdSeries = (await appointmentsResponse.json()).filter((appointment: any) =>
+        appointment.customerName === customerName,
+      );
 
-  test("keeps recurring manual booking hours when Lisbon enters daylight saving time", async ({ request }) => {
-    await loginAdminRequest(request);
+      expect(createdSeries).toHaveLength(51);
 
-    const [barbersResponse, servicesResponse] = await Promise.all([
-      request.get("/api/barbers"),
-      request.get("/api/services"),
-    ]);
-    expect(barbersResponse.ok()).toBe(true);
-    expect(servicesResponse.ok()).toBe(true);
+      const localDateTimes = createdSeries.map((appointment: any) => {
+        const parts = lisbonDateTimeParts(appointment.startTime);
+        return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+      });
 
-    const [barber] = await barbersResponse.json();
-    const [service] = await servicesResponse.json();
+      expect(localDateTimes.every((dateTime: string) => dateTime.endsWith(" 14:00"))).toBe(true);
+      expect(localDateTimes).toContain("2026-10-29 14:00");
+      expect(localDateTimes).toContain("2027-04-01 14:00");
 
-    const response = await request.post("/api/appointments/block", {
-      data: {
-        barberId: barber.id,
-        serviceId: service.id,
-        startTime: "2027-03-18T14:00:00.000Z",
-        name: "Recorrente Hora Inverno QA",
-        phone: "912695739",
-        isManualBooking: true,
-        isRecurring: true,
-        recurringWeeks: 1,
-        recurringMonths: 1,
-      },
-    });
+      const utcHours = [...new Set(createdSeries.map((appointment: any) =>
+        new Date(appointment.startTime).getUTCHours(),
+      ))].sort();
+      expect(utcHours).toEqual([13, 14]);
+    } finally {
+      if (createdSeries.length === 0) {
+        const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}`);
+        if (appointmentsResponse.ok()) {
+          createdSeries = (await appointmentsResponse.json()).filter((appointment: any) =>
+            appointment.customerName === customerName,
+          );
+        }
+      }
 
-    expect(response.ok(), await response.text()).toBe(true);
-
-    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=2027-04-01`);
-    expect(appointmentsResponse.ok()).toBe(true);
-    const appointments = await appointmentsResponse.json();
-    const daylightSavingAppointment = appointments.find((appointment: any) =>
-      appointment.customerName === "Recorrente Hora Inverno QA",
-    );
-    expect(daylightSavingAppointment).toBeTruthy();
-
-    const parts = lisbonDateTimeParts(daylightSavingAppointment.startTime);
-    expect(`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`).toBe("2027-04-01 14:00");
+      await Promise.all(createdSeries.map((appointment: any) =>
+        request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),
+      ));
+    }
   });
 
   test("keeps after-midnight exceptions on the correct Lisbon calendar day", async ({ request }) => {
