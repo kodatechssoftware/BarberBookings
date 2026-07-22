@@ -347,6 +347,61 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Acesso para Administradores e Barbeiros")).not.toBeVisible();
   });
 
+  test("adds the Portuguese dial code when blocking a customer", async ({ page, request }) => {
+    const phone = "912698764";
+
+    await loginAdminRequest(request);
+    const existingBlacklistResponse = await request.get("/api/admin/blacklist");
+    expect(existingBlacklistResponse.ok()).toBe(true);
+    const existingBlacklist = await existingBlacklistResponse.json();
+    for (const entry of existingBlacklist.filter((item: any) => item.phone === phone)) {
+      const cleanupResponse = await request.delete(`/api/admin/blacklist/${entry.id}`);
+      expect(cleanupResponse.ok()).toBe(true);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Bloqueados" }).click();
+
+    const phoneInput = page.locator("#bl-phone");
+    await expect(page.getByLabel("Indicativo de Portugal, mais 351")).toContainText("+351");
+    await expect(phoneInput).toHaveAttribute("placeholder", "912 345 678");
+
+    await phoneInput.fill(phone);
+    await expect(phoneInput).toHaveValue("912 698 764");
+    await page.getByRole("button", { name: "Bloquear Cliente" }).click();
+
+    await expect(page.getByText("Cliente bloqueado", { exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "+351 912 698 764" })).toBeVisible();
+    await expect(phoneInput).toHaveValue("");
+    await expectNoHorizontalOverflow(page);
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByText("Clientes Bloqueados").locator("..").locator("..").screenshot({
+        path: "test-results/blacklist-dial-code-desktop.png",
+      });
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByLabel("Indicativo de Portugal, mais 351")).toBeVisible();
+    await expect(phoneInput).toBeVisible();
+    await expect(page.getByRole("button", { name: "Bloquear Cliente" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.screenshot({ path: "test-results/blacklist-dial-code-mobile.png", fullPage: true });
+    }
+
+    const blacklistResponse = await request.get("/api/admin/blacklist");
+    expect(blacklistResponse.ok()).toBe(true);
+    const blacklist = await blacklistResponse.json();
+    const entry = blacklist.find((item: any) => item.phone === phone);
+    expect(entry).toBeTruthy();
+
+    const deleteResponse = await request.delete(`/api/admin/blacklist/${entry.id}`);
+    expect(deleteResponse.ok()).toBe(true);
+  });
+
   test("shows agenda only in Agenda and appointment list only in Marcações", async ({ page, request }) => {
     await createManualAppointmentForCurrentWeek(request);
 

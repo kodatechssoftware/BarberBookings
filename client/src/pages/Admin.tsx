@@ -89,6 +89,24 @@ function normalizeManualBookingPhoneForSubmit(phone: string) {
   return phone.trim() || "900000000";
 }
 
+function formatPortuguesePhoneInput(phone: string) {
+  const digits = normalizePortuguesePhone(phone).slice(0, 9);
+
+  return [digits.slice(0, 3), digits.slice(3, 6), digits.slice(6, 9)]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function formatPortuguesePhoneDisplay(phone?: string | null) {
+  const normalizedPhone = normalizePortuguesePhone(phone);
+
+  if (!isValidPortugueseMobile(normalizedPhone)) {
+    return phone || "-";
+  }
+
+  return `+351 ${formatPortuguesePhoneInput(normalizedPhone)}`;
+}
+
 type FutureBlacklistAppointment = {
   id: number;
   barberId: number;
@@ -1884,7 +1902,7 @@ export default function Admin() {
     }
 
     await apiRequest("POST", "/api/admin/blacklist", {
-      phone: normalizedPhone,
+      phone: normalizeManualBookingPhoneForSubmit(normalizedPhone),
       email: normalizedEmail || undefined,
       reason: "Bloqueio manual pelo administrador",
     });
@@ -1984,7 +2002,7 @@ export default function Admin() {
     }
 
     await submitBlacklistEntryWithFutureCheck({
-      phone: normalizedPhone,
+      phone: normalizeManualBookingPhoneForSubmit(normalizedPhone),
       email: normalizedEmail || undefined,
       reason: "Bloqueio manual pelo administrador",
     }, { clearForm: true });
@@ -3111,18 +3129,30 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
                     <div className="space-y-2">
-                      <Label className="text-xs">Telemóvel (obrigatório)</Label>
-                      <Input
-                        id="bl-phone"
-                        type="tel"
-                        inputMode="numeric"
-                        autoComplete="tel"
-                        maxLength={18}
-                        value={blacklistForm.phone}
-                        onChange={(event) => setBlacklistForm((current) => ({ ...current, phone: event.target.value }))}
-                        className="bg-background border-white/10"
-                        placeholder="912345678"
-                      />
+                      <Label htmlFor="bl-phone" className="text-xs">Telemóvel (obrigatório)</Label>
+                      <div className="flex h-10 overflow-hidden rounded-md border border-white/10 bg-background focus-within:border-red-400/60 focus-within:ring-1 focus-within:ring-red-400/30">
+                        <div
+                          className="flex shrink-0 items-center gap-2 border-r border-white/10 bg-white/5 px-3 text-sm font-semibold text-white"
+                          aria-label="Indicativo de Portugal, mais 351"
+                        >
+                          <span aria-hidden="true">🇵🇹</span>
+                          <span>+351</span>
+                        </div>
+                        <Input
+                          id="bl-phone"
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={11}
+                          value={blacklistForm.phone}
+                          onChange={(event) => setBlacklistForm((current) => ({
+                            ...current,
+                            phone: formatPortuguesePhoneInput(event.target.value),
+                          }))}
+                          className="h-full min-w-0 rounded-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+                          placeholder="912 345 678"
+                        />
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <Label className="text-xs">Email (opcional)</Label>
@@ -3154,7 +3184,7 @@ export default function Admin() {
                       <tbody className="divide-y divide-white/5">
                         {blacklistEntries?.map((entry: any) => (
                           <tr key={entry.id} className="hover:bg-white/5">
-                            <td className="px-6 py-4 font-mono">{entry.phone}</td>
+                            <td className="px-6 py-4 font-mono whitespace-nowrap">{formatPortuguesePhoneDisplay(entry.phone)}</td>
                             <td className="px-6 py-4">{entry.email || "-"}</td>
                             <td className="px-6 py-4 text-gray-400">{format(parseISO(entry.createdAt), "dd/MM/yyyy")}</td>
                             <td className="px-6 py-4 text-right">
