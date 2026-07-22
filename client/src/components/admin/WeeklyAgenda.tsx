@@ -398,7 +398,7 @@ export function WeeklyAgenda({
     const serviceLabel = getServiceBadge(service);
     const isSingleLine = height < 40;
     const isCompact = height < 84 || laneWidth < 55;
-    const isNarrow = laneWidth < 42;
+    const timeRangeLabel = `${format(start, "HH:mm")}–${format(end, "HH:mm")}`;
     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${serviceLabel}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
     return (
@@ -430,21 +430,22 @@ export function WeeklyAgenda({
             <span className="max-w-[46%] truncate font-bold text-white">{appointment.customerName}</span>
             <span className="shrink-0 text-white/35" aria-hidden="true">·</span>
             <span className="min-w-0 flex-1 truncate font-medium text-white/80">{serviceLabel}</span>
-            {!isNarrow && <span className="shrink-0 font-semibold text-white/60">{format(start, "HH:mm")}</span>}
+            <span className="shrink-0 font-semibold text-white/60">{timeRangeLabel}</span>
           </span>
         ) : (
           <>
             <span className="flex w-full min-w-0 items-center justify-between gap-2">
               <span className={cn("truncate font-bold text-white", isCompact ? "text-[11px]" : "text-sm")}>{appointment.customerName}</span>
-              <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>
+              {!isCompact && <span className="shrink-0 text-[10px] font-semibold text-white/65">{format(start, "HH:mm")}</span>}
             </span>
             <span className={cn("mt-0.5 flex w-full min-w-0 items-center gap-1.5 text-white/80", isCompact ? "text-[9px]" : "text-xs")}>
               <Scissors className="h-3 w-3 shrink-0" />
-              <span className="truncate">{serviceLabel}</span>
+              <span className="min-w-0 flex-1 truncate">{serviceLabel}</span>
+              {isCompact && <span className="shrink-0 font-semibold text-white/65">{timeRangeLabel}</span>}
             </span>
             {!isCompact && (
               <span className="mt-auto flex w-full items-center justify-between gap-2 pt-1 text-[10px] text-white/60">
-                <span>{format(start, "HH:mm")}–{format(end, "HH:mm")}</span>
+                <span>{timeRangeLabel}</span>
                 <span>{formatServicePrice(service?.price)}</span>
               </span>
             )}

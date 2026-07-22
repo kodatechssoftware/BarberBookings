@@ -1129,6 +1129,10 @@ test.describe("admin navigation", () => {
     await expect(tinyAppointment).toBeVisible();
     await expect(overlappingAppointment).toContainText(shortService.name);
     await expect(tinyAppointment).toContainText(tinyService.name);
+    await expect(longAppointment).toContainText("11:00–12:00");
+    await expect(overlappingAppointment).toContainText("11:30–12:00");
+    await expect(nextAppointment).toContainText("12:00–12:30");
+    await expect(tinyAppointment).toContainText("12:30–12:45");
 
     const cardContentMetrics = await Promise.all([longAppointment, overlappingAppointment, nextAppointment, tinyAppointment].map((appointment) =>
       appointment.evaluate((element) => ({
