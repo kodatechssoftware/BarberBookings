@@ -455,11 +455,10 @@ export function WeeklyAgenda({
     }
 
     const isSingleBarberView = displayedBarbers.length === 1;
-    const singleBarberColumnWidth = 520;
     const gridTemplateColumns = isSingleBarberView
-      ? `72px ${singleBarberColumnWidth}px`
+      ? "72px minmax(0, 1fr)"
       : `72px repeat(${displayedBarbers.length}, minmax(230px, 1fr))`;
-    const minWidth = 72 + displayedBarbers.length * (isSingleBarberView ? singleBarberColumnWidth : 230);
+    const minWidth = 72 + displayedBarbers.length * 230;
 
     return (
       <>
@@ -527,7 +526,10 @@ export function WeeklyAgenda({
         </div>
 
         <div className="day-agenda-horizontal-scroll hidden md:block" data-testid="day-agenda-grid">
-          <div style={{ minWidth, width: isSingleBarberView ? minWidth : undefined }}>
+          <div
+            className={cn(isSingleBarberView && "mx-auto w-full max-w-[820px]")}
+            style={{ minWidth: isSingleBarberView ? undefined : minWidth }}
+          >
             <div className="grid" style={{ gridTemplateColumns }}>
               <div className="border-b border-r border-white/10 bg-background/75" />
               {displayedBarbers.map((barber) => {

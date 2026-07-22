@@ -521,11 +521,23 @@ test.describe("admin navigation", () => {
     await page.getByRole("combobox").first().click();
     await page.getByRole("option", { name: barber.name, exact: true }).click();
 
+    const desktopAgenda = page.getByTestId("day-agenda-grid");
+    const focusedAgenda = desktopAgenda.locator(":scope > div");
     const barberHeaders = page.getByTestId("day-agenda-barber-header");
     await expect(barberHeaders).toHaveCount(1);
-    const headerBox = await barberHeaders.boundingBox();
+    const [agendaBox, focusedAgendaBox, headerBox] = await Promise.all([
+      desktopAgenda.boundingBox(),
+      focusedAgenda.boundingBox(),
+      barberHeaders.boundingBox(),
+    ]);
+    expect(agendaBox).toBeTruthy();
+    expect(focusedAgendaBox).toBeTruthy();
     expect(headerBox).toBeTruthy();
-    expect(headerBox!.width).toBeLessThanOrEqual(520.5);
+    expect(focusedAgendaBox!.width).toBeCloseTo(820, 0);
+    expect(headerBox!.width).toBeCloseTo(748, 0);
+    const leftGap = focusedAgendaBox!.x - agendaBox!.x;
+    const rightGap = agendaBox!.x + agendaBox!.width - focusedAgendaBox!.x - focusedAgendaBox!.width;
+    expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(10);
 
     const appointment = page.getByRole("button", { name: /Agenda Filtered Card QA/ }).first();
     await expect(appointment).toBeVisible();
@@ -534,6 +546,18 @@ test.describe("admin navigation", () => {
       (element.textContent?.match(/14:00/g) || []).length,
     );
     expect(startTimeOccurrences).toBe(1);
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-filtered-barber-desktop.png" });
+    }
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    const tabletMetrics = await desktopAgenda.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(tabletMetrics.scrollWidth).toBe(tabletMetrics.clientWidth);
+    await expectNoHorizontalOverflow(page);
   });
 
   test("adds and removes barber columns responsively across desktop, tablet and mobile", async ({ page, request }) => {
