@@ -1436,15 +1436,22 @@ test.describe("agenda interaction", () => {
     await expect(adminTabs).toHaveCSS("height", "48px");
   });
 
-  test("locks the desktop daily agenda scroller to horizontal panning", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
+  test("keeps horizontal agenda panning without trapping the page scroll", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 700 });
     await loginAdmin(page);
 
     const horizontalAgenda = page.locator(".day-agenda-horizontal-scroll");
     await expect(horizontalAgenda).toBeVisible();
     await expect(horizontalAgenda).toHaveCSS("overflow-x", "auto");
     await expect(horizontalAgenda).toHaveCSS("overflow-y", "hidden");
-    await expect(horizontalAgenda).toHaveCSS("touch-action", "pan-x");
+
+    await horizontalAgenda.hover({ position: { x: 200, y: 250 } });
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    await page.mouse.wheel(0, 500);
+
+    await expect
+      .poll(() => page.evaluate(() => window.scrollY))
+      .toBeGreaterThan(scrollBefore);
   });
 });
 

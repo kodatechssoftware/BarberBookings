@@ -88,7 +88,16 @@
     display: none;
   }
 
-  .day-agenda-horizontal-scroll,
+  .day-agenda-horizontal-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+    scrollbar-gutter: stable;
+    touch-action: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .agenda-date-strip {
     overflow-x: auto;
     overflow-y: hidden;
