@@ -55,7 +55,7 @@ function EditAppointmentDialog({
   toast,
 }: {
   appointment: AdminAppointment;
-  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null }>;
+  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null; isVisible?: boolean | null }>;
   services?: ServiceListItem[];
   toast: ReturnType<typeof useToast>["toast"];
 }) {
@@ -65,8 +65,13 @@ function EditAppointmentDialog({
   const [barberId, setBarberId] = useState(String(appointment.barberId));
   const [serviceId, setServiceId] = useState(appointment.serviceId ? String(appointment.serviceId) : "none");
   const [isSaving, setIsSaving] = useState(false);
-  const serviceList = services || [];
-  const selectedBarber = barbers?.find((barber) => String(barber.id) === barberId);
+  const serviceList = (services || []).filter((service) =>
+    service.isVisible !== false || service.id === appointment.serviceId,
+  );
+  const activeBarbers = (barbers || []).filter((barber) =>
+    barber.isVisible !== false || barber.id === appointment.barberId,
+  );
+  const selectedBarber = activeBarbers.find((barber) => String(barber.id) === barberId);
   const compatibleServices = useMemo(
     () => serviceList.filter((service) => canBarberPerformService(selectedBarber, service.id)),
     [selectedBarber, serviceList],
@@ -163,7 +168,7 @@ function EditAppointmentDialog({
             <Select value={barberId} onValueChange={setBarberId}>
               <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-card border-white/10 text-white">
-                {barbers?.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
+                {activeBarbers.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

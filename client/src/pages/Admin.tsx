@@ -37,7 +37,7 @@ import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialo
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { apiFetch } from "@/lib/api";
+import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
 import {
   canBarberPerformService,
   getEffectivePeriodsForBarber,
@@ -1104,6 +1104,7 @@ function validateAvailabilityForm(form: AvailabilityForm) {
 
 export default function Admin() {
   const [user, setUser] = useState<AdminUser | null>(null);
+  const sessionExpiryHandledRef = useRef(false);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
@@ -1401,6 +1402,7 @@ export default function Admin() {
       const res = await apiFetch("/api/admin/me");
       if (res.ok) {
         const data = await res.json();
+        sessionExpiryHandledRef.current = false;
         setUser(data);
       } else {
         setUser({ authorized: false, role: "" });
@@ -1421,6 +1423,7 @@ export default function Admin() {
       });
       if (res.ok) {
         const data = await res.json();
+        sessionExpiryHandledRef.current = false;
         setUser({
           authorized: true,
           role: data.role,
@@ -1442,8 +1445,13 @@ export default function Admin() {
   };
 
   const handleLogout = async () => {
-    await apiFetch("/api/admin/logout", { method: "POST" });
-    setUser({ authorized: false, role: "" });
+    try {
+      await apiFetch("/api/admin/logout", { method: "POST" });
+    } finally {
+      queryClient.clear();
+      setSelectedAppointment(null);
+      setUser({ authorized: false, role: "" });
+    }
   };
 
   const availabilityRowsToForm = (rows: any[], openField: "isWorking" | "isOpen" = "isWorking") => {
@@ -1843,7 +1851,7 @@ export default function Admin() {
 
   const handleStatusChange = (appointmentId: number, status: AppointmentStatus) => {
     updateStatus.mutate(
-      { id: appointmentId, status },
+      { id: appointmentId, status, expectedStatus: "booked" },
       {
         onSuccess: () => {
           toast({ title: "Atualizado", description: `Estado alterado para ${getStatusLabel(status).toLowerCase()}.` });
@@ -2019,7 +2027,26 @@ export default function Admin() {
   }), [appointmentList]);
 
   useEffect(() => {
+    const handleUnauthorized = () => {
+      if (sessionExpiryHandledRef.current) return;
+
+      sessionExpiryHandledRef.current = true;
+      queryClient.clear();
+      setSelectedAppointment(null);
+      setUser({ authorized: false, role: "" });
+      toast({
+        title: "Sessão terminada",
+        description: "Inicie sessão novamente para continuar.",
+        variant: "destructive",
+      });
+    };
+
+    window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
     checkAuth();
+
+    return () => {
+      window.removeEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
+    };
   }, []);
 
   const isDayClosed = (date: Date) => {
@@ -2053,7 +2080,7 @@ export default function Admin() {
 
   const selectedBlockBarber = barbers?.find((barber) => String(barber.id) === blockData.barberId);
   const manualBookingServices = useMemo(() => {
-    const serviceList = services || [];
+    const serviceList = (services || []).filter((service) => service.isVisible !== false);
     if (!blockData.barberId) return serviceList;
     return serviceList.filter((service) => canBarberPerformService(selectedBlockBarber, service.id));
   }, [blockData.barberId, selectedBlockBarber, services]);
@@ -2198,8 +2225,6 @@ export default function Admin() {
     }
 
     try {
-      const promises: any[] = [];
-      
       if (blockData.isRecurring) {
         const timeStr = blockData.times[0];
         const startTime = createBlockStartTime(blockData.date, timeStr);
@@ -2232,24 +2257,24 @@ export default function Admin() {
           }
         }
         
-        for (const date of datesToBlock) {
-          for (const timeStr of blockData.times) {
-            const startTime = createBlockStartTime(date, timeStr);
-            
-            const payload = {
-              barberId: Number(blockData.barberId),
-              serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
-              startTime: startTime,
-              name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
-              phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
-              isManualBooking: blockData.isManualBooking,
-              allowOutsideHours: blockData.allowOutsideHours,
-            };
-
-            promises.push(apiRequest("POST", "/api/appointments/block", payload));
-          }
+        const startTimes = datesToBlock.flatMap((date) =>
+          blockData.times.map((timeStr) => createBlockStartTime(date, timeStr)),
+        );
+        if (startTimes.length === 0) {
+          toast({ title: "Erro", description: "Não existem dias abertos no período selecionado.", variant: "destructive" });
+          return;
         }
-        await Promise.all(promises);
+
+        await apiRequest("POST", "/api/appointments/block", {
+          barberId: Number(blockData.barberId),
+          serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
+          startTime: startTimes[0],
+          startTimes,
+          name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
+          phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
+          isManualBooking: blockData.isManualBooking,
+          allowOutsideHours: blockData.allowOutsideHours,
+        });
       }
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
@@ -3004,7 +3029,7 @@ export default function Admin() {
                       </Dialog>
                       <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
-                        description="A palavra-passe atual deixa de funcionar até o barbeiro aceitar o novo convite."
+                        description="Se já existir outro convite, esse link deixa de funcionar. A palavra-passe atual mantém-se válida até o novo convite ser aceite."
                         confirmLabel="Criar convite"
                         confirmClassName="bg-primary text-primary-foreground hover:bg-primary/90"
                         onConfirm={() => handleCreateBarberInvite(barber)}

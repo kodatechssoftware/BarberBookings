@@ -36,7 +36,7 @@ import {
   type CreateCustomerNoteRequest,
   type CreateAuditLogRequest
 } from "@shared/schema";
-import { eq, and, gte, gt, lte, isNull, sql, desc, type SQL } from "drizzle-orm";
+import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
 
@@ -50,6 +50,56 @@ type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const appointmentConflictCode = "APPOINTMENT_CONFLICT";
+const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
+const shopDateTimePartsFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: SHOP_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function shopCalendarDateToInstant(year: number, month: number, day: number) {
+  const targetTimestamp = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+  let candidateTimestamp = targetTimestamp;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = Object.fromEntries(
+      shopDateTimePartsFormatter
+        .formatToParts(new Date(candidateTimestamp))
+        .map((part) => [part.type, part.value]),
+    );
+    const representedTimestamp = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const difference = representedTimestamp - targetTimestamp;
+    if (difference === 0) break;
+    candidateTimestamp -= difference;
+  }
+
+  return new Date(candidateTimestamp);
+}
+
+export function getShopDateBounds(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const nextDate = new Date(Date.UTC(year, month - 1, day + 1));
+  return {
+    start: shopCalendarDateToInstant(year, month, day),
+    endExclusive: shopCalendarDateToInstant(
+      nextDate.getUTCFullYear(),
+      nextDate.getUTCMonth() + 1,
+      nextDate.getUTCDate(),
+    ),
+  };
+}
 
 export class AppointmentConflictError extends Error {
   code = appointmentConflictCode;
@@ -116,6 +166,7 @@ export interface IStorage {
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
+  createAppointments(appointments: CreateAppointmentStorageRequest[]): Promise<Appointment[]>;
   updateAppointment(
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
@@ -328,11 +379,8 @@ export class DatabaseStorage implements IStorage {
     }
     
     if (date) {
-      const start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(23, 59, 59, 999);
-      conditions.push(gte(appointments.startTime, start), lte(appointments.startTime, end));
+      const { start, endExclusive } = getShopDateBounds(date);
+      conditions.push(gte(appointments.startTime, start), lt(appointments.startTime, endExclusive));
     }
 
     if (conditions.length > 0) {
@@ -353,15 +401,13 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (startDate) {
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
+      const { start } = getShopDateBounds(startDate);
       conditions.push(gte(appointments.startTime, start));
     }
 
     if (endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      conditions.push(lte(appointments.startTime, end));
+      const { endExclusive } = getShopDateBounds(endDate);
+      conditions.push(lt(appointments.startTime, endExclusive));
     }
 
     if (conditions.length === 0) {
@@ -386,13 +432,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
+    const [createdAppointment] = await this.createAppointments([appointment]);
+    return createdAppointment;
+  }
+
+  async createAppointments(appointmentInputs: CreateAppointmentStorageRequest[]): Promise<Appointment[]> {
+    if (appointmentInputs.length === 0) return [];
+
     try {
       return await db.transaction(async (tx) => {
-        await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
-        await this.assertNoAppointmentConflict(tx, appointment);
+        const lockTargets = new Map<string, CreateAppointmentStorageRequest>();
+        for (const appointment of appointmentInputs) {
+          const dayKey = getAppointmentLockDayKey(toAppointmentDate(appointment.startTime));
+          lockTargets.set(`${appointment.barberId}:${dayKey}`, appointment);
+        }
 
-        const [newAppointment] = await tx.insert(appointments).values(appointment).returning();
-        return newAppointment;
+        const sortedLockTargets = Array.from(lockTargets.values()).sort((left, right) => {
+          if (left.barberId !== right.barberId) return left.barberId - right.barberId;
+          return toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime();
+        });
+        for (const appointment of sortedLockTargets) {
+          await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
+        }
+
+        const createdAppointments: Appointment[] = [];
+        for (const appointment of appointmentInputs) {
+          await this.assertNoAppointmentConflict(tx, appointment);
+          const [newAppointment] = await tx.insert(appointments).values(appointment).returning();
+          createdAppointments.push(newAppointment);
+        }
+
+        return createdAppointments;
       });
     } catch (error) {
       if (isAppointmentConflictError(error)) {
@@ -934,32 +1004,27 @@ export class MemoryStorage implements IStorage {
   }
 
   async getAppointments(barberId?: number, date?: string): Promise<Appointment[]> {
-    const start = date ? new Date(date) : null;
-    if (start) start.setHours(0, 0, 0, 0);
-    const end = start ? new Date(start) : null;
-    if (end) end.setHours(23, 59, 59, 999);
+    const bounds = date ? getShopDateBounds(date) : null;
 
     return this.appointments
       .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
       .filter((appointment) => {
-        if (!start || !end) return true;
+        if (!bounds) return true;
         const appointmentDate = new Date(appointment.startTime);
-        return appointmentDate >= start && appointmentDate <= end;
+        return appointmentDate >= bounds.start && appointmentDate < bounds.endExclusive;
       })
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }
 
   async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]> {
-    const start = startDate ? new Date(startDate) : null;
-    if (start) start.setHours(0, 0, 0, 0);
-    const end = endDate ? new Date(endDate) : null;
-    if (end) end.setHours(23, 59, 59, 999);
+    const start = startDate ? getShopDateBounds(startDate).start : null;
+    const endExclusive = endDate ? getShopDateBounds(endDate).endExclusive : null;
 
     return this.appointments
       .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
       .filter((appointment) => {
         const appointmentDate = new Date(appointment.startTime);
-        return (!start || appointmentDate >= start) && (!end || appointmentDate <= end);
+        return (!start || appointmentDate >= start) && (!endExclusive || appointmentDate < endExclusive);
       })
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }
@@ -973,25 +1038,45 @@ export class MemoryStorage implements IStorage {
   }
 
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
-    const newAppointment: Appointment = {
-      id: this.nextIds.appointment++,
-      barberId: appointment.barberId,
-      serviceId: appointment.serviceId ?? null,
-      startTime: appointment.startTime,
-      customerName: appointment.customerName,
-      customerEmail: appointment.customerEmail ?? null,
-      customerPhone: appointment.customerPhone,
-      durationMinutes: appointment.durationMinutes,
-      status: appointment.status ?? "booked",
-      cancelToken: appointment.cancelToken,
-      cancelledAt: null,
-      depositRequired: appointment.depositRequired ?? false,
-      depositReason: appointment.depositReason ?? null,
-      createdAt: new Date(),
-    };
-    this.assertNoAppointmentConflict(newAppointment);
-    this.appointments.push(newAppointment);
-    return newAppointment;
+    const [createdAppointment] = await this.createAppointments([appointment]);
+    return createdAppointment;
+  }
+
+  async createAppointments(appointmentInputs: CreateAppointmentStorageRequest[]): Promise<Appointment[]> {
+    if (appointmentInputs.length === 0) return [];
+
+    const originalLength = this.appointments.length;
+    const originalNextId = this.nextIds.appointment;
+    const createdAppointments: Appointment[] = [];
+
+    try {
+      for (const appointment of appointmentInputs) {
+        const newAppointment: Appointment = {
+          id: this.nextIds.appointment++,
+          barberId: appointment.barberId,
+          serviceId: appointment.serviceId ?? null,
+          startTime: appointment.startTime,
+          customerName: appointment.customerName,
+          customerEmail: appointment.customerEmail ?? null,
+          customerPhone: appointment.customerPhone,
+          durationMinutes: appointment.durationMinutes,
+          status: appointment.status ?? "booked",
+          cancelToken: appointment.cancelToken,
+          cancelledAt: null,
+          depositRequired: appointment.depositRequired ?? false,
+          depositReason: appointment.depositReason ?? null,
+          createdAt: new Date(),
+        };
+        this.assertNoAppointmentConflict(newAppointment);
+        this.appointments.push(newAppointment);
+        createdAppointments.push(newAppointment);
+      }
+      return createdAppointments;
+    } catch (error) {
+      this.appointments.splice(originalLength);
+      this.nextIds.appointment = originalNextId;
+      throw error;
+    }
   }
 
   async updateAppointment(

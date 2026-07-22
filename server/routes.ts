@@ -1,7 +1,7 @@
 ﻿import type { Express } from "express";
 import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
-import { isAppointmentConflictError, storage } from "./storage";
+import { getShopDateBounds, isAppointmentConflictError, storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -17,8 +17,6 @@ import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { parseISO, format, isValid, startOfDay, endOfDay } from "date-fns";
-import { pt } from "date-fns/locale";
 import ExcelJS from 'exceljs';
 import { appointmentStatuses, insertServiceSchema, type Appointment } from "@shared/schema";
 import {
@@ -149,6 +147,10 @@ const blacklistInputSchema = z.object({
     .refine(isValidOptionalEmail, emailValidationMessage),
   reason: z.string().trim().max(500).optional(),
   cancelFutureAppointments: z.boolean().optional(),
+});
+const shopWeekdayFormatter = new Intl.DateTimeFormat("pt-PT", {
+  timeZone: SHOP_TIME_ZONE,
+  weekday: "long",
 });
 
 const loginInputSchema = z.object({
@@ -964,10 +966,10 @@ function getScheduleValidationError(
 type AppointmentLike = {
   id?: number;
   barberId: number;
-  serviceId: number | null;
+  serviceId?: number | null;
   startTime: Date | string;
   durationMinutes?: number;
-  status: string;
+  status?: string;
 };
 
 function toDate(value: Date | string) {
@@ -1023,7 +1025,7 @@ function hasAppointmentConflict(
 ) {
   return appointments.some((appointment) => {
     if (appointment.barberId !== barberId) return false;
-    if (appointment.status !== "booked") return false;
+    if ((appointment.status || "booked") !== "booked") return false;
     if (ignoreAppointmentId !== undefined && appointment.id === ignoreAppointmentId) return false;
 
     const appointmentStart = toDate(appointment.startTime);
@@ -1062,17 +1064,46 @@ function addCalendarDays(date: Date, amount: number) {
   return next;
 }
 
-function createDashboardDays(start: Date, end: Date) {
-  const days: Array<{ key: string; label: string }> = [];
-  let cursor = startOfDay(start);
-  const lastDay = startOfDay(end);
+function addDaysToCalendarDateKey(dateKey: string, amount: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + amount));
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
 
-  while (cursor <= lastDay) {
+function formatCalendarDateKey(dateKey: string, separator = "/") {
+  const [year, month, day] = dateKey.split("-");
+  return [day, month, year].join(separator);
+}
+
+function calendarDateKeyToExcelDate(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function toExcelShopDateTime(date: Date) {
+  const parts = getShopDateParts(date);
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute));
+}
+
+function formatShopTime(date: Date) {
+  const parts = getShopDateParts(date);
+  return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+}
+
+function createDashboardDays(startDateKey: string, endDateKey: string) {
+  const days: Array<{ key: string; label: string }> = [];
+  let cursor = startDateKey;
+
+  while (cursor <= endDateKey) {
     days.push({
-      key: format(cursor, "yyyy-MM-dd"),
-      label: format(cursor, "dd/MM"),
+      key: cursor,
+      label: formatCalendarDateKey(cursor).slice(0, 5),
     });
-    cursor = addCalendarDays(cursor, 1);
+    cursor = addDaysToCalendarDateKey(cursor, 1);
   }
 
   return days;
@@ -1144,7 +1175,7 @@ export async function registerRoutes(
 
       // Try barber login if admin fails
         const barber = await findBarberByEmail(normalizedUsername);
-      if (barber) {
+      if (barber && barber.isVisible !== false) {
         if (!barber.password) {
           return res.status(403).json({
             message: "A palavra-passe ainda não foi definida. Peça ao administrador um convite de acesso.",
@@ -1187,7 +1218,10 @@ export async function registerRoutes(
 
   app.get("/api/admin/me", async (req, res) => {
     const appSession = getAppSession(req);
-    if (!appSession.adminId && !appSession.barberId) {
+    if (
+      (appSession.role !== "admin" || !appSession.adminId)
+      && (appSession.role !== "barber" || !appSession.barberId)
+    ) {
       return res.json({ authorized: false, role: "" });
     }
     const role = appSession.role;
@@ -1196,6 +1230,12 @@ export async function registerRoutes(
     let userDetails = {};
     if (role === "barber") {
       const barber = appSession.barberId ? await storage.getBarber(appSession.barberId) : undefined;
+      if (!barber || barber.isVisible === false) {
+        return req.session.destroy((error) => {
+          if (error) console.warn("Could not clear invalid barber session:", error);
+          return res.json({ authorized: false, role: "" });
+        });
+      }
       userDetails = { name: barber?.name, email: barber?.email };
     }
     
@@ -1204,14 +1244,27 @@ export async function registerRoutes(
 
   // Auth Middleware for admin routes
   const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
-    if (getAppSession(req).role !== "admin") return res.status(401).json({ message: "Não autorizado" });
+    const appSession = getAppSession(req);
+    if (appSession.role !== "admin" || !appSession.adminId) {
+      return res.status(401).json({ message: "Não autorizado" });
+    }
     next();
   };
 
-  const requireAuth = (req: Request, res: Response, next: NextFunction) => {
+  const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
     const appSession = getAppSession(req);
-    if (!appSession.adminId && !appSession.barberId) return res.status(401).json({ message: "Não autorizado" });
-    next();
+    if (appSession.role === "admin" && appSession.adminId) return next();
+    if (appSession.role !== "barber" || !appSession.barberId) {
+      return res.status(401).json({ message: "Não autorizado" });
+    }
+
+    const barber = await storage.getBarber(appSession.barberId);
+    if (barber && barber.isVisible !== false) return next();
+
+    return req.session.destroy((error) => {
+      if (error) console.warn("Could not clear invalid barber session:", error);
+      return res.status(401).json({ message: "Não autorizado" });
+    });
   };
 
   app.get("/api/admin/audit-logs", requireAdmin, async (req, res) => {
@@ -1281,6 +1334,16 @@ export async function registerRoutes(
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);
       if (normalizedBarberPatch.email && await findBarberByEmail(normalizedBarberPatch.email, barberId)) {
         return res.status(409).json({ message: "Já existe um barbeiro com este email." });
+      }
+      if (normalizedBarberPatch.isVisible === false && existing.isVisible !== false) {
+        const hasFutureAppointments = (await storage.getAppointments(barberId)).some((appointment) =>
+          appointment.status === "booked" && new Date(appointment.startTime).getTime() >= Date.now(),
+        );
+        if (hasFutureAppointments) {
+          return res.status(409).json({
+            message: "Este barbeiro tem marcações futuras. Reatribua ou cancele essas marcações antes de o arquivar.",
+          });
+        }
       }
 
       const hasBarberPatch = Object.keys(normalizedBarberPatch).length > 0;
@@ -1447,6 +1510,9 @@ export async function registerRoutes(
       if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
       const barber = await storage.getBarber(barberId);
       if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado" });
+      if (barber.isVisible === false) {
+        return res.status(409).json({ message: "Reative o barbeiro antes de criar um convite de acesso." });
+      }
       if (!barber.email) {
         return res.status(400).json({ message: "Adicione um email ao barbeiro antes de criar o convite." });
       }
@@ -1483,7 +1549,9 @@ export async function registerRoutes(
     }
 
     const barber = await storage.getBarber(invite.barberId);
-    if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado." });
+    if (!barber || barber.isVisible === false) {
+      return res.status(404).json({ message: "Convite inválido ou expirado." });
+    }
 
     res.json({
       barberName: barber.name,
@@ -1508,7 +1576,9 @@ export async function registerRoutes(
       const { password } = parsedPassword.data;
 
       const barber = await storage.getBarber(invite.barberId);
-      if (!barber) return res.status(404).json({ message: "Barbeiro não encontrado." });
+      if (!barber || barber.isVisible === false) {
+        return res.status(404).json({ message: "Convite inválido ou expirado." });
+      }
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const updatedBarber = await storage.acceptBarberInvite(invite.id, barber.id, hashedPassword);
@@ -1994,24 +2064,37 @@ export async function registerRoutes(
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
-      const { barberId, startTime, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
+      const { barberId, startTime, startTimes, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
-        (isRecurring !== undefined && typeof isRecurring !== "boolean")
+        (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
+        (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
+        (isRecurring && startTimes !== undefined)
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
 
       const barberIdNumber = Number(barberId);
-      if (!Number.isInteger(barberIdNumber) || barberIdNumber <= 0 || !await storage.getBarber(barberIdNumber)) {
+      const selectedBarber = Number.isInteger(barberIdNumber) && barberIdNumber > 0
+        ? await storage.getBarber(barberIdNumber)
+        : undefined;
+      if (!selectedBarber) {
         return res.status(400).json({ message: "Barbeiro inválido." });
       }
+      if (selectedBarber.isVisible === false) {
+        return res.status(400).json({ message: "Barbeiro indisponível para novas marcações." });
+      }
 
-      const start = new Date(startTime);
-      if (Number.isNaN(start.getTime())) {
+      const rawRequestedStarts: unknown[] = startTimes === undefined ? [startTime] : startTimes;
+      if (rawRequestedStarts.some((value) => typeof value !== "string" || !value.trim())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
       }
+      const requestedStarts = rawRequestedStarts.map((value) => new Date(value as string));
+      if (requestedStarts.some((value: Date) => Number.isNaN(value.getTime()))) {
+        return res.status(400).json({ message: "Data ou hora inválida." });
+      }
+      const start = requestedStarts[0];
 
       const serviceIdNumber = serviceId === null || serviceId === undefined || serviceId === ""
         ? null
@@ -2021,6 +2104,9 @@ export async function registerRoutes(
       }
       if (isManualBooking && serviceIdNumber === null) {
         return res.status(400).json({ message: "Selecione um serviço para a marcação manual." });
+      }
+      if (!isManualBooking && serviceIdNumber !== null) {
+        return res.status(400).json({ message: "Uma ausência não pode ter um serviço associado." });
       }
 
       const normalizedName = typeof name === "string" ? name.trim() : "";
@@ -2045,8 +2131,14 @@ export async function registerRoutes(
       const conflicts = [];
       const services = await storage.getServices();
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
-      if (serviceIdNumber !== null && !services.some((service) => service.id === serviceIdNumber)) {
+      const selectedService = serviceIdNumber === null
+        ? undefined
+        : services.find((service) => service.id === serviceIdNumber);
+      if (serviceIdNumber !== null && !selectedService) {
         return res.status(400).json({ message: "Serviço não encontrado." });
+      }
+      if (isManualBooking && selectedService?.isVisible === false) {
+        return res.status(400).json({ message: "Serviço indisponível para novas marcações." });
       }
       const duration = serviceIdNumber
         ? getAppointmentDurationMinutes(serviceIdNumber, serviceDurations)
@@ -2079,21 +2171,28 @@ export async function registerRoutes(
       if (isRecurring && isBeforeNow(start)) {
         return res.status(400).json({ message: "A recorrência deve começar numa data e hora futuras." });
       }
-      if (!isRecurring && isManualBooking && isBeforeNow(start)) {
+      if (!isRecurring && requestedStarts.some((value: Date) => isBeforeNow(value))) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
 
       const occurrences = (isRecurring && recurringWeeks && recurringMonths)
         ? Math.max(1, Math.floor((recurringMonthsNumber * 4.33) / recurringWeeksNumber))
-        : 1;
+        : requestedStarts.length;
+      const occurrenceStarts = isRecurring
+        ? Array.from({ length: occurrences }, (_, index) => addWeeksPreservingShopTime(start, index * recurringWeeksNumber))
+        : requestedStarts;
+      const workingPeriodsByWeekday = new Map<number, MinutePeriod[]>();
+      const existingAppointmentsByDate = new Map<string, Appointment[]>();
 
-      for (let i = 0; i < occurrences; i++) {
-        const currentStart = isRecurring
-          ? addWeeksPreservingShopTime(start, i * recurringWeeksNumber)
-          : new Date(start);
+      for (const currentStart of occurrenceStarts) {
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
-        const workingPeriods = await getBarberWorkingPeriods(barberIdNumber, getShopDateParts(currentStart).weekday);
+        const shopDateParts = getShopDateParts(currentStart);
         const canBypassSchedule = Boolean(isManualBooking && allowOutsideHours);
+        let workingPeriods = workingPeriodsByWeekday.get(shopDateParts.weekday);
+        if (!canBypassSchedule && !workingPeriods) {
+          workingPeriods = await getBarberWorkingPeriods(barberIdNumber, shopDateParts.weekday);
+          workingPeriodsByWeekday.set(shopDateParts.weekday, workingPeriods);
+        }
         const scheduleError = canBypassSchedule
           ? null
           : getScheduleValidationError(currentStart, duration, workingPeriods);
@@ -2103,14 +2202,15 @@ export async function registerRoutes(
           });
         }
 
-        const existingAppointments = await storage.getAppointments(
-          barberIdNumber,
-          getShopDateParts(currentStart).dateKey,
-        );
+        let existingAppointments = existingAppointmentsByDate.get(shopDateParts.dateKey);
+        if (!existingAppointments) {
+          existingAppointments = await storage.getAppointments(barberIdNumber, shopDateParts.dateKey);
+          existingAppointmentsByDate.set(shopDateParts.dateKey, existingAppointments);
+        }
 
         if (
           hasAppointmentConflict(
-            existingAppointments,
+            [...existingAppointments, ...appointments],
             barberIdNumber,
             currentStart,
             currentEnd,
@@ -2136,7 +2236,7 @@ export async function registerRoutes(
         });
       }
 
-      if (conflicts.length > 0 && occurrences > 1) {
+      if (conflicts.length > 0 && occurrenceStarts.length > 1) {
         return res.status(400).json({ 
           message: "Conflitos detetados em algumas datas", 
           conflicts 
@@ -2145,10 +2245,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Horário indisponível para este barbeiro." });
       }
 
-      const createdAppointments: Appointment[] = [];
-      for (const app of appointments) {
-        createdAppointments.push(await storage.createAppointment(app));
-      }
+      const createdAppointments: Appointment[] = await storage.createAppointments(appointments);
 
       await recordAuditLog(req, {
         action: isManualBooking ? "appointment.created_manual" : "appointment.absence_created",
@@ -2242,8 +2339,14 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Barbeiro inválido." });
       }
 
-      if (hasBarberPatch && !await storage.getBarber(newBarberId)) {
-        return res.status(400).json({ message: "Barbeiro não encontrado." });
+      if (hasBarberPatch) {
+        const selectedBarber = await storage.getBarber(newBarberId);
+        if (!selectedBarber) {
+          return res.status(400).json({ message: "Barbeiro não encontrado." });
+        }
+        if (selectedBarber.isVisible === false && newBarberId !== currentApp.barberId) {
+          return res.status(400).json({ message: "Barbeiro indisponível para novas marcações." });
+        }
       }
 
       if (hasServicePatch && newServiceId !== null && (!Number.isFinite(newServiceId) || newServiceId <= 0)) {
@@ -2252,6 +2355,14 @@ export async function registerRoutes(
 
       if (newServiceId !== null && !services.some((service) => service.id === newServiceId)) {
         return res.status(400).json({ message: "Serviço não encontrado." });
+      }
+      if (
+        hasServicePatch
+        && newServiceId !== null
+        && newServiceId !== currentApp.serviceId
+        && services.find((service) => service.id === newServiceId)?.isVisible === false
+      ) {
+        return res.status(400).json({ message: "Serviço indisponível para novas marcações." });
       }
 
       // Conflict check for re-scheduling or service changes
@@ -2346,6 +2457,10 @@ export async function registerRoutes(
       if (!isKnownAppointmentStatus(status)) {
         return res.status(400).json({ message: "Estado de marcação inválido." });
       }
+      const expectedStatus = req.body.expectedStatus;
+      if (expectedStatus !== undefined && !isKnownAppointmentStatus(expectedStatus)) {
+        return res.status(400).json({ message: "Estado anterior de marcação inválido." });
+      }
 
       const appointmentId = parsePositiveInteger(req.params.id);
       if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
@@ -2357,8 +2472,17 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Não autorizado" });
       }
 
-      const updated = await storage.updateAppointmentStatus(appointmentId, status);
-      if (!updated) return res.status(404).json({ message: "Marcação não encontrada" });
+      const updated = expectedStatus === undefined
+        ? await storage.updateAppointmentStatus(appointmentId, status)
+        : await storage.updateAppointmentStatusIfCurrent(appointmentId, expectedStatus, status);
+      if (!updated) {
+        const latestAppointment = await storage.getAppointment(appointmentId);
+        if (!latestAppointment) return res.status(404).json({ message: "Marcação não encontrada" });
+        return res.status(409).json({
+          message: "A marcação foi alterada entretanto. Atualize a agenda e tente novamente.",
+          status: latestAppointment.status,
+        });
+      }
       await recordAuditLog(req, {
         action: "appointment.status_changed",
         entityType: "appointment",
@@ -2544,16 +2668,18 @@ export async function registerRoutes(
       ? Math.min(Math.max(Math.round(requestedDays), 7), 180)
       : 30;
 
-    const end = req.query.endDate
-      ? endOfDay(parseISO(String(req.query.endDate)))
-      : endOfDay(new Date());
-    const start = req.query.startDate
-      ? startOfDay(parseISO(String(req.query.startDate)))
-      : startOfDay(addCalendarDays(end, -(rangeDays - 1)));
+    const endDateKey = req.query.endDate
+      ? String(req.query.endDate)
+      : getShopDateParts(new Date()).dateKey;
+    const startDateKey = req.query.startDate
+      ? String(req.query.startDate)
+      : addDaysToCalendarDateKey(endDateKey, -(rangeDays - 1));
 
-    if (!isValid(start) || !isValid(end) || start > end) {
+    if (!isCalendarDate(startDateKey) || !isCalendarDate(endDateKey) || startDateKey > endDateKey) {
       return res.status(400).json({ message: "Intervalo de datas inválido." });
     }
+    const { start } = getShopDateBounds(startDateKey);
+    const { endExclusive } = getShopDateBounds(endDateKey);
 
     const hasRequestedBarber = Boolean(req.query.barberId && req.query.barberId !== "all");
     const requestedBarberId = hasRequestedBarber
@@ -2583,7 +2709,7 @@ export async function registerRoutes(
     const businessAppointments = allAppointments.filter(isOperationalAppointment);
     const rangeAppointments = businessAppointments.filter((appointment) => {
       const date = new Date(appointment.startTime);
-      return date >= start && date <= end;
+      return date >= start && date < endExclusive;
     });
 
     const completedAppointments = rangeAppointments.filter((appointment) => appointment.status === "completed");
@@ -2604,7 +2730,7 @@ export async function registerRoutes(
     const completedOrMissed = completedAppointments.length + noShowAppointments.length + lateCancelledAppointments.length;
 
     const dailyMap = new Map(
-      createDashboardDays(start, end).map((day) => [
+      createDashboardDays(startDateKey, endDateKey).map((day) => [
         day.key,
         {
           date: day.key,
@@ -2643,7 +2769,8 @@ export async function registerRoutes(
 
     rangeAppointments.forEach((appointment) => {
       const date = new Date(appointment.startTime);
-      const day = dailyMap.get(format(date, "yyyy-MM-dd"));
+      const shopDateParts = getShopDateParts(date);
+      const day = dailyMap.get(shopDateParts.dateKey);
       const price = getServicePriceCents(appointment.serviceId, servicePrices);
 
       if (day) {
@@ -2682,7 +2809,7 @@ export async function registerRoutes(
       }
 
       if (appointment.status === "completed" || appointment.status === "booked") {
-        const hour = format(date, "HH:00");
+        const hour = `${String(shopDateParts.hour).padStart(2, "0")}:00`;
         hourMap.set(hour, (hourMap.get(hour) || 0) + 1);
       }
     });
@@ -2732,8 +2859,8 @@ export async function registerRoutes(
 
     res.json({
       range: {
-        startDate: start,
-        endDate: end,
+        startDate: startDateKey,
+        endDate: endDateKey,
         days: rangeDays,
         barberId: barberId || "all",
       },
@@ -2984,16 +3111,17 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Datas de início e fim são obrigatórias" });
     }
 
-    const start = startOfDay(parseISO(startDate as string));
-    const end = endOfDay(parseISO(endDate as string));
-
-    if (!isValid(start) || !isValid(end)) {
+    const startDateKey = String(startDate);
+    const endDateKey = String(endDate);
+    if (!isCalendarDate(startDateKey) || !isCalendarDate(endDateKey)) {
       return res.status(400).json({ message: "Datas inválidas" });
     }
 
-    if (start > end) {
+    if (startDateKey > endDateKey) {
       return res.status(400).json({ message: "A data de início não pode ser posterior à data de fim" });
     }
+    const { start } = getShopDateBounds(startDateKey);
+    const { endExclusive } = getShopDateBounds(endDateKey);
 
     const hasSelectedBarber = Boolean(barberId && barberId !== "all");
     const selectedBarberId = hasSelectedBarber ? parsePositiveInteger(barberId) : undefined;
@@ -3065,7 +3193,7 @@ export async function registerRoutes(
         .filter(isOperationalAppointment)
         .filter((appointment) => {
           const appointmentDate = new Date(appointment.startTime);
-          return appointmentDate >= start && appointmentDate <= end;
+          return appointmentDate >= start && appointmentDate < endExclusive;
         })
         .sort((left, right) => new Date(left.startTime).getTime() - new Date(right.startTime).getTime());
 
@@ -3074,10 +3202,10 @@ export async function registerRoutes(
       const serviceSummaryMap = new Map<number | "unknown", ExportSummaryRow>();
       const dailySummaryMap = new Map<string, ExportDailyRow>();
 
-      createDashboardDays(start, end).forEach((day) => {
+      createDashboardDays(startDateKey, endDateKey).forEach((day) => {
         dailySummaryMap.set(day.key, {
           ...createSummaryRow(day.label),
-          date: parseISO(day.key),
+          date: calendarDateKeyToExcelDate(day.key),
           key: day.key,
         });
       });
@@ -3087,7 +3215,7 @@ export async function registerRoutes(
         const barber = barbersById.get(appointment.barberId);
         const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
         const serviceKey = appointment.serviceId ?? "unknown";
-        const dateKey = format(new Date(appointment.startTime), "yyyy-MM-dd");
+        const dateKey = getShopDateParts(new Date(appointment.startTime)).dateKey;
         const barberSummary = barberSummaryMap.get(appointment.barberId) || createSummaryRow(barber?.name || "Barbeiro desconhecido");
         const serviceSummary = serviceSummaryMap.get(serviceKey) || createSummaryRow(service?.name || "Serviço desconhecido");
         const dailySummary = dailySummaryMap.get(dateKey);
@@ -3188,7 +3316,7 @@ export async function registerRoutes(
       summarySheet.getCell("A1").alignment = { vertical: "middle" };
       summarySheet.getRow(1).height = 28;
       summarySheet.addRows([
-        ["Período", `${format(start, "dd/MM/yyyy")} a ${format(end, "dd/MM/yyyy")}`],
+        ["Período", `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`],
         ["Barbeiro", selectedBarber?.name || "Todos os barbeiros"],
         ["Marcações no período", totalSummary.appointments],
         ["Concluídas", totalSummary.completed],
@@ -3336,6 +3464,7 @@ export async function registerRoutes(
         detailHeaders,
         rangeAppointments.map((appointment) => {
           const startTime = new Date(appointment.startTime);
+          const endTime = new Date(startTime.getTime() + appointment.durationMinutes * 60000);
           const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
           const barber = barbersById.get(appointment.barberId);
           const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
@@ -3343,10 +3472,10 @@ export async function registerRoutes(
           const projectedCents = appointment.status === "booked" ? priceCents : 0;
 
           return [
-            startTime,
-            format(startTime, "EEEE", { locale: pt }),
-            format(startTime, "HH:mm"),
-            format(new Date(startTime.getTime() + appointment.durationMinutes * 60000), "HH:mm"),
+            toExcelShopDateTime(startTime),
+            shopWeekdayFormatter.format(startTime),
+            formatShopTime(startTime),
+            formatShopTime(endTime),
             barber?.name || "Barbeiro desconhecido",
             appointment.customerName,
             appointment.customerPhone,
@@ -3357,7 +3486,7 @@ export async function registerRoutes(
             centsToEuros(priceCents),
             centsToEuros(realizedCents),
             centsToEuros(projectedCents),
-            appointment.createdAt ? new Date(appointment.createdAt) : null,
+            appointment.createdAt ? toExcelShopDateTime(new Date(appointment.createdAt)) : null,
           ];
         }),
       );
@@ -3369,7 +3498,7 @@ export async function registerRoutes(
         15: dateTimeFormat,
       });
 
-      const fileName = `Relatório_de_${format(start, "dd-MM-yyyy")}_a_${format(end, "dd-MM-yyyy")}.xlsx`;
+      const fileName = `Relatório_de_${formatCalendarDateKey(startDateKey, "-")}_a_${formatCalendarDateKey(endDateKey, "-")}.xlsx`;
       const fallbackFileName = fileName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

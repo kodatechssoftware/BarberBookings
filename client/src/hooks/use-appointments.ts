@@ -138,14 +138,17 @@ export function useCreateAppointment() {
 export function useUpdateAppointmentStatus() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, status }: { id: number; status: AppointmentStatus }) => {
+    mutationFn: async ({ id, status, expectedStatus }: { id: number; status: AppointmentStatus; expectedStatus?: AppointmentStatus }) => {
       const url = buildUrl(api.appointments.updateStatus.path, { id });
       const res = await apiFetch(url, {
         method: api.appointments.updateStatus.method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, expectedStatus }),
       });
-      if (!res.ok) throw new Error("Failed to update status");
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        throw new Error(error?.message || "Falha ao atualizar o estado da marcação.");
+      }
       return await res.json() as AppointmentRecord;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] }),
