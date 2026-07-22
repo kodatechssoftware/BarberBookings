@@ -477,6 +477,150 @@ test.describe("admin navigation", () => {
     await expect(dialog.getByRole("combobox").first()).toContainText(barber.name);
   });
 
+  test("adds and removes barber columns responsively across desktop, tablet and mobile", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const initialBarbersResponse = await request.get("/api/barbers");
+    expect(initialBarbersResponse.ok(), await initialBarbersResponse.text()).toBe(true);
+    const initialBarbers = await initialBarbersResponse.json();
+    const initialBarberCount = initialBarbers.length;
+    const barberName = `Agenda Responsiva ${Date.now()}`;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Equipa" }).click();
+    await page.getByRole("button", { name: "Adicionar Barbeiro" }).click();
+
+    const addDialog = page.getByRole("dialog", { name: "Adicionar Membro à Equipa" });
+    await expect(addDialog).toBeVisible();
+    const addInputs = addDialog.locator("input");
+    await addInputs.nth(0).fill(barberName);
+    await addInputs.nth(1).fill("Teste de agenda responsiva");
+    await addDialog.getByRole("button", { name: "Criar Barbeiro" }).click();
+    await expect(addDialog).not.toBeVisible();
+
+    const addedTeamCard = page.getByTestId("team-barber-card").filter({ hasText: barberName });
+    await expect(addedTeamCard).toBeVisible();
+
+    const [createdBarbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    expect(createdBarbersResponse.ok(), await createdBarbersResponse.text()).toBe(true);
+    expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+    const createdBarber = (await createdBarbersResponse.json()).find((barber: any) => barber.name === barberName);
+    const [service] = await servicesResponse.json();
+    expect(createdBarber).toBeTruthy();
+    expect(service).toBeTruthy();
+
+    const historyAppointmentStart = currentWeekThursdayIso(18, 0);
+    const historyAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: createdBarber.id,
+        serviceId: service.id,
+        startTime: historyAppointmentStart,
+        name: "Agenda Responsiva Historico QA",
+        phone: "912695799",
+        isManualBooking: true,
+      },
+    });
+    expect(historyAppointmentResponse.ok(), await historyAppointmentResponse.text()).toBe(true);
+    const createdAppointmentsResponse = await request.get(
+      `/api/appointments?barberId=${createdBarber.id}&date=${dateKeyFromIso(historyAppointmentStart)}`,
+    );
+    expect(createdAppointmentsResponse.ok(), await createdAppointmentsResponse.text()).toBe(true);
+    const historyAppointment = (await createdAppointmentsResponse.json()).find((appointment: any) =>
+      appointment.customerName === "Agenda Responsiva Historico QA"
+    );
+    expect(historyAppointment).toBeTruthy();
+    const completeAppointmentResponse = await request.patch(`/api/appointments/${historyAppointment.id}/status`, {
+      data: { status: "completed" },
+    });
+    expect(completeAppointmentResponse.ok(), await completeAppointmentResponse.text()).toBe(true);
+
+    await page.getByRole("tab", { name: "Agenda" }).click();
+    const desktopAgenda = page.getByTestId("day-agenda-grid");
+    const desktopHeaders = page.getByTestId("day-agenda-barber-header");
+    await expect(desktopAgenda).toBeVisible();
+    await expect(desktopHeaders).toHaveCount(initialBarberCount + 1);
+    await expect(desktopHeaders.filter({ hasText: barberName })).toBeVisible();
+
+    const desktopColumnWidths = await desktopHeaders.evaluateAll((elements) =>
+      elements.map((element) => element.getBoundingClientRect().width),
+    );
+    expect(desktopColumnWidths.every((width) => width >= 229)).toBe(true);
+    await expectNoHorizontalOverflow(page);
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-dynamic-barbers-desktop.png" });
+    }
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(desktopAgenda).toBeVisible();
+    await expect(page.getByTestId("day-agenda-mobile")).not.toBeVisible();
+    const tabletMetrics = await desktopAgenda.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      overflowX: getComputedStyle(element).overflowX,
+    }));
+    expect(tabletMetrics.scrollWidth).toBeGreaterThanOrEqual(tabletMetrics.clientWidth);
+    expect(tabletMetrics.overflowX).toBe("auto");
+    await expect(desktopHeaders).toHaveCount(initialBarberCount + 1);
+    await expectNoHorizontalOverflow(page);
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-dynamic-barbers-tablet.png" });
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileAgenda = page.getByTestId("day-agenda-mobile");
+    const mobileBarbers = page.getByTestId("day-agenda-mobile-barber");
+    await expect(mobileAgenda).toBeVisible();
+    await expect(desktopAgenda).not.toBeVisible();
+    await expect(mobileBarbers).toHaveCount(initialBarberCount + 1);
+    await expect(mobileBarbers.filter({ hasText: barberName })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    if (process.env.VISUAL_QA === "true") {
+      await page.getByTestId("agenda-calendar").screenshot({ path: "test-results/agenda-dynamic-barbers-mobile.png" });
+    }
+
+    await page.getByRole("tab", { name: "Equipa" }).click();
+    await page.getByRole("button", { name: `Remover ${barberName}` }).click();
+    const removeDialog = page.getByRole("alertdialog", { name: `Remover ${barberName}?` });
+    await expect(removeDialog).toBeVisible();
+    await removeDialog.getByRole("button", { name: "Remover", exact: true }).click();
+    await expect(addedTeamCard).not.toBeVisible();
+
+    await page.getByRole("tab", { name: "Agenda" }).click();
+    await expect(mobileBarbers).toHaveCount(initialBarberCount);
+    await expect(mobileBarbers.filter({ hasText: barberName })).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(desktopAgenda).toBeVisible();
+    await expect(desktopHeaders).toHaveCount(initialBarberCount);
+    await expect(desktopHeaders.filter({ hasText: barberName })).toHaveCount(0);
+    const tabletMetricsAfterRemoval = await desktopAgenda.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(tabletMetricsAfterRemoval.scrollWidth).toBe(tabletMetricsAfterRemoval.clientWidth);
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(desktopHeaders).toHaveCount(initialBarberCount);
+    const desktopColumnWidthsAfterRemoval = await desktopHeaders.evaluateAll((elements) =>
+      elements.map((element) => element.getBoundingClientRect().width),
+    );
+    expect(desktopColumnWidthsAfterRemoval.every((width) => width > desktopColumnWidths[0])).toBe(true);
+    await expectNoHorizontalOverflow(page);
+
+    const finalBarbersResponse = await request.get("/api/barbers?includeHidden=true");
+    expect(finalBarbersResponse.ok(), await finalBarbersResponse.text()).toBe(true);
+    const finalBarbers = await finalBarbersResponse.json();
+    expect(finalBarbers.find((barber: any) => barber.name === barberName)?.isVisible).toBe(false);
+  });
+
   test("waits for barber and service names before showing appointment rows", async ({ page, request }) => {
     await loginAdminRequest(request);
     const createServiceResponse = await request.post("/api/services", {

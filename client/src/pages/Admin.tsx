@@ -2859,7 +2859,12 @@ export default function Admin() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {activeBarbers.map(barber => (
-                <Card key={barber.id} className="bg-card border-white/10 overflow-hidden text-white">
+                <Card
+                  key={barber.id}
+                  data-testid="team-barber-card"
+                  data-barber-id={barber.id}
+                  className="bg-card border-white/10 overflow-hidden text-white"
+                >
                   <div className="aspect-square bg-muted relative">
                     <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
                     <ConfirmAction
@@ -2875,7 +2880,12 @@ export default function Admin() {
                         }
                       }}
                     >
-                      <Button variant="destructive" size="icon" className="absolute top-2 right-2 h-8 w-8">
+                      <Button
+                        variant="destructive"
+                        size="icon"
+                        className="absolute top-2 right-2 h-8 w-8"
+                        aria-label={`Remover ${barber.name}`}
+                      >
                         <XCircle className="w-4 h-4" />
                       </Button>
                     </ConfirmAction>

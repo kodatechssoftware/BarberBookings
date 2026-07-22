@@ -470,7 +470,12 @@ export function WeeklyAgenda({
             const barberAppointments = selectedDayAppointments.filter((appointment) => appointment.barberId === barber.id);
             const color = normalizeBarberColor(barber.color);
             return (
-              <section key={barber.id} className="overflow-hidden rounded-xl border border-white/10 bg-background/55">
+              <section
+                key={barber.id}
+                data-testid="day-agenda-mobile-barber"
+                data-barber-id={barber.id}
+                className="overflow-hidden rounded-xl border border-white/10 bg-background/55"
+              >
                 <div className="flex items-center justify-between gap-3 border-b border-white/10 p-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <BarberAvatar barber={barber} />
@@ -533,7 +538,12 @@ export function WeeklyAgenda({
                   .filter((appointment) => appointment.status === "booked")
                   .reduce((total, appointment) => total + getWeeklyAppointmentDuration(appointment), 0);
                 return (
-                  <div key={barber.id} className="flex min-w-0 items-center gap-3 border-b border-r border-white/10 bg-background/65 px-4 py-3 last:border-r-0">
+                  <div
+                    key={barber.id}
+                    data-testid="day-agenda-barber-header"
+                    data-barber-id={barber.id}
+                    className="flex min-w-0 items-center gap-3 border-b border-r border-white/10 bg-background/65 px-4 py-3 last:border-r-0"
+                  >
                     <BarberAvatar barber={barber} />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-white">{barber.name}</p>
@@ -559,7 +569,13 @@ export function WeeklyAgenda({
                 const barberAppointments = selectedDayAppointments.filter((appointment) => appointment.barberId === barber.id);
                 const layouts = createAppointmentLayouts(barberAppointments, dayWindow.startMinutes, dayWindow.endMinutes);
                 return (
-                  <div key={barber.id} className="relative border-r border-white/10 last:border-r-0" style={{ height: dayAgendaHeight }}>
+                  <div
+                    key={barber.id}
+                    data-testid="day-agenda-barber-column"
+                    data-barber-id={barber.id}
+                    className="relative border-r border-white/10 last:border-r-0"
+                    style={{ height: dayAgendaHeight }}
+                  >
                     {daySlots.map((slotMinutes) => {
                       const time = formatAgendaMinutes(slotMinutes);
                       const top = getAgendaTopPx(slotMinutes, dayWindow.startMinutes);
