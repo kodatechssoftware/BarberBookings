@@ -42,6 +42,7 @@ import {
   canBarberPerformService,
   getEffectivePeriodsForBarber,
   periodsForShop,
+  timeToMinutes,
   type AvailabilityRow,
   type ShopAvailabilityRow,
 } from "@/lib/availability";
@@ -2142,8 +2143,54 @@ export default function Admin() {
     return (barbers || []).filter((barber) =>
       barber.id !== barberRemovalCandidate?.id &&
       barber.isVisible !== false &&
-      canBarberPerformService(barber, appointment.serviceId)
+      canBarberPerformService(barber, appointment.serviceId) &&
+      canReassignAppointmentToBarber(appointment, barber.id)
     );
+  };
+
+  const getReassignmentCandidateAppointments = () => {
+    const appointmentsById = new Map<number, AdminAppointment>();
+    [...agendaAppointmentList, ...appointmentList, ...futureRemovalAppointments].forEach((appointment) => {
+      appointmentsById.set(appointment.id, appointment);
+    });
+    return Array.from(appointmentsById.values());
+  };
+
+  const appointmentsOverlap = (first: AdminAppointment, second: AdminAppointment) => {
+    const firstStart = parseISO(first.startTime).getTime();
+    const firstEnd = firstStart + Math.max(15, first.durationMinutes || 30) * 60000;
+    const secondStart = parseISO(second.startTime).getTime();
+    const secondEnd = secondStart + Math.max(15, second.durationMinutes || 30) * 60000;
+    return firstStart < secondEnd && firstEnd > secondStart;
+  };
+
+  const canReassignAppointmentToBarber = (
+    appointment: AdminAppointment,
+    barberId: number,
+    proposedAssignments: Record<number, string> = barberReassignments,
+  ) => {
+    const appointmentStart = parseISO(appointment.startTime);
+    const startMinutes = timeToMinutes(format(appointmentStart, "HH:mm"));
+    const durationMinutes = Math.max(15, appointment.durationMinutes || 30);
+    const endMinutes = startMinutes + durationMinutes;
+    const dayOfWeek = appointmentStart.getDay();
+
+    const fitsSchedule = getEffectivePeriodsForBarber({
+      barberId,
+      dayOfWeek,
+      shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+      availabilityRows: (allAvailabilityRows as AvailabilityRow[] | undefined) ?? [],
+    }).some((period) => startMinutes >= period.start && endMinutes <= period.end);
+
+    if (!fitsSchedule) return false;
+
+    return !getReassignmentCandidateAppointments().some((candidate) => {
+      if (candidate.id === appointment.id || candidate.status !== "booked") return false;
+      const assignedBarberId = proposedAssignments[candidate.id]
+        ? Number(proposedAssignments[candidate.id])
+        : candidate.barberId;
+      return assignedBarberId === barberId && appointmentsOverlap(appointment, candidate);
+    });
   };
 
   const handleBulkReassignmentChange = (barberId: string) => {
@@ -2153,7 +2200,10 @@ export default function Admin() {
     setBarberReassignments((current) => {
       const next = { ...current };
       futureRemovalAppointments.forEach((appointment) => {
-        if (canBarberPerformService(replacement, appointment.serviceId)) {
+        if (
+          canBarberPerformService(replacement, appointment.serviceId) &&
+          canReassignAppointmentToBarber(appointment, replacement.id, next)
+        ) {
           next[appointment.id] = barberId;
         }
       });
@@ -2805,7 +2855,14 @@ export default function Admin() {
                   </SelectTrigger>
                   <SelectContent className="bg-card border-white/10 text-white">
                     {(barbers || [])
-                      .filter((barber) => barber.id !== barberRemovalCandidate?.id && barber.isVisible !== false)
+                      .filter((barber) =>
+                        barber.id !== barberRemovalCandidate?.id &&
+                        barber.isVisible !== false &&
+                        futureRemovalAppointments.some((appointment) =>
+                          canBarberPerformService(barber, appointment.serviceId) &&
+                          canReassignAppointmentToBarber(appointment, barber.id),
+                        )
+                      )
                       .map((barber) => (
                         <SelectItem key={barber.id} value={String(barber.id)}>
                           {barber.name}
@@ -2814,7 +2871,7 @@ export default function Admin() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-gray-500">
-                  Se algum barbeiro não fizer o serviço de uma marcação, essa linha fica por escolher manualmente.
+                  Só aparecem barbeiros que fazem o serviço, trabalham nesse horário e não têm marcação sobreposta.
                 </p>
               </div>
 
