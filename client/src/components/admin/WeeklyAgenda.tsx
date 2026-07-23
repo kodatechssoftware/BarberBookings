@@ -491,7 +491,7 @@ export function getAppointmentContactLinks(phone: string) {
 }
 
 export function WeeklyAgenda({
-  weekStartDate = startOfWeek(new Date(), { weekStartsOn: 1 }),
+  weekStartDate,
   appointments,
   barbers,
   services,
@@ -499,12 +499,12 @@ export function WeeklyAgenda({
   selectedBarberFilter,
   selectedStatusFilter,
   canFilterBarbers,
-  canManageSchedule: _canManageSchedule,
+  canManageSchedule,
   onBarberFilterChange,
   onStatusFilterChange,
-  onPreviousWeek = () => {},
-  onNextWeek = () => {},
-  onToday = () => {},
+  onPreviousWeek,
+  onNextWeek,
+  onToday,
   onException,
   onManualBooking,
   onCreateAtSlot,
@@ -528,23 +528,48 @@ export function WeeklyAgenda({
   onToday?: () => void;
   onException: () => void;
   onManualBooking: () => void;
-  onCreateAtSlot: (date: Date, time: string) => void;
+  onCreateAtSlot: (date: Date, time: string, barberId?: number) => void;
   onMoveAppointment: (appointmentId: number, date: Date, time: string) => void;
   onSelectAppointment: (appointment: WeeklyAgendaAppointment) => void;
   getStatusLabel: (status: string) => string;
 }) {
   const [selectedCrowdedGroup, setSelectedCrowdedGroup] = useState<WeeklyAgendaCrowdedGroup | null>(null);
-  const [selectedDayKey, setSelectedDayKey] = useState(() => getDateKey(weekStartDate));
+  const [internalWeekStartDate, setInternalWeekStartDate] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
+  const visibleWeekStartDate = weekStartDate || internalWeekStartDate;
+  const [selectedDayKey, setSelectedDayKey] = useState(() => getDateKey(visibleWeekStartDate));
+  const handlePreviousWeek = () => {
+    if (onPreviousWeek) {
+      onPreviousWeek();
+      return;
+    }
+    setInternalWeekStartDate((current) => addDays(current, -7));
+  };
+  const handleNextWeek = () => {
+    if (onNextWeek) {
+      onNextWeek();
+      return;
+    }
+    setInternalWeekStartDate((current) => addDays(current, 7));
+  };
+  const handleToday = () => {
+    if (onToday) {
+      onToday();
+      return;
+    }
+    const todayWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    setInternalWeekStartDate(todayWeekStart);
+    setSelectedDayKey(getDateKey(new Date()));
+  };
   const calendarDays = useMemo(
-    () => Array.from({ length: 7 }, (_, index) => addDays(weekStartDate, index)),
-    [weekStartDate],
+    () => Array.from({ length: 7 }, (_, index) => addDays(visibleWeekStartDate, index)),
+    [visibleWeekStartDate],
   );
   useEffect(() => {
     const weekContainsSelectedDay = calendarDays.some((day) => getDateKey(day) === selectedDayKey);
     if (!weekContainsSelectedDay) {
-      setSelectedDayKey(getDateKey(weekStartDate));
+      setSelectedDayKey(getDateKey(visibleWeekStartDate));
     }
-  }, [calendarDays, selectedDayKey, weekStartDate]);
+  }, [calendarDays, selectedDayKey, visibleWeekStartDate]);
   const barbersById = useMemo(
     () => new Map((barbers || []).map((barber) => [barber.id, barber])),
     [barbers],
@@ -570,8 +595,8 @@ export function WeeklyAgenda({
     return grouped;
   }, [appointments, calendarDays]);
   const selectedDay = useMemo(
-    () => calendarDays.find((day) => getDateKey(day) === selectedDayKey) || calendarDays[0] || weekStartDate,
-    [calendarDays, selectedDayKey, weekStartDate],
+    () => calendarDays.find((day) => getDateKey(day) === selectedDayKey) || calendarDays[0] || visibleWeekStartDate,
+    [calendarDays, selectedDayKey, visibleWeekStartDate],
   );
   const selectedDayAppointments = useMemo(
     () => appointmentsByDay.get(getDateKey(selectedDay)) || [],
@@ -636,7 +661,7 @@ export function WeeklyAgenda({
     }
   };
 
-  const weekLabel = `${format(weekStartDate, "dd MMM", { locale: pt })} - ${format(addDays(weekStartDate, 6), "dd MMM yyyy", { locale: pt })}`;
+  const weekLabel = `${format(visibleWeekStartDate, "dd MMM", { locale: pt })} - ${format(addDays(visibleWeekStartDate, 6), "dd MMM yyyy", { locale: pt })}`;
   const visibleBarbers = (barbers || []).filter((barber) =>
     appointments.some((appointment) => appointment.barberId === barber.id),
   );
@@ -671,10 +696,10 @@ export function WeeklyAgenda({
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
             <p className="truncate text-sm font-semibold text-white">{appointment.customerName}</p>
           </div>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.06] px-2 text-[10px] font-semibold uppercase tracking-wide text-gray-300">
+          <div className="mt-1 flex min-w-0 items-center gap-2">
+            <span className="inline-flex h-5 max-w-full min-w-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-2 text-[10px] font-semibold uppercase tracking-wide text-gray-300">
               <Scissors className="h-3 w-3 shrink-0" />
-              {serviceBadge}
+              <span className="min-w-0 truncate">{serviceBadge}</span>
             </span>
           </div>
           <p className="mt-1 text-[11px] uppercase tracking-wide text-gray-500">{getStatusLabel(appointment.status)}</p>
@@ -727,24 +752,26 @@ export function WeeklyAgenda({
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="grid grid-cols-[44px_1fr_44px] gap-2 sm:flex">
-                <Button type="button" variant="outline" size="icon" className="h-10 border-white/10" onClick={onPreviousWeek} aria-label="Semana anterior">
+                <Button type="button" variant="outline" size="icon" className="h-10 border-white/10" onClick={handlePreviousWeek} aria-label="Semana anterior">
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Button type="button" variant="outline" className="h-10 border-white/10" onClick={onToday}>
+                <Button type="button" variant="outline" className="h-10 border-white/10" onClick={handleToday}>
                   Hoje
                 </Button>
-                <Button type="button" variant="outline" size="icon" className="h-10 border-white/10" onClick={onNextWeek} aria-label="Semana seguinte">
+                <Button type="button" variant="outline" size="icon" className="h-10 border-white/10" onClick={handleNextWeek} aria-label="Semana seguinte">
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="grid grid-cols-2 gap-2 sm:flex">
-                <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={onException}>
-                  <AlertTriangle className="h-4 w-4" /> Ausência
-                </Button>
-                <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking()}>
-                  <Plus className="h-4 w-4" /> Marcação manual
-                </Button>
-              </div>
+              {canManageSchedule && (
+                <div className="grid grid-cols-2 gap-2 sm:flex">
+                  <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={() => onException()}>
+                    <AlertTriangle className="h-4 w-4" /> Ausência
+                  </Button>
+                  <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking()}>
+                    <Plus className="h-4 w-4" /> Marcação manual
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -779,11 +806,11 @@ export function WeeklyAgenda({
           </div>
 
           {visibleBarbers.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex min-w-0 flex-wrap gap-2">
               {visibleBarbers.map((barber) => (
-                <span key={barber.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: normalizeBarberColor(barber.color) }} />
-                  {barber.name}
+                <span key={barber.id} className="inline-flex max-w-full min-w-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300 sm:max-w-[220px]">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: normalizeBarberColor(barber.color) }} />
+                  <span className="min-w-0 truncate">{barber.name}</span>
                 </span>
               ))}
             </div>
@@ -796,29 +823,31 @@ export function WeeklyAgenda({
             </div>
           ) : (
             <>
-              <div className="grid gap-3 lg:hidden">
+              <div className="grid gap-3 lg:hidden" data-testid="day-agenda-mobile">
                 {calendarDays.map((day) => {
                   const key = getDateKey(day);
                   const dayAppointments = appointmentsByDay.get(key) || [];
                   const slotGroups = groupAppointmentsByStart(dayAppointments);
 
                   return (
-                    <div key={key} className="rounded-xl border border-white/10 bg-background/60 p-3">
+                    <div key={key} className="rounded-xl border border-white/10 bg-background/60 p-3" data-testid="day-agenda-mobile-barber">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
                           <p className="font-bold text-white">{format(day, "EEEE", { locale: pt })}</p>
                           <p className="text-xs text-gray-500">{format(day, "dd/MM/yyyy")}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1 border-white/10 px-2 text-xs"
-                            onClick={() => onCreateAtSlot(day, "09:00")}
-                          >
-                            <Plus className="h-3.5 w-3.5" /> Criar
-                          </Button>
+                          {canManageSchedule && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1 border-white/10 px-2 text-xs"
+                              onClick={() => onCreateAtSlot(day, "09:00")}
+                            >
+                              <Plus className="h-3.5 w-3.5" /> Criar
+                            </Button>
+                          )}
                           <span className="rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-200">
                             {getDailyAppointmentLabel(dayAppointments.length)}
                           </span>
@@ -933,7 +962,7 @@ export function WeeklyAgenda({
                       Não há barbeiros ativos para mostrar na agenda.
                     </div>
                   ) : (
-                    <div className="weekly-agenda-horizontal-scroll">
+                    <div className="weekly-agenda-horizontal-scroll" data-testid="day-agenda-grid">
                       <div
                         className="min-w-full"
                         style={{
@@ -948,7 +977,7 @@ export function WeeklyAgenda({
                         >
                           <div />
                           {resourceBarbers.map((barber) => (
-                            <div key={barber.id} className="border-b border-white/10 px-3 pb-3 text-center">
+                            <div key={barber.id} data-testid="day-agenda-barber-header" className="border-b border-white/10 px-3 pb-3 text-center">
                               <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
                                 <span
                                   className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -1003,7 +1032,7 @@ export function WeeklyAgenda({
                                     style={{ top: getAgendaTopPx(hour * 60, selectedDayAgendaStartMinutes) }}
                                   />
                                 ))}
-                                {selectedDayAgendaSlots.map((slotMinutes) => {
+                                {canManageSchedule && selectedDayAgendaSlots.map((slotMinutes) => {
                                   const time = formatAgendaMinutes(slotMinutes);
                                   const top = getAgendaTopPx(slotMinutes, selectedDayAgendaStartMinutes);
                                   const height = getAgendaHeightPx(slotMinutes, slotMinutes + weeklyAgendaSlotMinutes);
@@ -1014,7 +1043,7 @@ export function WeeklyAgenda({
                                       aria-label={`Criar marcação para ${barber.name} em ${format(selectedDay, "dd/MM/yyyy")} às ${time}`}
                                       className="absolute left-0 right-0 z-0 border-t border-transparent text-left transition hover:bg-primary/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                                       style={{ top, height }}
-                                      onClick={() => onCreateAtSlot(selectedDay, time)}
+                                      onClick={() => onCreateAtSlot(selectedDay, time, barber.id)}
                                       onDragOver={(event) => {
                                         event.preventDefault();
                                         event.dataTransfer.dropEffect = "move";
@@ -1053,7 +1082,7 @@ export function WeeklyAgenda({
                                       onClick={() => onSelectAppointment(appointment)}
                                       className={cn(
                                         "absolute z-10 overflow-hidden rounded-lg border text-left shadow-sm transition hover:z-20 hover:brightness-110 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
-                                        isCompact ? "px-2 py-1" : "px-3 py-2",
+                                        isTiny ? "px-1.5 py-0.5" : isCompact ? "px-2 py-1" : "px-3 py-2",
                                         appointment.status !== "booked" && "opacity-70",
                                       )}
                                       style={{
@@ -1067,12 +1096,12 @@ export function WeeklyAgenda({
                                       }}
                                     >
                                       <div className="flex min-w-0 items-center justify-between gap-2">
-                                        <span className="min-w-0 truncate text-xs font-bold text-white">
+                                        <span className={cn("min-w-0 truncate font-bold text-white", isTiny ? "text-[10px] leading-none" : "text-xs")}>
                                           {format(start, "HH:mm")} - {appointment.customerName}
                                         </span>
-                                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                                        <span className={cn("shrink-0 rounded-full", isTiny ? "h-2 w-2" : "h-2.5 w-2.5")} style={{ backgroundColor: color }} />
                                       </div>
-                                      {!isTiny && (
+                                      {!isCompact && (
                                         <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] font-semibold uppercase text-gray-200">
                                           <Scissors className="h-3 w-3 shrink-0" />
                                           <span className="truncate">{serviceBadge}</span>
