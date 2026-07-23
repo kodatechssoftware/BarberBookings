@@ -20,6 +20,7 @@ export const barberAvailabilityIdSeq = appPgSchema?.sequence("barber_availabilit
 export const barberInvitesIdSeq = appPgSchema?.sequence("barber_invites_id_seq");
 export const customerNotesIdSeq = appPgSchema?.sequence("customer_notes_id_seq");
 export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
+export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -39,6 +40,18 @@ export const appointmentStatuses = [
   "cancelled",
   "late_cancelled",
   "no_show",
+] as const;
+
+export const barberCompensationModels = [
+  "none",
+  "commission",
+  "chair_rent",
+] as const;
+
+export const chairRentPeriods = [
+  "day",
+  "week",
+  "month",
 ] as const;
 
 export const barbers = appPgTable("barbers", {
@@ -161,6 +174,17 @@ export const auditLogs = appPgTable("audit_logs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const barberCompensationRules = appPgTable("barber_compensation_rules", {
+  id: idColumn("barber_compensation_rules_id_seq"),
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  model: text("model", { enum: barberCompensationModels }).default("none").notNull(),
+  commissionPercent: integer("commission_percent"),
+  chairRentCents: integer("chair_rent_cents"),
+  chairRentPeriod: text("chair_rent_period", { enum: chairRentPeriods }),
+  effectiveFrom: timestamp("effective_from").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // === RELATIONS ===
 
 export const appointmentsRelations = relations(appointments, ({ one }) => ({
@@ -177,6 +201,7 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
 export const barbersRelations = relations(barbers, ({ many }) => ({
   appointments: many(appointments),
   serviceAssignments: many(barberServices),
+  compensationRules: many(barberCompensationRules),
 }));
 
 export const servicesRelations = relations(services, ({ many }) => ({
@@ -192,6 +217,13 @@ export const barberServicesRelations = relations(barberServices, ({ one }) => ({
   service: one(services, {
     fields: [barberServices.serviceId],
     references: [services.id],
+  }),
+}));
+
+export const barberCompensationRulesRelations = relations(barberCompensationRules, ({ one }) => ({
+  barber: one(barbers, {
+    fields: [barberCompensationRules.barberId],
+    references: [barbers.id],
   }),
 }));
 
@@ -236,6 +268,10 @@ export const insertCustomerNoteSchema = createInsertSchema(customerNotes).omit({
   updatedAt: true,
 });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export const insertBarberCompensationRuleSchema = createInsertSchema(barberCompensationRules).omit({
+  id: true,
+  createdAt: true,
+});
 
 // === EXPLICIT API CONTRACT TYPES ===
 
@@ -251,9 +287,16 @@ export type BarberService = typeof barberServices.$inferSelect;
 export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
+export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect;
+export type BarberCompensationModel = typeof barberCompensationModels[number];
+export type ChairRentPeriod = typeof chairRentPeriods[number];
 
 export type BarberWithServices = Barber & {
   serviceIds: number[];
+  compensationModel?: BarberCompensationModel;
+  commissionPercent?: number | null;
+  chairRentCents?: number | null;
+  chairRentPeriod?: ChairRentPeriod | null;
 };
 
 export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
@@ -267,6 +310,7 @@ export type CreateBarberServiceRequest = z.infer<typeof insertBarberServiceSchem
 export type CreateBarberInviteRequest = z.infer<typeof insertBarberInviteSchema>;
 export type CreateCustomerNoteRequest = z.infer<typeof insertCustomerNoteSchema>;
 export type CreateAuditLogRequest = z.infer<typeof insertAuditLogSchema>;
+export type CreateBarberCompensationRuleRequest = z.infer<typeof insertBarberCompensationRuleSchema>;
 
 export type AppointmentWithDetails = Appointment & {
   barber: Barber;

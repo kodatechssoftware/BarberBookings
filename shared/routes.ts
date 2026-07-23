@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
   insertBarberSchema,
   insertServiceSchema,
@@ -6,17 +6,30 @@ import {
   appointmentStatuses,
   services,
   appointments,
+  barberCompensationModels,
+  chairRentPeriods,
   type BarberWithServices,
-} from './schema';
+} from "./schema";
 
 const serviceIdsInputSchema = z.array(z.number().int().positive()).optional();
-export const barberInputSchema = insertBarberSchema.extend({
+const compensationModelSchema = z.enum(barberCompensationModels);
+const chairRentPeriodSchema = z.enum(chairRentPeriods);
+
+const barberCompensationInputSchema = z.object({
+  compensationModel: compensationModelSchema.optional(),
+  commissionPercent: z.number().min(0).max(100).nullable().optional(),
+  chairRentCents: z.number().int().min(0).nullable().optional(),
+  chairRentPeriod: chairRentPeriodSchema.nullable().optional(),
+});
+
+const barberProfileInputSchema = insertBarberSchema.extend({
   name: z.string().trim().min(1, "Indique o nome do barbeiro."),
   specialty: z.string().trim().min(1, "Indique a especialidade do barbeiro."),
   serviceIds: serviceIdsInputSchema,
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor inválida. Use formato hexadecimal.").optional(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Cor invalida. Use formato hexadecimal.").optional(),
 });
 
+export const barberInputSchema = barberProfileInputSchema.merge(barberCompensationInputSchema);
 export type CreateBarberRequest = z.infer<typeof barberInputSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
@@ -37,7 +50,7 @@ export const errorSchemas = {
   }),
   conflict: z.object({
     message: z.string(),
-  })
+  }),
 };
 
 // ============================================
@@ -46,87 +59,87 @@ export const errorSchemas = {
 export const api = {
   barbers: {
     list: {
-      method: 'GET' as const,
-      path: '/api/barbers',
+      method: "GET" as const,
+      path: "/api/barbers",
       responses: {
         200: z.array(z.custom<BarberWithServices>()),
       },
     },
     get: {
-      method: 'GET' as const,
-      path: '/api/barbers/:id',
+      method: "GET" as const,
+      path: "/api/barbers/:id",
       responses: {
         200: z.custom<BarberWithServices>(),
         404: errorSchemas.notFound,
       },
     },
-    create: { // For admin/seed
-      method: 'POST' as const,
-      path: '/api/barbers',
+    create: {
+      method: "POST" as const,
+      path: "/api/barbers",
       input: barberInputSchema,
       responses: {
         201: z.custom<BarberWithServices>(),
         400: errorSchemas.validation,
       },
-    }
+    },
   },
   services: {
     list: {
-      method: 'GET' as const,
-      path: '/api/services',
+      method: "GET" as const,
+      path: "/api/services",
       responses: {
         200: z.array(z.custom<typeof services.$inferSelect>()),
       },
     },
-    create: { // For admin/seed
-      method: 'POST' as const,
-      path: '/api/services',
+    create: {
+      method: "POST" as const,
+      path: "/api/services",
       input: insertServiceSchema,
       responses: {
         201: z.custom<typeof services.$inferSelect>(),
         400: errorSchemas.validation,
       },
-    }
+    },
   },
   appointments: {
     list: {
-      method: 'GET' as const,
-      path: '/api/appointments',
+      method: "GET" as const,
+      path: "/api/appointments",
       input: z.object({
         barberId: z.string().optional(),
-        date: z.string().optional(), // ISO date string YYYY-MM-DD
+        date: z.string().optional(),
       }).optional(),
       responses: {
         200: z.array(z.custom<typeof appointments.$inferSelect>()),
       },
     },
     create: {
-      method: 'POST' as const,
-      path: '/api/appointments',
+      method: "POST" as const,
+      path: "/api/appointments",
       input: insertAppointmentSchema,
       responses: {
         201: z.custom<typeof appointments.$inferSelect>(),
         400: errorSchemas.validation,
-        409: errorSchemas.conflict, // Slot taken
+        409: errorSchemas.conflict,
       },
     },
     updateStatus: {
-      method: 'PATCH' as const,
-      path: '/api/appointments/:id/status',
+      method: "PATCH" as const,
+      path: "/api/appointments/:id/status",
       input: z.object({ status: z.enum(appointmentStatuses) }),
       responses: {
         200: z.custom<typeof appointments.$inferSelect>(),
         404: errorSchemas.notFound,
-      }
+      },
     },
     cancel: {
-      method: 'POST' as const,
-      path: '/api/appointments/cancel/:token',
+      method: "POST" as const,
+      path: "/api/appointments/cancel/:token",
       responses: {
         200: z.object({ message: z.string() }),
         404: errorSchemas.notFound,
-      }
-    }
+      },
+    },
   },
 };
 

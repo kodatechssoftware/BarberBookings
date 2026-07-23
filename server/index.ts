@@ -2,7 +2,12 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
-import { ensureAppointmentOverlapProtection, ensureBarberServicesTable, ensureServiceAgendaLabelColumn } from "./db";
+import {
+  ensureAppointmentOverlapProtection,
+  ensureBarberCompensationRulesTable,
+  ensureBarberServicesTable,
+  ensureServiceAgendaLabelColumn,
+} from "./db";
 
 const app = express();
 const httpServer = createServer(app);
@@ -166,6 +171,7 @@ app.use((req, res, next) => {
 
   await ensureServiceAgendaLabelColumn();
   await ensureBarberServicesTable();
+  await ensureBarberCompensationRulesTable();
   await ensureAppointmentOverlapProtection();
   const server = await registerRoutes(app, httpServer);
 

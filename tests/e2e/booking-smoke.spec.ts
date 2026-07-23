@@ -53,6 +53,12 @@ function futureThursdayIso(weeksAhead = 3, hour = 10, minute = 0) {
   return date.toISOString();
 }
 
+function pastThursdayIso(weeksAgo = 6, hour = 10, minute = 0) {
+  const date = new Date(currentWeekThursdayIso(hour, minute));
+  date.setDate(date.getDate() - weeksAgo * 7);
+  return date.toISOString();
+}
+
 function futureWeekdayIso(dayOffsetFromThursday: number, weeksAhead = 3, hour = 10, minute = 0) {
   const date = new Date(futureThursdayIso(weeksAhead, hour, minute));
   date.setDate(date.getDate() + dayOffsetFromThursday);
@@ -72,6 +78,12 @@ function dateLabelFromIso(isoDate: string) {
   ].join("/");
 }
 
+async function selectWeeklyAgendaDay(page: Page, isoDate: string) {
+  const dayButton = page.getByTestId(`weekly-agenda-day-${dateKeyFromIso(isoDate)}`);
+  await expect(dayButton).toBeVisible();
+  await dayButton.click();
+}
+
 function lisbonDateTimeParts(isoDate: string) {
   return Object.fromEntries(
     new Intl.DateTimeFormat("en-GB", {
@@ -88,7 +100,7 @@ function lisbonDateTimeParts(isoDate: string) {
 
 async function createManualAppointmentForCurrentWeek(
   request: APIRequestContext,
-  options: { name?: string; phone?: string; hour?: number; minute?: number } = {},
+  options: { name?: string; phone?: string; hour?: number; minute?: number; weeksAhead?: number } = {},
 ) {
   await loginAdminRequest(request);
 
@@ -106,7 +118,9 @@ async function createManualAppointmentForCurrentWeek(
     data: {
       barberId: barber.id,
       serviceId: service.id,
-      startTime: currentWeekThursdayIso(options.hour ?? 10, options.minute ?? 0),
+      startTime: options.weeksAhead
+        ? futureThursdayIso(options.weeksAhead, options.hour ?? 10, options.minute ?? 0)
+        : currentWeekThursdayIso(options.hour ?? 10, options.minute ?? 0),
       name: options.name || "Agenda Click QA",
       phone: options.phone || "912695705",
       isManualBooking: true,
@@ -150,6 +164,19 @@ async function createExportAppointment(
   expect(appointment).toBeTruthy();
 
   return { appointment, barber, service };
+}
+
+async function getAppointmentByCustomerName(
+  request: APIRequestContext,
+  dateIso: string,
+  customerName: string,
+) {
+  const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(dateIso)}`);
+  expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+  const appointments = await appointmentsResponse.json();
+  const appointment = appointments.find((item: any) => item.customerName === customerName);
+  expect(appointment, `appointment for ${customerName}`).toBeTruthy();
+  return appointment;
 }
 
 async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequestContext) {
@@ -210,8 +237,12 @@ async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequ
 
 async function openManualBookingFromAgendaSlot(page: Page, isoDate: string, time: string) {
   const dateLabel = dateLabelFromIso(isoDate);
+  const dayButton = page.getByTestId(`weekly-agenda-day-${dateKeyFromIso(isoDate)}`);
+  if (await dayButton.isVisible().catch(() => false)) {
+    await dayButton.click();
+  }
   const slotButton = page.getByRole("button", {
-    name: `Criar marcação em ${dateLabel} às ${time}`,
+    name: new RegExp(`Criar marca.*${dateLabel}.*${time}`),
   }).first();
   await expect(slotButton).toBeVisible();
   await slotButton.click();
@@ -343,6 +374,7 @@ test.describe("admin navigation", () => {
     await loginAdmin(page);
 
     await page.getByRole("tab", { name: "Agenda" }).click();
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
     await expect(page.getByText("Agenda semanal")).toBeVisible();
     await expect(page.getByText("Agenda do dia")).not.toBeVisible();
     await expect(page.getByText("Lista de marcações")).not.toBeVisible();
@@ -479,6 +511,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
     await page.getByRole("button", { name: "Marcação manual" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Marcação manual" });
@@ -526,6 +559,7 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
     await page.getByRole("tab", { name: "Agenda" }).click();
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
     await page.getByRole("button", { name: /manual/i }).click();
 
     const dialog = page.getByRole("dialog", { name: /manual/i });
@@ -613,11 +647,14 @@ test.describe("admin navigation", () => {
     });
     expect(assignServicesResponse.ok(), await assignServicesResponse.text()).toBe(true);
 
+    const labelAppointmentStart = futureThursdayIso(1, 19, 30);
+    const madeixasAppointmentStart = futureThursdayIso(1, 18, 30);
+
     const createResponse = await request.post("/api/appointments/block", {
       data: {
         barberId: barber.id,
         serviceId: service.id,
-        startTime: currentWeekThursdayIso(19, 30),
+        startTime: labelAppointmentStart,
         name: "Cliente Etiqueta",
         phone: "912695733",
         isManualBooking: true,
@@ -629,7 +666,7 @@ test.describe("admin navigation", () => {
       data: {
         barberId: barber.id,
         serviceId: madeixasService.id,
-        startTime: currentWeekThursdayIso(18, 30),
+        startTime: madeixasAppointmentStart,
         name: "Cliente Madeixas",
         phone: "912695734",
         isManualBooking: true,
@@ -639,6 +676,8 @@ test.describe("admin navigation", () => {
 
     await page.reload();
     await page.getByRole("tab", { name: "Agenda" }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Semana seguinte" }).click();
+    await selectWeeklyAgendaDay(page, labelAppointmentStart);
     const agendaAppointment = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Cliente Etiqueta/,
     }).first();
@@ -666,6 +705,7 @@ test.describe("admin navigation", () => {
       phone: "912695706",
       hour: 14,
       minute: 30,
+      weeksAhead: 1,
     });
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -673,7 +713,8 @@ test.describe("admin navigation", () => {
 
     await expect(page.getByText("Resumo do dia")).toBeVisible();
     await expect(page.getByText("Dashboard simples")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+    await page.getByRole("tab", { name: "Marcações" }).click();
+    await page.getByRole("button", { name: "Próximas" }).click();
 
     const appointmentButton = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Notas Internas QA/,
@@ -694,6 +735,8 @@ test.describe("admin navigation", () => {
 
     await page.reload();
     await expect(page.getByText("Resumo do dia")).toBeVisible();
+    await page.getByRole("tab", { name: "Marcações" }).click();
+    await page.getByRole("button", { name: "Próximas" }).click();
 
     const reloadedAppointmentButton = page.getByRole("button", {
       name: /Abrir detalhes da marcação de Notas Internas QA/,
@@ -707,7 +750,7 @@ test.describe("admin navigation", () => {
   test("keeps manual and public availability in sync", async ({ page, request }) => {
     await loginAdminRequest(request);
 
-    const appointmentStart = currentWeekThursdayIso(16, 30);
+    const appointmentStart = futureThursdayIso(1, 16, 30);
     const { appointment, barber, service } = await createExportAppointment(request, {
       name: "Disponibilidade Manual QA",
       phone: "912695707",
@@ -722,6 +765,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await page.getByRole("button", { name: "Semana seguinte" }).click();
 
     let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
     await selectDialogOption(page, dialog, 0, barber.name);
@@ -743,6 +787,7 @@ test.describe("admin navigation", () => {
 
     await page.reload();
     await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+    await page.getByRole("button", { name: "Semana seguinte" }).click();
     await expect(page.getByRole("button", {
       name: /Abrir detalhes da marcação de Disponibilidade Manual QA/,
     })).toHaveCount(0);
@@ -753,7 +798,7 @@ test.describe("admin navigation", () => {
 
     await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
 
-    const publicAppointmentStart = currentWeekThursdayIso(17, 30);
+    const publicAppointmentStart = futureThursdayIso(1, 17, 30);
     const publicCreateResponse = await request.post("/api/appointments", {
       data: {
         barberId: barber.id,
@@ -769,6 +814,7 @@ test.describe("admin navigation", () => {
     await page.keyboard.press("Escape");
     await page.reload();
     await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+    await page.getByRole("button", { name: "Semana seguinte" }).click();
 
     dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00");
     await selectDialogOption(page, dialog, 0, barber.name);
@@ -843,6 +889,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
 
     const firstAppointment = page.getByRole("button", { name: /Grupo Agenda 1/ }).first();
     const secondAppointment = page.getByRole("button", { name: /Grupo Agenda 2/ }).first();
@@ -914,6 +961,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
 
     const sameStartBoxes = await Promise.all(
       [1, 2, 3, 4].map(async (index) => {
@@ -1022,6 +1070,7 @@ test.describe("admin navigation", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
 
     const longAppointment = page.getByRole("button", { name: /Lane Agenda Longo QA/ }).first();
     const overlappingAppointment = page.getByRole("button", { name: /Lane Agenda Sobreposto QA/ }).first();
@@ -1125,6 +1174,7 @@ test.describe("admin navigation", () => {
 
     await page.getByText("Todos os barbeiros").first().click();
     await page.getByRole("option", { name: barber.name }).click();
+    await selectWeeklyAgendaDay(page, currentWeekThursdayIso());
 
     const halfHourAppointment = page.getByRole("button", { name: /Agenda Minutos Meio/ }).first();
     const fiftyMinuteAppointment = page.getByRole("button", { name: /Agenda Minutos Cinquenta/ }).first();
@@ -1286,6 +1336,213 @@ test.describe("booking rules", () => {
     expect(bookedRow!.getCell(projectedCol).value).toBe(bookedServiceValue);
   });
 
+  test("exports barber compensation using the rule active on each appointment date", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const suffix = Date.now();
+    const serviceResponse = await request.post("/api/services", {
+      data: {
+        name: `Compensacao Corte ${suffix}`,
+        description: "Servico para validar comissoes",
+        agendaLabel: "Compensacao",
+        price: 2000,
+        duration: 60,
+        isVisible: true,
+      },
+    });
+    expect(serviceResponse.ok(), await serviceResponse.text()).toBe(true);
+    const service = await serviceResponse.json();
+
+    const barberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Barbeiro Comissao ${suffix}`,
+        specialty: "Comissao",
+        bio: "",
+        avatar: null,
+        email: "",
+        color: "#38BDF8",
+        serviceIds: [service.id],
+        compensationModel: "commission",
+        commissionPercent: 40,
+      },
+    });
+    expect(barberResponse.ok(), await barberResponse.text()).toBe(true);
+    const barber = await barberResponse.json();
+
+    const oldStartTime = pastThursdayIso(2, 15, 30);
+    const oldAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: oldStartTime,
+        name: `Cliente 40 ${suffix}`,
+        phone: "912697140",
+        isManualBooking: true,
+      },
+    });
+    expect(oldAppointmentResponse.ok(), await oldAppointmentResponse.text()).toBe(true);
+    const oldAppointment = await getAppointmentByCustomerName(request, oldStartTime, `Cliente 40 ${suffix}`);
+    const oldStatusResponse = await request.patch(`/api/appointments/${oldAppointment.id}/status`, {
+      data: { status: "completed" },
+    });
+    expect(oldStatusResponse.ok(), await oldStatusResponse.text()).toBe(true);
+
+    const updateResponse = await request.patch(`/api/barbers/${barber.id}`, {
+      data: {
+        name: barber.name,
+        specialty: barber.specialty,
+        color: barber.color,
+        avatar: barber.avatar,
+        compensationModel: "commission",
+        commissionPercent: 50,
+      },
+    });
+    expect(updateResponse.ok(), await updateResponse.text()).toBe(true);
+
+    const newStartTime = futureThursdayIso(14, 16, 30);
+    const newAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: newStartTime,
+        name: `Cliente 50 ${suffix}`,
+        phone: "912697150",
+        isManualBooking: true,
+      },
+    });
+    expect(newAppointmentResponse.ok(), await newAppointmentResponse.text()).toBe(true);
+    const newAppointment = await getAppointmentByCustomerName(request, newStartTime, `Cliente 50 ${suffix}`);
+    const newStatusResponse = await request.patch(`/api/appointments/${newAppointment.id}/status`, {
+      data: { status: "completed" },
+    });
+    expect(newStatusResponse.ok(), await newStatusResponse.text()).toBe(true);
+
+    const exportResponse = await request.get(
+      `/api/admin/export?startDate=${dateKeyFromIso(oldStartTime)}&endDate=${dateKeyFromIso(newStartTime)}&barberId=${barber.id}`,
+    );
+    expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+    const compensationSheet = workbook.getWorksheet("Acertos Barbeiros");
+    const detailSheet = workbook.getWorksheet("Detalhe Completo");
+    expect(compensationSheet).toBeTruthy();
+    expect(detailSheet).toBeTruthy();
+
+    const summaryHeaders = compensationSheet!.getRow(1).values as unknown[];
+    const summaryBarberCol = summaryHeaders.indexOf("Barbeiro");
+    const summaryCommissionCol = summaryHeaders.indexOf("Comissões do barbeiro (€)");
+    const summaryBarberValueCol = summaryHeaders.indexOf("Valor estimado do barbeiro (€)");
+    let summaryRow: ExcelJS.Row | undefined;
+    compensationSheet!.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell(summaryBarberCol).value === barber.name) summaryRow = row;
+    });
+    expect(summaryRow).toBeTruthy();
+    expect(summaryRow!.getCell(summaryCommissionCol).value).toBe(18);
+    expect(summaryRow!.getCell(summaryBarberValueCol).value).toBe(18);
+
+    const detailHeaders = detailSheet!.getRow(1).values as unknown[];
+    const customerCol = detailHeaders.indexOf("Cliente");
+    const commissionCol = detailHeaders.indexOf("Comissão (%)");
+    const barberValueCol = detailHeaders.indexOf("Valor barbeiro (€)");
+    let oldRow: ExcelJS.Row | undefined;
+    let newRow: ExcelJS.Row | undefined;
+    detailSheet!.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell(customerCol).value === `Cliente 40 ${suffix}`) oldRow = row;
+      if (row.getCell(customerCol).value === `Cliente 50 ${suffix}`) newRow = row;
+    });
+
+    expect(oldRow).toBeTruthy();
+    expect(newRow).toBeTruthy();
+    expect(oldRow!.getCell(commissionCol).value).toBe(0.4);
+    expect(newRow!.getCell(commissionCol).value).toBe(0.5);
+    expect(oldRow!.getCell(barberValueCol).value).toBe(8);
+    expect(newRow!.getCell(barberValueCol).value).toBe(10);
+  });
+
+  test("exports chair rent once per worked period", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const suffix = Date.now();
+    const serviceResponse = await request.post("/api/services", {
+      data: {
+        name: `Aluguer Corte ${suffix}`,
+        description: "Servico para validar aluguer de cadeira",
+        agendaLabel: "Aluguer",
+        price: 3000,
+        duration: 60,
+        isVisible: true,
+      },
+    });
+    expect(serviceResponse.ok(), await serviceResponse.text()).toBe(true);
+    const service = await serviceResponse.json();
+
+    const barberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Barbeiro Aluguer ${suffix}`,
+        specialty: "Aluguer",
+        bio: "",
+        avatar: null,
+        email: "",
+        color: "#22C55E",
+        serviceIds: [service.id],
+        compensationModel: "chair_rent",
+        chairRentCents: 5000,
+        chairRentPeriod: "day",
+      },
+    });
+    expect(barberResponse.ok(), await barberResponse.text()).toBe(true);
+    const barber = await barberResponse.json();
+    const startTimes = [pastThursdayIso(3, 9, 0), pastThursdayIso(3, 10, 0)];
+
+    for (const [index, startTime] of startTimes.entries()) {
+      const createResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime,
+          name: `Cliente Aluguer ${suffix} ${index + 1}`,
+          phone: `91269716${index}`,
+          isManualBooking: true,
+        },
+      });
+      expect(createResponse.ok(), await createResponse.text()).toBe(true);
+      const appointment = await getAppointmentByCustomerName(request, startTime, `Cliente Aluguer ${suffix} ${index + 1}`);
+      const statusResponse = await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "completed" },
+      });
+      expect(statusResponse.ok(), await statusResponse.text()).toBe(true);
+    }
+
+    const dateKey = dateKeyFromIso(startTimes[0]);
+    const exportResponse = await request.get(`/api/admin/export?startDate=${dateKey}&endDate=${dateKey}&barberId=${barber.id}`);
+    expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+    const compensationSheet = workbook.getWorksheet("Acertos Barbeiros");
+    expect(compensationSheet).toBeTruthy();
+    const headers = compensationSheet!.getRow(1).values as unknown[];
+    const barberCol = headers.indexOf("Barbeiro");
+    const realizedCol = headers.indexOf("Receita concluída (€)");
+    const rentCol = headers.indexOf("Aluguer da cadeira (€)");
+    const barberValueCol = headers.indexOf("Valor estimado do barbeiro (€)");
+    const shopValueCol = headers.indexOf("Valor estimado da barbearia (€)");
+    let summaryRow: ExcelJS.Row | undefined;
+    compensationSheet!.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell(barberCol).value === barber.name) summaryRow = row;
+    });
+
+    expect(summaryRow).toBeTruthy();
+    expect(summaryRow!.getCell(realizedCol).value).toBe(60);
+    expect(summaryRow!.getCell(rentCol).value).toBe(50);
+    expect(summaryRow!.getCell(barberValueCol).value).toBe(10);
+    expect(summaryRow!.getCell(shopValueCol).value).toBe(50);
+  });
+
   test("rejects malformed phone numbers sent directly to the booking API", async ({ request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
@@ -1414,7 +1671,7 @@ test.describe("booking rules", () => {
       data: {
         barberId: barber.id,
         serviceId: service.id,
-        startTime: "2026-06-11T16:30:00.000Z",
+        startTime: futureThursdayIso(1, 16, 30),
         customerName: "QA Blacklist",
         customerPhone: "+34912695703",
         customerEmail: "qa-blacklist@example.com",
@@ -1665,6 +1922,91 @@ test.describe("booking rules", () => {
     );
     expect(publicAfterCancelResponse.ok()).toBe(true);
     expect((await publicAfterCancelResponse.json()).some((item: any) => item.id === appointment.id)).toBe(false);
+  });
+
+  test("allows admins to create a normal manual booking in the past", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const weeksAgo = 5 + (Math.floor(Date.now() / 1000) % 30);
+    const startTime = pastThursdayIso(weeksAgo, 15, 30);
+    const customerName = `Manual Passado QA ${Date.now()}`;
+
+    const createResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        name: customerName,
+        phone: "912695755",
+        isManualBooking: true,
+      },
+    });
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+
+    const appointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(startTime)}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    expect(appointments.some((appointment: any) => appointment.customerName === customerName)).toBe(true);
+  });
+
+  test("rejects public booking creation and rescheduling to past date-times", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const [barber] = await barbersResponse.json();
+    const [service] = await servicesResponse.json();
+    const uniqueWeeksAhead = 20 + (Math.floor(Date.now() / 1000) % 10);
+    const pastStart = pastThursdayIso(6, 15, 30);
+    const futureStart = futureThursdayIso(uniqueWeeksAhead, 15, 30);
+
+    const pastCreateResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: pastStart,
+        customerName: "Cliente Passado QA",
+        customerPhone: "912695756",
+        customerEmail: "cliente-passado@example.com",
+      },
+    });
+    expect(pastCreateResponse.status()).toBe(400);
+    await expect(pastCreateResponse.json()).resolves.toMatchObject({
+      message: "Escolha uma data e hora futuras.",
+    });
+
+    const createFutureResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: futureStart,
+        customerName: "Cliente Reagendar Passado QA",
+        customerPhone: "912695757",
+        customerEmail: "cliente-reagendar-passado@example.com",
+      },
+    });
+    expect(createFutureResponse.ok(), await createFutureResponse.text()).toBe(true);
+    const futureAppointment = await createFutureResponse.json();
+
+    const pastRescheduleResponse = await request.post(`/api/appointments/reschedule/${futureAppointment.cancelToken}`, {
+      data: { startTime: pastStart },
+    });
+    expect(pastRescheduleResponse.status()).toBe(400);
+    await expect(pastRescheduleResponse.json()).resolves.toMatchObject({
+      message: "Escolha uma data e hora futuras.",
+    });
   });
 
   test("assigns no-preference bookings to the least busy available barber", async ({ request }) => {
