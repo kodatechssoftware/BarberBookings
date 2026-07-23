@@ -5,6 +5,7 @@ import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import {
   ensureAppointmentOverlapProtection,
+  ensureBarberCompensationRulesTable,
   ensureBarberServicesTable,
   ensureServiceAgendaLabelColumn,
   pool,
@@ -173,6 +174,7 @@ app.use((req, res, next) => {
 
   await ensureServiceAgendaLabelColumn();
   await ensureBarberServicesTable();
+  await ensureBarberCompensationRulesTable();
   await ensureAppointmentOverlapProtection();
   const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
   if (repairedEncodingRows > 0) {

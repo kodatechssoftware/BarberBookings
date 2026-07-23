@@ -177,3 +177,29 @@ export async function repairKnownTextEncodingArtifacts() {
     client.release();
   }
 }
+
+export async function ensureBarberCompensationRulesTable() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_compensation_rules")}`;
+  const qualifiedBarbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
+      id serial PRIMARY KEY,
+      barber_id integer NOT NULL REFERENCES ${qualifiedBarbersTable}(id) ON DELETE CASCADE,
+      model text NOT NULL DEFAULT 'none',
+      commission_percent integer,
+      chair_rent_cents integer,
+      chair_rent_period text,
+      effective_from timestamp NOT NULL,
+      created_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS barber_compensation_rules_barber_effective_idx
+    ON ${qualifiedTableName} (barber_id, effective_from DESC)
+  `);
+}

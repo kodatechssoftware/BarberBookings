@@ -17,8 +17,16 @@ import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
+import { format, startOfDay } from "date-fns";
 import ExcelJS from 'exceljs';
-import { appointmentStatuses, insertServiceSchema, type Appointment } from "@shared/schema";
+import {
+  appointmentStatuses,
+  insertServiceSchema,
+  type Appointment,
+  type BarberCompensationRule,
+  type BarberCompensationModel,
+  type ChairRentPeriod,
+} from "@shared/schema";
 import {
   emailValidationMessage,
   isValidOptionalEmail,
@@ -131,6 +139,24 @@ const customerNotesInputSchema = z.object({
 });
 
 const barberUpdateInputSchema = api.barbers.create.input.partial();
+
+type BarberCompensationInput = {
+  compensationModel?: BarberCompensationModel;
+  commissionPercent?: number | null;
+  chairRentCents?: number | null;
+  chairRentPeriod?: ChairRentPeriod | null;
+};
+
+const defaultCompensationRule = (barberId: number): BarberCompensationRule => ({
+  id: 0,
+  barberId,
+  model: "none",
+  commissionPercent: null,
+  chairRentCents: null,
+  chairRentPeriod: null,
+  effectiveFrom: new Date(0),
+  createdAt: new Date(0),
+});
 
 const blacklistInputSchema = z.object({
   phone: z
@@ -650,15 +676,93 @@ function validateAppointmentFilters(query: Request["query"]) {
   return null;
 }
 
+function normalizeBarberCompensationInput(input: BarberCompensationInput) {
+  const model = input.compensationModel || "none";
+
+  if (model === "commission") {
+    return {
+      model,
+      commissionPercent: Math.round(input.commissionPercent ?? 0),
+      chairRentCents: null,
+      chairRentPeriod: null,
+    };
+  }
+
+  if (model === "chair_rent") {
+    return {
+      model,
+      commissionPercent: null,
+      chairRentCents: input.chairRentCents ?? 0,
+      chairRentPeriod: input.chairRentPeriod || "month",
+    };
+  }
+
+  return {
+    model: "none" as const,
+    commissionPercent: null,
+    chairRentCents: null,
+    chairRentPeriod: null,
+  };
+}
+
+function compensationRulesMatch(
+  currentRule: BarberCompensationRule,
+  nextRule: ReturnType<typeof normalizeBarberCompensationInput>,
+) {
+  return currentRule.model === nextRule.model &&
+    (currentRule.commissionPercent ?? null) === nextRule.commissionPercent &&
+    (currentRule.chairRentCents ?? null) === nextRule.chairRentCents &&
+    (currentRule.chairRentPeriod ?? null) === nextRule.chairRentPeriod;
+}
+
+function attachCompensationRule<T extends { id: number }>(
+  barber: T,
+  rule?: BarberCompensationRule,
+) {
+  const activeRule = rule || defaultCompensationRule(barber.id);
+  return {
+    ...barber,
+    compensationModel: activeRule.model,
+    commissionPercent: activeRule.commissionPercent,
+    chairRentCents: activeRule.chairRentCents,
+    chairRentPeriod: activeRule.chairRentPeriod,
+  };
+}
+
+async function saveBarberCompensationRuleIfNeeded(
+  barberId: number,
+  input: BarberCompensationInput,
+  effectiveFrom = new Date(),
+) {
+  const nextRule = normalizeBarberCompensationInput(input);
+  const [currentRule] = await storage.getBarberCompensationRules(barberId);
+  if (currentRule && compensationRulesMatch(currentRule, nextRule)) {
+    return currentRule;
+  }
+
+  return storage.createBarberCompensationRule({
+    barberId,
+    ...nextRule,
+    effectiveFrom,
+  });
+}
+
 async function getBarbersWithServiceIds() {
-  const [barbers, serviceRows] = await Promise.all([
+  const [barbers, serviceRows, compensationRows] = await Promise.all([
     storage.getBarbers(),
     storage.getAllBarberServices(),
+    storage.getBarberCompensationRules(),
   ]);
   const barberServiceMap = buildBarberServiceMap(serviceRows);
+  const currentCompensationByBarberId = new Map<number, BarberCompensationRule>();
+  compensationRows.forEach((rule) => {
+    if (!currentCompensationByBarberId.has(rule.barberId)) {
+      currentCompensationByBarberId.set(rule.barberId, rule);
+    }
+  });
 
   return barbers.map((barber) => ({
-    ...barber,
+    ...attachCompensationRule(barber, currentCompensationByBarberId.get(barber.id)),
     serviceIds: barberServiceMap.get(barber.id) || [],
   }));
 }
@@ -679,12 +783,29 @@ async function freezeUniversalBarberServiceAssignments(existingServiceIds: numbe
   );
 }
 
-function sanitizeBarberForResponse<T extends { email?: unknown; password?: unknown }>(
+function sanitizeBarberForResponse<T extends {
+  email?: unknown;
+  password?: unknown;
+  compensationModel?: unknown;
+  commissionPercent?: unknown;
+  chairRentCents?: unknown;
+  chairRentPeriod?: unknown;
+}>(
   barber: T,
   includePrivateFields = false,
 ) {
-  const { email, password: _password, ...publicBarber } = barber;
-  return includePrivateFields ? { ...publicBarber, email } : publicBarber;
+  const {
+    email,
+    password: _password,
+    compensationModel,
+    commissionPercent,
+    chairRentCents,
+    chairRentPeriod,
+    ...publicBarber
+  } = barber;
+  return includePrivateFields
+    ? { ...publicBarber, email, compensationModel, commissionPercent, chairRentCents, chairRentPeriod }
+    : publicBarber;
 }
 
 function isLateCancellation(startTime: Date | string) {
@@ -1062,6 +1183,42 @@ function centsToEuros(cents: number) {
   return cents / 100;
 }
 
+function getCompensationModelLabel(model: BarberCompensationModel) {
+  if (model === "commission") return "Comissão percentual";
+  if (model === "chair_rent") return "Aluguer fixo de cadeira";
+  return "Sem cálculo financeiro";
+}
+
+function getChairRentPeriodLabel(period?: ChairRentPeriod | null) {
+  if (period === "day") return "Por dia trabalhado";
+  if (period === "week") return "Por semana trabalhada";
+  if (period === "month") return "Por mês trabalhado";
+  return "";
+}
+
+function getRuleForDate(
+  rules: BarberCompensationRule[],
+  barberId: number,
+  date: Date,
+) {
+  const timestamp = date.getTime();
+  const barberRules = rules
+    .filter((candidate) => candidate.barberId === barberId)
+    .sort((left, right) => new Date(right.effectiveFrom).getTime() - new Date(left.effectiveFrom).getTime());
+  const rule = barberRules.find((candidate) => new Date(candidate.effectiveFrom).getTime() <= timestamp);
+  return rule || barberRules[barberRules.length - 1] || defaultCompensationRule(barberId);
+}
+
+function getChairRentUnitKey(date: Date, period: ChairRentPeriod) {
+  if (period === "day") return format(date, "yyyy-MM-dd");
+  if (period === "week") {
+    const weekStart = startOfDay(date);
+    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+    return format(weekStart, "yyyy-MM-dd");
+  }
+  return format(date, "yyyy-MM");
+}
+
 function addCalendarDays(date: Date, amount: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + amount);
@@ -1289,13 +1446,26 @@ export async function registerRoutes(
   app.post("/api/barbers", requireAdmin, async (req, res) => {
     try {
       const input = api.barbers.create.input.parse(req.body);
-      const { serviceIds, ...barberInput } = input;
+      const {
+        serviceIds,
+        compensationModel,
+        commissionPercent,
+        chairRentCents,
+        chairRentPeriod,
+        ...barberInput
+      } = input;
       const normalizedBarberInput = normalizeBarberEmail(barberInput);
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds);
       if (normalizedBarberInput.email && await findBarberByEmail(normalizedBarberInput.email)) {
         return res.status(409).json({ message: "Já existe um barbeiro com este email." });
       }
       const barber = await storage.createBarber(normalizedBarberInput);
+      const compensationRule = await saveBarberCompensationRuleIfNeeded(barber.id, {
+        compensationModel,
+        commissionPercent,
+        chairRentCents,
+        chairRentPeriod,
+      });
       if (normalizedServiceIds !== undefined) {
         await storage.replaceBarberServices(barber.id, normalizedServiceIds);
       }
@@ -1304,9 +1474,12 @@ export async function registerRoutes(
         entityType: "barber",
         entityId: barber.id,
         summary: `Barbeiro criado: ${barber.name}`,
-        metadata: { serviceIds: normalizedServiceIds || [] },
+        metadata: { serviceIds: normalizedServiceIds || [], compensationModel: compensationRule.model },
       });
-      res.status(201).json({ ...barber, serviceIds: normalizedServiceIds || [] });
+      res.status(201).json({
+        ...attachCompensationRule(barber, compensationRule),
+        serviceIds: normalizedServiceIds || [],
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -1330,7 +1503,14 @@ export async function registerRoutes(
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
       const input = barberUpdateInputSchema.parse(req.body);
-      const { serviceIds, ...barberPatch } = input;
+      const {
+        serviceIds,
+        compensationModel,
+        commissionPercent,
+        chairRentCents,
+        chairRentPeriod,
+        ...barberPatch
+      } = input;
       const existing = await storage.getBarber(barberId);
       if (!existing) return res.status(404).json({ message: "Barbeiro não encontrado" });
 
@@ -1354,6 +1534,20 @@ export async function registerRoutes(
       const barber = hasBarberPatch
         ? await storage.updateBarber(barberId, normalizedBarberPatch)
         : existing;
+      const hasCompensationPatch = [
+        compensationModel,
+        commissionPercent,
+        chairRentCents,
+        chairRentPeriod,
+      ].some((value) => value !== undefined);
+      const compensationRule = hasCompensationPatch
+        ? await saveBarberCompensationRuleIfNeeded(barberId, {
+          compensationModel,
+          commissionPercent,
+          chairRentCents,
+          chairRentPeriod,
+        })
+        : (await storage.getBarberCompensationRules(barberId))[0] || defaultCompensationRule(barberId);
 
       if (normalizedServiceIds !== undefined) {
         await storage.replaceBarberServices(barberId, normalizedServiceIds);
@@ -1370,13 +1564,15 @@ export async function registerRoutes(
           fields: [
             ...Object.keys(barberPatch),
             ...(normalizedServiceIds !== undefined ? ["serviceIds"] : []),
+            ...(hasCompensationPatch ? ["compensation"] : []),
           ],
           previousColor: existing.color,
           newColor: updatedBarber.color,
           serviceIds: currentServiceIds,
+          compensationModel: compensationRule.model,
         },
       });
-      res.json({ ...updatedBarber, serviceIds: currentServiceIds });
+      res.json({ ...attachCompensationRule(updatedBarber, compensationRule), serviceIds: currentServiceIds });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -1862,7 +2058,11 @@ export async function registerRoutes(
     }
 
     const serviceIds = await storage.getBarberServiceIds(barber.id);
-    res.json(sanitizeBarberForResponse({ ...barber, serviceIds }, includePrivateFields));
+    const [compensationRule] = await storage.getBarberCompensationRules(barber.id);
+    res.json(sanitizeBarberForResponse({
+      ...attachCompensationRule(barber, compensationRule),
+      serviceIds,
+    }, includePrivateFields));
   });
 
   // === SERVICES ===
@@ -2558,6 +2758,9 @@ export async function registerRoutes(
       if (Number.isNaN(startTime.getTime())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
       }
+      if (isBeforeNow(startTime)) {
+        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+      }
 
       if (isBeforeNow(startTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
@@ -3136,16 +3339,18 @@ export async function registerRoutes(
     const { endExclusive } = getShopDateBounds(endDateKey);
 
     const hasSelectedBarber = Boolean(barberId && barberId !== "all");
-    const selectedBarberId = hasSelectedBarber ? parsePositiveInteger(barberId) : undefined;
-    if (hasSelectedBarber && selectedBarberId === null) {
+    const parsedSelectedBarberId = hasSelectedBarber ? parsePositiveInteger(barberId) : undefined;
+    if (hasSelectedBarber && parsedSelectedBarberId === null) {
       return res.status(400).json({ message: "Barbeiro inválido" });
     }
+    const selectedBarberId = parsedSelectedBarberId ?? undefined;
 
     try {
-      const [allBarbers, allServices, allAppointments] = await Promise.all([
+      const [allBarbers, allServices, allAppointments, compensationRules] = await Promise.all([
         storage.getBarbers(),
         storage.getServices(),
-        storage.getAppointments(selectedBarberId ?? undefined),
+        storage.getAppointments(selectedBarberId),
+        storage.getBarberCompensationRules(selectedBarberId),
       ]);
 
       const barbersById = new Map(allBarbers.map((barber) => [barber.id, barber]));
@@ -3213,6 +3418,17 @@ export async function registerRoutes(
       const barberSummaryMap = new Map<number, ExportSummaryRow>();
       const serviceSummaryMap = new Map<number | "unknown", ExportSummaryRow>();
       const dailySummaryMap = new Map<string, ExportDailyRow>();
+      const compensationSummaryMap = new Map<number, {
+        barberName: string;
+        completed: number;
+        realizedCents: number;
+        commissionCents: number;
+        chairRentCents: number;
+        barberEstimatedCents: number;
+        shopEstimatedCents: number;
+        models: Set<string>;
+        chairRentKeys: Set<string>;
+      }>();
 
       createDashboardDays(startDateKey, endDateKey).forEach((day) => {
         dailySummaryMap.set(day.key, {
@@ -3236,6 +3452,47 @@ export async function registerRoutes(
         addAppointmentToSummary(barberSummary, appointment, priceCents);
         addAppointmentToSummary(serviceSummary, appointment, priceCents);
         if (dailySummary) addAppointmentToSummary(dailySummary, appointment, priceCents);
+
+        if (appointment.status === "completed") {
+          const startTime = new Date(appointment.startTime);
+          const rule = getRuleForDate(compensationRules, appointment.barberId, startTime);
+          const compensationSummary = compensationSummaryMap.get(appointment.barberId) || {
+            barberName: barber?.name || "Barbeiro desconhecido",
+            completed: 0,
+            realizedCents: 0,
+            commissionCents: 0,
+            chairRentCents: 0,
+            barberEstimatedCents: 0,
+            shopEstimatedCents: 0,
+            models: new Set<string>(),
+            chairRentKeys: new Set<string>(),
+          };
+
+          compensationSummary.completed += 1;
+          compensationSummary.realizedCents += priceCents;
+          compensationSummary.models.add(getCompensationModelLabel(rule.model));
+
+          if (rule.model === "commission") {
+            const commissionCents = Math.round(priceCents * (rule.commissionPercent || 0) / 100);
+            compensationSummary.commissionCents += commissionCents;
+            compensationSummary.barberEstimatedCents += commissionCents;
+            compensationSummary.shopEstimatedCents += priceCents - commissionCents;
+          } else if (rule.model === "chair_rent") {
+            compensationSummary.barberEstimatedCents += priceCents;
+            const rentPeriod = rule.chairRentPeriod || "month";
+            const rentKey = `${rule.id}:${rentPeriod}:${getChairRentUnitKey(startTime, rentPeriod)}`;
+            if (!compensationSummary.chairRentKeys.has(rentKey)) {
+              compensationSummary.chairRentKeys.add(rentKey);
+              compensationSummary.chairRentCents += rule.chairRentCents || 0;
+              compensationSummary.shopEstimatedCents += rule.chairRentCents || 0;
+              compensationSummary.barberEstimatedCents -= rule.chairRentCents || 0;
+            }
+          } else {
+            compensationSummary.shopEstimatedCents += priceCents;
+          }
+
+          compensationSummaryMap.set(appointment.barberId, compensationSummary);
+        }
 
         barberSummaryMap.set(appointment.barberId, barberSummary);
         serviceSummaryMap.set(serviceKey, serviceSummary);
@@ -3452,6 +3709,43 @@ export async function registerRoutes(
         11: percentFormat,
       });
 
+      const compensationSheet = workbook.addWorksheet("Acertos Barbeiros");
+      addTable(
+        compensationSheet,
+        "AcertosBarbeiros",
+        [
+          "Barbeiro",
+          "Modelo aplicado",
+          "Serviços concluídos",
+          "Receita concluída (€)",
+          "Comissões do barbeiro (€)",
+          "Aluguer da cadeira (€)",
+          "Valor estimado do barbeiro (€)",
+          "Valor estimado da barbearia (€)",
+          "Nota",
+        ],
+        Array.from(compensationSummaryMap.values())
+          .sort((left, right) => right.realizedCents - left.realizedCents || left.barberName.localeCompare(right.barberName))
+          .map((item) => [
+            item.barberName,
+            Array.from(item.models).join(" + "),
+            item.completed,
+            centsToEuros(item.realizedCents),
+            centsToEuros(item.commissionCents),
+            centsToEuros(item.chairRentCents),
+            centsToEuros(item.barberEstimatedCents),
+            centsToEuros(item.shopEstimatedCents),
+            "Comissões usam a regra em vigor na data da marcação. Aluguer de cadeira é contado uma vez por período trabalhado no intervalo exportado.",
+          ]),
+      );
+      finishTableSheet(compensationSheet, [24, 30, 20, 22, 26, 24, 28, 30, 72], {
+        4: currencyFormat,
+        5: currencyFormat,
+        6: currencyFormat,
+        7: currencyFormat,
+        8: currencyFormat,
+      });
+
       const detailSheet = workbook.addWorksheet("Detalhe Completo");
       const detailHeaders = [
         "Data",
@@ -3468,6 +3762,10 @@ export async function registerRoutes(
         "Valor serviço (€)",
         "Receita realizada (€)",
         "Receita prevista (€)",
+        "Modelo financeiro",
+        "Comissão (%)",
+        "Valor barbeiro (€)",
+        "Valor barbearia (€)",
         "Criada em",
       ];
       addTable(
@@ -3482,6 +3780,25 @@ export async function registerRoutes(
           const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
           const realizedCents = appointment.status === "completed" ? priceCents : 0;
           const projectedCents = appointment.status === "booked" ? priceCents : 0;
+          const compensationRule = getRuleForDate(compensationRules, appointment.barberId, startTime);
+          const commissionRate = compensationRule.model === "commission"
+            ? (compensationRule.commissionPercent || 0) / 100
+            : null;
+          const commissionCents = commissionRate !== null ? Math.round(priceCents * commissionRate) : 0;
+          const barberValueCents = appointment.status === "completed"
+            ? compensationRule.model === "commission"
+              ? commissionCents
+              : compensationRule.model === "chair_rent"
+                ? priceCents
+                : 0
+            : 0;
+          const shopValueCents = appointment.status === "completed"
+            ? compensationRule.model === "commission"
+              ? priceCents - commissionCents
+              : compensationRule.model === "none"
+                ? priceCents
+                : 0
+            : 0;
 
           return [
             toExcelShopDateTime(startTime),
@@ -3498,16 +3815,23 @@ export async function registerRoutes(
             centsToEuros(priceCents),
             centsToEuros(realizedCents),
             centsToEuros(projectedCents),
+            getCompensationModelLabel(compensationRule.model),
+            commissionRate,
+            centsToEuros(barberValueCents),
+            centsToEuros(shopValueCents),
             appointment.createdAt ? toExcelShopDateTime(new Date(appointment.createdAt)) : null,
           ];
         }),
       );
-      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 18], {
+      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 26, 14, 20, 22, 18], {
         1: dateFormat,
         12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
-        15: dateTimeFormat,
+        16: percentFormat,
+        17: currencyFormat,
+        18: currencyFormat,
+        19: dateTimeFormat,
       });
 
       const fileName = `Relatório_de_${formatCalendarDateKey(startDateKey, "-")}_a_${formatCalendarDateKey(endDateKey, "-")}.xlsx`;

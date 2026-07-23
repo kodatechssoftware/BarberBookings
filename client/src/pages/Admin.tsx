@@ -768,6 +768,19 @@ type BarberListItem = {
   color?: string | null;
   isVisible?: boolean | null;
   serviceIds?: number[] | null;
+  compensationModel?: CompensationModel | null;
+  commissionPercent?: number | null;
+  chairRentCents?: number | null;
+  chairRentPeriod?: ChairRentPeriod | null;
+};
+
+type CompensationModel = "none" | "commission" | "chair_rent";
+type ChairRentPeriod = "day" | "week" | "month";
+type BarberCompensationFormData = {
+  compensationModel: CompensationModel;
+  commissionPercent: string;
+  chairRentAmount: string;
+  chairRentPeriod: ChairRentPeriod;
 };
 
 type ServiceMutationResponse = {
@@ -822,9 +835,85 @@ type BarberListCacheItem = {
 
 const barberColorPalette = ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
 const defaultBarberColor = "#D4AF37";
+const defaultBarberCompensationFormData: BarberCompensationFormData = {
+  compensationModel: "none",
+  commissionPercent: "40",
+  chairRentAmount: "0",
+  chairRentPeriod: "month",
+};
 
 function normalizeBarberColor(color?: string | null) {
   return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : defaultBarberColor;
+}
+
+function centsToEurosInputValue(cents?: number | null) {
+  if (!cents) return "";
+  return String(cents / 100).replace(".", ",");
+}
+
+function eurosInputToCents(value: string) {
+  const normalized = value.replace(",", ".").trim();
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.round(parsed * 100);
+}
+
+function getBarberCompensationFormData(barber?: BarberListItem): BarberCompensationFormData {
+  return {
+    compensationModel: barber?.compensationModel || defaultBarberCompensationFormData.compensationModel,
+    commissionPercent: barber?.commissionPercent != null
+      ? String(barber.commissionPercent)
+      : defaultBarberCompensationFormData.commissionPercent,
+    chairRentAmount: barber?.chairRentCents != null
+      ? centsToEurosInputValue(barber.chairRentCents)
+      : defaultBarberCompensationFormData.chairRentAmount,
+    chairRentPeriod: barber?.chairRentPeriod || defaultBarberCompensationFormData.chairRentPeriod,
+  };
+}
+
+function getBarberCompensationPayload(data: BarberCompensationFormData) {
+  if (data.compensationModel === "commission") {
+    const parsedPercent = Number(data.commissionPercent.replace(",", "."));
+    return {
+      compensationModel: "commission" as const,
+      commissionPercent: Number.isFinite(parsedPercent) ? Math.max(0, Math.min(100, parsedPercent)) : 0,
+      chairRentCents: null,
+      chairRentPeriod: null,
+    };
+  }
+
+  if (data.compensationModel === "chair_rent") {
+    return {
+      compensationModel: "chair_rent" as const,
+      commissionPercent: null,
+      chairRentCents: eurosInputToCents(data.chairRentAmount),
+      chairRentPeriod: data.chairRentPeriod,
+    };
+  }
+
+  return {
+    compensationModel: "none" as const,
+    commissionPercent: null,
+    chairRentCents: null,
+    chairRentPeriod: null,
+  };
+}
+
+function getCompensationSummary(barber: BarberListItem) {
+  if (barber.compensationModel === "commission") {
+    return `Comissão: ${barber.commissionPercent ?? 0}% dos serviços concluídos`;
+  }
+
+  if (barber.compensationModel === "chair_rent") {
+    const periodLabel = barber.chairRentPeriod === "day"
+      ? "dia trabalhado"
+      : barber.chairRentPeriod === "week"
+        ? "semana trabalhada"
+        : "mês trabalhado";
+    return `Aluguer de cadeira: ${formatCents(barber.chairRentCents || 0)} por ${periodLabel}`;
+  }
+
+  return "Sem cálculo financeiro no relatório";
 }
 
 function colorWithAlpha(color: string | undefined | null, alpha: number) {
@@ -950,6 +1039,103 @@ function BarberServicesPicker({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function BarberCompensationFields({
+  value,
+  onChange,
+}: {
+  value: BarberCompensationFormData;
+  onChange: (value: BarberCompensationFormData) => void;
+}) {
+  const setValue = (patch: Partial<BarberCompensationFormData>) => onChange({ ...value, ...patch });
+
+  return (
+    <div className="space-y-3 rounded-lg border border-white/10 bg-background/50 p-3">
+      <div>
+        <Label>Modelo financeiro</Label>
+        <p className="text-xs text-gray-500">
+          Esta regra entra em vigor a partir do momento em que guardar. O histórico anterior mantém a regra antiga no Excel.
+        </p>
+      </div>
+      <Select
+        value={value.compensationModel}
+        onValueChange={(selected) => setValue({ compensationModel: selected as CompensationModel })}
+      >
+        <SelectTrigger className="border-white/10 bg-background text-white">
+          <SelectValue placeholder="Escolher modelo" />
+        </SelectTrigger>
+        <SelectContent className="border-white/10 bg-card text-white">
+          <SelectItem value="none">Sem cálculo financeiro</SelectItem>
+          <SelectItem value="commission">Comissão percentual</SelectItem>
+          <SelectItem value="chair_rent">Aluguer fixo de cadeira</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <div className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs leading-relaxed text-gray-400">
+        {value.compensationModel === "commission" ? (
+          <span>
+            O relatório calcula para o barbeiro a percentagem indicada sobre os serviços concluídos. A barbearia fica com o restante.
+          </span>
+        ) : value.compensationModel === "chair_rent" ? (
+          <span>
+            O barbeiro mantém a receita dos serviços concluídos e o relatório desconta o aluguer fixo uma vez por período trabalhado.
+          </span>
+        ) : (
+          <span>
+            O relatório mostra a receita da barbearia sem calcular pagamentos ao barbeiro.
+          </span>
+        )}
+      </div>
+
+      {value.compensationModel === "commission" ? (
+        <div className="space-y-2">
+          <Label>Percentagem do barbeiro (%)</Label>
+          <Input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            inputMode="decimal"
+            value={value.commissionPercent}
+            onChange={(event) => setValue({ commissionPercent: event.target.value })}
+            className="border-white/10 bg-background text-white"
+          />
+        </div>
+      ) : null}
+
+      {value.compensationModel === "chair_rent" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label>Valor do aluguer (€)</Label>
+            <Input
+              inputMode="decimal"
+              value={value.chairRentAmount}
+              onChange={(event) => setValue({ chairRentAmount: event.target.value })}
+              className="border-white/10 bg-background text-white"
+              placeholder="Ex.: 250"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Periodicidade</Label>
+            <Select
+              value={value.chairRentPeriod}
+              onValueChange={(selected) => setValue({ chairRentPeriod: selected as ChairRentPeriod })}
+            >
+              <SelectTrigger className="border-white/10 bg-background text-white">
+                <SelectValue placeholder="Período" />
+              </SelectTrigger>
+              <SelectContent className="border-white/10 bg-card text-white">
+                <SelectItem value="day">Por dia trabalhado</SelectItem>
+                <SelectItem value="week">Por semana trabalhada</SelectItem>
+                <SelectItem value="month">Por mês trabalhado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1110,9 +1296,19 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
-  const [barberFormData, setBarberFormData] = useState({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] as number[] });
+  const [barberFormData, setBarberFormData] = useState({
+    name: "",
+    specialty: "",
+    bio: "",
+    avatar: "",
+    email: "",
+    color: defaultBarberColor,
+    serviceIds: [] as number[],
+    ...defaultBarberCompensationFormData,
+  });
   const [barberAvatarDrafts, setBarberAvatarDrafts] = useState<Record<number, string | null>>({});
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
+  const [barberCompensationDrafts, setBarberCompensationDrafts] = useState<Record<number, BarberCompensationFormData>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
@@ -1331,11 +1527,21 @@ export default function Admin() {
         avatar: barberFormData.avatar || null,
         color: normalizeBarberColor(barberFormData.color),
         serviceIds: normalizeServiceSelection(barberFormData.serviceIds, allServiceIds),
+        ...getBarberCompensationPayload(barberFormData),
       });
       await refreshBarbersCache();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingBarber(false);
-      setBarberFormData({ name: "", specialty: "", bio: "", avatar: "", email: "", color: defaultBarberColor, serviceIds: [] });
+      setBarberFormData({
+        name: "",
+        specialty: "",
+        bio: "",
+        avatar: "",
+        email: "",
+        color: defaultBarberColor,
+        serviceIds: [],
+        ...defaultBarberCompensationFormData,
+      });
       toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao adicionar barbeiro.", variant: "destructive" });
@@ -2865,6 +3071,10 @@ export default function Admin() {
                         serviceIds: normalizeServiceSelection(serviceIds, getAllServiceIds(services)),
                       })}
                     />
+                    <BarberCompensationFields
+                      value={barberFormData}
+                      onChange={(compensation) => setBarberFormData({ ...barberFormData, ...compensation })}
+                    />
                     <Button 
                       variant="gold" 
                       className="w-full" 
@@ -2919,6 +3129,9 @@ export default function Admin() {
                     <p className="mb-3 line-clamp-2 text-xs text-gray-400">
                       {formatBarberServicesSummary(barber, services)}
                     </p>
+                    <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
+                      {getCompensationSummary(barber)}
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       <Dialog>
                         <DialogTrigger asChild>
@@ -2954,6 +3167,17 @@ export default function Admin() {
                                 [barber.id]: normalizeServiceSelection(serviceIds, getAllServiceIds(services)),
                               }))}
                             />
+                            <BarberCompensationFields
+                              value={
+                                Object.prototype.hasOwnProperty.call(barberCompensationDrafts, barber.id)
+                                  ? barberCompensationDrafts[barber.id]
+                                  : getBarberCompensationFormData(barber)
+                              }
+                              onChange={(compensation) => setBarberCompensationDrafts((current) => ({
+                                ...current,
+                                [barber.id]: compensation,
+                              }))}
+                            />
                             <Button
                               variant="gold"
                               className="w-full"
@@ -2967,6 +3191,9 @@ export default function Admin() {
                                   const color = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-color-${barber.id}`)?.value || defaultBarberColor;
                                   const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
                                   const hasServiceDraft = Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id);
+                                  const compensationDraft = Object.prototype.hasOwnProperty.call(barberCompensationDrafts, barber.id)
+                                    ? barberCompensationDrafts[barber.id]
+                                    : getBarberCompensationFormData(barber);
                                   const selectedServiceIds = getEffectiveServiceSelection(
                                     hasServiceDraft ? barberServiceDrafts[barber.id] : barber.serviceIds,
                                     services,
@@ -2976,6 +3203,7 @@ export default function Admin() {
                                     specialty,
                                     color: normalizeBarberColor(color),
                                     avatar: avatar || null,
+                                    ...getBarberCompensationPayload(compensationDraft),
                                   };
                                   if (hasServiceDraft) {
                                     payload.serviceIds = normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services));
@@ -2991,6 +3219,11 @@ export default function Admin() {
                                     return next;
                                   });
                                   setBarberServiceDrafts((current) => {
+                                    const next = { ...current };
+                                    delete next[barber.id];
+                                    return next;
+                                  });
+                                  setBarberCompensationDrafts((current) => {
                                     const next = { ...current };
                                     delete next[barber.id];
                                     return next;

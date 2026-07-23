@@ -12,6 +12,7 @@ import {
   barberInvites,
   customerNotes,
   auditLogs,
+  barberCompensationRules,
   type Barber,
   type Service,
   type Appointment,
@@ -24,6 +25,7 @@ import {
   type BarberInvite,
   type CustomerNote,
   type AuditLog,
+  type BarberCompensationRule,
   type CreateBarberRequest,
   type CreateServiceRequest,
   type CreateAppointmentRequest,
@@ -34,7 +36,8 @@ import {
   type CreateBarberServiceRequest,
   type CreateBarberInviteRequest,
   type CreateCustomerNoteRequest,
-  type CreateAuditLogRequest
+  type CreateAuditLogRequest,
+  type CreateBarberCompensationRuleRequest
 } from "@shared/schema";
 import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail } from "@shared/customer-validation";
@@ -214,6 +217,10 @@ export interface IStorage {
   // Audit log
   getAuditLogs(limit?: number): Promise<AuditLog[]>;
   createAuditLog(log: CreateAuditLogRequest): Promise<AuditLog>;
+
+  // Barber compensation
+  getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]>;
+  createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -779,6 +786,26 @@ export class DatabaseStorage implements IStorage {
     return entry;
   }
 
+  async getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]> {
+    const query = db
+      .select()
+      .from(barberCompensationRules)
+      .orderBy(barberCompensationRules.barberId, desc(barberCompensationRules.effectiveFrom), desc(barberCompensationRules.id));
+
+    if (barberId === undefined) return await query;
+
+    return await db
+      .select()
+      .from(barberCompensationRules)
+      .where(eq(barberCompensationRules.barberId, barberId))
+      .orderBy(desc(barberCompensationRules.effectiveFrom), desc(barberCompensationRules.id));
+  }
+
+  async createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule> {
+    const [created] = await db.insert(barberCompensationRules).values(rule).returning();
+    return created;
+  }
+
   async hasData(): Promise<boolean> {
       const [barber] = await db.select().from(barbers).limit(1);
       return !!barber;
@@ -834,6 +861,7 @@ export class MemoryStorage implements IStorage {
   private barberInvites: BarberInvite[] = [];
   private customerNotes: CustomerNote[] = [];
   private auditLogs: AuditLog[] = [];
+  private barberCompensationRules: BarberCompensationRule[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
   private nextIds = {
@@ -848,6 +876,7 @@ export class MemoryStorage implements IStorage {
     customerNote: 1,
     auditLog: 1,
     verificationCode: 1,
+    barberCompensationRule: 1,
   };
 
   private assertNoAppointmentConflict(
@@ -1342,6 +1371,31 @@ export class MemoryStorage implements IStorage {
     };
     this.auditLogs.push(entry);
     return entry;
+  }
+
+  async getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]> {
+    return this.barberCompensationRules
+      .filter((rule) => barberId === undefined || rule.barberId === barberId)
+      .sort((a, b) =>
+        a.barberId - b.barberId ||
+        new Date(b.effectiveFrom).getTime() - new Date(a.effectiveFrom).getTime() ||
+        b.id - a.id,
+      );
+  }
+
+  async createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule> {
+    const created: BarberCompensationRule = {
+      id: this.nextIds.barberCompensationRule++,
+      barberId: rule.barberId,
+      model: rule.model ?? "none",
+      commissionPercent: rule.commissionPercent ?? null,
+      chairRentCents: rule.chairRentCents ?? null,
+      chairRentPeriod: rule.chairRentPeriod ?? null,
+      effectiveFrom: rule.effectiveFrom,
+      createdAt: new Date(),
+    };
+    this.barberCompensationRules.push(created);
+    return created;
   }
 
   async createVerificationCode(phone: string, code: string): Promise<void> {
