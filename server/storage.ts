@@ -13,6 +13,7 @@ import {
   customerNotes,
   auditLogs,
   barberCompensationRules,
+  businessExpenses,
   type Barber,
   type Service,
   type Appointment,
@@ -26,6 +27,7 @@ import {
   type CustomerNote,
   type AuditLog,
   type BarberCompensationRule,
+  type BusinessExpense,
   type CreateBarberRequest,
   type CreateServiceRequest,
   type CreateAppointmentRequest,
@@ -37,7 +39,8 @@ import {
   type CreateBarberInviteRequest,
   type CreateCustomerNoteRequest,
   type CreateAuditLogRequest,
-  type CreateBarberCompensationRuleRequest
+  type CreateBarberCompensationRuleRequest,
+  type CreateBusinessExpenseRequest
 } from "@shared/schema";
 import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail } from "@shared/customer-validation";
@@ -221,6 +224,16 @@ export interface IStorage {
   // Barber compensation
   getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]>;
   createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule>;
+
+  // Business expenses
+  getBusinessExpenses(filters?: {
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  }): Promise<BusinessExpense[]>;
+  createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense>;
+  updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined>;
+  deleteBusinessExpense(id: number): Promise<void>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -806,6 +819,59 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async getBusinessExpenses(filters: {
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  } = {}): Promise<BusinessExpense[]> {
+    const conditions: SQL[] = [];
+
+    if (filters.startDate) {
+      const { start } = getShopDateBounds(filters.startDate);
+      conditions.push(gte(businessExpenses.expenseDate, start));
+    }
+
+    if (filters.endDate) {
+      const { endExclusive } = getShopDateBounds(filters.endDate);
+      conditions.push(lt(businessExpenses.expenseDate, endExclusive));
+    }
+
+    if (filters.category && filters.category !== "all") {
+      conditions.push(eq(businessExpenses.category, filters.category as any));
+    }
+
+    const query = db
+      .select()
+      .from(businessExpenses)
+      .orderBy(desc(businessExpenses.expenseDate), desc(businessExpenses.id));
+
+    if (conditions.length === 0) return await query;
+
+    return await db
+      .select()
+      .from(businessExpenses)
+      .where(and(...conditions))
+      .orderBy(desc(businessExpenses.expenseDate), desc(businessExpenses.id));
+  }
+
+  async createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense> {
+    const [created] = await db.insert(businessExpenses).values(expense).returning();
+    return created;
+  }
+
+  async updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined> {
+    const [updated] = await db
+      .update(businessExpenses)
+      .set({ ...expense, updatedAt: new Date() })
+      .where(eq(businessExpenses.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteBusinessExpense(id: number): Promise<void> {
+    await db.delete(businessExpenses).where(eq(businessExpenses.id, id));
+  }
+
   async hasData(): Promise<boolean> {
       const [barber] = await db.select().from(barbers).limit(1);
       return !!barber;
@@ -862,6 +928,7 @@ export class MemoryStorage implements IStorage {
   private customerNotes: CustomerNote[] = [];
   private auditLogs: AuditLog[] = [];
   private barberCompensationRules: BarberCompensationRule[] = [];
+  private businessExpenses: BusinessExpense[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
   private nextIds = {
@@ -877,6 +944,7 @@ export class MemoryStorage implements IStorage {
     auditLog: 1,
     verificationCode: 1,
     barberCompensationRule: 1,
+    businessExpense: 1,
   };
 
   private assertNoAppointmentConflict(
@@ -1396,6 +1464,59 @@ export class MemoryStorage implements IStorage {
     };
     this.barberCompensationRules.push(created);
     return created;
+  }
+
+  async getBusinessExpenses(filters: {
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  } = {}): Promise<BusinessExpense[]> {
+    const start = filters.startDate ? getShopDateBounds(filters.startDate).start : undefined;
+    const endExclusive = filters.endDate ? getShopDateBounds(filters.endDate).endExclusive : undefined;
+
+    return this.businessExpenses
+      .filter((expense) => {
+        const expenseDate = new Date(expense.expenseDate);
+        if (start && expenseDate < start) return false;
+        if (endExclusive && expenseDate >= endExclusive) return false;
+        if (filters.category && filters.category !== "all" && expense.category !== filters.category) return false;
+        return true;
+      })
+      .sort((a, b) =>
+        new Date(b.expenseDate).getTime() - new Date(a.expenseDate).getTime() || b.id - a.id,
+      );
+  }
+
+  async createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense> {
+    const now = new Date();
+    const created: BusinessExpense = {
+      id: this.nextIds.businessExpense++,
+      category: expense.category,
+      description: expense.description,
+      amountCents: expense.amountCents,
+      expenseDate: expense.expenseDate,
+      recurrence: expense.recurrence ?? "once",
+      notes: expense.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.businessExpenses.push(created);
+    return created;
+  }
+
+  async updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined> {
+    const index = this.businessExpenses.findIndex((item) => item.id === id);
+    if (index === -1) return undefined;
+    this.businessExpenses[index] = {
+      ...this.businessExpenses[index],
+      ...expense,
+      updatedAt: new Date(),
+    };
+    return this.businessExpenses[index];
+  }
+
+  async deleteBusinessExpense(id: number): Promise<void> {
+    this.businessExpenses = this.businessExpenses.filter((expense) => expense.id !== id);
   }
 
   async createVerificationCode(phone: string, code: string): Promise<void> {

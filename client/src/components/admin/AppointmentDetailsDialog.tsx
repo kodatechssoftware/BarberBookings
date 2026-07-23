@@ -266,8 +266,12 @@ export function AppointmentDetailsDialog({
   getStatusLabel: (status: string) => string;
   getStatusClass: (status: string) => string;
   onOpenHistory: (appointment: AdminAppointment) => void;
-  onStatusChange: (appointmentId: number, status: AppointmentStatus) => void;
-  onBlockCustomer: (appointment: AdminAppointment) => Promise<void>;
+  onStatusChange: (
+    appointmentId: number,
+    status: AppointmentStatus,
+    options?: { onSuccess?: () => void },
+  ) => void;
+  onBlockCustomer: (appointment: AdminAppointment) => Promise<boolean | void>;
   canManageSchedule: boolean;
 }) {
   const [customerNotes, setCustomerNotes] = useState("");
@@ -346,7 +350,14 @@ export function AppointmentDetailsDialog({
   };
 
   const handleStatusChange = (status: AppointmentStatus) => {
-    onStatusChange(appointment.id, status);
+    onStatusChange(appointment.id, status, { onSuccess: () => onOpenChange(false) });
+  };
+
+  const handleBlockCustomer = async () => {
+    const completed = await onBlockCustomer(appointment);
+    if (completed !== false) {
+      onOpenChange(false);
+    }
   };
 
   return (
@@ -460,7 +471,7 @@ export function AppointmentDetailsDialog({
                       description={`${appointment.customerName} (${contactLinks.displayPhone || appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
                       confirmLabel="Bloquear"
                       confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      onConfirm={() => onBlockCustomer(appointment)}
+                      onConfirm={handleBlockCustomer}
                     >
                       <Button size="sm" variant="ghost" className="h-9 text-xs text-destructive hover:text-red-300">
                         Bloquear

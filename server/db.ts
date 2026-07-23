@@ -203,3 +203,29 @@ export async function ensureBarberCompensationRulesTable() {
     ON ${qualifiedTableName} (barber_id, effective_from DESC)
   `);
 }
+
+export async function ensureBusinessExpensesTable() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("business_expenses")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
+      id serial PRIMARY KEY,
+      category text NOT NULL,
+      description text NOT NULL,
+      amount_cents integer NOT NULL,
+      expense_date timestamp NOT NULL,
+      recurrence text NOT NULL DEFAULT 'once',
+      notes text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS business_expenses_expense_date_idx
+    ON ${qualifiedTableName} (expense_date DESC)
+  `);
+}

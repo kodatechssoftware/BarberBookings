@@ -183,6 +183,72 @@ type AuditLogItem = {
   createdAt: string;
 };
 
+type BusinessExpenseCategory =
+  | "rent"
+  | "utilities"
+  | "internet"
+  | "materials"
+  | "equipment"
+  | "marketing"
+  | "accounting"
+  | "staff"
+  | "other";
+type BusinessExpenseRecurrence = "once" | "weekly" | "monthly";
+type BusinessExpense = {
+  id: number;
+  category: BusinessExpenseCategory;
+  description: string;
+  amountCents: number;
+  expenseDate: string;
+  recurrence: BusinessExpenseRecurrence;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+type BusinessExpenseForm = {
+  category: BusinessExpenseCategory;
+  description: string;
+  amount: string;
+  expenseDate: Date;
+  recurrence: BusinessExpenseRecurrence;
+  notes: string;
+};
+
+const businessExpenseCategories: Array<{ value: BusinessExpenseCategory; label: string; help: string }> = [
+  { value: "rent", label: "Renda", help: "Valor fixo do espaco." },
+  { value: "utilities", label: "Agua / luz", help: "Contas de funcionamento." },
+  { value: "internet", label: "Internet / telefone", help: "Comunicações da loja." },
+  { value: "materials", label: "Material e produtos", help: "Produtos, laminas, toalhas e consumiveis." },
+  { value: "equipment", label: "Equipamentos", help: "Maquinas, cadeiras e reparacoes." },
+  { value: "marketing", label: "Marketing", help: "Publicidade e conteudo." },
+  { value: "accounting", label: "Contabilidade", help: "Apoio contabilistico e administrativo." },
+  { value: "staff", label: "Pagamentos de equipa", help: "Acertos manuais fora das regras automaticas." },
+  { value: "other", label: "Outros", help: "Qualquer despesa pontual." },
+];
+
+const businessExpenseRecurrences: Array<{ value: BusinessExpenseRecurrence; label: string }> = [
+  { value: "once", label: "Unica" },
+  { value: "weekly", label: "Semanal" },
+  { value: "monthly", label: "Mensal" },
+];
+
+const defaultBusinessExpenseForm: BusinessExpenseForm = {
+  category: "materials",
+  description: "",
+  amount: "",
+  expenseDate: startOfToday(),
+  recurrence: "once",
+  notes: "",
+};
+
+function getBusinessExpenseCategoryLabel(category: BusinessExpenseCategory) {
+  return businessExpenseCategories.find((item) => item.value === category)?.label || category;
+}
+
+function getBusinessExpenseRecurrenceLabel(recurrence: BusinessExpenseRecurrence) {
+  return businessExpenseRecurrences.find((item) => item.value === recurrence)?.label || recurrence;
+}
+
 const currencyFormatter = new Intl.NumberFormat("pt-PT", {
   style: "currency",
   currency: "EUR",
@@ -1310,12 +1376,14 @@ export default function Admin() {
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [barberCompensationDrafts, setBarberCompensationDrafts] = useState<Record<number, BarberCompensationFormData>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
+  const [editingBarberId, setEditingBarberId] = useState<number | null>(null);
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
   const [futureRemovalAppointments, setFutureRemovalAppointments] = useState<AdminAppointment[]>([]);
   const [barberReassignments, setBarberReassignments] = useState<Record<number, string>>({});
   const [isReassigningBarber, setIsReassigningBarber] = useState(false);
   const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
+  const [editingServiceId, setEditingServiceId] = useState<number | null>(null);
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
@@ -1324,6 +1392,17 @@ export default function Admin() {
   const [appointmentViewMode, setAppointmentViewMode] = useState<AppointmentViewMode>("day");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportDates, setExportDates] = useState({
+    start: subDays(startOfToday(), 30),
+    end: startOfToday(),
+    barberId: "all"
+  });
+  const [expenseForm, setExpenseForm] = useState<BusinessExpenseForm>(() => ({
+    ...defaultBusinessExpenseForm,
+    expenseDate: startOfToday(),
+  }));
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
   const businessDashboardRef = useRef<HTMLDivElement>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
@@ -1388,6 +1467,22 @@ export default function Admin() {
       return res.json();
     },
   });
+  const expensesUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      startDate: format(exportDates.start, "yyyy-MM-dd"),
+      endDate: format(exportDates.end, "yyyy-MM-dd"),
+      category: "all",
+    });
+    return `/api/admin/expenses?${params.toString()}`;
+  }, [exportDates.start, exportDates.end]);
+  const { data: businessExpenses = [], isLoading: isLoadingExpenses } = useQuery<BusinessExpense[]>({
+    queryKey: [expensesUrl],
+    enabled: user?.authorized === true && user.role === "admin",
+  });
+  const businessExpensesTotalCents = useMemo(
+    () => businessExpenses.reduce((total, expense) => total + expense.amountCents, 0),
+    [businessExpenses],
+  );
   const keepBusinessDashboardInView = () => {
     window.requestAnimationFrame(() => {
       businessDashboardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1497,12 +1592,6 @@ export default function Admin() {
   const [loginData, setLoginData] = useState({ username: "", password: "" });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportDates, setExportDates] = useState({ 
-    start: subDays(startOfToday(), 30), 
-    end: startOfToday(),
-    barberId: "all"
-  });
   const [blacklistForm, setBlacklistForm] = useState({ phone: "", email: "" });
   const blacklistPhoneParts = splitStoredPhone(blacklistForm.phone);
   const blacklistPhoneCountry = getPhoneCountry(blacklistPhoneParts.countryCode);
@@ -1602,6 +1691,64 @@ export default function Admin() {
       toast({ title: "Erro", description: err.message || "Falha ao gerar o relatorio.", variant: "destructive" });
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const invalidateExpensesQueries = () => {
+    void queryClient.invalidateQueries({
+      predicate: (query) => {
+        const key = query.queryKey[0];
+        return typeof key === "string" && key.startsWith("/api/admin/expenses");
+      },
+    });
+  };
+
+  const handleAddExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amountCents = eurosInputToCents(expenseForm.amount);
+
+    if (!expenseForm.description.trim()) {
+      toast({ title: "Descricao em falta", description: "Indique a descricao da despesa.", variant: "destructive" });
+      return;
+    }
+
+    if (amountCents <= 0) {
+      toast({ title: "Valor em falta", description: "Indique um valor superior a zero.", variant: "destructive" });
+      return;
+    }
+
+    setIsSavingExpense(true);
+    try {
+      await apiRequest("POST", "/api/admin/expenses", {
+        category: expenseForm.category,
+        description: expenseForm.description.trim(),
+        amountCents,
+        expenseDate: format(expenseForm.expenseDate, "yyyy-MM-dd"),
+        recurrence: expenseForm.recurrence,
+        notes: expenseForm.notes.trim() || null,
+      });
+      setExpenseForm({
+        ...defaultBusinessExpenseForm,
+        expenseDate: startOfToday(),
+      });
+      invalidateExpensesQueries();
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      toast({ title: "Sucesso", description: "Despesa registada." });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message || "Erro ao registar despesa.", variant: "destructive" });
+    } finally {
+      setIsSavingExpense(false);
+    }
+  };
+
+  const handleDeleteExpense = async (expense: BusinessExpense) => {
+    try {
+      await apiRequest("DELETE", `/api/admin/expenses/${expense.id}`);
+      invalidateExpensesQueries();
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      toast({ title: "Sucesso", description: "Despesa removida." });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message || "Erro ao remover despesa.", variant: "destructive" });
     }
   };
 
@@ -2057,13 +2204,18 @@ export default function Admin() {
     }
   };
 
-  const handleStatusChange = (appointmentId: number, status: AppointmentStatus) => {
+  const handleStatusChange = (
+    appointmentId: number,
+    status: AppointmentStatus,
+    options?: { onSuccess?: () => void },
+  ) => {
     updateStatus.mutate(
       { id: appointmentId, status, expectedStatus: "booked" },
       {
         onSuccess: () => {
           toast({ title: "Atualizado", description: `Estado alterado para ${getStatusLabel(status).toLowerCase()}.` });
           queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+          options?.onSuccess?.();
         },
         onError: (error: any) => {
           toast({ title: "Erro", description: error.message || "Não foi possível atualizar a marcação.", variant: "destructive" });
@@ -2141,7 +2293,7 @@ export default function Admin() {
           ...payload,
           futureAppointments: responseBody.futureAppointments || [],
         });
-        return;
+        return true;
       }
 
       if (!response.ok) {
@@ -2166,19 +2318,21 @@ export default function Admin() {
           ? `${cancelledCount} marcação(ões) futura(s) foram cancelada(s).`
           : "Cliente adicionado à lista de bloqueio.",
       });
+      return true;
     } catch (err: any) {
       toast({
         title: "Erro",
         description: err.message || "Não foi possível bloquear o cliente.",
         variant: "destructive",
       });
+      return false;
     } finally {
       setIsSubmittingBlacklist(false);
     }
   };
 
   const handleBlockCustomerWithFutureCheck = async (appointment: AdminAppointment) => {
-    await submitBlacklistEntryWithFutureCheck({
+    return submitBlacklistEntryWithFutureCheck({
       phone: appointment.customerPhone,
       email: appointment.customerEmail || undefined,
       reason: `Faltou à marcação de ${format(parseISO(appointment.startTime), "dd/MM/yyyy HH:mm")}`,
@@ -3133,7 +3287,7 @@ export default function Admin() {
                       {getCompensationSummary(barber)}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      <Dialog>
+                      <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => setEditingBarberId(open ? barber.id : null)}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
@@ -3228,6 +3382,7 @@ export default function Admin() {
                                     delete next[barber.id];
                                     return next;
                                   });
+                                  setEditingBarberId(null);
                                   toast({ title: "Sucesso", description: "Barbeiro atualizado." });
                                 } catch (err: any) {
                                   toast({
@@ -3459,6 +3614,7 @@ export default function Admin() {
                 </div>
               </CardContent>
             </Card>
+
           </TabsContent>
 
           <TabsContent value="services" className="outline-none">
@@ -3543,7 +3699,7 @@ export default function Admin() {
                       <p className="text-xs text-gray-500">Agenda: {service.agendaLabel || "etiqueta automática"}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Dialog>
+                      <Dialog open={editingServiceId === service.id} onOpenChange={(open) => setEditingServiceId(open ? service.id : null)}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
@@ -3575,6 +3731,7 @@ export default function Admin() {
                                 await assertServiceAgendaLabelPersisted(response, agendaLabel);
                                 queryClient.invalidateQueries({ queryKey: ["/api/services"] });
                                 queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+                                setEditingServiceId(null);
                                 toast({ title: "Sucesso", description: "Serviço atualizado." });
                               } catch (err: any) {
                                 toast({ title: "Erro", description: err.message || "Erro ao atualizar serviço.", variant: "destructive" });
@@ -3819,8 +3976,8 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="reports" className="outline-none">
-            <Card className="bg-card border-white/10 max-w-2xl mx-auto">
+          <TabsContent value="reports" className="outline-none space-y-6">
+            <Card className="bg-card border-white/10 max-w-3xl mx-auto">
               <CardHeader>
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
                 <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com resumo financeiro, estados e detalhe das marcações do período.</p>
@@ -3876,6 +4033,168 @@ export default function Admin() {
                 </Button>
               </CardContent>
             </Card>
+
+            <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.1fr] gap-6">
+              <Card className="bg-card border-white/10">
+                <CardHeader>
+                  <CardTitle className="text-xl font-display font-bold text-primary">Despesas da Barbearia</CardTitle>
+                  <p className="text-gray-400 text-sm">Registe renda, agua, luz, material, marketing ou outras despesas para entrarem no resumo financeiro.</p>
+                </CardHeader>
+                <CardContent>
+                  <form className="space-y-4" onSubmit={handleAddExpense}>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-white">Categoria</Label>
+                        <Select value={expenseForm.category} onValueChange={(value) => setExpenseForm({...expenseForm, category: value as BusinessExpenseCategory})}>
+                          <SelectTrigger className="border-white/10 bg-background text-white h-11">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card border-white/10 text-white">
+                            {businessExpenseCategories.map((category) => (
+                              <SelectItem key={category.value} value={category.value}>{category.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-gray-500">
+                          {businessExpenseCategories.find((category) => category.value === expenseForm.category)?.help}
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-white">Data</Label>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
+                              <CalendarIcon className="mr-2 h-4 w-4" />
+                              {format(expenseForm.expenseDate, "dd/MM/yyyy")}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 bg-card border-white/10">
+                            <Calendar mode="single" selected={expenseForm.expenseDate} onSelect={(d) => d && setExpenseForm({...expenseForm, expenseDate: d})} locale={pt} initialFocus />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-white">Descricao</Label>
+                      <Input
+                        value={expenseForm.description}
+                        onChange={(event) => setExpenseForm({...expenseForm, description: event.target.value})}
+                        className="border-white/10 bg-background text-white h-11"
+                        placeholder="Ex.: Renda de julho, laminas, eletricidade"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-white">Valor</Label>
+                        <Input
+                          value={expenseForm.amount}
+                          onChange={(event) => setExpenseForm({...expenseForm, amount: event.target.value})}
+                          className="border-white/10 bg-background text-white h-11"
+                          inputMode="decimal"
+                          placeholder="Ex.: 125,50"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-white">Recorrencia</Label>
+                        <Select value={expenseForm.recurrence} onValueChange={(value) => setExpenseForm({...expenseForm, recurrence: value as BusinessExpenseRecurrence})}>
+                          <SelectTrigger className="border-white/10 bg-background text-white h-11">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card border-white/10 text-white">
+                            {businessExpenseRecurrences.map((recurrence) => (
+                              <SelectItem key={recurrence.value} value={recurrence.value}>{recurrence.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-gray-500">
+                          O valor entra no periodo pela data registada. Use a periodicidade para identificar despesas fixas ou recorrentes.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-white">Notas</Label>
+                      <Textarea
+                        value={expenseForm.notes}
+                        onChange={(event) => setExpenseForm({...expenseForm, notes: event.target.value})}
+                        className="min-h-[76px] border-white/10 bg-background text-white"
+                        placeholder="Opcional. Ex.: pago em dinheiro, fornecedor, referencia."
+                      />
+                    </div>
+
+                    <Button type="submit" variant="gold" className="w-full h-12 text-base font-bold gap-2" disabled={isSavingExpense}>
+                      {isSavingExpense ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
+                      Registar despesa
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-white/10">
+                <CardHeader>
+                  <CardTitle className="text-xl font-display font-bold text-primary">Resumo financeiro</CardTitle>
+                  <p className="text-gray-400 text-sm">Despesas registadas no periodo selecionado para o relatorio.</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="rounded-md border border-white/10 bg-background/70 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Total de despesas</p>
+                        <p className="text-2xl font-bold text-white">{(businessExpensesTotalCents / 100).toFixed(2).replace(".", ",")} €</p>
+                      </div>
+                      <Euro className="h-6 w-6 text-primary" />
+                    </div>
+                    <p className="mt-2 text-xs text-gray-500">O Excel combina este valor com a receita concluida e os pagamentos estimados aos barbeiros.</p>
+                  </div>
+
+                  {isLoadingExpenses ? (
+                    <div className="flex items-center justify-center rounded-md border border-white/10 py-10 text-gray-400">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      A carregar despesas...
+                    </div>
+                  ) : businessExpenses.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-white/10 py-10 text-center text-gray-500">
+                      Sem despesas registadas neste periodo.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-white/10 rounded-md border border-white/10">
+                      {businessExpenses.map((expense) => (
+                        <div key={expense.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold text-white">{expense.description}</p>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300">
+                                {getBusinessExpenseCategoryLabel(expense.category)}
+                              </span>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300">
+                                {getBusinessExpenseRecurrenceLabel(expense.recurrence)}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-sm text-gray-400">
+                              {format(parseISO(expense.expenseDate), "dd/MM/yyyy")}
+                              {expense.notes ? ` - ${expense.notes}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 md:justify-end">
+                            <p className="text-lg font-bold text-white">{(expense.amountCents / 100).toFixed(2).replace(".", ",")} €</p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-red-500/30 text-red-300 hover:bg-red-500/10"
+                              onClick={() => handleDeleteExpense(expense)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
         </Tabs>
       </div>

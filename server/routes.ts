@@ -21,11 +21,15 @@ import { format, startOfDay } from "date-fns";
 import ExcelJS from 'exceljs';
 import {
   appointmentStatuses,
+  businessExpenseCategories,
+  businessExpenseRecurrences,
   insertServiceSchema,
   type Appointment,
   type BarberCompensationRule,
   type BarberCompensationModel,
   type ChairRentPeriod,
+  type BusinessExpenseCategory,
+  type BusinessExpenseRecurrence,
 } from "@shared/schema";
 import {
   emailValidationMessage,
@@ -139,6 +143,14 @@ const customerNotesInputSchema = z.object({
 });
 
 const barberUpdateInputSchema = api.barbers.create.input.partial();
+const businessExpenseInputSchema = z.object({
+  category: z.enum(businessExpenseCategories),
+  description: z.string().trim().min(1, "Indique a descricao da despesa.").max(160, "A descricao nao pode ter mais de 160 caracteres."),
+  amountCents: z.number().int().min(0, "O valor nao pode ser negativo.").max(10_000_000, "O valor indicado e demasiado elevado."),
+  expenseDate: z.string().trim().refine(isCalendarDate, "Data invalida."),
+  recurrence: z.enum(businessExpenseRecurrences).default("once"),
+  notes: z.string().trim().max(500, "As notas nao podem ter mais de 500 caracteres.").optional().nullable(),
+});
 
 type BarberCompensationInput = {
   compensationModel?: BarberCompensationModel;
@@ -1196,6 +1208,27 @@ function getChairRentPeriodLabel(period?: ChairRentPeriod | null) {
   return "";
 }
 
+function getBusinessExpenseCategoryLabel(category: BusinessExpenseCategory) {
+  const labels: Record<BusinessExpenseCategory, string> = {
+    rent: "Renda",
+    utilities: "Água / luz",
+    internet: "Internet / telefone",
+    materials: "Material e produtos",
+    equipment: "Equipamentos",
+    marketing: "Marketing",
+    accounting: "Contabilidade",
+    staff: "Pagamentos de equipa",
+    other: "Outros",
+  };
+  return labels[category] || category;
+}
+
+function getBusinessExpenseRecurrenceLabel(recurrence: BusinessExpenseRecurrence) {
+  if (recurrence === "weekly") return "Semanal";
+  if (recurrence === "monthly") return "Mensal";
+  return "Única";
+}
+
 function getRuleForDate(
   rules: BarberCompensationRule[],
   barberId: number,
@@ -1439,6 +1472,125 @@ export async function registerRoutes(
     } catch (error) {
       console.warn("Could not load audit logs:", error instanceof Error ? error.message : error);
       res.json([]);
+    }
+  });
+
+  app.get("/api/admin/expenses", requireAdmin, async (req, res) => {
+    try {
+      const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+      const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+      const category = req.query.category ? String(req.query.category) : undefined;
+
+      if (startDate && !isCalendarDate(startDate)) {
+        return res.status(400).json({ message: "Data de inicio invalida." });
+      }
+      if (endDate && !isCalendarDate(endDate)) {
+        return res.status(400).json({ message: "Data de fim invalida." });
+      }
+      if (startDate && endDate && startDate > endDate) {
+        return res.status(400).json({ message: "A data de inicio nao pode ser posterior a data de fim." });
+      }
+      if (category && category !== "all" && !businessExpenseCategories.includes(category as BusinessExpenseCategory)) {
+        return res.status(400).json({ message: "Categoria invalida." });
+      }
+
+      const expenses = await storage.getBusinessExpenses({ startDate, endDate, category });
+      res.json(expenses);
+    } catch (error) {
+      console.error("List expenses error:", error);
+      res.status(500).json({ message: "Erro ao carregar despesas" });
+    }
+  });
+
+  app.post("/api/admin/expenses", requireAdmin, async (req, res) => {
+    try {
+      const parsed = businessExpenseInputSchema.parse(req.body);
+      const { start } = getShopDateBounds(parsed.expenseDate);
+      const expense = await storage.createBusinessExpense({
+        category: parsed.category,
+        description: parsed.description,
+        amountCents: parsed.amountCents,
+        expenseDate: start,
+        recurrence: parsed.recurrence,
+        notes: parsed.notes || null,
+      });
+      await recordAuditLog(req, {
+        action: "business_expense.created",
+        entityType: "business_expense",
+        entityId: expense.id,
+        summary: `Despesa criada: ${expense.description}`,
+        metadata: {
+          category: expense.category,
+          amountCents: expense.amountCents,
+          expenseDate: parsed.expenseDate,
+        },
+      });
+      res.status(201).json(expense);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0].message,
+          field: error.errors[0].path.join("."),
+        });
+      }
+      console.error("Create expense error:", error);
+      res.status(500).json({ message: "Erro ao criar despesa" });
+    }
+  });
+
+  app.patch("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+    try {
+      const expenseId = parsePositiveInteger(req.params.id);
+      if (expenseId === null) return res.status(400).json({ message: "Despesa invalida." });
+
+      const parsed = businessExpenseInputSchema.partial().parse(req.body);
+      const patch = {
+        ...parsed,
+        expenseDate: parsed.expenseDate ? getShopDateBounds(parsed.expenseDate).start : undefined,
+        notes: parsed.notes === undefined ? undefined : parsed.notes || null,
+      };
+      const updated = await storage.updateBusinessExpense(expenseId, patch);
+      if (!updated) return res.status(404).json({ message: "Despesa nao encontrada" });
+
+      await recordAuditLog(req, {
+        action: "business_expense.updated",
+        entityType: "business_expense",
+        entityId: updated.id,
+        summary: `Despesa atualizada: ${updated.description}`,
+        metadata: { fields: Object.keys(parsed) },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0].message,
+          field: error.errors[0].path.join("."),
+        });
+      }
+      console.error("Update expense error:", error);
+      res.status(500).json({ message: "Erro ao atualizar despesa" });
+    }
+  });
+
+  app.delete("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+    try {
+      const expenseId = parsePositiveInteger(req.params.id);
+      if (expenseId === null) return res.status(400).json({ message: "Despesa invalida." });
+
+      const existing = (await storage.getBusinessExpenses()).find((expense) => expense.id === expenseId);
+      if (!existing) return res.status(404).json({ message: "Despesa nao encontrada" });
+      await storage.deleteBusinessExpense(expenseId);
+      await recordAuditLog(req, {
+        action: "business_expense.deleted",
+        entityType: "business_expense",
+        entityId: expenseId,
+        summary: `Despesa removida: ${existing.description}`,
+        metadata: { amountCents: existing.amountCents, category: existing.category },
+      });
+      res.json({ message: "Despesa removida." });
+    } catch (error) {
+      console.error("Delete expense error:", error);
+      res.status(500).json({ message: "Erro ao remover despesa" });
     }
   });
 
@@ -3346,11 +3498,12 @@ export async function registerRoutes(
     const selectedBarberId = parsedSelectedBarberId ?? undefined;
 
     try {
-      const [allBarbers, allServices, allAppointments, compensationRules] = await Promise.all([
+      const [allBarbers, allServices, allAppointments, compensationRules, businessExpenses] = await Promise.all([
         storage.getBarbers(),
         storage.getServices(),
         storage.getAppointments(selectedBarberId),
         storage.getBarberCompensationRules(selectedBarberId),
+        storage.getBusinessExpenses({ startDate: startDateKey, endDate: endDateKey }),
       ]);
 
       const barbersById = new Map(allBarbers.map((barber) => [barber.id, barber]));
@@ -3501,6 +3654,13 @@ export async function registerRoutes(
       const averageTicketEuros = totalSummary.completed
         ? centsToEuros(Math.round(totalSummary.realizedCents / totalSummary.completed))
         : 0;
+      const barberPayoutCents = Array.from(compensationSummaryMap.values())
+        .reduce((total, item) => total + item.barberEstimatedCents, 0);
+      const shopCompensationCents = Array.from(compensationSummaryMap.values())
+        .reduce((total, item) => total + item.shopEstimatedCents, 0);
+      const businessExpensesCents = businessExpenses
+        .reduce((total, expense) => total + expense.amountCents, 0);
+      const estimatedResultCents = totalSummary.realizedCents - barberPayoutCents - businessExpensesCents;
       const completionRate = totalSummary.appointments
         ? totalSummary.completed / totalSummary.appointments
         : 0;
@@ -3595,17 +3755,20 @@ export async function registerRoutes(
         ["Faltas", totalSummary.noShows],
         ["Receita realizada", centsToEuros(totalSummary.realizedCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
+        ["Pagamentos estimados a barbeiros", centsToEuros(barberPayoutCents)],
+        ["Despesas operacionais", centsToEuros(businessExpensesCents)],
+        ["Resultado estimado", centsToEuros(estimatedResultCents)],
         ["Ticket médio realizado", averageTicketEuros],
         ["Taxa de conclusão", completionRate],
         ["Taxa de risco", riskRate],
-        ["Nota", "Receita realizada considera apenas marcações concluídas. Marcações marcadas contam como previsão."],
+        ["Nota", "Receita realizada considera apenas marcações concluídas. Marcações marcadas contam como previsão. Resultado estimado desconta pagamentos calculados aos barbeiros e despesas registadas no período."],
       ]);
       summarySheet.getColumn(1).width = 28;
       summarySheet.getColumn(2).width = 58;
-      [10, 11, 12].forEach((rowNumber) => {
+      [10, 11, 12, 13, 14, 15].forEach((rowNumber) => {
         summarySheet.getCell(rowNumber, 2).numFmt = currencyFormat;
       });
-      [13, 14].forEach((rowNumber) => {
+      [16, 17].forEach((rowNumber) => {
         summarySheet.getCell(rowNumber, 2).numFmt = percentFormat;
       });
       summarySheet.eachRow((row, rowNumber) => {
@@ -3744,6 +3907,70 @@ export async function registerRoutes(
         6: currencyFormat,
         7: currencyFormat,
         8: currencyFormat,
+      });
+
+      const expensesSheet = workbook.addWorksheet("Despesas");
+      addTable(
+        expensesSheet,
+        "Despesas",
+        [
+          "Data",
+          "Categoria",
+          "Descricao",
+          "Valor (€)",
+          "Recorrencia",
+          "Notas",
+        ],
+        businessExpenses
+          .sort((left, right) => new Date(left.expenseDate).getTime() - new Date(right.expenseDate).getTime())
+          .map((expense) => [
+            toExcelShopDateTime(new Date(expense.expenseDate)),
+            getBusinessExpenseCategoryLabel(expense.category),
+            expense.description,
+            centsToEuros(expense.amountCents),
+            getBusinessExpenseRecurrenceLabel(expense.recurrence),
+            expense.notes || "",
+          ]),
+      );
+      finishTableSheet(expensesSheet, [14, 24, 34, 16, 16, 48], {
+        1: dateFormat,
+        4: currencyFormat,
+      });
+
+      const financialSheet = workbook.addWorksheet("Resumo Financeiro");
+      financialSheet.mergeCells("A1:B1");
+      financialSheet.getCell("A1").value = "Resumo financeiro";
+      financialSheet.getCell("A1").font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+      financialSheet.getCell("A1").fill = headerFill;
+      financialSheet.getRow(1).height = 28;
+      financialSheet.addRows([
+        ["Período", `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`],
+        ["Receita concluída", centsToEuros(totalSummary.realizedCents)],
+        ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
+        ["Pagamentos estimados a barbeiros", centsToEuros(barberPayoutCents)],
+        ["Valor estimado da barbearia antes de despesas", centsToEuros(shopCompensationCents)],
+        ["Despesas registadas", centsToEuros(businessExpensesCents)],
+        ["Resultado estimado apos despesas", centsToEuros(estimatedResultCents)],
+        ["Nota", "Pagamentos aos barbeiros seguem a regra financeira em vigor na data de cada marcação concluída. Despesas são os registos lançados no período exportado."],
+      ]);
+      financialSheet.getColumn(1).width = 42;
+      financialSheet.getColumn(2).width = 64;
+      [3, 4, 5, 6, 7, 8].forEach((rowNumber) => {
+        financialSheet.getCell(rowNumber, 2).numFmt = currencyFormat;
+      });
+      financialSheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          row.getCell(1).font = { bold: true };
+          row.eachCell((cell) => {
+            cell.border = {
+              top: { style: "thin", color: { argb: "FFE5E7EB" } },
+              left: { style: "thin", color: { argb: "FFE5E7EB" } },
+              bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+              right: { style: "thin", color: { argb: "FFE5E7EB" } },
+            };
+            cell.alignment = { vertical: "middle", wrapText: rowNumber === 9 };
+          });
+        }
       });
 
       const detailSheet = workbook.addWorksheet("Detalhe Completo");
