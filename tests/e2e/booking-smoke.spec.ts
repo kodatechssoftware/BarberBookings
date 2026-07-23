@@ -950,6 +950,148 @@ test.describe("admin navigation", () => {
     expect(finalBarbers.find((barber: any) => barber.name === barberName)?.isVisible).toBe(false);
   });
 
+  test("reassigns future barber appointments only to available replacement barbers", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const timestamp = Date.now();
+    const appointmentStart = futureThursdayIso(4, 9, 30);
+    const appointmentDateKey = dateKeyFromIso(appointmentStart);
+
+    const createServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Reatribuir Corte QA ${timestamp}`,
+        description: "Teste de reatribuição de barbeiro",
+        price: 1200,
+        duration: 60,
+      },
+    });
+    expect(createServiceResponse.ok(), await createServiceResponse.text()).toBe(true);
+    const service = await createServiceResponse.json();
+
+    const createBarber = async (name: string, color: string) => {
+      const response = await request.post("/api/barbers", {
+        data: {
+          name,
+          specialty: "Teste de reatribuição",
+          color,
+          isVisible: true,
+          serviceIds: [service.id],
+        },
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+
+    const sourceBarber = await createBarber(`Reatribuir Origem ${timestamp}`, "#38BDF8");
+    const availableBarber = await createBarber(`Reatribuir Livre ${timestamp}`, "#22C55E");
+    const busyBarber = await createBarber(`Reatribuir Ocupado ${timestamp}`, "#F97316");
+
+    const sourceAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: sourceBarber.id,
+        serviceId: service.id,
+        startTime: appointmentStart,
+        name: `Cliente Reatribuir ${timestamp}`,
+        phone: "+351912697101",
+        isManualBooking: true,
+      },
+    });
+    expect(sourceAppointmentResponse.ok(), await sourceAppointmentResponse.text()).toBe(true);
+    const sourceAppointmentsBeforeResponse = await request.get(
+      `/api/appointments?barberId=${sourceBarber.id}&date=${appointmentDateKey}`,
+    );
+    expect(sourceAppointmentsBeforeResponse.ok(), await sourceAppointmentsBeforeResponse.text()).toBe(true);
+    const sourceAppointment = (await sourceAppointmentsBeforeResponse.json()).find((appointment: any) =>
+      appointment.customerName === `Cliente Reatribuir ${timestamp}`,
+    );
+    expect(sourceAppointment).toBeTruthy();
+
+    const busyAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: busyBarber.id,
+        serviceId: service.id,
+        startTime: appointmentStart,
+        name: `Cliente Ocupado ${timestamp}`,
+        phone: "+351912697102",
+        isManualBooking: true,
+      },
+    });
+    expect(busyAppointmentResponse.ok(), await busyAppointmentResponse.text()).toBe(true);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Equipa" }).click();
+
+    await page.getByRole("button", { name: `Remover ${sourceBarber.name}` }).click();
+    const removeDialog = page.getByRole("alertdialog", { name: `Remover ${sourceBarber.name}?` });
+    await expect(removeDialog).toBeVisible();
+    await removeDialog.getByRole("button", { name: "Remover", exact: true }).click();
+
+    const reassignDialog = page.getByRole("dialog", { name: `Reatribuir marcações de ${sourceBarber.name}` });
+    await expect(reassignDialog).toBeVisible();
+    await expect(reassignDialog).toContainText(`Cliente Reatribuir ${timestamp}`);
+
+    await reassignDialog.getByRole("combobox").nth(1).click();
+    await expect(page.getByRole("option", { name: availableBarber.name })).toBeVisible();
+    await expect(page.getByRole("option", { name: busyBarber.name })).toHaveCount(0);
+    await page.getByRole("option", { name: availableBarber.name }).click();
+
+    await reassignDialog.getByRole("button", { name: "Reatribuir e remover" }).click();
+    await expect(reassignDialog).not.toBeVisible();
+
+    const reassignedAppointmentsResponse = await request.get(
+      `/api/appointments?barberId=${availableBarber.id}&date=${appointmentDateKey}`,
+    );
+    expect(reassignedAppointmentsResponse.ok(), await reassignedAppointmentsResponse.text()).toBe(true);
+    const reassignedAppointments = await reassignedAppointmentsResponse.json();
+    expect(reassignedAppointments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: sourceAppointment.id,
+        barberId: availableBarber.id,
+        customerName: `Cliente Reatribuir ${timestamp}`,
+        status: "booked",
+      }),
+    ]));
+
+    const publicAppointmentsResponse = await request.get(
+      `/api/appointments/public?barberId=${availableBarber.id}&date=${appointmentDateKey}`,
+    );
+    expect(publicAppointmentsResponse.ok(), await publicAppointmentsResponse.text()).toBe(true);
+    const publicAppointments = await publicAppointmentsResponse.json();
+    expect(publicAppointments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: sourceAppointment.id,
+        barberId: availableBarber.id,
+      }),
+    ]));
+
+    const overlappingAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: availableBarber.id,
+        serviceId: service.id,
+        startTime: appointmentStart,
+        name: `Cliente Sobreposto ${timestamp}`,
+        phone: "+351912697103",
+        isManualBooking: true,
+      },
+    });
+    expect([400, 409]).toContain(overlappingAppointmentResponse.status());
+    const overlapError = await overlappingAppointmentResponse.json();
+    expect(overlapError.message).toMatch(/horário|marcação/i);
+
+    const sourceAppointmentsResponse = await request.get(
+      `/api/appointments?barberId=${sourceBarber.id}&date=${appointmentDateKey}`,
+    );
+    expect(sourceAppointmentsResponse.ok(), await sourceAppointmentsResponse.text()).toBe(true);
+    expect(await sourceAppointmentsResponse.json()).toEqual([]);
+
+    const finalBarbersResponse = await request.get("/api/barbers?includeHidden=true");
+    expect(finalBarbersResponse.ok(), await finalBarbersResponse.text()).toBe(true);
+    const finalBarbers = await finalBarbersResponse.json();
+    const removedSource = finalBarbers.find((barber: any) => barber.id === sourceBarber.id);
+    expect(removedSource === undefined || removedSource.isVisible === false).toBe(true);
+  });
+
   test("waits for barber and service names before showing appointment rows", async ({ page, request }) => {
     await loginAdminRequest(request);
     const createServiceResponse = await request.post("/api/services", {
