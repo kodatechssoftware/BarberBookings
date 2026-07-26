@@ -21,10 +21,12 @@ import { format, startOfDay } from "date-fns";
 import ExcelJS from 'exceljs';
 import {
   appointmentStatuses,
+  appointmentPaymentMethods,
   businessExpenseCategories,
   businessExpenseRecurrences,
   insertServiceSchema,
   type Appointment,
+  type AppointmentPaymentMethod,
   type BarberCompensationRule,
   type BarberCompensationModel,
   type ChairRentPeriod,
@@ -122,12 +124,19 @@ function formatShopDateTime(date: Date) {
 }
 
 const appointmentStatusSet = new Set<string>(appointmentStatuses);
+const appointmentPaymentMethodSet = new Set<string>(appointmentPaymentMethods);
 const appointmentStatusLabels: Record<Appointment["status"], string> = {
   booked: "Marcada",
   completed: "Concluída",
   cancelled: "Cancelada",
   late_cancelled: "Cancelamento tardio",
   no_show: "Falta",
+};
+const appointmentPaymentMethodLabels: Record<AppointmentPaymentMethod, string> = {
+  pending: "Por confirmar",
+  cash: "Dinheiro",
+  card: "Multibanco",
+  gift: "Oferta",
 };
 
 type AppSession = session.Session & Partial<session.SessionData> & {
@@ -541,6 +550,10 @@ function customerIdentityMatches(
 
 function isKnownAppointmentStatus(status: unknown): status is Appointment["status"] {
   return typeof status === "string" && appointmentStatusSet.has(status);
+}
+
+function isKnownAppointmentPaymentMethod(paymentMethod: unknown): paymentMethod is AppointmentPaymentMethod {
+  return typeof paymentMethod === "string" && appointmentPaymentMethodSet.has(paymentMethod);
 }
 
 function getStatusPatch(status: Appointment["status"]) {
@@ -1187,8 +1200,17 @@ function getAppointmentStatusLabel(status: Appointment["status"]) {
   return appointmentStatusLabels[status] || status;
 }
 
+function getAppointmentPaymentMethodLabel(paymentMethod?: AppointmentPaymentMethod | null) {
+  return appointmentPaymentMethodLabels[paymentMethod || "pending"] || "Por confirmar";
+}
+
 function getServicePriceCents(serviceId: number | null, servicePrices: Map<number, number>) {
   return serviceId ? servicePrices.get(serviceId) ?? 0 : 0;
+}
+
+function getCollectedCents(appointment: Appointment, priceCents: number) {
+  if (appointment.status !== "completed") return 0;
+  return appointment.paymentMethod === "gift" ? 0 : priceCents;
 }
 
 function centsToEuros(cents: number) {
@@ -2825,6 +2847,14 @@ export async function registerRoutes(
       if (expectedStatus !== undefined && !isKnownAppointmentStatus(expectedStatus)) {
         return res.status(400).json({ message: "Estado anterior de marcação inválido." });
       }
+      const requestedPaymentMethod = req.body.paymentMethod;
+      if (requestedPaymentMethod !== undefined && !isKnownAppointmentPaymentMethod(requestedPaymentMethod)) {
+        return res.status(400).json({ message: "Método de pagamento inválido." });
+      }
+      const paymentMethod = status === "completed" ? requestedPaymentMethod : "pending";
+      if (status === "completed" && (!paymentMethod || paymentMethod === "pending")) {
+        return res.status(400).json({ message: "Indique como o cliente pagou antes de concluir a marcação." });
+      }
 
       const appointmentId = parsePositiveInteger(req.params.id);
       if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
@@ -2837,8 +2867,8 @@ export async function registerRoutes(
       }
 
       const updated = expectedStatus === undefined
-        ? await storage.updateAppointmentStatus(appointmentId, status)
-        : await storage.updateAppointmentStatusIfCurrent(appointmentId, expectedStatus, status);
+        ? await storage.updateAppointmentStatus(appointmentId, status, paymentMethod)
+        : await storage.updateAppointmentStatusIfCurrent(appointmentId, expectedStatus, status, paymentMethod);
       if (!updated) {
         const latestAppointment = await storage.getAppointment(appointmentId);
         if (!latestAppointment) return res.status(404).json({ message: "Marcação não encontrada" });
@@ -2852,7 +2882,12 @@ export async function registerRoutes(
         entityType: "appointment",
         entityId: appointmentId,
         summary: `Estado da marcação alterado: ${currentApp.customerName}`,
-        metadata: { previousStatus: currentApp.status, newStatus: status },
+        metadata: {
+          previousStatus: currentApp.status,
+          newStatus: status,
+          previousPaymentMethod: currentApp.paymentMethod,
+          newPaymentMethod: paymentMethod,
+        },
       });
       res.json(updated);
     } catch (error) {
@@ -3086,7 +3121,10 @@ export async function registerRoutes(
     const noShowAppointments = rangeAppointments.filter((appointment) => appointment.status === "no_show");
 
     const revenueCents = completedAppointments.reduce(
-      (total, appointment) => total + getServicePriceCents(appointment.serviceId, servicePrices),
+      (total, appointment) => total + getCollectedCents(
+        appointment,
+        getServicePriceCents(appointment.serviceId, servicePrices),
+      ),
       0,
     );
     const projectedRevenueCents = bookedAppointments.reduce(
@@ -3139,12 +3177,13 @@ export async function registerRoutes(
       const shopDateParts = getShopDateParts(date);
       const day = dailyMap.get(shopDateParts.dateKey);
       const price = getServicePriceCents(appointment.serviceId, servicePrices);
+      const collectedCents = getCollectedCents(appointment, price);
 
       if (day) {
         day.appointments += 1;
         if (appointment.status === "completed") {
           day.completed += 1;
-          day.revenueCents += price;
+          day.revenueCents += collectedCents;
         }
         if (appointment.status === "booked") day.booked += 1;
         if (appointment.status === "cancelled" || appointment.status === "late_cancelled") day.cancelled += 1;
@@ -3156,7 +3195,7 @@ export async function registerRoutes(
         barber.appointments += 1;
         if (appointment.status === "completed") {
           barber.completed += 1;
-          barber.revenueCents += price;
+          barber.revenueCents += collectedCents;
         }
         if (appointment.status === "booked") barber.booked += 1;
         if (appointment.status === "no_show" || appointment.status === "late_cancelled") barber.noShows += 1;
@@ -3171,7 +3210,7 @@ export async function registerRoutes(
           revenueCents: 0,
         };
         serviceSummary.count += 1;
-        if (appointment.status === "completed") serviceSummary.revenueCents += price;
+        if (appointment.status === "completed") serviceSummary.revenueCents += collectedCents;
         serviceMap.set(appointment.serviceId, serviceSummary);
       }
 
@@ -3520,6 +3559,10 @@ export async function registerRoutes(
         lateCancelled: number;
         noShows: number;
         realizedCents: number;
+        cashCents: number;
+        cardCents: number;
+        giftCents: number;
+        pendingPaymentCents: number;
         projectedCents: number;
       };
 
@@ -3537,6 +3580,10 @@ export async function registerRoutes(
         lateCancelled: 0,
         noShows: 0,
         realizedCents: 0,
+        cashCents: 0,
+        cardCents: 0,
+        giftCents: 0,
+        pendingPaymentCents: 0,
         projectedCents: 0,
       });
 
@@ -3547,8 +3594,14 @@ export async function registerRoutes(
       ) => {
         summary.appointments += 1;
         if (appointment.status === "completed") {
+          const collectedCents = getCollectedCents(appointment, priceCents);
+          const paymentMethod = appointment.paymentMethod || "pending";
           summary.completed += 1;
-          summary.realizedCents += priceCents;
+          summary.realizedCents += collectedCents;
+          if (paymentMethod === "cash") summary.cashCents += priceCents;
+          else if (paymentMethod === "card") summary.cardCents += priceCents;
+          else if (paymentMethod === "gift") summary.giftCents += priceCents;
+          else summary.pendingPaymentCents += priceCents;
         }
         if (appointment.status === "booked") {
           summary.booked += 1;
@@ -3609,6 +3662,7 @@ export async function registerRoutes(
         if (appointment.status === "completed") {
           const startTime = new Date(appointment.startTime);
           const rule = getRuleForDate(compensationRules, appointment.barberId, startTime);
+          const collectedCents = getCollectedCents(appointment, priceCents);
           const compensationSummary = compensationSummaryMap.get(appointment.barberId) || {
             barberName: barber?.name || "Barbeiro desconhecido",
             completed: 0,
@@ -3622,16 +3676,16 @@ export async function registerRoutes(
           };
 
           compensationSummary.completed += 1;
-          compensationSummary.realizedCents += priceCents;
+          compensationSummary.realizedCents += collectedCents;
           compensationSummary.models.add(getCompensationModelLabel(rule.model));
 
           if (rule.model === "commission") {
-            const commissionCents = Math.round(priceCents * (rule.commissionPercent || 0) / 100);
+            const commissionCents = Math.round(collectedCents * (rule.commissionPercent || 0) / 100);
             compensationSummary.commissionCents += commissionCents;
             compensationSummary.barberEstimatedCents += commissionCents;
-            compensationSummary.shopEstimatedCents += priceCents - commissionCents;
+            compensationSummary.shopEstimatedCents += collectedCents - commissionCents;
           } else if (rule.model === "chair_rent") {
-            compensationSummary.barberEstimatedCents += priceCents;
+            compensationSummary.barberEstimatedCents += collectedCents;
             const rentPeriod = rule.chairRentPeriod || "month";
             const rentKey = `${rule.id}:${rentPeriod}:${getChairRentUnitKey(startTime, rentPeriod)}`;
             if (!compensationSummary.chairRentKeys.has(rentKey)) {
@@ -3641,7 +3695,7 @@ export async function registerRoutes(
               compensationSummary.barberEstimatedCents -= rule.chairRentCents || 0;
             }
           } else {
-            compensationSummary.shopEstimatedCents += priceCents;
+            compensationSummary.shopEstimatedCents += collectedCents;
           }
 
           compensationSummaryMap.set(appointment.barberId, compensationSummary);
@@ -3754,6 +3808,10 @@ export async function registerRoutes(
         ["Cancelamentos tardios", totalSummary.lateCancelled],
         ["Faltas", totalSummary.noShows],
         ["Receita realizada", centsToEuros(totalSummary.realizedCents)],
+        ["Receita em dinheiro", centsToEuros(totalSummary.cashCents)],
+        ["Receita em multibanco", centsToEuros(totalSummary.cardCents)],
+        ["Ofertas (valor de tabela)", centsToEuros(totalSummary.giftCents)],
+        ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
         ["Pagamentos estimados a barbeiros", centsToEuros(barberPayoutCents)],
         ["Despesas operacionais", centsToEuros(businessExpensesCents)],
@@ -3761,14 +3819,14 @@ export async function registerRoutes(
         ["Ticket médio realizado", averageTicketEuros],
         ["Taxa de conclusão", completionRate],
         ["Taxa de risco", riskRate],
-        ["Nota", "Receita realizada considera apenas marcações concluídas. Marcações marcadas contam como previsão. Resultado estimado desconta pagamentos calculados aos barbeiros e despesas registadas no período."],
+        ["Nota", "Receita realizada soma apenas dinheiro e multibanco confirmados em marcações concluídas. Ofertas ficam separadas como valor de tabela sem entrada de dinheiro. Resultado estimado desconta pagamentos calculados aos barbeiros e despesas registadas no período."],
       ]);
       summarySheet.getColumn(1).width = 28;
       summarySheet.getColumn(2).width = 58;
-      [10, 11, 12, 13, 14, 15].forEach((rowNumber) => {
+      [10, 11, 12, 13, 14, 15, 16, 17, 18, 19].forEach((rowNumber) => {
         summarySheet.getCell(rowNumber, 2).numFmt = currencyFormat;
       });
-      [16, 17].forEach((rowNumber) => {
+      [20, 21].forEach((rowNumber) => {
         summarySheet.getCell(rowNumber, 2).numFmt = percentFormat;
       });
       summarySheet.eachRow((row, rowNumber) => {
@@ -3781,7 +3839,7 @@ export async function registerRoutes(
               bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
               right: { style: "thin", color: { argb: "FFE5E7EB" } },
             };
-            cell.alignment = { vertical: "middle", wrapText: rowNumber === 15 };
+            cell.alignment = { vertical: "middle", wrapText: rowNumber === 22 };
           });
         }
       });
@@ -3795,6 +3853,10 @@ export async function registerRoutes(
         "Cancelamentos tardios",
         "Faltas",
         "Receita realizada (€)",
+        "Dinheiro (€)",
+        "Multibanco (€)",
+        "Ofertas (€)",
+        "Por confirmar (€)",
         "Receita prevista (€)",
         "Ticket médio (€)",
         "Taxa conclusão",
@@ -3808,6 +3870,10 @@ export async function registerRoutes(
         item.lateCancelled,
         item.noShows,
         centsToEuros(item.realizedCents),
+        centsToEuros(item.cashCents),
+        centsToEuros(item.cardCents),
+        centsToEuros(item.giftCents),
+        centsToEuros(item.pendingPaymentCents),
         centsToEuros(item.projectedCents),
         item.completed ? centsToEuros(Math.round(item.realizedCents / item.completed)) : 0,
         item.appointments ? item.completed / item.appointments : 0,
@@ -3822,11 +3888,15 @@ export async function registerRoutes(
           .sort((left, right) => right.realizedCents - left.realizedCents || right.appointments - left.appointments)
           .map(summaryToRow),
       );
-      finishTableSheet(barberSheet, [26, 17, 13, 12, 12, 22, 10, 20, 20, 16, 16], {
+      finishTableSheet(barberSheet, [26, 17, 13, 12, 12, 22, 10, 20, 16, 18, 16, 18, 20, 16, 16], {
         8: currencyFormat,
         9: currencyFormat,
         10: currencyFormat,
-        11: percentFormat,
+        11: currencyFormat,
+        12: currencyFormat,
+        13: currencyFormat,
+        14: currencyFormat,
+        15: percentFormat,
       });
 
       const serviceSheet = workbook.addWorksheet("Resumo por Serviço");
@@ -3838,11 +3908,15 @@ export async function registerRoutes(
           .sort((left, right) => right.realizedCents - left.realizedCents || right.appointments - left.appointments)
           .map(summaryToRow),
       );
-      finishTableSheet(serviceSheet, [28, 17, 13, 12, 12, 22, 10, 20, 20, 16, 16], {
+      finishTableSheet(serviceSheet, [28, 17, 13, 12, 12, 22, 10, 20, 16, 18, 16, 18, 20, 16, 16], {
         8: currencyFormat,
         9: currencyFormat,
         10: currencyFormat,
-        11: percentFormat,
+        11: currencyFormat,
+        12: currencyFormat,
+        13: currencyFormat,
+        14: currencyFormat,
+        15: percentFormat,
       });
 
       const dailySheet = workbook.addWorksheet("Resumo diário");
@@ -3859,17 +3933,25 @@ export async function registerRoutes(
           item.lateCancelled,
           item.noShows,
           centsToEuros(item.realizedCents),
+          centsToEuros(item.cashCents),
+          centsToEuros(item.cardCents),
+          centsToEuros(item.giftCents),
+          centsToEuros(item.pendingPaymentCents),
           centsToEuros(item.projectedCents),
           item.completed ? centsToEuros(Math.round(item.realizedCents / item.completed)) : 0,
           item.appointments ? item.completed / item.appointments : 0,
         ]),
       );
-      finishTableSheet(dailySheet, [14, 17, 13, 12, 12, 22, 10, 20, 20, 16, 16], {
+      finishTableSheet(dailySheet, [14, 17, 13, 12, 12, 22, 10, 20, 16, 18, 16, 18, 20, 16, 16], {
         1: dateFormat,
         8: currencyFormat,
         9: currencyFormat,
         10: currencyFormat,
-        11: percentFormat,
+        11: currencyFormat,
+        12: currencyFormat,
+        13: currencyFormat,
+        14: currencyFormat,
+        15: percentFormat,
       });
 
       const compensationSheet = workbook.addWorksheet("Acertos Barbeiros");
@@ -3946,16 +4028,20 @@ export async function registerRoutes(
       financialSheet.addRows([
         ["Período", `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`],
         ["Receita concluída", centsToEuros(totalSummary.realizedCents)],
+        ["Receita em dinheiro", centsToEuros(totalSummary.cashCents)],
+        ["Receita em multibanco", centsToEuros(totalSummary.cardCents)],
+        ["Ofertas (valor de tabela)", centsToEuros(totalSummary.giftCents)],
+        ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
         ["Pagamentos estimados a barbeiros", centsToEuros(barberPayoutCents)],
         ["Valor estimado da barbearia antes de despesas", centsToEuros(shopCompensationCents)],
         ["Despesas registadas", centsToEuros(businessExpensesCents)],
         ["Resultado estimado apos despesas", centsToEuros(estimatedResultCents)],
-        ["Nota", "Pagamentos aos barbeiros seguem a regra financeira em vigor na data de cada marcação concluída. Despesas são os registos lançados no período exportado."],
+        ["Nota", "Pagamentos aos barbeiros seguem a regra financeira em vigor na data de cada marcação concluída e apenas sobre valor recebido. Ofertas ficam separadas para leitura operacional, sem aumentar receita recebida."],
       ]);
       financialSheet.getColumn(1).width = 42;
       financialSheet.getColumn(2).width = 64;
-      [3, 4, 5, 6, 7, 8].forEach((rowNumber) => {
+      [3, 4, 5, 6, 7, 8, 9, 10, 11, 12].forEach((rowNumber) => {
         financialSheet.getCell(rowNumber, 2).numFmt = currencyFormat;
       });
       financialSheet.eachRow((row, rowNumber) => {
@@ -3968,7 +4054,7 @@ export async function registerRoutes(
               bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
               right: { style: "thin", color: { argb: "FFE5E7EB" } },
             };
-            cell.alignment = { vertical: "middle", wrapText: rowNumber === 9 };
+            cell.alignment = { vertical: "middle", wrapText: rowNumber === 13 };
           });
         }
       });
@@ -3986,8 +4072,9 @@ export async function registerRoutes(
         "Serviço",
         "Duração (min)",
         "Estado",
+        "Método de pagamento",
         "Valor serviço (€)",
-        "Receita realizada (€)",
+        "Valor recebido (€)",
         "Receita prevista (€)",
         "Modelo financeiro",
         "Comissão (%)",
@@ -4005,25 +4092,25 @@ export async function registerRoutes(
           const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
           const barber = barbersById.get(appointment.barberId);
           const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
-          const realizedCents = appointment.status === "completed" ? priceCents : 0;
+          const realizedCents = getCollectedCents(appointment, priceCents);
           const projectedCents = appointment.status === "booked" ? priceCents : 0;
           const compensationRule = getRuleForDate(compensationRules, appointment.barberId, startTime);
           const commissionRate = compensationRule.model === "commission"
             ? (compensationRule.commissionPercent || 0) / 100
             : null;
-          const commissionCents = commissionRate !== null ? Math.round(priceCents * commissionRate) : 0;
+          const commissionCents = commissionRate !== null ? Math.round(realizedCents * commissionRate) : 0;
           const barberValueCents = appointment.status === "completed"
             ? compensationRule.model === "commission"
               ? commissionCents
               : compensationRule.model === "chair_rent"
-                ? priceCents
+                ? realizedCents
                 : 0
             : 0;
           const shopValueCents = appointment.status === "completed"
             ? compensationRule.model === "commission"
-              ? priceCents - commissionCents
+              ? realizedCents - commissionCents
               : compensationRule.model === "none"
-                ? priceCents
+                ? realizedCents
                 : 0
             : 0;
 
@@ -4039,6 +4126,7 @@ export async function registerRoutes(
             service?.name || "Serviço desconhecido",
             appointment.durationMinutes,
             getAppointmentStatusLabel(appointment.status),
+            getAppointmentPaymentMethodLabel(appointment.paymentMethod),
             centsToEuros(priceCents),
             centsToEuros(realizedCents),
             centsToEuros(projectedCents),
@@ -4050,15 +4138,15 @@ export async function registerRoutes(
           ];
         }),
       );
-      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 18, 22, 20, 26, 14, 20, 22, 18], {
+      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 22, 18, 20, 20, 26, 14, 20, 22, 18], {
         1: dateFormat,
-        12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
-        16: percentFormat,
-        17: currencyFormat,
+        15: currencyFormat,
+        17: percentFormat,
         18: currencyFormat,
-        19: dateTimeFormat,
+        19: currencyFormat,
+        20: dateTimeFormat,
       });
 
       const fileName = `Relatório_de_${formatCalendarDateKey(startDateKey, "-")}_a_${formatCalendarDateKey(endDateKey, "-")}.xlsx`;

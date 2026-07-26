@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
-import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
+import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -2257,10 +2257,10 @@ export default function Admin() {
   const handleStatusChange = (
     appointmentId: number,
     status: AppointmentStatus,
-    options?: { onSuccess?: () => void },
+    options?: { onSuccess?: () => void; paymentMethod?: AppointmentPaymentMethod },
   ) => {
     updateStatus.mutate(
-      { id: appointmentId, status, expectedStatus: "booked" },
+      { id: appointmentId, status, expectedStatus: "booked", paymentMethod: options?.paymentMethod },
       {
         onSuccess: () => {
           toast({ title: "Atualizado", description: `Estado alterado para ${getStatusLabel(status).toLowerCase()}.` });

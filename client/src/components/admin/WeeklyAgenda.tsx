@@ -527,7 +527,7 @@ export function WeeklyAgenda({
   onNextWeek?: () => void;
   onToday?: () => void;
   onException: () => void;
-  onManualBooking: () => void;
+  onManualBooking: (date?: Date) => void;
   onCreateAtSlot: (date: Date, time: string, barberId?: number) => void;
   onMoveAppointment: (appointmentId: number, date: Date, time: string) => void;
   onSelectAppointment: (appointment: WeeklyAgendaAppointment) => void;
@@ -767,7 +767,7 @@ export function WeeklyAgenda({
                   <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={() => onException()}>
                     <AlertTriangle className="h-4 w-4" /> Ausência
                   </Button>
-                  <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking()}>
+                  <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking(selectedDay)}>
                     <Plus className="h-4 w-4" /> Marcação manual
                   </Button>
                 </div>

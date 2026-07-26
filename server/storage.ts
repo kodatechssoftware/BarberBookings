@@ -17,6 +17,7 @@ import {
   type Barber,
   type Service,
   type Appointment,
+  type AppointmentPaymentMethod,
   type AppointmentStatus,
   type Admin,
   type Blacklist,
@@ -50,6 +51,7 @@ type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   cancelToken: string;
   durationMinutes: number;
   status?: AppointmentStatus;
+  paymentMethod?: AppointmentPaymentMethod;
   depositRequired?: boolean;
   depositReason?: string | null;
 };
@@ -178,11 +180,16 @@ export interface IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined>;
-  updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined>;
+  updateAppointmentStatus(
+    id: number,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined>;
   updateAppointmentStatusIfCurrent(
     id: number,
     currentStatus: AppointmentStatus,
     status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
   ): Promise<Appointment | undefined>;
   
   // Admins
@@ -536,14 +543,23 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined> {
-    const updateData: { status: AppointmentStatus; cancelledAt?: Date | null } = { status };
+  async updateAppointmentStatus(
+    id: number,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined> {
+    const updateData: {
+      status: AppointmentStatus;
+      cancelledAt?: Date | null;
+      paymentMethod?: AppointmentPaymentMethod;
+    } = { status };
     if (status === "cancelled" || status === "late_cancelled") {
       updateData.cancelledAt = new Date();
     }
     if (status === "booked" || status === "completed") {
       updateData.cancelledAt = null;
     }
+    updateData.paymentMethod = status === "completed" ? (paymentMethod || "pending") : "pending";
 
     return this.updateAppointment(id, updateData);
   }
@@ -552,14 +568,20 @@ export class DatabaseStorage implements IStorage {
     id: number,
     currentStatus: AppointmentStatus,
     status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
   ): Promise<Appointment | undefined> {
-    const updateData: { status: AppointmentStatus; cancelledAt?: Date | null } = { status };
+    const updateData: {
+      status: AppointmentStatus;
+      cancelledAt?: Date | null;
+      paymentMethod?: AppointmentPaymentMethod;
+    } = { status };
     if (status === "cancelled" || status === "late_cancelled") {
       updateData.cancelledAt = new Date();
     }
     if (status === "booked" || status === "completed") {
       updateData.cancelledAt = null;
     }
+    updateData.paymentMethod = status === "completed" ? (paymentMethod || "pending") : "pending";
 
     const [updated] = await db
       .update(appointments)
@@ -1158,6 +1180,7 @@ export class MemoryStorage implements IStorage {
           customerPhone: appointment.customerPhone,
           durationMinutes: appointment.durationMinutes,
           status: appointment.status ?? "booked",
+          paymentMethod: appointment.paymentMethod ?? "pending",
           cancelToken: appointment.cancelToken,
           cancelledAt: null,
           depositRequired: appointment.depositRequired ?? false,
@@ -1190,8 +1213,15 @@ export class MemoryStorage implements IStorage {
     return this.appointments[index];
   }
 
-  async updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined> {
-    const patch: Partial<Omit<Appointment, "id">> = { status };
+  async updateAppointmentStatus(
+    id: number,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined> {
+    const patch: Partial<Omit<Appointment, "id">> = {
+      status,
+      paymentMethod: status === "completed" ? (paymentMethod || "pending") : "pending",
+    };
     if (status === "cancelled" || status === "late_cancelled") {
       patch.cancelledAt = new Date();
     }
@@ -1205,10 +1235,11 @@ export class MemoryStorage implements IStorage {
     id: number,
     currentStatus: AppointmentStatus,
     status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
   ): Promise<Appointment | undefined> {
     const current = this.appointments.find((appointment) => appointment.id === id);
     if (!current || current.status !== currentStatus) return undefined;
-    return this.updateAppointmentStatus(id, status);
+    return this.updateAppointmentStatus(id, status, paymentMethod);
   }
 
   async getAdminByUsername(username: string): Promise<Admin | undefined> {

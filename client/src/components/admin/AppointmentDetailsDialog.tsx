@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { CheckCircle, MessageCircle, Pencil, Phone, User, XCircle } from "lucide-react";
-import { type AppointmentStatus } from "@/hooks/use-appointments";
+import { Banknote, CheckCircle, CreditCard, Gift, MessageCircle, Pencil, Phone, User, XCircle } from "lucide-react";
+import { type AppointmentPaymentMethod, type AppointmentStatus } from "@/hooks/use-appointments";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button-custom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -34,6 +34,7 @@ type AdminAppointment = {
   startTime: string;
   durationMinutes: number;
   status: AppointmentStatus;
+  paymentMethod?: AppointmentPaymentMethod;
   customerName: string;
   customerPhone: string;
   customerEmail?: string | null;
@@ -203,6 +204,39 @@ function EditAppointmentDialog({
   );
 }
 
+const paymentOptions: Array<{
+  value: Exclude<AppointmentPaymentMethod, "pending">;
+  label: string;
+  description: string;
+  icon: ComponentType<{ className?: string }>;
+}> = [
+  {
+    value: "cash",
+    label: "Dinheiro",
+    description: "Conta como valor recebido em numerário.",
+    icon: Banknote,
+  },
+  {
+    value: "card",
+    label: "Multibanco",
+    description: "Conta como valor recebido por cartão ou MB.",
+    icon: CreditCard,
+  },
+  {
+    value: "gift",
+    label: "Oferta",
+    description: "Conta como serviço feito, mas sem receita recebida.",
+    icon: Gift,
+  },
+];
+
+function getPaymentMethodLabel(paymentMethod?: AppointmentPaymentMethod | null) {
+  if (paymentMethod === "cash") return "Dinheiro";
+  if (paymentMethod === "card") return "Multibanco";
+  if (paymentMethod === "gift") return "Oferta";
+  return "Por confirmar";
+}
+
 function ConfirmAction({
   children,
   title,
@@ -269,7 +303,7 @@ export function AppointmentDetailsDialog({
   onStatusChange: (
     appointmentId: number,
     status: AppointmentStatus,
-    options?: { onSuccess?: () => void },
+    options?: { onSuccess?: () => void; paymentMethod?: AppointmentPaymentMethod },
   ) => void;
   onBlockCustomer: (appointment: AdminAppointment) => Promise<boolean | void>;
   canManageSchedule: boolean;
@@ -278,6 +312,7 @@ export function AppointmentDetailsDialog({
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
   const [isLoadingCustomerNotes, setIsLoadingCustomerNotes] = useState(false);
   const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
+  const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!open || !appointment?.customerPhone) return;
@@ -353,6 +388,16 @@ export function AppointmentDetailsDialog({
     onStatusChange(appointment.id, status, { onSuccess: () => onOpenChange(false) });
   };
 
+  const handleCompleteWithPayment = (paymentMethod: AppointmentPaymentMethod) => {
+    onStatusChange(appointment.id, "completed", {
+      paymentMethod,
+      onSuccess: () => {
+        setIsPaymentDialogOpen(false);
+        onOpenChange(false);
+      },
+    });
+  };
+
   const handleBlockCustomer = async () => {
     const completed = await onBlockCustomer(appointment);
     if (completed !== false) {
@@ -392,6 +437,12 @@ export function AppointmentDetailsDialog({
                 <p className="text-xs uppercase tracking-widest text-gray-500">Serviço</p>
                 <p className="mt-1 font-semibold text-white">{getServiceName(appointment.serviceId)}</p>
               </div>
+              {appointment.status === "completed" && (
+                <div className="rounded-xl border border-white/10 bg-card px-3 py-2 sm:col-span-2">
+                  <p className="text-xs uppercase tracking-widest text-gray-500">Pagamento</p>
+                  <p className="mt-1 font-semibold text-white">{getPaymentMethodLabel(appointment.paymentMethod)}</p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -455,7 +506,7 @@ export function AppointmentDetailsDialog({
 
             {appointment.status === "booked" && (
               <>
-                <Button size="sm" variant="ghost" onClick={() => handleStatusChange("completed")} className="h-9 text-xs text-green-300 hover:text-green-200">
+                <Button size="sm" variant="ghost" onClick={() => setIsPaymentDialogOpen(true)} className="h-9 text-xs text-green-300 hover:text-green-200">
                   <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => handleStatusChange("no_show")} className="h-9 text-xs text-rose-300 hover:text-rose-200">
@@ -490,6 +541,40 @@ export function AppointmentDetailsDialog({
           </div>
         </div>
       </DialogContent>
+      <AlertDialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
+        <AlertDialogContent className="border-white/10 bg-card text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Como foi pago?</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              Esta escolha fica guardada no relatorio Excel e ajuda a separar dinheiro, multibanco e ofertas.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid gap-2">
+            {paymentOptions.map((option) => {
+              const Icon = option.icon;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleCompleteWithPayment(option.value)}
+                  className="rounded-lg border border-white/10 bg-background/70 p-3 text-left transition hover:border-primary/50 hover:bg-primary/10"
+                >
+                  <span className="flex items-center gap-2 font-semibold text-white">
+                    <Icon className="h-4 w-4 text-primary" />
+                    {option.label}
+                  </span>
+                  <span className="mt-1 block text-xs text-gray-400">{option.description}</span>
+                </button>
+              );
+            })}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">
+              Voltar
+            </AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

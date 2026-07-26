@@ -3,6 +3,7 @@ import {
   insertBarberSchema,
   insertServiceSchema,
   insertAppointmentSchema,
+  appointmentPaymentMethods,
   appointmentStatuses,
   services,
   appointments,
@@ -131,7 +132,11 @@ export const api = {
     updateStatus: {
       method: "PATCH" as const,
       path: "/api/appointments/:id/status",
-      input: z.object({ status: z.enum(appointmentStatuses) }),
+      input: z.object({
+        status: z.enum(appointmentStatuses),
+        expectedStatus: z.enum(appointmentStatuses).optional(),
+        paymentMethod: z.enum(appointmentPaymentMethods).optional(),
+      }),
       responses: {
         200: z.custom<typeof appointments.$inferSelect>(),
         404: errorSchemas.notFound,

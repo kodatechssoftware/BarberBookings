@@ -63,6 +63,14 @@ function dateKeyFromIso(isoDate: string) {
   return isoDate.slice(0, 10);
 }
 
+function localDateKey(date: Date) {
+  return [
+    String(date.getFullYear()),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 function dateLabelFromIso(isoDate: string) {
   const date = new Date(isoDate);
   return [
@@ -70,6 +78,11 @@ function dateLabelFromIso(isoDate: string) {
     String(date.getMonth() + 1).padStart(2, "0"),
     String(date.getFullYear()),
   ].join("/");
+}
+
+function dateLabelFromDateKey(dayKey: string) {
+  const [year, month, day] = dayKey.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 function normalizedCellText(value: unknown) {
@@ -89,14 +102,30 @@ function getCellValueByFirstColumnLabel(sheet: ExcelJS.Worksheet, label: string,
   return foundValue;
 }
 
+function getCompatibleBarberAndService(barbers: any[], services: any[]) {
+  for (const barber of barbers) {
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) ||
+      barber.serviceIds.length === 0 ||
+      barber.serviceIds.includes(item.id),
+    );
+    if (barber?.isVisible !== false && service?.isVisible !== false) {
+      return { barber, service };
+    }
+  }
+
+  throw new Error("Could not find a compatible visible barber and service");
+}
+
 async function selectAgendaDay(page: Page, isoDate = futureThursdayIso(1)) {
   const date = new Date(isoDate);
-  const dayKey = dateKeyFromIso(date.toISOString());
+  const dayKey = localDateKey(date);
   await navigateAgendaToWeek(page, dayKey);
-  const dayButton = page.getByTestId(`weekly-agenda-day-${dayKey}`).filter({ visible: true }).first();
-  if (await dayButton.count()) {
-    await expect(dayButton).toBeVisible();
-    await dayButton.click();
+  const dayButtons = page.getByTestId(`weekly-agenda-day-${dayKey}`);
+  const visibleDayButton = dayButtons.filter({ visible: true }).first();
+  if (await visibleDayButton.count()) {
+    await expect(visibleDayButton).toBeVisible();
+    await visibleDayButton.click();
     return;
   }
 
@@ -104,24 +133,29 @@ async function selectAgendaDay(page: Page, isoDate = futureThursdayIso(1)) {
 }
 
 async function navigateAgendaToWeek(page: Page, dayKey: string) {
-  const dayButton = page.getByTestId(`weekly-agenda-day-${dayKey}`);
-  if (await dayButton.count()) {
+  const visibleDayButton = () => page.getByTestId(`weekly-agenda-day-${dayKey}`).filter({ visible: true });
+  const visibleDayLabel = () => page.getByText(dateLabelFromDateKey(dayKey), { exact: true }).filter({ visible: true });
+  const targetIsVisible = async () => (await visibleDayButton().count()) > 0 || (await visibleDayLabel().count()) > 0;
+
+  if (await targetIsVisible()) {
     return;
   }
 
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    await page.getByRole("button", { name: "Semana anterior" }).click();
-    if (await dayButton.count()) {
-      return;
-    }
+  await page.getByRole("button", { name: "Hoje" }).click();
+  if (await targetIsVisible()) {
+    return;
   }
 
-  await page.getByRole("button", { name: "Hoje" }).click();
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    if (await dayButton.count()) {
+  const targetDate = new Date(`${dayKey}T12:00:00`);
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const directionButton = targetDate >= today ? "Semana seguinte" : "Semana anterior";
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await page.getByRole("button", { name: directionButton }).click();
+    if (await targetIsVisible()) {
       return;
     }
-    await page.getByRole("button", { name: "Semana seguinte" }).click();
   }
 
   throw new Error(`Could not navigate weekly agenda to ${dayKey}`);
@@ -135,6 +169,7 @@ async function advanceAgendaToNextOpenDay(page: Page, minimumDaysAhead = 1) {
   while (target.getDay() === 0) {
     target.setDate(target.getDate() + 1);
   }
+  target.setHours(12, 0, 0, 0);
 
   await selectAgendaDay(page, target.toISOString());
 
@@ -305,6 +340,21 @@ async function openManualBookingFromAgendaSlot(page: Page, isoDate: string, time
 async function selectDialogOption(page: Page, dialog: Locator, index: number, optionName: string) {
   await dialog.getByRole("combobox").nth(index).click();
   await page.getByRole("option", { name: optionName }).click();
+}
+
+async function clickFirstEnabledManualTime(dialog: Locator, excludedTimes: string[] = []) {
+  const timeButtons = dialog.locator("button").filter({ hasText: /^\d{2}:\d{2}$/ });
+  const count = await timeButtons.count();
+  for (let index = 0; index < count; index += 1) {
+    const button = timeButtons.nth(index);
+    const label = (await button.textContent())?.trim() ?? "";
+    if (!excludedTimes.includes(label) && await button.isEnabled()) {
+      await button.click();
+      return label;
+    }
+  }
+
+  throw new Error("Could not find an enabled manual booking time");
 }
 
 test.describe("public booking flow", () => {
@@ -910,7 +960,7 @@ test.describe("admin navigation", () => {
     );
     expect(historyAppointment).toBeTruthy();
     const completeAppointmentResponse = await request.patch(`/api/appointments/${historyAppointment.id}/status`, {
-      data: { status: "completed" },
+      data: { status: "completed", paymentMethod: "cash" },
     });
     expect(completeAppointmentResponse.ok(), await completeAppointmentResponse.text()).toBe(true);
 
@@ -1215,9 +1265,9 @@ test.describe("admin navigation", () => {
     await expect(dialog.getByRole("button", { name: "Tarde" })).toHaveCount(0);
     await expect(dialog.getByText("Hora da marcação")).toBeVisible();
 
-    await dialog.getByRole("button", { name: "14:00", exact: true }).click();
+    const firstSelectedTime = await clickFirstEnabledManualTime(dialog);
     await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
-    await dialog.getByRole("button", { name: "14:30", exact: true }).click();
+    await clickFirstEnabledManualTime(dialog, [firstSelectedTime]);
     await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
@@ -1333,7 +1383,7 @@ test.describe("admin navigation", () => {
     await manualCountrySelect.selectOption("ES");
     await expect(dialog.locator("#manual-booking-phone")).toHaveAttribute("placeholder", "612 345 678");
     await dialog.locator("#manual-booking-phone").fill("612696001");
-    await dialog.getByRole("button", { name: "14:00", exact: true }).click();
+    await clickFirstEnabledManualTime(dialog);
     await dialog.getByRole("button", { name: /Criar/i }).click();
 
     const warningDialog = page.getByRole("alertdialog", { name: "Cliente na blacklist" });
@@ -2094,7 +2144,7 @@ test.describe("booking rules", () => {
     });
 
     const statusResponse = await request.patch(`/api/appointments/${completed.appointment.id}/status`, {
-      data: { status: "completed" },
+      data: { status: "completed", paymentMethod: "card" },
     });
     expect(statusResponse.ok()).toBe(true);
 
@@ -2113,18 +2163,25 @@ test.describe("booking rules", () => {
     const completedServiceValue = completed.service.price / 100;
     const bookedServiceValue = booked.service.price / 100;
     const summarySheet = workbook.getWorksheet("Resumo Geral");
-    expect(Number(summarySheet?.getCell("B10").value)).toBeGreaterThanOrEqual(completedServiceValue);
-    expect(Number(summarySheet?.getCell("B11").value)).toBeGreaterThanOrEqual(bookedServiceValue);
+    const summaryValues = new Map<string, unknown>();
+    summarySheet?.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
+    });
+    expect(Number(summaryValues.get("Receita realizada"))).toBeGreaterThanOrEqual(completedServiceValue);
+    expect(Number(summaryValues.get("Receita em multibanco"))).toBeGreaterThanOrEqual(completedServiceValue);
+    expect(Number(summaryValues.get("Receita prevista em agenda"))).toBeGreaterThanOrEqual(bookedServiceValue);
 
     const detailSheet = workbook.getWorksheet("Detalhe Completo");
     expect(detailSheet).toBeTruthy();
     const headers = detailSheet!.getRow(1).values as unknown[];
     const customerCol = headers.indexOf("Cliente");
     const statusCol = headers.indexOf("Estado");
-    const realizedCol = headers.indexOf("Receita realizada (€)");
-    const projectedCol = headers.indexOf("Receita prevista (€)");
+    const paymentMethodCol = headers.indexOf("Método de pagamento");
+    const realizedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
+    const projectedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("receita prevista"));
     expect(customerCol).toBeGreaterThan(0);
     expect(statusCol).toBeGreaterThan(0);
+    expect(paymentMethodCol).toBeGreaterThan(0);
     expect(realizedCol).toBeGreaterThan(0);
     expect(projectedCol).toBeGreaterThan(0);
 
@@ -2139,11 +2196,89 @@ test.describe("booking rules", () => {
     expect(completedRow).toBeTruthy();
     expect(bookedRow).toBeTruthy();
     expect(completedRow!.getCell(statusCol).value).toBe("Concluída");
+    expect(completedRow!.getCell(paymentMethodCol).value).toBe("Multibanco");
     expect(completedRow!.getCell(realizedCol).value).toBe(completedServiceValue);
     expect(completedRow!.getCell(projectedCol).value).toBe(0);
     expect(bookedRow!.getCell(statusCol).value).toBe("Marcada");
+    expect(bookedRow!.getCell(paymentMethodCol).value).toBe("Por confirmar");
     expect(bookedRow!.getCell(realizedCol).value).toBe(0);
     expect(bookedRow!.getCell(projectedCol).value).toBe(bookedServiceValue);
+  });
+
+  test("exports completed appointments by payment method for accounting filters", async ({ request }) => {
+    await loginAdminRequest(request);
+
+    const uniqueWeeksAhead = 96 + (Date.now() % 10);
+    const cash = await createExportAppointment(request, {
+      name: "Excel Dinheiro QA",
+      phone: "912695781",
+      startTime: futureThursdayIso(uniqueWeeksAhead, 9, 0),
+    });
+    const card = await createExportAppointment(request, {
+      name: "Excel Multibanco QA",
+      phone: "912695782",
+      startTime: futureThursdayIso(uniqueWeeksAhead, 10, 0),
+    });
+    const gift = await createExportAppointment(request, {
+      name: "Excel Oferta QA",
+      phone: "912695783",
+      startTime: futureThursdayIso(uniqueWeeksAhead, 11, 0),
+    });
+
+    const missingPaymentResponse = await request.patch(`/api/appointments/${cash.appointment.id}/status`, {
+      data: { status: "completed" },
+    });
+    expect(missingPaymentResponse.status()).toBe(400);
+    expect(await missingPaymentResponse.text()).toContain("Indique como o cliente pagou");
+
+    for (const [appointment, paymentMethod] of [
+      [cash.appointment, "cash"],
+      [card.appointment, "card"],
+      [gift.appointment, "gift"],
+    ] as const) {
+      const response = await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "completed", paymentMethod },
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+    }
+
+    const dateKey = dateKeyFromIso(cash.appointment.startTime);
+    const exportResponse = await request.get(`/api/admin/export?startDate=${dateKey}&endDate=${dateKey}&barberId=all`);
+    expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+    const detailSheet = workbook.getWorksheet("Detalhe Completo");
+    expect(detailSheet).toBeTruthy();
+
+    const headers = detailSheet!.getRow(1).values as unknown[];
+    const customerCol = headers.indexOf("Cliente");
+    const paymentCol = headers.indexOf("Método de pagamento");
+    const receivedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
+    expect(customerCol).toBeGreaterThan(0);
+    expect(paymentCol).toBeGreaterThan(0);
+    expect(receivedCol).toBeGreaterThan(0);
+
+    const rowsByCustomer = new Map<string, ExcelJS.Row>();
+    detailSheet!.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) rowsByCustomer.set(String(row.getCell(customerCol).value), row);
+    });
+
+    expect(rowsByCustomer.get("Excel Dinheiro QA")?.getCell(paymentCol).value).toBe("Dinheiro");
+    expect(rowsByCustomer.get("Excel Multibanco QA")?.getCell(paymentCol).value).toBe("Multibanco");
+    expect(rowsByCustomer.get("Excel Oferta QA")?.getCell(paymentCol).value).toBe("Oferta");
+    expect(Number(rowsByCustomer.get("Excel Dinheiro QA")?.getCell(receivedCol).value)).toBeGreaterThan(0);
+    expect(Number(rowsByCustomer.get("Excel Multibanco QA")?.getCell(receivedCol).value)).toBeGreaterThan(0);
+    expect(rowsByCustomer.get("Excel Oferta QA")?.getCell(receivedCol).value).toBe(0);
+
+    const summarySheet = workbook.getWorksheet("Resumo Geral");
+    const summaryValues = new Map<string, unknown>();
+    summarySheet?.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
+    });
+    expect(Number(summaryValues.get("Receita em dinheiro"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Receita em multibanco"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Ofertas (valor de tabela)"))).toBeGreaterThan(0);
   });
 
   test("includes business expenses and historical barber payouts in the Excel finance report", async ({ request }) => {
@@ -2221,7 +2356,7 @@ test.describe("booking rules", () => {
     );
     expect(currentAppointment).toBeTruthy();
     const completeCurrentResponse = await request.patch(`/api/appointments/${currentAppointment.id}/status`, {
-      data: { status: "completed" },
+      data: { status: "completed", paymentMethod: "cash" },
     });
     expect(completeCurrentResponse.ok(), await completeCurrentResponse.text()).toBe(true);
 
@@ -2431,14 +2566,18 @@ test.describe("booking rules", () => {
 
       const headers = detailSheet!.getRow(1).values as unknown[];
       const customerColumn = headers.indexOf("Cliente");
-      const realizedColumn = headers.findIndex((value) => String(value).startsWith("Receita realizada"));
+      const paymentColumn = headers.findIndex((value) => normalizedCellText(value).startsWith("metodo de pagamento"));
+      const receivedColumn = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
+      expect(paymentColumn).toBeGreaterThan(0);
+      expect(receivedColumn).toBeGreaterThan(0);
       let detailRow: ExcelJS.Row | undefined;
       detailSheet!.eachRow((row, rowNumber) => {
         if (rowNumber > 1 && row.getCell(customerColumn).value === customerName) detailRow = row;
       });
 
       expect(detailRow).toBeTruthy();
-      expect(detailRow!.getCell(realizedColumn).value).toBe(service.price / 100);
+      expect(detailRow!.getCell(paymentColumn).value).toBe("Por confirmar");
+      expect(detailRow!.getCell(receivedColumn).value).toBe(service.price / 100);
     } finally {
       if (createdAppointments.length === 0) {
         const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
@@ -3177,6 +3316,52 @@ test.describe("booking rules", () => {
     expect(statuses).toEqual([201, 409]);
   });
 
+  test("allows only one of five simultaneous final confirmations for the same slot", async ({ request }) => {
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    expect(barbersResponse.ok()).toBe(true);
+    expect(servicesResponse.ok()).toBe(true);
+
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
+    const uniqueWeeksAhead = 160 + (Date.now() % 20);
+    const startTime = futureThursdayIso(uniqueWeeksAhead, 16, 0);
+    const dateKey = dateKeyFromIso(startTime);
+
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        request.post("/api/appointments", {
+          data: {
+            barberId: barber.id,
+            serviceId: service.id,
+            startTime,
+            customerEmail: null,
+            customerName: `Concorrente Final ${index + 1}`,
+            customerPhone: `91269610${index}`,
+          },
+        }),
+      ),
+    );
+
+    const statuses = responses.map((response) => response.status()).sort();
+    expect(statuses).toEqual([201, 409, 409, 409, 409]);
+
+    await loginAdminRequest(request);
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+    expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+    const appointments = await appointmentsResponse.json();
+    const matchingAppointments = appointments.filter((appointment: any) =>
+      appointment.startTime === startTime &&
+      appointment.status === "booked" &&
+      String(appointment.customerName).startsWith("Concorrente Final"),
+    );
+    expect(matchingAppointments).toHaveLength(1);
+  });
+
   test("does not leave a partial recurring series when concurrent series overlap", async ({ request }) => {
     await loginAdminRequest(request);
     const [barbersResponse, servicesResponse] = await Promise.all([
@@ -3186,8 +3371,10 @@ test.describe("booking rules", () => {
     expect(barbersResponse.ok()).toBe(true);
     expect(servicesResponse.ok()).toBe(true);
 
-    const [barber] = await barbersResponse.json();
-    const [service] = await servicesResponse.json();
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
     const suffix = Date.now();
     const firstStart = futureThursdayIso(60 + (suffix % 10), 17, 0);
     const secondStartDate = new Date(firstStart);
@@ -3766,7 +3953,7 @@ test.describe("booking rules", () => {
     const responses = await Promise.all([
       request.post(`/api/appointments/cancel/${appointment.cancelToken}`),
       request.patch(`/api/appointments/${appointment.id}/status`, {
-        data: { status: "completed", expectedStatus: "booked" },
+        data: { status: "completed", expectedStatus: "booked", paymentMethod: "cash" },
       }),
     ]);
     expect(responses.map((response) => response.status()).sort()).toEqual([200, 409]);
@@ -4491,7 +4678,7 @@ test.describe("booking rules", () => {
       request.patch("/api/barbers/not-a-number", { data: { name: "Nunca" } }),
       request.patch("/api/barbers/not-a-number/reset-password", { data: {} }),
       request.patch("/api/services/not-a-number", { data: { name: "Nunca" } }),
-      request.patch("/api/appointments/not-a-number/status", { data: { status: "completed" } }),
+      request.patch("/api/appointments/not-a-number/status", { data: { status: "completed", paymentMethod: "cash" } }),
       request.get("/api/admin/dashboard?barberId=not-a-number"),
     ]);
     for (const response of invalidAdminResponses) {

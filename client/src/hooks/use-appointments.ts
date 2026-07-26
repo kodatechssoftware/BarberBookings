@@ -3,6 +3,7 @@ import { api, buildUrl, type CreateAppointmentRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 
 export type AppointmentStatus = "booked" | "completed" | "cancelled" | "late_cancelled" | "no_show";
+export type AppointmentPaymentMethod = "pending" | "cash" | "card" | "gift";
 
 export type AppointmentRecord = {
   id: number;
@@ -14,6 +15,7 @@ export type AppointmentRecord = {
   customerPhone: string;
   durationMinutes: number;
   status: AppointmentStatus;
+  paymentMethod: AppointmentPaymentMethod;
   cancelToken: string;
   cancelledAt: string | null;
   depositRequired: boolean;
@@ -138,12 +140,22 @@ export function useCreateAppointment() {
 export function useUpdateAppointmentStatus() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, status, expectedStatus }: { id: number; status: AppointmentStatus; expectedStatus?: AppointmentStatus }) => {
+    mutationFn: async ({
+      id,
+      status,
+      expectedStatus,
+      paymentMethod,
+    }: {
+      id: number;
+      status: AppointmentStatus;
+      expectedStatus?: AppointmentStatus;
+      paymentMethod?: AppointmentPaymentMethod;
+    }) => {
       const url = buildUrl(api.appointments.updateStatus.path, { id });
       const res = await apiFetch(url, {
         method: api.appointments.updateStatus.method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, expectedStatus }),
+        body: JSON.stringify({ status, expectedStatus, paymentMethod }),
       });
       if (!res.ok) {
         const error = await res.json().catch(() => null);

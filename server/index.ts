@@ -5,6 +5,7 @@ import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import {
   ensureAppointmentOverlapProtection,
+  ensureAppointmentPaymentMethodColumn,
   ensureBarberCompensationRulesTable,
   ensureBarberServicesTable,
   ensureBusinessExpensesTable,
@@ -174,6 +175,7 @@ app.use((req, res, next) => {
   log(`starting BarberBookings API (${getSafeDatabaseTarget()} appPoolMax=${pool.options.max})`);
 
   await ensureServiceAgendaLabelColumn();
+  await ensureAppointmentPaymentMethodColumn();
   await ensureBarberServicesTable();
   await ensureBarberCompensationRulesTable();
   await ensureBusinessExpensesTable();

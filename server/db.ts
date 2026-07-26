@@ -100,6 +100,30 @@ export async function ensureServiceAgendaLabelColumn() {
   `);
 }
 
+export async function ensureAppointmentPaymentMethodColumn() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
+  const constraintName = "appointments_payment_method_check";
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedTableName}
+    ADD COLUMN IF NOT EXISTS payment_method text NOT NULL DEFAULT 'pending'
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      ALTER TABLE ${qualifiedTableName}
+      ADD CONSTRAINT ${quoteIdentifier(constraintName)}
+      CHECK (payment_method IN ('pending', 'cash', 'card', 'gift'));
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+}
+
 export async function ensureBarberServicesTable() {
   if (useMemoryStorage) return;
 

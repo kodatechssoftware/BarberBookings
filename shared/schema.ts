@@ -43,6 +43,13 @@ export const appointmentStatuses = [
   "no_show",
 ] as const;
 
+export const appointmentPaymentMethods = [
+  "pending",
+  "cash",
+  "card",
+  "gift",
+] as const;
+
 export const barberCompensationModels = [
   "none",
   "commission",
@@ -107,6 +114,7 @@ export const appointments = appPgTable("appointments", {
   status: text("status", { enum: appointmentStatuses }).default("booked").notNull(),
   cancelToken: text("cancel_token").notNull(),
   cancelledAt: timestamp("cancelled_at"),
+  paymentMethod: text("payment_method", { enum: appointmentPaymentMethods }).default("pending").notNull(),
   depositRequired: boolean("deposit_required").default(false).notNull(),
   depositReason: text("deposit_reason"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -283,6 +291,7 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   status: true,
   cancelToken: true,
   cancelledAt: true,
+  paymentMethod: true,
   durationMinutes: true,
   depositRequired: true,
   depositReason: true,
@@ -323,6 +332,7 @@ export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentStatus = typeof appointmentStatuses[number];
+export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
