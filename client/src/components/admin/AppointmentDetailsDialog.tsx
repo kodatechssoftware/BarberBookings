@@ -237,6 +237,22 @@ function getPaymentMethodLabel(paymentMethod?: AppointmentPaymentMethod | null) 
   return "Por confirmar";
 }
 
+function getStatusTimingMessage(appointment: AdminAppointment, status: AppointmentStatus) {
+  const now = new Date();
+  const start = parseISO(appointment.startTime);
+  const end = getWeeklyAppointmentEnd(appointment);
+
+  if (status === "completed" && end.getTime() > now.getTime()) {
+    return "Só pode marcar como feita depois da hora de fim da marcação.";
+  }
+
+  if (status === "no_show" && start.getTime() > now.getTime()) {
+    return "Só pode marcar falta depois da hora da marcação.";
+  }
+
+  return "";
+}
+
 function ConfirmAction({
   children,
   title,
@@ -378,6 +394,8 @@ export function AppointmentDetailsDialog({
   const start = parseISO(appointment.startTime);
   const end = getWeeklyAppointmentEnd(appointment);
   const contactLinks = getAppointmentContactLinks(appointment.customerPhone);
+  const completeDisabledMessage = getStatusTimingMessage(appointment, "completed");
+  const noShowDisabledMessage = getStatusTimingMessage(appointment, "no_show");
 
   const handleOpenHistory = () => {
     onOpenChange(false);
@@ -506,10 +524,24 @@ export function AppointmentDetailsDialog({
 
             {appointment.status === "booked" && (
               <>
-                <Button size="sm" variant="ghost" onClick={() => setIsPaymentDialogOpen(true)} className="h-9 text-xs text-green-300 hover:text-green-200">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setIsPaymentDialogOpen(true)}
+                  disabled={Boolean(completeDisabledMessage)}
+                  title={completeDisabledMessage || "Marcar como feita"}
+                  className="h-9 text-xs text-green-300 hover:text-green-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
                   <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => handleStatusChange("no_show")} className="h-9 text-xs text-rose-300 hover:text-rose-200">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => handleStatusChange("no_show")}
+                  disabled={Boolean(noShowDisabledMessage)}
+                  title={noShowDisabledMessage || "Marcar falta"}
+                  className="h-9 text-xs text-rose-300 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
                   Falta
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">

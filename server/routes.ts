@@ -1164,6 +1164,25 @@ function getAppointmentEndTime(
   return new Date(startTime.getTime() + durationMinutes * 60000);
 }
 
+function getAppointmentStatusTimingError(
+  appointment: AppointmentLike,
+  status: Appointment["status"],
+  serviceDurations: Map<number, number>,
+  now = new Date(),
+) {
+  const startTime = toDate(appointment.startTime);
+
+  if (status === "completed" && getAppointmentEndTime(appointment, serviceDurations).getTime() > now.getTime()) {
+    return "Só pode marcar como feita depois da hora de fim da marcação.";
+  }
+
+  if (status === "no_show" && startTime.getTime() > now.getTime()) {
+    return "Só pode marcar falta depois da hora da marcação.";
+  }
+
+  return null;
+}
+
 function hasAppointmentConflict(
   appointments: AppointmentLike[],
   barberId: number,
@@ -2860,6 +2879,14 @@ export async function registerRoutes(
       if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
       const currentApp = await storage.getAppointment(appointmentId);
       if (!currentApp) return res.status(404).json({ message: "Marcação não encontrada" });
+
+      if (status === "completed" || status === "no_show") {
+        const serviceDurations = new Map((await storage.getServices()).map((service) => [service.id, service.duration]));
+        const timingError = getAppointmentStatusTimingError(currentApp, status, serviceDurations);
+        if (timingError) {
+          return res.status(400).json({ message: timingError });
+        }
+      }
 
       const appSession = getAppSession(req);
       if (appSession.role === "barber" && currentApp.barberId !== Number(appSession.barberId)) {
