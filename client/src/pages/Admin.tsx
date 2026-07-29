@@ -2739,8 +2739,8 @@ export default function Admin() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-body p-4 md:p-8">
-      <div className="container mx-auto">
+    <div className="min-h-screen overflow-x-hidden bg-background text-foreground font-body p-4 md:p-8">
+      <div className="container mx-auto max-w-full overflow-x-hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8 text-white">
           <div className="flex-1">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-2">
@@ -3080,7 +3080,8 @@ export default function Admin() {
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="admin-tabs-horizontal-scroll scrollbar-none sticky top-2 z-30 w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:static md:shadow-none">
+          <div className="sticky top-2 z-30 w-full max-w-full overflow-hidden rounded-xl md:static">
+          <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {user.role === "admin" && (
@@ -3093,6 +3094,7 @@ export default function Admin() {
               </>
             )}
           </TabsList>
+          </div>
 
           <TabsContent value="dashboard" className="space-y-6 outline-none">
             <TodayOverviewPanel

@@ -119,11 +119,13 @@
   }
 
   .admin-tabs-horizontal-scroll {
+    display: flex;
+    box-sizing: border-box;
     height: 3rem;
     min-height: 3rem;
     max-height: 3rem;
     width: 100%;
-    max-width: calc(100vw - 2rem);
+    max-width: 100%;
     min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;

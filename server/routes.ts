@@ -3739,9 +3739,16 @@ export async function registerRoutes(
         .reduce((total, item) => total + item.barberEstimatedCents, 0);
       const shopCompensationCents = Array.from(compensationSummaryMap.values())
         .reduce((total, item) => total + item.shopEstimatedCents, 0);
+      const chairRentIncomeCents = Array.from(compensationSummaryMap.values())
+        .reduce((total, item) => total + item.chairRentCents, 0);
       const businessExpensesCents = businessExpenses
         .reduce((total, expense) => total + expense.amountCents, 0);
       const estimatedResultCents = totalSummary.realizedCents - barberPayoutCents - businessExpensesCents;
+      const getCompensationSummaryForBarber = (barberId: number) => compensationSummaryMap.get(barberId);
+      const getCompensationModelsForBarber = (barberId: number) => {
+        const compensationSummary = getCompensationSummaryForBarber(barberId);
+        return compensationSummary ? Array.from(compensationSummary.models).join(" + ") : "Sem serviços concluídos";
+      };
       const completionRate = totalSummary.appointments
         ? totalSummary.completed / totalSummary.appointments
         : 0;
@@ -3828,37 +3835,68 @@ export async function registerRoutes(
       summarySheet.addRows([
         ["Período", `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`],
         ["Barbeiro", selectedBarber?.name || "Todos os barbeiros"],
+        ["", ""],
+        ["Atividade", ""],
         ["Marcações no período", totalSummary.appointments],
         ["Concluídas", totalSummary.completed],
         ["Marcadas", totalSummary.booked],
         ["Canceladas", totalSummary.cancelled],
         ["Cancelamentos tardios", totalSummary.lateCancelled],
         ["Faltas", totalSummary.noShows],
+        ["", ""],
+        ["Receita recebida", ""],
         ["Receita realizada", centsToEuros(totalSummary.realizedCents)],
         ["Receita em dinheiro", centsToEuros(totalSummary.cashCents)],
         ["Receita em multibanco", centsToEuros(totalSummary.cardCents)],
         ["Ofertas (valor de tabela)", centsToEuros(totalSummary.giftCents)],
         ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
-        ["Pagamentos estimados a barbeiros", centsToEuros(barberPayoutCents)],
+        ["", ""],
+        ["Acertos com barbeiros", ""],
+        ["Aluguer de cadeira recebido pela barbearia", centsToEuros(chairRentIncomeCents)],
+        ["Valor líquido estimado dos barbeiros", centsToEuros(barberPayoutCents)],
+        ["Valor estimado da barbearia antes de despesas", centsToEuros(shopCompensationCents)],
+        ["", ""],
+        ["Despesas e resultado", ""],
         ["Despesas operacionais", centsToEuros(businessExpensesCents)],
         ["Resultado estimado", centsToEuros(estimatedResultCents)],
+        ["", ""],
+        ["Indicadores", ""],
         ["Ticket médio realizado", averageTicketEuros],
         ["Taxa de conclusão", completionRate],
         ["Taxa de risco", riskRate],
-        ["Nota", "Receita realizada soma apenas dinheiro e multibanco confirmados em marcações concluídas. Ofertas ficam separadas como valor de tabela sem entrada de dinheiro. Resultado estimado desconta pagamentos calculados aos barbeiros e despesas registadas no período."],
+        ["Nota", "No modelo de aluguer de cadeira, a renda é uma receita fixa da barbearia e um acerto/custo do barbeiro. As despesas operacionais são apenas custos registados do salão."],
       ]);
-      summarySheet.getColumn(1).width = 28;
+      summarySheet.getColumn(1).width = 42;
       summarySheet.getColumn(2).width = 58;
-      [10, 11, 12, 13, 14, 15, 16, 17, 18, 19].forEach((rowNumber) => {
-        summarySheet.getCell(rowNumber, 2).numFmt = currencyFormat;
-      });
-      [20, 21].forEach((rowNumber) => {
-        summarySheet.getCell(rowNumber, 2).numFmt = percentFormat;
-      });
       summarySheet.eachRow((row, rowNumber) => {
         if (rowNumber > 1) {
-          row.getCell(1).font = { bold: true };
+          const label = String(row.getCell(1).value || "");
+          const isSection = Boolean(label) && !row.getCell(2).value && rowNumber > 3;
+          row.getCell(1).font = { bold: true, color: isSection ? { argb: "FF111827" } : undefined };
+          if (isSection) {
+            row.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+            row.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+          }
+          if ([
+            "Receita realizada",
+            "Receita em dinheiro",
+            "Receita em multibanco",
+            "Ofertas (valor de tabela)",
+            "Pagamentos por confirmar",
+            "Receita prevista em agenda",
+            "Aluguer de cadeira recebido pela barbearia",
+            "Valor líquido estimado dos barbeiros",
+            "Valor estimado da barbearia antes de despesas",
+            "Despesas operacionais",
+            "Resultado estimado",
+            "Ticket médio realizado",
+          ].includes(label)) {
+            row.getCell(2).numFmt = currencyFormat;
+          }
+          if (["Taxa de conclusão", "Taxa de risco"].includes(label)) {
+            row.getCell(2).numFmt = percentFormat;
+          }
           row.eachCell((cell) => {
             cell.border = {
               top: { style: "thin", color: { argb: "FFE5E7EB" } },
@@ -3866,7 +3904,7 @@ export async function registerRoutes(
               bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
               right: { style: "thin", color: { argb: "FFE5E7EB" } },
             };
-            cell.alignment = { vertical: "middle", wrapText: rowNumber === 22 };
+            cell.alignment = { vertical: "middle", wrapText: label === "Nota" };
           });
         }
       });
@@ -3910,12 +3948,52 @@ export async function registerRoutes(
       addTable(
         barberSheet,
         "ResumoPorBarbeiro",
-        summaryHeaders,
+        [
+          "Barbeiro",
+          "Modelo financeiro",
+          "Total marcações",
+          "Concluídas",
+          "Receita realizada (€)",
+          "Dinheiro (€)",
+          "Multibanco (€)",
+          "Ofertas (€)",
+          "Por confirmar (€)",
+          "Receita prevista (€)",
+          "Valor líquido estimado do barbeiro (€)",
+          "Aluguer de cadeira - receita da barbearia (€)",
+          "Valor estimado da barbearia antes de despesas (€)",
+          "Ticket médio (€)",
+          "Taxa conclusão",
+        ],
         Array.from(barberSummaryMap.values())
           .sort((left, right) => right.realizedCents - left.realizedCents || right.appointments - left.appointments)
-          .map(summaryToRow),
+          .map((item) => {
+            const barberEntry = Array.from(barberSummaryMap.entries()).find(([, summary]) => summary === item);
+            const barberId = barberEntry?.[0] || 0;
+            const compensationSummary = getCompensationSummaryForBarber(barberId);
+            return [
+              item.name,
+              getCompensationModelsForBarber(barberId),
+              item.appointments,
+              item.completed,
+              centsToEuros(item.realizedCents),
+              centsToEuros(item.cashCents),
+              centsToEuros(item.cardCents),
+              centsToEuros(item.giftCents),
+              centsToEuros(item.pendingPaymentCents),
+              centsToEuros(item.projectedCents),
+              centsToEuros(compensationSummary?.barberEstimatedCents || 0),
+              centsToEuros(compensationSummary?.chairRentCents || 0),
+              centsToEuros(compensationSummary?.shopEstimatedCents || 0),
+              item.completed ? centsToEuros(Math.round(item.realizedCents / item.completed)) : 0,
+              item.appointments ? item.completed / item.appointments : 0,
+            ];
+          }),
       );
-      finishTableSheet(barberSheet, [26, 17, 13, 12, 12, 22, 10, 20, 16, 18, 16, 18, 20, 16, 16], {
+      finishTableSheet(barberSheet, [26, 26, 17, 13, 20, 16, 18, 16, 18, 20, 28, 30, 32, 16, 16], {
+        5: currencyFormat,
+        6: currencyFormat,
+        7: currencyFormat,
         8: currencyFormat,
         9: currencyFormat,
         10: currencyFormat,
@@ -3991,9 +4069,9 @@ export async function registerRoutes(
           "Serviços concluídos",
           "Receita concluída (€)",
           "Comissões do barbeiro (€)",
-          "Aluguer da cadeira (€)",
-          "Valor estimado do barbeiro (€)",
-          "Valor estimado da barbearia (€)",
+          "Aluguer de cadeira - receita da barbearia (€)",
+          "Valor líquido estimado do barbeiro (€)",
+          "Valor estimado da barbearia antes de despesas (€)",
           "Nota",
         ],
         Array.from(compensationSummaryMap.values())
@@ -4007,7 +4085,7 @@ export async function registerRoutes(
             centsToEuros(item.chairRentCents),
             centsToEuros(item.barberEstimatedCents),
             centsToEuros(item.shopEstimatedCents),
-            "Comissões usam a regra em vigor na data da marcação. Aluguer de cadeira é contado uma vez por período trabalhado no intervalo exportado.",
+            "Aluguer de cadeira entra como receita da barbearia e reduz o valor líquido do barbeiro. É contado uma vez por período trabalhado no intervalo exportado.",
           ]),
       );
       finishTableSheet(compensationSheet, [24, 30, 20, 22, 26, 24, 28, 30, 72], {
@@ -4054,26 +4132,52 @@ export async function registerRoutes(
       financialSheet.getRow(1).height = 28;
       financialSheet.addRows([
         ["Período", `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`],
+        ["", ""],
+        ["Receita recebida", ""],
         ["Receita concluída", centsToEuros(totalSummary.realizedCents)],
         ["Receita em dinheiro", centsToEuros(totalSummary.cashCents)],
         ["Receita em multibanco", centsToEuros(totalSummary.cardCents)],
         ["Ofertas (valor de tabela)", centsToEuros(totalSummary.giftCents)],
         ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
-        ["Pagamentos estimados a barbeiros", centsToEuros(barberPayoutCents)],
+        ["", ""],
+        ["Acertos com barbeiros", ""],
+        ["Aluguer de cadeira recebido pela barbearia", centsToEuros(chairRentIncomeCents)],
+        ["Valor líquido estimado dos barbeiros", centsToEuros(barberPayoutCents)],
         ["Valor estimado da barbearia antes de despesas", centsToEuros(shopCompensationCents)],
+        ["", ""],
+        ["Despesas e resultado", ""],
         ["Despesas registadas", centsToEuros(businessExpensesCents)],
         ["Resultado estimado apos despesas", centsToEuros(estimatedResultCents)],
-        ["Nota", "Pagamentos aos barbeiros seguem a regra financeira em vigor na data de cada marcação concluída e apenas sobre valor recebido. Ofertas ficam separadas para leitura operacional, sem aumentar receita recebida."],
+        ["", ""],
+        ["Nota", "No modelo de comissão, o barbeiro recebe a percentagem definida. No modelo de aluguer de cadeira, o barbeiro fica com a receita dos serviços e paga a renda ao salão; essa renda aparece como receita da barbearia, não como despesa operacional."],
       ]);
       financialSheet.getColumn(1).width = 42;
       financialSheet.getColumn(2).width = 64;
-      [3, 4, 5, 6, 7, 8, 9, 10, 11, 12].forEach((rowNumber) => {
-        financialSheet.getCell(rowNumber, 2).numFmt = currencyFormat;
-      });
       financialSheet.eachRow((row, rowNumber) => {
         if (rowNumber > 1) {
-          row.getCell(1).font = { bold: true };
+          const label = String(row.getCell(1).value || "");
+          const isSection = Boolean(label) && !row.getCell(2).value && rowNumber > 3;
+          row.getCell(1).font = { bold: true, color: isSection ? { argb: "FF111827" } : undefined };
+          if (isSection) {
+            row.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+            row.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+          }
+          if ([
+            "Receita concluída",
+            "Receita em dinheiro",
+            "Receita em multibanco",
+            "Ofertas (valor de tabela)",
+            "Pagamentos por confirmar",
+            "Receita prevista em agenda",
+            "Aluguer de cadeira recebido pela barbearia",
+            "Valor líquido estimado dos barbeiros",
+            "Valor estimado da barbearia antes de despesas",
+            "Despesas registadas",
+            "Resultado estimado apos despesas",
+          ].includes(label)) {
+            row.getCell(2).numFmt = currencyFormat;
+          }
           row.eachCell((cell) => {
             cell.border = {
               top: { style: "thin", color: { argb: "FFE5E7EB" } },
@@ -4081,7 +4185,7 @@ export async function registerRoutes(
               bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
               right: { style: "thin", color: { argb: "FFE5E7EB" } },
             };
-            cell.alignment = { vertical: "middle", wrapText: rowNumber === 13 };
+            cell.alignment = { vertical: "middle", wrapText: label === "Nota" };
           });
         }
       });
