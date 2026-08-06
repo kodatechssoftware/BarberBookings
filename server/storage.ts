@@ -13,6 +13,7 @@ import {
   customerNotes,
   auditLogs,
   barberCompensationRules,
+  whatsappMessages,
   type Barber,
   type Service,
   type Appointment,
@@ -26,6 +27,8 @@ import {
   type CustomerNote,
   type AuditLog,
   type BarberCompensationRule,
+  type WhatsappMessage,
+  type WhatsappMessageStatus,
   type CreateBarberRequest,
   type CreateServiceRequest,
   type CreateAppointmentRequest,
@@ -37,7 +40,8 @@ import {
   type CreateBarberInviteRequest,
   type CreateCustomerNoteRequest,
   type CreateAuditLogRequest,
-  type CreateBarberCompensationRuleRequest
+  type CreateBarberCompensationRuleRequest,
+  type CreateWhatsappMessageRequest
 } from "@shared/schema";
 import { eq, and, gte, lte, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail, portugueseMobilePhonesMatch } from "@shared/customer-validation";
@@ -157,6 +161,15 @@ export interface IStorage {
   // Barber compensation
   getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]>;
   createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule>;
+
+  // WhatsApp deliveries
+  createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage>;
+  updateWhatsappMessageStatusByProviderId(
+    providerMessageId: string,
+    status: WhatsappMessageStatus,
+    providerStatus?: string | null,
+    webhookPayload?: string | null,
+  ): Promise<WhatsappMessage | undefined>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -629,6 +642,31 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage> {
+    const [created] = await db.insert(whatsappMessages).values(message).returning();
+    return created;
+  }
+
+  async updateWhatsappMessageStatusByProviderId(
+    providerMessageId: string,
+    status: WhatsappMessageStatus,
+    providerStatus?: string | null,
+    webhookPayload?: string | null,
+  ): Promise<WhatsappMessage | undefined> {
+    const [updated] = await db
+      .update(whatsappMessages)
+      .set({
+        status,
+        providerStatus: providerStatus ?? null,
+        webhookPayload: webhookPayload ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(whatsappMessages.providerMessageId, providerMessageId))
+      .returning();
+
+    return updated;
+  }
+
   async hasData(): Promise<boolean> {
       const [barber] = await db.select().from(barbers).limit(1);
       return !!barber;
@@ -685,6 +723,7 @@ export class MemoryStorage implements IStorage {
   private customerNotes: CustomerNote[] = [];
   private auditLogs: AuditLog[] = [];
   private barberCompensationRules: BarberCompensationRule[] = [];
+  private whatsappMessages: WhatsappMessage[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
   private nextIds = {
@@ -700,6 +739,7 @@ export class MemoryStorage implements IStorage {
     auditLog: 1,
     verificationCode: 1,
     barberCompensationRule: 1,
+    whatsappMessage: 1,
   };
 
   private assertNoAppointmentConflict(
@@ -1131,6 +1171,44 @@ export class MemoryStorage implements IStorage {
     };
     this.barberCompensationRules.push(created);
     return created;
+  }
+
+  async createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage> {
+    const now = new Date();
+    const created: WhatsappMessage = {
+      id: this.nextIds.whatsappMessage++,
+      appointmentId: message.appointmentId ?? null,
+      messageType: message.messageType,
+      phone: message.phone,
+      providerMessageId: message.providerMessageId ?? null,
+      status: message.status ?? "pending",
+      providerStatus: message.providerStatus ?? null,
+      responseStatus: message.responseStatus ?? null,
+      responseBody: message.responseBody ?? null,
+      webhookPayload: message.webhookPayload ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.whatsappMessages.push(created);
+    return created;
+  }
+
+  async updateWhatsappMessageStatusByProviderId(
+    providerMessageId: string,
+    status: WhatsappMessageStatus,
+    providerStatus?: string | null,
+    webhookPayload?: string | null,
+  ): Promise<WhatsappMessage | undefined> {
+    const index = this.whatsappMessages.findIndex((message) => message.providerMessageId === providerMessageId);
+    if (index === -1) return undefined;
+    this.whatsappMessages[index] = {
+      ...this.whatsappMessages[index],
+      status,
+      providerStatus: providerStatus ?? null,
+      webhookPayload: webhookPayload ?? null,
+      updatedAt: new Date(),
+    };
+    return this.whatsappMessages[index];
   }
 
   async createVerificationCode(phone: string, code: string): Promise<void> {

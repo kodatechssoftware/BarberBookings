@@ -1,6 +1,10 @@
 import "dotenv/config";
 
+import { storage } from "./storage";
+import type { WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
+
 type AppointmentMessageParams = {
+  appointmentId?: number;
   customerName: string;
   customerPhone: string;
   barberName?: string;
@@ -53,6 +57,79 @@ function normalizeWhatsAppNumber(phone: string) {
 function maskPhoneNumber(phone: string) {
   if (phone.length <= 5) return phone;
   return `${phone.slice(0, 3)}***${phone.slice(-3)}`;
+}
+
+function safeStringify(value: unknown) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function truncate(value: string | null | undefined, maxLength: number) {
+  if (!value) return value ?? null;
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
+}
+
+async function readEvolutionResponse(response: Response) {
+  const responseText = await response.text();
+  if (!responseText) return { responseText, responseJson: null as unknown };
+
+  try {
+    return { responseText, responseJson: JSON.parse(responseText) as unknown };
+  } catch {
+    return { responseText, responseJson: null as unknown };
+  }
+}
+
+function getNestedString(value: unknown, path: string[]): string | null {
+  const current = getNestedValue(value, path);
+  return typeof current === "string" && current.trim() ? current.trim() : null;
+}
+
+function getNestedValue(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || !(key in current)) return null;
+    current = (current as Record<string, unknown>)[key];
+  }
+
+  return current;
+}
+
+function extractEvolutionMessageId(responseJson: unknown): string | null {
+  const paths = [
+    ["key", "id"],
+    ["data", "key", "id"],
+    ["message", "key", "id"],
+    ["data", "message", "key", "id"],
+    ["id"],
+    ["messageId"],
+    ["keyId"],
+    ["data", "id"],
+    ["data", "messageId"],
+    ["data", "keyId"],
+  ];
+
+  for (const path of paths) {
+    const value = getNestedString(responseJson, path);
+    if (value) return value;
+  }
+
+  return null;
+}
+
+function mapEvolutionDeliveryStatus(providerStatus: unknown): WhatsappMessageStatus {
+  const normalizedStatus = String(providerStatus ?? "").trim().toLowerCase();
+
+  if (["read", "played", "read_ack", "3", "4"].includes(normalizedStatus)) return "read";
+  if (["delivered", "delivery_ack", "server_ack", "2"].includes(normalizedStatus)) return "delivered";
+  if (["sent", "send", "sent_ack", "1"].includes(normalizedStatus)) return "sent";
+  if (["error", "failed", "failure", "undelivered", "-1"].includes(normalizedStatus)) return "failed";
+  if (["pending", "0"].includes(normalizedStatus)) return "pending";
+
+  return "unknown";
 }
 
 function formatAppointmentDate(date: Date) {
@@ -113,7 +190,14 @@ export function buildBookingCancellationMessage({
   ].filter(Boolean).join("\n");
 }
 
-async function sendWhatsAppText(phone: string, text: string) {
+async function sendWhatsAppText(
+  phone: string,
+  text: string,
+  options: {
+    appointmentId?: number;
+    messageType: WhatsappMessageType;
+  },
+) {
   const config = getEvolutionConfig();
   if (!config) {
     if (!isProduction) {
@@ -145,21 +229,44 @@ async function sendWhatsAppText(phone: string, text: string) {
     },
   );
 
+  const { responseText, responseJson } = await readEvolutionResponse(response);
+
   if (!response.ok) {
-    const responseText = await response.text();
     throw new Error(
       `Evolution API returned ${response.status}: ${(responseText || response.statusText).slice(0, 800)}`,
     );
   }
 
-  console.log(`WhatsApp notification accepted by Evolution API for ${maskPhoneNumber(number)}.`);
-  return true;
+  const providerMessageId = extractEvolutionMessageId(responseJson);
+  await storage.createWhatsappMessage({
+    appointmentId: options.appointmentId,
+    messageType: options.messageType,
+    phone: number,
+    providerMessageId,
+    status: "pending",
+    providerStatus: "HTTP_ACCEPTED",
+    responseStatus: response.status,
+    responseBody: truncate(responseText, 4000),
+  });
+
+  console.log(
+    `WhatsApp notification accepted by Evolution API for ${maskPhoneNumber(number)}; delivery is pending webhook confirmation.`,
+  );
+  return {
+    accepted: true,
+    status: "pending" as const,
+    providerMessageId,
+  };
 }
 
 export async function sendBookingWhatsAppConfirmation(params: AppointmentMessageParams) {
   return sendWhatsAppText(
     params.customerPhone,
     buildBookingConfirmationMessage(params),
+    {
+      appointmentId: params.appointmentId,
+      messageType: "booking_confirmation",
+    },
   );
 }
 
@@ -167,5 +274,89 @@ export async function sendBookingWhatsAppCancellation(params: AppointmentMessage
   return sendWhatsAppText(
     params.customerPhone,
     buildBookingCancellationMessage(params),
+    {
+      appointmentId: params.appointmentId,
+      messageType: "booking_cancellation",
+    },
   );
+}
+
+function extractWebhookMessageId(data: unknown): string | null {
+  const paths = [
+    ["key", "id"],
+    ["id"],
+    ["messageId"],
+    ["keyId"],
+    ["message", "key", "id"],
+    ["update", "key", "id"],
+  ];
+
+  for (const path of paths) {
+    const value = getNestedValue(data, path);
+    if (
+      (typeof value === "string" || typeof value === "number" || typeof value === "boolean") &&
+      String(value).trim()
+    ) {
+      return String(value).trim();
+    }
+  }
+
+  return null;
+}
+
+function extractWebhookProviderStatus(data: unknown): string | number | boolean | null {
+  const paths = [
+    ["status"],
+    ["update", "status"],
+    ["message", "status"],
+    ["receipt", "status"],
+  ];
+
+  for (const path of paths) {
+    const value = getNestedString(data, path);
+    if (value) return value;
+  }
+
+  if (data && typeof data === "object" && "status" in data) {
+    const status = (data as Record<string, unknown>).status;
+    if (typeof status === "string" || typeof status === "number" || typeof status === "boolean") {
+      return status;
+    }
+  }
+
+  return null;
+}
+
+export async function recordEvolutionMessagesUpdate(payload: unknown) {
+  const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const rawData = body.data;
+  const items = Array.isArray(rawData) ? rawData : [rawData];
+  const updates: Array<{
+    providerMessageId: string;
+    status: WhatsappMessageStatus;
+    updated: boolean;
+  }> = [];
+
+  for (const item of items) {
+    if (!item) continue;
+    const providerMessageId = extractWebhookMessageId(item);
+    if (!providerMessageId) continue;
+
+    const providerStatus = extractWebhookProviderStatus(item);
+    const status = mapEvolutionDeliveryStatus(providerStatus);
+    const updated = await storage.updateWhatsappMessageStatusByProviderId(
+      providerMessageId,
+      status,
+      providerStatus === null || providerStatus === undefined ? null : String(providerStatus),
+      truncate(safeStringify(payload), 8000),
+    );
+
+    updates.push({
+      providerMessageId,
+      status,
+      updated: Boolean(updated),
+    });
+  }
+
+  return updates;
 }

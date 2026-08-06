@@ -7,6 +7,7 @@ import {
   ensureBarberCompensationRulesTable,
   ensureBarberServicesTable,
   ensureServiceAgendaLabelColumn,
+  ensureWhatsappMessagesTable,
 } from "./db";
 
 const app = express();
@@ -172,6 +173,7 @@ app.use((req, res, next) => {
   await ensureServiceAgendaLabelColumn();
   await ensureBarberServicesTable();
   await ensureBarberCompensationRulesTable();
+  await ensureWhatsappMessagesTable();
   await ensureAppointmentOverlapProtection();
   const server = await registerRoutes(app, httpServer);
 

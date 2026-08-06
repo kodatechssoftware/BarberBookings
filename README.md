@@ -74,12 +74,23 @@ Para ativar no Railway, define:
 - `EVOLUTION_API_KEY`: chave da Evolution API
 - `EVOLUTION_API_INSTANCE`: nome da instancia ligada ao telemovel da barbearia
 - `PUBLIC_URL`: URL publica desta app, usada para gerar o link de cancelamento
+- `EVOLUTION_WEBHOOK_SECRET`: segredo opcional para validar webhooks da Evolution
 - `WHATSAPP_DEFAULT_COUNTRY_CODE=351`
 - `SHOP_NAME=Baptista Barber Shop`
 - `SHOP_TIME_ZONE=Europe/Lisbon`
 
 Quando estas variaveis existem, a app envia confirmacao de marcacao com link de cancelamento e confirmacao quando o cliente cancela pelo link.
 O WhatsApp e o canal principal; se o envio falhar ou a Evolution API nao estiver configurada, a app tenta enviar email como fallback quando o cliente indicou email.
+
+A resposta HTTP 2xx da Evolution API e tratada apenas como aceite para processamento. A entrega fica como `pending` na tabela `whatsapp_messages` e so e confirmada quando a Evolution enviar o webhook `MESSAGES_UPDATE`.
+
+Configura o webhook da instancia para:
+
+- URL: `${PUBLIC_URL}/api/webhooks/evolution`
+- Eventos: `MESSAGES_UPDATE`
+- Header opcional, se definires `EVOLUTION_WEBHOOK_SECRET`: `Authorization: Bearer <EVOLUTION_WEBHOOK_SECRET>` ou `X-Webhook-Secret: <EVOLUTION_WEBHOOK_SECRET>`
+
+Se usares `webhook_by_events=true`, tambem podes apontar a base para `${PUBLIC_URL}/api/webhooks/evolution`; a rota `/api/webhooks/evolution/messages-update` esta preparada para esse modo.
 
 ## Deploy no Railway
 
