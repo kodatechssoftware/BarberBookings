@@ -22,6 +22,7 @@ export const customerNotesIdSeq = appPgSchema?.sequence("customer_notes_id_seq")
 export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
 export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
+export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -78,6 +79,20 @@ export const businessExpenseRecurrences = [
   "once",
   "weekly",
   "monthly",
+] as const;
+
+export const whatsappMessageStatuses = [
+  "pending",
+  "sent",
+  "delivered",
+  "read",
+  "failed",
+  "unknown",
+] as const;
+
+export const whatsappMessageTypes = [
+  "booking_confirmation",
+  "booking_cancellation",
 ] as const;
 
 export const barbers = appPgTable("barbers", {
@@ -224,6 +239,23 @@ export const businessExpenses = appPgTable("business_expenses", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const whatsappMessages = appPgTable("whatsapp_messages", {
+  id: idColumn("whatsapp_messages_id_seq"),
+  appointmentId: integer("appointment_id").references(() => appointments.id),
+  messageType: text("message_type", { enum: whatsappMessageTypes }).notNull(),
+  phone: text("phone").notNull(),
+  providerMessageId: text("provider_message_id"),
+  status: text("status", { enum: whatsappMessageStatuses }).default("pending").notNull(),
+  providerStatus: text("provider_status"),
+  responseStatus: integer("response_status"),
+  responseBody: text("response_body"),
+  webhookPayload: text("webhook_payload"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  providerMessageIdIdx: uniqueIndex("whatsapp_messages_provider_message_id_idx").on(table.providerMessageId),
+}));
+
 // === RELATIONS ===
 
 export const appointmentsRelations = relations(appointments, ({ one }) => ({
@@ -325,6 +357,11 @@ export const insertBusinessExpenseSchema = createInsertSchema(businessExpenses).
   amountCents: z.number().int("O valor deve ser indicado em centimos.").min(0, "O valor nao pode ser negativo.").max(10_000_000, "O valor indicado e demasiado elevado."),
   notes: z.string().trim().max(500, "As notas nao podem ter mais de 500 caracteres.").optional().nullable(),
 });
+export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
 
 // === EXPLICIT API CONTRACT TYPES ===
 
@@ -343,10 +380,13 @@ export type CustomerNote = typeof customerNotes.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect;
 export type BusinessExpense = typeof businessExpenses.$inferSelect;
+export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
 export type BusinessExpenseCategory = typeof businessExpenseCategories[number];
 export type BusinessExpenseRecurrence = typeof businessExpenseRecurrences[number];
+export type WhatsappMessageStatus = typeof whatsappMessageStatuses[number];
+export type WhatsappMessageType = typeof whatsappMessageTypes[number];
 
 export type BarberWithServices = Barber & {
   serviceIds: number[];
@@ -369,6 +409,7 @@ export type CreateCustomerNoteRequest = z.infer<typeof insertCustomerNoteSchema>
 export type CreateAuditLogRequest = z.infer<typeof insertAuditLogSchema>;
 export type CreateBarberCompensationRuleRequest = z.infer<typeof insertBarberCompensationRuleSchema>;
 export type CreateBusinessExpenseRequest = z.infer<typeof insertBusinessExpenseSchema>;
+export type CreateWhatsappMessageRequest = z.infer<typeof insertWhatsappMessageSchema>;
 
 export type AppointmentWithDetails = Appointment & {
   barber: Barber;

@@ -253,3 +253,39 @@ export async function ensureBusinessExpensesTable() {
     ON ${qualifiedTableName} (expense_date DESC)
   `);
 }
+
+export async function ensureWhatsappMessagesTable() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("whatsapp_messages")}`;
+  const qualifiedAppointmentsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
+      id serial PRIMARY KEY,
+      appointment_id integer REFERENCES ${qualifiedAppointmentsTable}(id) ON DELETE SET NULL,
+      message_type text NOT NULL,
+      phone text NOT NULL,
+      provider_message_id text,
+      status text NOT NULL DEFAULT 'pending',
+      provider_status text,
+      response_status integer,
+      response_body text,
+      webhook_payload text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_messages_provider_message_id_idx
+    ON ${qualifiedTableName} (provider_message_id)
+    WHERE provider_message_id IS NOT NULL
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS whatsapp_messages_status_idx
+    ON ${qualifiedTableName} (status, updated_at DESC)
+  `);
+}
