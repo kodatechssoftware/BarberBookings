@@ -6,8 +6,9 @@ async function throwIfResNotOk(res: Response) {
     const text = await res.text();
     if (text) {
       let serverMessage: string | undefined;
+      let payload: any;
       try {
-        const payload = JSON.parse(text);
+        payload = JSON.parse(text);
         if (typeof payload?.message === "string" && payload.message.trim()) {
           serverMessage = payload.message;
         }
@@ -15,7 +16,17 @@ async function throwIfResNotOk(res: Response) {
         serverMessage = undefined;
       }
 
-      throw new Error(serverMessage || text);
+      const requestError = new Error(serverMessage || text) as Error & {
+        status?: number;
+        payload?: unknown;
+        code?: unknown;
+        affectedAppointments?: unknown;
+      };
+      requestError.status = res.status;
+      requestError.payload = payload;
+      requestError.code = payload?.code;
+      requestError.affectedAppointments = payload?.affectedAppointments;
+      throw requestError;
     }
 
     throw new Error(res.statusText || "Não foi possível concluir o pedido.");

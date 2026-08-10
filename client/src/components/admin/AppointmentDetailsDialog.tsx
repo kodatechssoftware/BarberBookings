@@ -22,7 +22,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { canBarberPerformService } from "@/lib/availability";
+import {
+  canBarberPerformService,
+  getEffectivePeriodsForBarber,
+  timeToMinutes,
+  type AvailabilityRow,
+  type ShopAvailabilityRow,
+} from "@/lib/availability";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch } from "@/lib/api";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
@@ -52,11 +58,17 @@ function EditAppointmentDialog({
   appointment,
   barbers,
   services,
+  appointments,
+  availabilityRows,
+  shopAvailabilityRows,
   toast,
 }: {
   appointment: AdminAppointment;
-  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null }>;
+  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null; isVisible?: boolean | null }>;
   services?: ServiceListItem[];
+  appointments?: AdminAppointment[];
+  availabilityRows?: AvailabilityRow[];
+  shopAvailabilityRows?: ShopAvailabilityRow[];
   toast: ReturnType<typeof useToast>["toast"];
 }) {
   const [open, setOpen] = useState(false);
@@ -65,8 +77,60 @@ function EditAppointmentDialog({
   const [barberId, setBarberId] = useState(String(appointment.barberId));
   const [serviceId, setServiceId] = useState(appointment.serviceId ? String(appointment.serviceId) : "none");
   const [isSaving, setIsSaving] = useState(false);
-  const serviceList = services || [];
-  const selectedBarber = barbers?.find((barber) => String(barber.id) === barberId);
+  const serviceList = (services || []).filter((service) =>
+    service.isVisible !== false || service.id === appointment.serviceId,
+  );
+  const activeBarbers = (barbers || []).filter((barber) =>
+    barber.isVisible !== false || barber.id === appointment.barberId,
+  );
+  const selectedService = serviceId === "none"
+    ? null
+    : serviceList.find((service) => String(service.id) === serviceId) || null;
+  const selectedDuration = selectedService?.duration || appointment.durationMinutes || 30;
+  const requestedStartTime = useMemo(() => new Date(`${dateValue}T${timeValue}`), [dateValue, timeValue]);
+  const availableBarbers = useMemo(() => {
+    if (Number.isNaN(requestedStartTime.getTime())) return [];
+
+    const startMinutes = timeToMinutes(timeValue);
+    const endMinutes = startMinutes + selectedDuration;
+    const requestedEndTime = new Date(requestedStartTime.getTime() + selectedDuration * 60000);
+    const dayOfWeek = requestedStartTime.getDay();
+    const appointmentList = appointments ?? [];
+
+    return activeBarbers.filter((barber) => {
+      if (!canBarberPerformService(barber, selectedService?.id ?? null)) return false;
+
+      const fitsSchedule = getEffectivePeriodsForBarber({
+        barberId: barber.id,
+        dayOfWeek,
+        shopAvailabilityRows: shopAvailabilityRows ?? [],
+        availabilityRows: availabilityRows ?? [],
+      }).some((period) => startMinutes >= period.start && endMinutes <= period.end);
+      if (!fitsSchedule) return false;
+
+      return !appointmentList.some((candidate) => {
+        if (candidate.id === appointment.id) return false;
+        if (candidate.barberId !== barber.id) return false;
+        if (candidate.status !== "booked") return false;
+
+        const candidateStart = parseISO(candidate.startTime);
+        const candidateDuration = candidate.durationMinutes || 30;
+        const candidateEnd = new Date(candidateStart.getTime() + candidateDuration * 60000);
+        return requestedStartTime < candidateEnd && requestedEndTime > candidateStart;
+      });
+    });
+  }, [
+    activeBarbers,
+    appointment.id,
+    appointments,
+    availabilityRows,
+    requestedStartTime,
+    selectedDuration,
+    selectedService?.id,
+    shopAvailabilityRows,
+    timeValue,
+  ]);
+  const selectedBarber = activeBarbers.find((barber) => String(barber.id) === barberId);
   const compatibleServices = useMemo(
     () => serviceList.filter((service) => canBarberPerformService(selectedBarber, service.id)),
     [selectedBarber, serviceList],
@@ -76,6 +140,11 @@ function EditAppointmentDialog({
 
   useEffect(() => {
     if (!open) return;
+    if (availableBarbers.length > 0 && !availableBarbers.some((barber) => String(barber.id) === barberId)) {
+      setBarberId(String(availableBarbers[0].id));
+      return;
+    }
+
     if (serviceId === "none") {
       if (!canUseNoService && compatibleServices.length > 0) {
         setServiceId(String(compatibleServices[0].id));
@@ -86,7 +155,7 @@ function EditAppointmentDialog({
     if (!compatibleServices.some((service) => String(service.id) === serviceId)) {
       setServiceId(compatibleServices[0] ? String(compatibleServices[0].id) : "none");
     }
-  }, [canUseNoService, compatibleServices, open, serviceId]);
+  }, [availableBarbers, barberId, canUseNoService, compatibleServices, open, serviceId]);
 
   const resetForm = () => {
     setDateValue(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
@@ -163,9 +232,12 @@ function EditAppointmentDialog({
             <Select value={barberId} onValueChange={setBarberId}>
               <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-card border-white/10 text-white">
-                {barbers?.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
+                {availableBarbers.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
               </SelectContent>
             </Select>
+            {availableBarbers.length === 0 && (
+              <p className="text-xs text-red-300">Nenhum barbeiro disponível para esta data, hora e serviço.</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label>Serviço</Label>
@@ -187,7 +259,7 @@ function EditAppointmentDialog({
           <Button
             variant="gold"
             className="w-full"
-            disabled={isSaving || !hasCompatibleService}
+            disabled={isSaving || !hasCompatibleService || availableBarbers.length === 0}
             onClick={handleSave}
           >
             {isSaving ? "A guardar..." : "Guardar alterações"}
@@ -240,6 +312,9 @@ export function AppointmentDetailsDialog({
   onOpenChange,
   barbers,
   services,
+  appointments,
+  availabilityRows,
+  shopAvailabilityRows,
   toast,
   getBarberName,
   getServiceName,
@@ -252,8 +327,11 @@ export function AppointmentDetailsDialog({
   appointment: AdminAppointment | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null }>;
+  barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null; isVisible?: boolean | null }>;
   services?: ServiceListItem[];
+  appointments?: AdminAppointment[];
+  availabilityRows?: AvailabilityRow[];
+  shopAvailabilityRows?: ShopAvailabilityRow[];
   toast: ReturnType<typeof useToast>["toast"];
   getBarberName: (id: number) => string;
   getServiceName: (id?: number | null) => string;
@@ -461,6 +539,9 @@ export function AppointmentDetailsDialog({
                   appointment={appointment}
                   barbers={barbers}
                   services={services}
+                  appointments={appointments}
+                  availabilityRows={availabilityRows}
+                  shopAvailabilityRows={shopAvailabilityRows}
                   toast={toast}
                 />
               </>

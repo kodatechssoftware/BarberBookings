@@ -1310,10 +1310,14 @@ test.describe("booking rules", () => {
     expect(detailSheet).toBeTruthy();
     const headers = detailSheet!.getRow(1).values as unknown[];
     const customerCol = headers.indexOf("Cliente");
+    const phoneCol = headers.indexOf("Telemóvel");
+    const emailCol = headers.indexOf("Email");
     const statusCol = headers.indexOf("Estado");
     const realizedCol = headers.indexOf("Receita realizada (€)");
     const projectedCol = headers.indexOf("Receita prevista (€)");
     expect(customerCol).toBeGreaterThan(0);
+    expect(phoneCol).toBe(-1);
+    expect(emailCol).toBe(-1);
     expect(statusCol).toBeGreaterThan(0);
     expect(realizedCol).toBeGreaterThan(0);
     expect(projectedCol).toBeGreaterThan(0);
