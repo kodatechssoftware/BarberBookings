@@ -1679,7 +1679,10 @@ export default function Admin() {
         return;
       }
 
-      const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportDates.barberId}`;
+      const exportBarberId = user?.role === "barber" && user.id
+        ? String(user.id)
+        : exportDates.barberId;
+      const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportBarberId}`;
       const response = await apiFetch(url);
 
       if (!response.ok) {
@@ -3249,9 +3252,9 @@ export default function Admin() {
                 <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
                 <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>
                 <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>
-                <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
               </>
             )}
+            <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
           </TabsList>
           </div>
 
@@ -4203,7 +4206,11 @@ export default function Admin() {
             <Card className="bg-card border-white/10 max-w-3xl mx-auto">
               <CardHeader>
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
-                <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com resumo financeiro, estados e detalhe das marcações do período.</p>
+                <p className="text-gray-400 text-sm">
+                  {user.role === "admin"
+                    ? "Gere um ficheiro .xlsx com resumo financeiro, estados e detalhe das marcações do período."
+                    : "Gere um ficheiro .xlsx apenas com as suas marcações e resumo do período."}
+                </p>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4237,18 +4244,27 @@ export default function Admin() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label className="text-white">Barbeiro</Label>
-                  <Select value={exportDates.barberId} onValueChange={(v) => setExportDates({...exportDates, barberId: v})}>
-                    <SelectTrigger className="border-white/10 bg-background text-white h-11">
-                      <SelectValue placeholder="Selecione o barbeiro" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-card border-white/10 text-white">
-                      <SelectItem value="all">Todos os Barbeiros</SelectItem>
-                      {barbers?.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {user.role === "admin" ? (
+                  <div className="space-y-2">
+                    <Label className="text-white">Barbeiro</Label>
+                    <Select value={exportDates.barberId} onValueChange={(v) => setExportDates({...exportDates, barberId: v})}>
+                      <SelectTrigger className="border-white/10 bg-background text-white h-11">
+                        <SelectValue placeholder="Selecione o barbeiro" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-card border-white/10 text-white">
+                        <SelectItem value="all">Todos os Barbeiros</SelectItem>
+                        {barbers?.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Label className="text-white">Barbeiro</Label>
+                    <div className="flex h-11 items-center rounded-md border border-white/10 bg-background px-3 text-sm font-semibold text-primary">
+                      {user.name}
+                    </div>
+                  </div>
+                )}
 
                 <Button variant="gold" className="w-full h-12 text-base font-bold gap-2" onClick={handleExport} disabled={isExporting}>
                   {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileDown className="w-5 h-5" />}
@@ -4257,6 +4273,7 @@ export default function Admin() {
               </CardContent>
             </Card>
 
+            {user.role === "admin" && (
             <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.1fr] gap-6">
               <Card className="bg-card border-white/10">
                 <CardHeader>
@@ -4418,6 +4435,7 @@ export default function Admin() {
                 </CardContent>
               </Card>
             </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>

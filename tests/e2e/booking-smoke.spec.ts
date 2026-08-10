@@ -4928,6 +4928,43 @@ test.describe("booking rules", () => {
     const ownBarber = await createBarber(`Barber Own ${suffix}`, ownEmail, true);
     const otherBarber = await createBarber(`Barber Other ${suffix}`, otherEmail, true);
     const hiddenBarber = await createBarber(`Barber Hidden ${suffix}`, hiddenEmail, false);
+    const servicesResponse = await request.get("/api/services?includeHidden=true");
+    expect(servicesResponse.ok()).toBe(true);
+    const [service] = await servicesResponse.json();
+    expect(service).toBeTruthy();
+    const exportDate = futureThursdayIso(6, 11, 0);
+    const exportDateKey = dateKeyFromIso(exportDate);
+    const ownCustomerName = `Own Export ${suffix}`;
+    const otherCustomerName = `Other Export ${suffix}`;
+    const ownAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: ownBarber.id,
+        serviceId: service.id,
+        startTime: exportDate,
+        name: ownCustomerName,
+        phone: "+351912697201",
+        isManualBooking: true,
+      },
+    });
+    expect(ownAppointmentResponse.status(), await ownAppointmentResponse.text()).toBe(201);
+    const otherAppointmentResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: otherBarber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(6, 12, 0),
+        name: otherCustomerName,
+        phone: "+351912697202",
+        isManualBooking: true,
+      },
+    });
+    expect(otherAppointmentResponse.status(), await otherAppointmentResponse.text()).toBe(201);
+    const appointmentsResponse = await request.get(`/api/appointments?date=${exportDateKey}`);
+    expect(appointmentsResponse.ok()).toBe(true);
+    const createdAppointments = await appointmentsResponse.json();
+    const ownAppointmentId = createdAppointments.find((appointment: any) => appointment.customerName === ownCustomerName)?.id;
+    const otherAppointmentId = createdAppointments.find((appointment: any) => appointment.customerName === otherCustomerName)?.id;
+    expect(ownAppointmentId).toBeTruthy();
+    expect(otherAppointmentId).toBeTruthy();
 
     try {
       const inviteResponse = await request.post(`/api/barbers/${ownBarber.id}/invite`, { data: {} });
@@ -4966,12 +5003,44 @@ test.describe("booking rules", () => {
         expect(ownProfile).not.toHaveProperty("compensationModel");
         const dashboardResponse = await barberContext.get("/api/admin/dashboard");
         expect(dashboardResponse.status(), await dashboardResponse.text()).toBe(401);
+        const forbiddenExportResponse = await barberContext.get(
+          `/api/admin/export?startDate=${exportDateKey}&endDate=${exportDateKey}&barberId=${otherBarber.id}`,
+        );
+        expect(forbiddenExportResponse.status(), await forbiddenExportResponse.text()).toBe(403);
+
+        const ownExportResponse = await barberContext.get(
+          `/api/admin/export?startDate=${exportDateKey}&endDate=${exportDateKey}&barberId=all`,
+        );
+        expect(ownExportResponse.ok(), await ownExportResponse.text()).toBe(true);
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(await ownExportResponse.body());
+        expect(workbook.getWorksheet("Resumo")).toBeTruthy();
+        expect(workbook.getWorksheet("Detalhe")).toBeTruthy();
+        expect(workbook.getWorksheet("Resumo Geral")).toBeUndefined();
+        expect(workbook.getWorksheet("Resumo Financeiro")).toBeUndefined();
+        expect(workbook.getWorksheet("Acertos Barbeiros")).toBeUndefined();
+        expect(workbook.getWorksheet("Despesas")).toBeUndefined();
+        const detailSheet = workbook.getWorksheet("Detalhe");
+        const exportedCustomers: string[] = [];
+        detailSheet!.eachRow((row, rowNumber) => {
+          if (rowNumber === 1) return;
+          const customerName = String(row.getCell(5).value || "");
+          if (customerName) exportedCustomers.push(customerName);
+        });
+        expect(exportedCustomers).toContain(ownCustomerName);
+        expect(exportedCustomers).not.toContain(otherCustomerName);
         const hiddenResponse = await barberContext.get(`/api/barbers/${hiddenBarber.id}`);
         expect(hiddenResponse.status(), await hiddenResponse.text()).toBe(404);
       } finally {
         await barberContext.dispose();
       }
     } finally {
+      if (ownAppointmentId) {
+        await request.patch(`/api/appointments/${ownAppointmentId}/status`, { data: { status: "cancelled" } });
+      }
+      if (otherAppointmentId) {
+        await request.patch(`/api/appointments/${otherAppointmentId}/status`, { data: { status: "cancelled" } });
+      }
       for (const id of createdIds.reverse()) {
         await request.delete(`/api/barbers/${id}`);
       }
