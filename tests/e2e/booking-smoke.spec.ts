@@ -4905,7 +4905,16 @@ test.describe("booking rules", () => {
     const createdIds: number[] = [];
     const createBarber = async (name: string, email: string, isVisible: boolean) => {
       const response = await request.post("/api/barbers", {
-        data: { name, specialty: "QA", email, color: "#14B8A6", isVisible, serviceIds: [] },
+        data: {
+          name,
+          specialty: "QA",
+          email,
+          color: "#14B8A6",
+          isVisible,
+          serviceIds: [],
+          compensationModel: "commission",
+          commissionPercent: 40,
+        },
       });
       expect(response.status(), await response.text()).toBe(201);
       const barber = await response.json();
@@ -4940,12 +4949,23 @@ test.describe("booking rules", () => {
         const listedOwn = listedBarbers.find((barber: any) => barber.id === ownBarber.id);
         const listedOther = listedBarbers.find((barber: any) => barber.id === otherBarber.id);
         expect(listedOwn.email).toBe(ownEmail);
+        expect(listedOwn).not.toHaveProperty("compensationModel");
+        expect(listedOwn).not.toHaveProperty("commissionPercent");
+        expect(listedOwn).not.toHaveProperty("chairRentCents");
+        expect(listedOwn).not.toHaveProperty("chairRentPeriod");
         expect(listedOther).not.toHaveProperty("email");
         expect(listedBarbers.some((barber: any) => barber.id === hiddenBarber.id)).toBe(false);
 
         const otherResponse = await barberContext.get(`/api/barbers/${otherBarber.id}`);
         expect(otherResponse.ok()).toBe(true);
         expect(await otherResponse.json()).not.toHaveProperty("email");
+        const ownResponse = await barberContext.get(`/api/barbers/${ownBarber.id}`);
+        expect(ownResponse.ok()).toBe(true);
+        const ownProfile = await ownResponse.json();
+        expect(ownProfile.email).toBe(ownEmail);
+        expect(ownProfile).not.toHaveProperty("compensationModel");
+        const dashboardResponse = await barberContext.get("/api/admin/dashboard");
+        expect(dashboardResponse.status(), await dashboardResponse.text()).toBe(401);
         const hiddenResponse = await barberContext.get(`/api/barbers/${hiddenBarber.id}`);
         expect(hiddenResponse.status(), await hiddenResponse.text()).toBe(404);
       } finally {

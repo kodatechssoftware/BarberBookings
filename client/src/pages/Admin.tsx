@@ -463,13 +463,23 @@ function TodayOverviewPanel({
   summary,
   getBarberName,
   getServiceName,
+  showFinancialSummary = false,
 }: {
   summary: TodaySummary;
   getBarberName: (id: number) => string;
   getServiceName: (id?: number | null) => string;
+  showFinancialSummary?: boolean;
 }) {
   const next = summary.nextAppointment;
   const nextStart = next ? parseISO(next.startTime) : null;
+  const metrics = [
+    { label: "Total do dia", value: String(summary.total), tone: "text-white" },
+    { label: "Atrasadas", value: String(summary.delayed), tone: summary.delayed ? "text-orange-300" : "text-gray-300" },
+    { label: "Faltas prováveis", value: String(summary.probableNoShows), tone: summary.probableNoShows ? "text-rose-300" : "text-gray-300" },
+    ...(showFinancialSummary
+      ? [{ label: "Receita prevista", value: formatCents(summary.projectedRevenueCents), tone: "text-primary" }]
+      : []),
+  ];
 
   return (
     <Card className="border-white/10 bg-card text-white">
@@ -482,7 +492,12 @@ function TodayOverviewPanel({
           <p className="text-sm text-gray-400">{format(startOfToday(), "dd 'de' MMMM", { locale: pt })}</p>
         </div>
       </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-[1.4fr_repeat(4,minmax(0,1fr))]">
+      <CardContent className={cn(
+        "grid gap-3",
+        showFinancialSummary
+          ? "md:grid-cols-[1.4fr_repeat(4,minmax(0,1fr))]"
+          : "md:grid-cols-[1.4fr_repeat(3,minmax(0,1fr))]",
+      )}>
         <div className="rounded-xl border border-white/10 bg-background/60 p-3">
           <p className="text-xs uppercase tracking-widest text-gray-500">Próxima marcação</p>
           {next && nextStart ? (
@@ -495,12 +510,7 @@ function TodayOverviewPanel({
             <p className="mt-3 text-sm font-semibold text-gray-400">Sem próximas marcações hoje</p>
           )}
         </div>
-        {[
-          { label: "Total do dia", value: String(summary.total), tone: "text-white" },
-          { label: "Atrasadas", value: String(summary.delayed), tone: summary.delayed ? "text-orange-300" : "text-gray-300" },
-          { label: "Faltas prováveis", value: String(summary.probableNoShows), tone: summary.probableNoShows ? "text-rose-300" : "text-gray-300" },
-          { label: "Receita prevista", value: formatCents(summary.projectedRevenueCents), tone: "text-primary" },
-        ].map((item) => (
+        {metrics.map((item) => (
           <div key={item.label} className="rounded-xl border border-white/10 bg-background/60 p-3">
             <p className="text-xs uppercase tracking-widest text-gray-500">{item.label}</p>
             <p className={cn("mt-2 text-xl font-bold", item.tone)}>{item.value}</p>
@@ -1455,12 +1465,10 @@ export default function Admin() {
   const { data: shopAvailabilityRows } = useShopAvailability();
   const { data: dashboardData, isLoading: isLoadingDashboard } = useQuery<DashboardData>({
     queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.id],
-    enabled: user?.authorized === true,
+    enabled: user?.authorized === true && user.role === "admin",
     queryFn: async () => {
       const params = new URLSearchParams({ days: dashboardDays });
-      if (user?.role === "barber" && user.id) {
-        params.set("barberId", String(user.id));
-      } else if (dashboardBarberFilter !== "all") {
+      if (dashboardBarberFilter !== "all") {
         params.set("barberId", dashboardBarberFilter);
       }
 
@@ -3252,6 +3260,7 @@ export default function Admin() {
               summary={todaySummary}
               getBarberName={getBarberName}
               getServiceName={getServiceName}
+              showFinancialSummary={user.role === "admin"}
             />
 
             <WeeklyAgenda
@@ -3277,6 +3286,8 @@ export default function Admin() {
               <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs} />
             )}
 
+            {user.role === "admin" && (
+              <>
             <div ref={businessDashboardRef} className="scroll-mt-24 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h2 className="text-xl font-bold text-white">Dashboard de negócio</h2>
@@ -3323,6 +3334,8 @@ export default function Admin() {
               </Card>
             ) : (
               <SimpleBusinessDashboard data={dashboardData} />
+            )}
+              </>
             )}
           </TabsContent>
 

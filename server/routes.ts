@@ -819,6 +819,7 @@ function sanitizeBarberForResponse<T extends {
 }>(
   barber: T,
   includePrivateFields = false,
+  includeFinancialFields = false,
 ) {
   const {
     email,
@@ -829,9 +830,11 @@ function sanitizeBarberForResponse<T extends {
     chairRentPeriod,
     ...publicBarber
   } = barber;
-  return includePrivateFields
+  if (!includePrivateFields) return publicBarber;
+
+  return includeFinancialFields
     ? { ...publicBarber, email, compensationModel, commissionPercent, chairRentCents, chairRentPeriod }
-    : publicBarber;
+    : { ...publicBarber, email };
 }
 
 function isLateCancellation(startTime: Date | string) {
@@ -2174,7 +2177,11 @@ export async function registerRoutes(
 
     res.json(
       visibleBarbers.map((barber) =>
-        sanitizeBarberForResponse(barber, isAdminSession || barber.id === ownBarberId),
+        sanitizeBarberForResponse(
+          barber,
+          isAdminSession || barber.id === ownBarberId,
+          isAdminSession,
+        ),
       ),
     );
   });
@@ -2319,7 +2326,7 @@ export async function registerRoutes(
     res.json(sanitizeBarberForResponse({
       ...attachCompensationRule(barber, compensationRule),
       serviceIds,
-    }, includePrivateFields));
+    }, includePrivateFields, isAdminSession));
   });
 
   // === SERVICES ===
@@ -3183,7 +3190,7 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/admin/dashboard", requireAuth, async (req, res) => {
+  app.get("/api/admin/dashboard", requireAdmin, async (req, res) => {
     const appSession = getAppSession(req);
     const requestedDays = Number(req.query.days || 30);
     const rangeDays = Number.isFinite(requestedDays)
