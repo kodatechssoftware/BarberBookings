@@ -1381,6 +1381,7 @@ export default function Admin() {
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
   const [futureRemovalAppointments, setFutureRemovalAppointments] = useState<AdminAppointment[]>([]);
+  const [absenceConflict, setAbsenceConflict] = useState<{ barber: BarberListItem; appointments: AdminAppointment[] } | null>(null);
   const [barberReassignments, setBarberReassignments] = useState<Record<number, string>>({});
   const [isReassigningBarber, setIsReassigningBarber] = useState(false);
   const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
@@ -2139,9 +2140,12 @@ export default function Admin() {
     setBarberReassignments({});
   };
 
-  const getCompatibleReplacementBarbers = (appointment: AdminAppointment) => {
+  const getCompatibleReplacementBarbers = (
+    appointment: AdminAppointment,
+    sourceBarberId = barberRemovalCandidate?.id,
+  ) => {
     return (barbers || []).filter((barber) =>
-      barber.id !== barberRemovalCandidate?.id &&
+      barber.id !== sourceBarberId &&
       barber.isVisible !== false &&
       canBarberPerformService(barber, appointment.serviceId) &&
       canReassignAppointmentToBarber(appointment, barber.id)
@@ -2150,7 +2154,12 @@ export default function Admin() {
 
   const getReassignmentCandidateAppointments = () => {
     const appointmentsById = new Map<number, AdminAppointment>();
-    [...agendaAppointmentList, ...appointmentList, ...futureRemovalAppointments].forEach((appointment) => {
+    [
+      ...agendaAppointmentList,
+      ...appointmentList,
+      ...futureRemovalAppointments,
+      ...(absenceConflict?.appointments ?? []),
+    ].forEach((appointment) => {
       appointmentsById.set(appointment.id, appointment);
     });
     return Array.from(appointmentsById.values());
@@ -2218,6 +2227,12 @@ export default function Admin() {
     setIsReassigningBarber(false);
   };
 
+  const closeAbsenceConflictFlow = () => {
+    setAbsenceConflict(null);
+    setBarberReassignments({});
+    setIsReassigningBarber(false);
+  };
+
   const handleReassignFutureAppointmentsAndRemoveBarber = async () => {
     if (!barberRemovalCandidate) return;
 
@@ -2244,6 +2259,40 @@ export default function Admin() {
         title: "Marcações reatribuídas",
         description: "As marcações futuras foram passadas para outro barbeiro.",
       });
+    } catch (err: any) {
+      toast({
+        title: "Não foi possível reatribuir",
+        description: err.message || "Confirme os horários e tente novamente.",
+        variant: "destructive",
+      });
+      setIsReassigningBarber(false);
+    }
+  };
+
+  const handleReassignAbsenceConflictsAndCreateAbsence = async () => {
+    if (!absenceConflict) return;
+
+    const missingAppointment = absenceConflict.appointments.find((appointment) => !barberReassignments[appointment.id]);
+    if (missingAppointment) {
+      toast({
+        title: "Falta escolher barbeiro",
+        description: `Escolha um novo barbeiro para ${missingAppointment.customerName}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsReassigningBarber(true);
+    try {
+      for (const appointment of absenceConflict.appointments) {
+        const newBarberId = Number(barberReassignments[appointment.id]);
+        await apiRequest("PATCH", `/api/appointments/${appointment.id}`, { barberId: newBarberId });
+      }
+
+      setAbsenceConflict(null);
+      setBarberReassignments({});
+      setIsReassigningBarber(false);
+      await handleBlockTime({ skipBlacklistCheck: true });
     } catch (err: any) {
       toast({
         title: "Não foi possível reatribuir",
@@ -2679,6 +2728,24 @@ export default function Admin() {
       refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
+      if (
+        err?.code === "ABSENCE_HAS_EXISTING_APPOINTMENTS" &&
+        !blockData.isManualBooking &&
+        selectedBlockBarber &&
+        Array.isArray(err.affectedAppointments)
+      ) {
+        setAbsenceConflict({
+          barber: selectedBlockBarber,
+          appointments: err.affectedAppointments as AdminAppointment[],
+        });
+        setBarberReassignments({});
+        toast({
+          title: "Existem marcações neste período",
+          description: "Reatribua ou cancele essas marcações antes de guardar a ausência.",
+          variant: "destructive",
+        });
+        return;
+      }
       toast({ title: "Erro", description: err.message, variant: "destructive" });
     }
   };
@@ -2940,6 +3007,87 @@ export default function Admin() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={!!absenceConflict} onOpenChange={(open) => {
+          if (!open) closeAbsenceConflictFlow();
+        }}>
+          <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Resolver marcações de {absenceConflict?.barber.name}</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-5 pt-2">
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-4">
+                <p className="text-sm text-amber-100">
+                  Este período ainda tem {absenceConflict?.appointments.length ?? 0} marcação(ões). Escolha outro barbeiro antes de guardar a ausência.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {(absenceConflict?.appointments ?? []).map((appointment) => {
+                  const compatibleBarbers = getCompatibleReplacementBarbers(appointment, absenceConflict?.barber.id);
+                  return (
+                    <div key={appointment.id} className="grid gap-3 rounded-lg border border-white/10 bg-background/50 p-4 md:grid-cols-[1fr_260px] md:items-center">
+                      <div>
+                        <p className="font-semibold text-white">{appointment.customerName}</p>
+                        <p className="mt-1 text-sm text-gray-300">
+                          {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getServiceName(appointment.serviceId)}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">{getAppointmentContactLinks(appointment.customerPhone).displayPhone}</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs text-gray-400">Novo barbeiro</Label>
+                        <Select
+                          value={barberReassignments[appointment.id]}
+                          onValueChange={(value) => setBarberReassignments((current) => ({
+                            ...current,
+                            [appointment.id]: value,
+                          }))}
+                          disabled={compatibleBarbers.length === 0 || isReassigningBarber}
+                        >
+                          <SelectTrigger className="bg-background border-white/10">
+                            <SelectValue placeholder={compatibleBarbers.length === 0 ? "Sem opção compatível" : "Escolher"} />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card border-white/10 text-white">
+                            {compatibleBarbers.map((barber) => (
+                              <SelectItem key={barber.id} value={String(barber.id)}>
+                                {barber.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={closeAbsenceConflictFlow}
+                  disabled={isReassigningBarber}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  variant="gold"
+                  onClick={handleReassignAbsenceConflictsAndCreateAbsence}
+                  disabled={
+                    isReassigningBarber ||
+                    !absenceConflict ||
+                    absenceConflict.appointments.length === 0 ||
+                    absenceConflict.appointments.some((appointment) => !barberReassignments[appointment.id])
+                  }
+                >
+                  {isReassigningBarber ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {isReassigningBarber ? "A reatribuir..." : "Reatribuir e guardar ausência"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <AppointmentDetailsDialog
           appointment={selectedAppointmentDetails}
           open={!!selectedAppointmentDetails}
@@ -2948,6 +3096,9 @@ export default function Admin() {
           }}
           barbers={barbers}
           services={services}
+          appointments={[...agendaAppointmentList, ...appointmentList]}
+          availabilityRows={(allAvailabilityRows as AvailabilityRow[] | undefined) ?? []}
+          shopAvailabilityRows={(shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? []}
           toast={toast}
           getBarberName={getBarberName}
           getServiceName={getServiceName}

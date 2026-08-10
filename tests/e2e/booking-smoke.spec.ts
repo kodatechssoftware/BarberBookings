@@ -1204,6 +1204,106 @@ test.describe("admin navigation", () => {
     expect(removedSource === undefined || removedSource.isVisible === false).toBe(true);
   });
 
+  test("shows only available barbers when editing an appointment", async ({ page, request }) => {
+    await loginAdminRequest(request);
+
+    const timestamp = Date.now();
+    const appointmentStart = futureThursdayIso(5, 16, 0);
+    const appointmentDateKey = dateKeyFromIso(appointmentStart);
+    const createServiceResponse = await request.post("/api/services", {
+      data: {
+        name: `Editar Corte QA ${timestamp}`,
+        description: "Teste de disponibilidade no editor",
+        price: 1300,
+        duration: 60,
+      },
+    });
+    expect(createServiceResponse.ok(), await createServiceResponse.text()).toBe(true);
+    const service = await createServiceResponse.json();
+
+    const createBarber = async (name: string, color: string) => {
+      const response = await request.post("/api/barbers", {
+        data: {
+          name,
+          specialty: "Teste editor",
+          color,
+          isVisible: true,
+          serviceIds: [service.id],
+        },
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+
+    const sourceBarber = await createBarber(`Editar Origem ${timestamp}`, "#38BDF8");
+    const availableBarber = await createBarber(`Editar Livre ${timestamp}`, "#22C55E");
+    const busyBarber = await createBarber(`Editar Ocupado ${timestamp}`, "#F97316");
+    const customerName = `Cliente Editar ${timestamp}`;
+    const busyCustomerName = `Cliente Editar Ocupado ${timestamp}`;
+    let sourceAppointmentId: number | undefined;
+    let busyAppointmentId: number | undefined;
+
+    try {
+      const sourceAppointmentResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: sourceBarber.id,
+          serviceId: service.id,
+          startTime: appointmentStart,
+          name: customerName,
+          phone: "+351912697104",
+          isManualBooking: true,
+        },
+      });
+      expect(sourceAppointmentResponse.status(), await sourceAppointmentResponse.text()).toBe(201);
+
+      const busyAppointmentResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: busyBarber.id,
+          serviceId: service.id,
+          startTime: appointmentStart,
+          name: busyCustomerName,
+          phone: "+351912697105",
+          isManualBooking: true,
+        },
+      });
+      expect(busyAppointmentResponse.status(), await busyAppointmentResponse.text()).toBe(201);
+
+      const appointmentsResponse = await request.get(`/api/appointments?date=${appointmentDateKey}`);
+      expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+      const createdAppointments = await appointmentsResponse.json();
+      sourceAppointmentId = createdAppointments.find((appointment: any) => appointment.customerName === customerName)?.id;
+      busyAppointmentId = createdAppointments.find((appointment: any) => appointment.customerName === busyCustomerName)?.id;
+      expect(sourceAppointmentId).toBeTruthy();
+      expect(busyAppointmentId).toBeTruthy();
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await loginAdmin(page);
+      await page.getByRole("tab", { name: /Marca/ }).click();
+      await page.getByRole("button", { name: /Pr.ximas/ }).click();
+      await page.getByRole("button", { name: new RegExp(`Abrir detalhes da marca..o de ${customerName}`) }).click();
+
+      const detailsDialog = page.getByRole("dialog", { name: /Detalhes da marca/ });
+      await expect(detailsDialog).toBeVisible();
+      await detailsDialog.getByRole("button", { name: "Editar", exact: true }).click();
+
+      const editDialog = page.getByRole("dialog", { name: /Editar marca/ });
+      await expect(editDialog).toBeVisible();
+      await editDialog.getByRole("combobox").first().click();
+      await expect(page.getByRole("option", { name: sourceBarber.name })).toBeVisible();
+      await expect(page.getByRole("option", { name: availableBarber.name })).toBeVisible();
+      await expect(page.getByRole("option", { name: busyBarber.name })).toHaveCount(0);
+    } finally {
+      await Promise.all([
+        sourceAppointmentId
+          ? request.patch(`/api/appointments/${sourceAppointmentId}/status`, { data: { status: "cancelled" } })
+          : Promise.resolve(),
+        busyAppointmentId
+          ? request.patch(`/api/appointments/${busyAppointmentId}/status`, { data: { status: "cancelled" } })
+          : Promise.resolve(),
+      ]);
+    }
+  });
+
   test("waits for barber and service names before showing appointment rows", async ({ page, request }) => {
     await loginAdminRequest(request);
     const createServiceResponse = await request.post("/api/services", {
@@ -2208,11 +2308,15 @@ test.describe("booking rules", () => {
     expect(detailSheet).toBeTruthy();
     const headers = detailSheet!.getRow(1).values as unknown[];
     const customerCol = headers.indexOf("Cliente");
+    const phoneCol = headers.indexOf("Telemóvel");
+    const emailCol = headers.indexOf("Email");
     const statusCol = headers.indexOf("Estado");
     const paymentMethodCol = headers.indexOf("Método de pagamento");
     const realizedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
     const projectedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("receita prevista"));
     expect(customerCol).toBeGreaterThan(0);
+    expect(phoneCol).toBe(-1);
+    expect(emailCol).toBe(-1);
     expect(statusCol).toBeGreaterThan(0);
     expect(paymentMethodCol).toBeGreaterThan(0);
     expect(realizedCol).toBeGreaterThan(0);
@@ -3678,6 +3782,76 @@ test.describe("booking rules", () => {
     } finally {
       if (occupiedAppointmentId) {
         await request.patch(`/api/appointments/${occupiedAppointmentId}/status`, { data: { status: "cancelled" } });
+      }
+    }
+  });
+
+  test("rejects an absence that overlaps an existing customer appointment", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    expect(barbersResponse.ok(), await barbersResponse.text()).toBe(true);
+    expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
+    const weeksAhead = 150 + (Date.now() % 20);
+    const startTime = futureThursdayIso(weeksAhead, 16, 0);
+    const dateKey = dateKeyFromIso(startTime);
+    const customerName = `Cliente Ausencia Conflito QA ${Date.now()}`;
+    let appointmentId: number | undefined;
+
+    try {
+      const bookingResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime,
+          name: customerName,
+          phone: "+351912695737",
+          isManualBooking: true,
+        },
+      });
+      expect(bookingResponse.status(), await bookingResponse.text()).toBe(201);
+
+      const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+      expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+      const dayAppointments = await appointmentsResponse.json();
+      const createdAppointment = dayAppointments.find((appointment: any) =>
+        appointment.customerName === customerName,
+      );
+      appointmentId = createdAppointment?.id;
+      expect(appointmentId).toBeTruthy();
+
+      const absenceResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: null,
+          startTime,
+          startTimes: [startTime],
+          name: "AUSENCIA QA",
+          phone: "900000000",
+          isManualBooking: false,
+        },
+      });
+      expect(absenceResponse.status(), await absenceResponse.text()).toBe(409);
+      const absenceBody = await absenceResponse.json();
+      expect(absenceBody.code).toBe("ABSENCE_HAS_EXISTING_APPOINTMENTS");
+      expect(absenceBody.message).toMatch(/reatribua|cancele/i);
+      expect(absenceBody.affectedAppointments).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: appointmentId, customerName }),
+      ]));
+
+      const afterResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+      expect(afterResponse.ok(), await afterResponse.text()).toBe(true);
+      const afterAppointments = await afterResponse.json();
+      expect(afterAppointments.some((appointment: any) => appointment.customerName === "AUSENCIA QA")).toBe(false);
+    } finally {
+      if (appointmentId) {
+        await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
       }
     }
   });

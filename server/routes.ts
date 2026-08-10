@@ -1222,6 +1222,23 @@ function isOperationalAppointment(appointment: Appointment) {
   ].some((marker) => name.includes(marker)) && !name.startsWith("RECORRENTE:");
 }
 
+function getOverlappingBookedAppointments(
+  appointments: Appointment[],
+  barberId: number,
+  startTime: Date,
+  endTime: Date,
+  serviceDurations: Map<number, number>,
+) {
+  return appointments.filter((appointment) => {
+    if (appointment.barberId !== barberId) return false;
+    if (appointment.status !== "booked") return false;
+
+    const appointmentStart = toDate(appointment.startTime);
+    const appointmentEnd = getAppointmentEndTime(appointment, serviceDurations);
+    return startTime < appointmentEnd && endTime > appointmentStart;
+  });
+}
+
 function getAppointmentStatusLabel(status: Appointment["status"]) {
   return appointmentStatusLabels[status] || status;
 }
@@ -2655,6 +2672,33 @@ export async function registerRoutes(
         if (!existingAppointments) {
           existingAppointments = await storage.getAppointments(barberIdNumber, shopDateParts.dateKey);
           existingAppointmentsByDate.set(shopDateParts.dateKey, existingAppointments);
+        }
+
+        if (!isManualBooking) {
+          const affectedAppointments = getOverlappingBookedAppointments(
+            existingAppointments,
+            barberIdNumber,
+            currentStart,
+            currentEnd,
+            serviceDurations,
+          );
+          if (affectedAppointments.length > 0) {
+            return res.status(409).json({
+              code: "ABSENCE_HAS_EXISTING_APPOINTMENTS",
+              message: "Este barbeiro já tem marcações ou bloqueios neste período. Reatribua, cancele ou remova esses registos antes de criar a ausência.",
+              affectedAppointments: affectedAppointments.map((appointment) => ({
+                id: appointment.id,
+                barberId: appointment.barberId,
+                serviceId: appointment.serviceId,
+                startTime: appointment.startTime,
+                durationMinutes: appointment.durationMinutes,
+                status: appointment.status,
+                customerName: appointment.customerName,
+                customerPhone: appointment.customerPhone,
+                customerEmail: appointment.customerEmail,
+              })),
+            });
+          }
         }
 
         if (
@@ -4247,8 +4291,6 @@ export async function registerRoutes(
         "Fim",
         "Barbeiro",
         "Cliente",
-        "Telemóvel",
-        "Email",
         "Serviço",
         "Duração (min)",
         "Estado",
@@ -4301,8 +4343,6 @@ export async function registerRoutes(
             formatShopTime(endTime),
             barber?.name || "Barbeiro desconhecido",
             appointment.customerName,
-            appointment.customerPhone,
-            appointment.customerEmail || "",
             service?.name || "Serviço desconhecido",
             appointment.durationMinutes,
             getAppointmentStatusLabel(appointment.status),
@@ -4318,15 +4358,15 @@ export async function registerRoutes(
           ];
         }),
       );
-      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 18, 28, 28, 14, 22, 22, 18, 20, 20, 26, 14, 20, 22, 18], {
+      finishTableSheet(detailSheet, [14, 18, 10, 10, 24, 26, 28, 14, 22, 22, 18, 20, 20, 26, 14, 20, 22, 18], {
         1: dateFormat,
+        11: currencyFormat,
+        12: currencyFormat,
         13: currencyFormat,
-        14: currencyFormat,
-        15: currencyFormat,
-        17: percentFormat,
-        18: currencyFormat,
-        19: currencyFormat,
-        20: dateTimeFormat,
+        15: percentFormat,
+        16: currencyFormat,
+        17: currencyFormat,
+        18: dateTimeFormat,
       });
 
       const fileName = `Relatório_de_${formatCalendarDateKey(startDateKey, "-")}_a_${formatCalendarDateKey(endDateKey, "-")}.xlsx`;
