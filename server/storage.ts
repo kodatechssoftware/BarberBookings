@@ -13,10 +13,12 @@ import {
   customerNotes,
   auditLogs,
   barberCompensationRules,
+  businessExpenses,
   whatsappMessages,
   type Barber,
   type Service,
   type Appointment,
+  type AppointmentPaymentMethod,
   type AppointmentStatus,
   type Admin,
   type Blacklist,
@@ -27,6 +29,7 @@ import {
   type CustomerNote,
   type AuditLog,
   type BarberCompensationRule,
+  type BusinessExpense,
   type WhatsappMessage,
   type WhatsappMessageStatus,
   type CreateBarberRequest,
@@ -41,21 +44,74 @@ import {
   type CreateCustomerNoteRequest,
   type CreateAuditLogRequest,
   type CreateBarberCompensationRuleRequest,
+  type CreateBusinessExpenseRequest,
   type CreateWhatsappMessageRequest
 } from "@shared/schema";
-import { eq, and, gte, lte, sql, desc, type SQL } from "drizzle-orm";
-import { normalizeEmail, portugueseMobilePhonesMatch } from "@shared/customer-validation";
+import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
+import { normalizeEmail } from "@shared/customer-validation";
+import { supportedPhonesMatch } from "@shared/phone-countries";
 
 type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   cancelToken: string;
   durationMinutes: number;
   status?: AppointmentStatus;
+  paymentMethod?: AppointmentPaymentMethod;
   depositRequired?: boolean;
   depositReason?: string | null;
 };
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const appointmentConflictCode = "APPOINTMENT_CONFLICT";
+const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
+const shopDateTimePartsFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: SHOP_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function shopCalendarDateToInstant(year: number, month: number, day: number) {
+  const targetTimestamp = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+  let candidateTimestamp = targetTimestamp;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = Object.fromEntries(
+      shopDateTimePartsFormatter
+        .formatToParts(new Date(candidateTimestamp))
+        .map((part) => [part.type, part.value]),
+    );
+    const representedTimestamp = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const difference = representedTimestamp - targetTimestamp;
+    if (difference === 0) break;
+    candidateTimestamp -= difference;
+  }
+
+  return new Date(candidateTimestamp);
+}
+
+export function getShopDateBounds(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const nextDate = new Date(Date.UTC(year, month - 1, day + 1));
+  return {
+    start: shopCalendarDateToInstant(year, month, day),
+    endExclusive: shopCalendarDateToInstant(
+      nextDate.getUTCFullYear(),
+      nextDate.getUTCMonth() + 1,
+      nextDate.getUTCDate(),
+    ),
+  };
+}
 
 export class AppointmentConflictError extends Error {
   code = appointmentConflictCode;
@@ -122,8 +178,23 @@ export interface IStorage {
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
-  updateAppointment(id: number, appointment: Partial<Omit<Appointment, "id">>): Promise<Appointment | undefined>;
-  updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined>;
+  createAppointments(appointments: CreateAppointmentStorageRequest[]): Promise<Appointment[]>;
+  updateAppointment(
+    id: number,
+    appointment: Partial<Omit<Appointment, "id">>,
+    expectedStatus?: AppointmentStatus,
+  ): Promise<Appointment | undefined>;
+  updateAppointmentStatus(
+    id: number,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined>;
+  updateAppointmentStatusIfCurrent(
+    id: number,
+    currentStatus: AppointmentStatus,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined>;
   
   // Admins
   getAdminByUsername(username: string): Promise<Admin | undefined>;
@@ -147,8 +218,11 @@ export interface IStorage {
 
   // Barber invites
   createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite>;
+  createBarberInviteReplacingActive(invite: CreateBarberInviteRequest): Promise<BarberInvite>;
   getBarberInviteByToken(token: string): Promise<BarberInvite | undefined>;
   markBarberInviteUsed(id: number): Promise<BarberInvite | undefined>;
+  invalidateBarberInvites(barberId: number): Promise<void>;
+  acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined>;
 
   // Customer notes
   getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
@@ -161,6 +235,16 @@ export interface IStorage {
   // Barber compensation
   getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]>;
   createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule>;
+
+  // Business expenses
+  getBusinessExpenses(filters?: {
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  }): Promise<BusinessExpense[]>;
+  createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense>;
+  updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined>;
+  deleteBusinessExpense(id: number): Promise<void>;
 
   // WhatsApp deliveries
   createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage>;
@@ -305,6 +389,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteService(id: number): Promise<void> {
+    const [futureAppointment] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(and(
+        eq(appointments.serviceId, id),
+        eq(appointments.status, "booked"),
+        gte(appointments.startTime, new Date()),
+      ))
+      .limit(1);
+
+    if (futureAppointment) {
+      const error = new Error("Service has future appointments") as Error & { code?: string };
+      error.code = "SERVICE_HAS_FUTURE_APPOINTMENTS";
+      throw error;
+    }
+
     await db.delete(barberServices).where(eq(barberServices.serviceId, id));
     // Set serviceId to null for all appointments linked to this service
     await db.update(appointments).set({ serviceId: null }).where(eq(appointments.serviceId, id));
@@ -319,11 +419,8 @@ export class DatabaseStorage implements IStorage {
     }
     
     if (date) {
-      const start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(23, 59, 59, 999);
-      conditions.push(gte(appointments.startTime, start), lte(appointments.startTime, end));
+      const { start, endExclusive } = getShopDateBounds(date);
+      conditions.push(gte(appointments.startTime, start), lt(appointments.startTime, endExclusive));
     }
 
     if (conditions.length > 0) {
@@ -344,15 +441,13 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (startDate) {
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
+      const { start } = getShopDateBounds(startDate);
       conditions.push(gte(appointments.startTime, start));
     }
 
     if (endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      conditions.push(lte(appointments.startTime, end));
+      const { endExclusive } = getShopDateBounds(endDate);
+      conditions.push(lt(appointments.startTime, endExclusive));
     }
 
     if (conditions.length === 0) {
@@ -377,13 +472,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
+    const [createdAppointment] = await this.createAppointments([appointment]);
+    return createdAppointment;
+  }
+
+  async createAppointments(appointmentInputs: CreateAppointmentStorageRequest[]): Promise<Appointment[]> {
+    if (appointmentInputs.length === 0) return [];
+
     try {
       return await db.transaction(async (tx) => {
-        await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
-        await this.assertNoAppointmentConflict(tx, appointment);
+        const lockTargets = new Map<string, CreateAppointmentStorageRequest>();
+        for (const appointment of appointmentInputs) {
+          const dayKey = getAppointmentLockDayKey(toAppointmentDate(appointment.startTime));
+          lockTargets.set(`${appointment.barberId}:${dayKey}`, appointment);
+        }
 
-        const [newAppointment] = await tx.insert(appointments).values(appointment).returning();
-        return newAppointment;
+        const sortedLockTargets = Array.from(lockTargets.values()).sort((left, right) => {
+          if (left.barberId !== right.barberId) return left.barberId - right.barberId;
+          return toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime();
+        });
+        for (const appointment of sortedLockTargets) {
+          await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
+        }
+
+        const createdAppointments: Appointment[] = [];
+        for (const appointment of appointmentInputs) {
+          await this.assertNoAppointmentConflict(tx, appointment);
+          const [newAppointment] = await tx.insert(appointments).values(appointment).returning();
+          createdAppointments.push(newAppointment);
+        }
+
+        return createdAppointments;
       });
     } catch (error) {
       if (isAppointmentConflictError(error)) {
@@ -396,13 +515,18 @@ export class DatabaseStorage implements IStorage {
   async updateAppointment(
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
+    expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined> {
     try {
       return await db.transaction(async (tx) => {
+        const appointmentConditions = [eq(appointments.id, id)];
+        if (expectedStatus) {
+          appointmentConditions.push(eq(appointments.status, expectedStatus));
+        }
         const [current] = await tx
           .select()
           .from(appointments)
-          .where(eq(appointments.id, id))
+          .where(and(...appointmentConditions))
           .limit(1);
 
         if (!current) return undefined;
@@ -420,7 +544,7 @@ export class DatabaseStorage implements IStorage {
         const [updated] = await tx
           .update(appointments)
           .set(appointment)
-          .where(eq(appointments.id, id))
+          .where(and(...appointmentConditions))
           .returning();
         return updated;
       });
@@ -432,16 +556,52 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined> {
-    const updateData: { status: AppointmentStatus; cancelledAt?: Date | null } = { status };
+  async updateAppointmentStatus(
+    id: number,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined> {
+    const updateData: {
+      status: AppointmentStatus;
+      cancelledAt?: Date | null;
+      paymentMethod?: AppointmentPaymentMethod;
+    } = { status };
     if (status === "cancelled" || status === "late_cancelled") {
       updateData.cancelledAt = new Date();
     }
     if (status === "booked" || status === "completed") {
       updateData.cancelledAt = null;
     }
+    updateData.paymentMethod = status === "completed" ? (paymentMethod || "pending") : "pending";
 
     return this.updateAppointment(id, updateData);
+  }
+
+  async updateAppointmentStatusIfCurrent(
+    id: number,
+    currentStatus: AppointmentStatus,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined> {
+    const updateData: {
+      status: AppointmentStatus;
+      cancelledAt?: Date | null;
+      paymentMethod?: AppointmentPaymentMethod;
+    } = { status };
+    if (status === "cancelled" || status === "late_cancelled") {
+      updateData.cancelledAt = new Date();
+    }
+    if (status === "booked" || status === "completed") {
+      updateData.cancelledAt = null;
+    }
+    updateData.paymentMethod = status === "completed" ? (paymentMethod || "pending") : "pending";
+
+    const [updated] = await db
+      .update(appointments)
+      .set(updateData)
+      .where(and(eq(appointments.id, id), eq(appointments.status, currentStatus)))
+      .returning();
+    return updated;
   }
 
   async getAdminByUsername(username: string): Promise<Admin | undefined> {
@@ -474,7 +634,7 @@ export class DatabaseStorage implements IStorage {
 
     const entries = await db.select().from(blacklist);
     return entries.some((entry) =>
-      (hasPhone && portugueseMobilePhonesMatch(entry.phone, phone)) ||
+      (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }
@@ -487,13 +647,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async replaceShopAvailability(rows: CreateShopAvailabilityRequest[]): Promise<ShopAvailability[]> {
-    await db.delete(shopAvailability);
+    return await db.transaction(async (tx) => {
+      await tx.delete(shopAvailability);
 
-    if (rows.length === 0) {
-      return [];
-    }
+      if (rows.length === 0) {
+        return [];
+      }
 
-    return await db.insert(shopAvailability).values(rows).returning();
+      return await tx.insert(shopAvailability).values(rows).returning();
+    });
   }
 
   async getBarberAvailability(barberId: number): Promise<BarberAvailability[]> {
@@ -515,16 +677,18 @@ export class DatabaseStorage implements IStorage {
     barberId: number,
     rows: Omit<CreateBarberAvailabilityRequest, "barberId">[],
   ): Promise<BarberAvailability[]> {
-    await db.delete(barberAvailability).where(eq(barberAvailability.barberId, barberId));
+    return await db.transaction(async (tx) => {
+      await tx.delete(barberAvailability).where(eq(barberAvailability.barberId, barberId));
 
-    if (rows.length === 0) {
-      return [];
-    }
+      if (rows.length === 0) {
+        return [];
+      }
 
-    return await db
-      .insert(barberAvailability)
-      .values(rows.map((row) => ({ ...row, barberId })))
-      .returning();
+      return await tx
+        .insert(barberAvailability)
+        .values(rows.map((row) => ({ ...row, barberId })))
+        .returning();
+    });
   }
 
   async getAllBarberServices(): Promise<BarberService[]> {
@@ -545,22 +709,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   async replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]> {
-    await db.delete(barberServices).where(eq(barberServices.barberId, barberId));
+    return await db.transaction(async (tx) => {
+      await tx.delete(barberServices).where(eq(barberServices.barberId, barberId));
 
-    const uniqueServiceIds = Array.from(new Set(serviceIds));
-    if (uniqueServiceIds.length === 0) {
-      return [];
-    }
+      const uniqueServiceIds = Array.from(new Set(serviceIds));
+      if (uniqueServiceIds.length === 0) {
+        return [];
+      }
 
-    return await db
-      .insert(barberServices)
-      .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId } satisfies CreateBarberServiceRequest)))
-      .returning();
+      return await tx
+        .insert(barberServices)
+        .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId } satisfies CreateBarberServiceRequest)))
+        .returning();
+    });
   }
 
   async createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
     const [newInvite] = await db.insert(barberInvites).values(invite).returning();
     return newInvite;
+  }
+
+  async createBarberInviteReplacingActive(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${invite.barberId}, -1)`);
+      await tx
+        .update(barberInvites)
+        .set({ usedAt: new Date() })
+        .where(and(eq(barberInvites.barberId, invite.barberId), isNull(barberInvites.usedAt)));
+      const [newInvite] = await tx.insert(barberInvites).values(invite).returning();
+      return newInvite;
+    });
   }
 
   async getBarberInviteByToken(token: string): Promise<BarberInvite | undefined> {
@@ -575,6 +753,40 @@ export class DatabaseStorage implements IStorage {
       .where(eq(barberInvites.id, id))
       .returning();
     return updated;
+  }
+
+  async invalidateBarberInvites(barberId: number): Promise<void> {
+    await db
+      .update(barberInvites)
+      .set({ usedAt: new Date() })
+      .where(and(eq(barberInvites.barberId, barberId), isNull(barberInvites.usedAt)));
+  }
+
+  async acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [claimedInvite] = await tx
+        .update(barberInvites)
+        .set({ usedAt: now })
+        .where(and(
+          eq(barberInvites.id, inviteId),
+          eq(barberInvites.barberId, barberId),
+          isNull(barberInvites.usedAt),
+          gt(barberInvites.expiresAt, now),
+        ))
+        .returning();
+      if (!claimedInvite) return undefined;
+
+      const [updatedBarber] = await tx
+        .update(barbers)
+        .set({ password })
+        .where(eq(barbers.id, barberId))
+        .returning();
+      if (!updatedBarber) {
+        throw new Error("Barber not found while accepting invite");
+      }
+      return updatedBarber;
+    });
   }
 
   async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
@@ -640,6 +852,59 @@ export class DatabaseStorage implements IStorage {
   async createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule> {
     const [created] = await db.insert(barberCompensationRules).values(rule).returning();
     return created;
+  }
+
+  async getBusinessExpenses(filters: {
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  } = {}): Promise<BusinessExpense[]> {
+    const conditions: SQL[] = [];
+
+    if (filters.startDate) {
+      const { start } = getShopDateBounds(filters.startDate);
+      conditions.push(gte(businessExpenses.expenseDate, start));
+    }
+
+    if (filters.endDate) {
+      const { endExclusive } = getShopDateBounds(filters.endDate);
+      conditions.push(lt(businessExpenses.expenseDate, endExclusive));
+    }
+
+    if (filters.category && filters.category !== "all") {
+      conditions.push(eq(businessExpenses.category, filters.category as any));
+    }
+
+    const query = db
+      .select()
+      .from(businessExpenses)
+      .orderBy(desc(businessExpenses.expenseDate), desc(businessExpenses.id));
+
+    if (conditions.length === 0) return await query;
+
+    return await db
+      .select()
+      .from(businessExpenses)
+      .where(and(...conditions))
+      .orderBy(desc(businessExpenses.expenseDate), desc(businessExpenses.id));
+  }
+
+  async createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense> {
+    const [created] = await db.insert(businessExpenses).values(expense).returning();
+    return created;
+  }
+
+  async updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined> {
+    const [updated] = await db
+      .update(businessExpenses)
+      .set({ ...expense, updatedAt: new Date() })
+      .where(eq(businessExpenses.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteBusinessExpense(id: number): Promise<void> {
+    await db.delete(businessExpenses).where(eq(businessExpenses.id, id));
   }
 
   async createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage> {
@@ -723,6 +988,7 @@ export class MemoryStorage implements IStorage {
   private customerNotes: CustomerNote[] = [];
   private auditLogs: AuditLog[] = [];
   private barberCompensationRules: BarberCompensationRule[] = [];
+  private businessExpenses: BusinessExpense[] = [];
   private whatsappMessages: WhatsappMessage[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
@@ -739,6 +1005,7 @@ export class MemoryStorage implements IStorage {
     auditLog: 1,
     verificationCode: 1,
     barberCompensationRule: 1,
+    businessExpense: 1,
     whatsappMessage: 1,
   };
 
@@ -784,6 +1051,14 @@ export class MemoryStorage implements IStorage {
   }
 
   async createBarber(barber: CreateBarberRequest): Promise<Barber> {
+    if (
+      barber.email &&
+      this.barbers.some((existing) => existing.email?.toLowerCase() === barber.email?.toLowerCase())
+    ) {
+      const error = new Error("Duplicate barber email") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
     const newBarber: Barber = {
       id: this.nextIds.barber++,
       name: barber.name,
@@ -802,6 +1077,16 @@ export class MemoryStorage implements IStorage {
   async updateBarber(id: number, barber: Partial<CreateBarberRequest>): Promise<Barber | undefined> {
     const index = this.barbers.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
+    if (
+      barber.email &&
+      this.barbers.some((existing) =>
+        existing.id !== id && existing.email?.toLowerCase() === barber.email?.toLowerCase(),
+      )
+    ) {
+      const error = new Error("Duplicate barber email") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
     this.barbers[index] = { ...this.barbers[index], ...barber };
     return this.barbers[index];
   }
@@ -859,6 +1144,17 @@ export class MemoryStorage implements IStorage {
   }
 
   async deleteService(id: number): Promise<void> {
+    const now = new Date();
+    if (this.appointments.some((appointment) =>
+      appointment.serviceId === id &&
+      shouldProtectAppointment(appointment.status) &&
+      new Date(appointment.startTime) >= now
+    )) {
+      const error = new Error("Service has future appointments") as Error & { code?: string };
+      error.code = "SERVICE_HAS_FUTURE_APPOINTMENTS";
+      throw error;
+    }
+
     this.appointments = this.appointments.map((appointment) =>
       appointment.serviceId === id ? { ...appointment, serviceId: null } : appointment,
     );
@@ -867,32 +1163,27 @@ export class MemoryStorage implements IStorage {
   }
 
   async getAppointments(barberId?: number, date?: string): Promise<Appointment[]> {
-    const start = date ? new Date(date) : null;
-    if (start) start.setHours(0, 0, 0, 0);
-    const end = start ? new Date(start) : null;
-    if (end) end.setHours(23, 59, 59, 999);
+    const bounds = date ? getShopDateBounds(date) : null;
 
     return this.appointments
       .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
       .filter((appointment) => {
-        if (!start || !end) return true;
+        if (!bounds) return true;
         const appointmentDate = new Date(appointment.startTime);
-        return appointmentDate >= start && appointmentDate <= end;
+        return appointmentDate >= bounds.start && appointmentDate < bounds.endExclusive;
       })
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }
 
   async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]> {
-    const start = startDate ? new Date(startDate) : null;
-    if (start) start.setHours(0, 0, 0, 0);
-    const end = endDate ? new Date(endDate) : null;
-    if (end) end.setHours(23, 59, 59, 999);
+    const start = startDate ? getShopDateBounds(startDate).start : null;
+    const endExclusive = endDate ? getShopDateBounds(endDate).endExclusive : null;
 
     return this.appointments
       .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
       .filter((appointment) => {
         const appointmentDate = new Date(appointment.startTime);
-        return (!start || appointmentDate >= start) && (!end || appointmentDate <= end);
+        return (!start || appointmentDate >= start) && (!endExclusive || appointmentDate < endExclusive);
       })
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }
@@ -906,41 +1197,71 @@ export class MemoryStorage implements IStorage {
   }
 
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
-    const newAppointment: Appointment = {
-      id: this.nextIds.appointment++,
-      barberId: appointment.barberId,
-      serviceId: appointment.serviceId ?? null,
-      startTime: appointment.startTime,
-      customerName: appointment.customerName,
-      customerEmail: appointment.customerEmail ?? null,
-      customerPhone: appointment.customerPhone,
-      durationMinutes: appointment.durationMinutes,
-      status: appointment.status ?? "booked",
-      cancelToken: appointment.cancelToken,
-      cancelledAt: null,
-      depositRequired: appointment.depositRequired ?? false,
-      depositReason: appointment.depositReason ?? null,
-      createdAt: new Date(),
-    };
-    this.assertNoAppointmentConflict(newAppointment);
-    this.appointments.push(newAppointment);
-    return newAppointment;
+    const [createdAppointment] = await this.createAppointments([appointment]);
+    return createdAppointment;
+  }
+
+  async createAppointments(appointmentInputs: CreateAppointmentStorageRequest[]): Promise<Appointment[]> {
+    if (appointmentInputs.length === 0) return [];
+
+    const originalLength = this.appointments.length;
+    const originalNextId = this.nextIds.appointment;
+    const createdAppointments: Appointment[] = [];
+
+    try {
+      for (const appointment of appointmentInputs) {
+        const newAppointment: Appointment = {
+          id: this.nextIds.appointment++,
+          barberId: appointment.barberId,
+          serviceId: appointment.serviceId ?? null,
+          startTime: appointment.startTime,
+          customerName: appointment.customerName,
+          customerEmail: appointment.customerEmail ?? null,
+          customerPhone: appointment.customerPhone,
+          durationMinutes: appointment.durationMinutes,
+          status: appointment.status ?? "booked",
+          paymentMethod: appointment.paymentMethod ?? "pending",
+          cancelToken: appointment.cancelToken,
+          cancelledAt: null,
+          depositRequired: appointment.depositRequired ?? false,
+          depositReason: appointment.depositReason ?? null,
+          createdAt: new Date(),
+        };
+        this.assertNoAppointmentConflict(newAppointment);
+        this.appointments.push(newAppointment);
+        createdAppointments.push(newAppointment);
+      }
+      return createdAppointments;
+    } catch (error) {
+      this.appointments.splice(originalLength);
+      this.nextIds.appointment = originalNextId;
+      throw error;
+    }
   }
 
   async updateAppointment(
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
+    expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
+    if (expectedStatus && this.appointments[index].status !== expectedStatus) return undefined;
     const updatedAppointment = { ...this.appointments[index], ...appointment };
     this.assertNoAppointmentConflict(updatedAppointment, id);
     this.appointments[index] = updatedAppointment;
     return this.appointments[index];
   }
 
-  async updateAppointmentStatus(id: number, status: AppointmentStatus): Promise<Appointment | undefined> {
-    const patch: Partial<Omit<Appointment, "id">> = { status };
+  async updateAppointmentStatus(
+    id: number,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined> {
+    const patch: Partial<Omit<Appointment, "id">> = {
+      status,
+      paymentMethod: status === "completed" ? (paymentMethod || "pending") : "pending",
+    };
     if (status === "cancelled" || status === "late_cancelled") {
       patch.cancelledAt = new Date();
     }
@@ -950,11 +1271,27 @@ export class MemoryStorage implements IStorage {
     return this.updateAppointment(id, patch);
   }
 
+  async updateAppointmentStatusIfCurrent(
+    id: number,
+    currentStatus: AppointmentStatus,
+    status: AppointmentStatus,
+    paymentMethod?: AppointmentPaymentMethod,
+  ): Promise<Appointment | undefined> {
+    const current = this.appointments.find((appointment) => appointment.id === id);
+    if (!current || current.status !== currentStatus) return undefined;
+    return this.updateAppointmentStatus(id, status, paymentMethod);
+  }
+
   async getAdminByUsername(username: string): Promise<Admin | undefined> {
     return this.admins.find((admin) => admin.username === username);
   }
 
   async createAdmin(admin: CreateAdminRequest): Promise<Admin> {
+    if (this.admins.some((existing) => existing.username.toLowerCase() === admin.username.toLowerCase())) {
+      const error = new Error("Duplicate admin username") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
     const newAdmin: Admin = {
       id: this.nextIds.admin++,
       username: admin.username,
@@ -993,7 +1330,7 @@ export class MemoryStorage implements IStorage {
     if (!normalizedEmail && !hasPhone) return false;
 
     return this.blacklist.some((entry) =>
-      (hasPhone && portugueseMobilePhonesMatch(entry.phone, phone)) ||
+      (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
     );
   }
@@ -1079,6 +1416,11 @@ export class MemoryStorage implements IStorage {
     return newInvite;
   }
 
+  async createBarberInviteReplacingActive(invite: CreateBarberInviteRequest): Promise<BarberInvite> {
+    await this.invalidateBarberInvites(invite.barberId);
+    return this.createBarberInvite(invite);
+  }
+
   async getBarberInviteByToken(token: string): Promise<BarberInvite | undefined> {
     return this.barberInvites.find((invite) => invite.token === token);
   }
@@ -1088,6 +1430,28 @@ export class MemoryStorage implements IStorage {
     if (index === -1) return undefined;
     this.barberInvites[index] = { ...this.barberInvites[index], usedAt: new Date() };
     return this.barberInvites[index];
+  }
+
+  async invalidateBarberInvites(barberId: number): Promise<void> {
+    const now = new Date();
+    this.barberInvites = this.barberInvites.map((invite) =>
+      invite.barberId === barberId && !invite.usedAt ? { ...invite, usedAt: now } : invite,
+    );
+  }
+
+  async acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined> {
+    const inviteIndex = this.barberInvites.findIndex((invite) =>
+      invite.id === inviteId &&
+      invite.barberId === barberId &&
+      !invite.usedAt &&
+      invite.expiresAt > new Date(),
+    );
+    const barberIndex = this.barbers.findIndex((barber) => barber.id === barberId);
+    if (inviteIndex === -1 || barberIndex === -1) return undefined;
+
+    this.barberInvites[inviteIndex] = { ...this.barberInvites[inviteIndex], usedAt: new Date() };
+    this.barbers[barberIndex] = { ...this.barbers[barberIndex], password };
+    return this.barbers[barberIndex];
   }
 
   async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
@@ -1171,6 +1535,59 @@ export class MemoryStorage implements IStorage {
     };
     this.barberCompensationRules.push(created);
     return created;
+  }
+
+  async getBusinessExpenses(filters: {
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  } = {}): Promise<BusinessExpense[]> {
+    const start = filters.startDate ? getShopDateBounds(filters.startDate).start : undefined;
+    const endExclusive = filters.endDate ? getShopDateBounds(filters.endDate).endExclusive : undefined;
+
+    return this.businessExpenses
+      .filter((expense) => {
+        const expenseDate = new Date(expense.expenseDate);
+        if (start && expenseDate < start) return false;
+        if (endExclusive && expenseDate >= endExclusive) return false;
+        if (filters.category && filters.category !== "all" && expense.category !== filters.category) return false;
+        return true;
+      })
+      .sort((a, b) =>
+        new Date(b.expenseDate).getTime() - new Date(a.expenseDate).getTime() || b.id - a.id,
+      );
+  }
+
+  async createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense> {
+    const now = new Date();
+    const created: BusinessExpense = {
+      id: this.nextIds.businessExpense++,
+      category: expense.category,
+      description: expense.description,
+      amountCents: expense.amountCents,
+      expenseDate: expense.expenseDate,
+      recurrence: expense.recurrence ?? "once",
+      notes: expense.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.businessExpenses.push(created);
+    return created;
+  }
+
+  async updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined> {
+    const index = this.businessExpenses.findIndex((item) => item.id === id);
+    if (index === -1) return undefined;
+    this.businessExpenses[index] = {
+      ...this.businessExpenses[index],
+      ...expense,
+      updatedAt: new Date(),
+    };
+    return this.businessExpenses[index];
+  }
+
+  async deleteBusinessExpense(id: number): Promise<void> {
+    this.businessExpenses = this.businessExpenses.filter((expense) => expense.id !== id);
   }
 
   async createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage> {

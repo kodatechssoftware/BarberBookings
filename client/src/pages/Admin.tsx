@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
-import { type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
+import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
-import { addDays, format, parseISO, startOfToday, startOfWeek, subDays } from "date-fns";
+import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
@@ -37,7 +37,7 @@ import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialo
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { apiFetch } from "@/lib/api";
+import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
 import {
   canBarberPerformService,
   getEffectivePeriodsForBarber,
@@ -49,11 +49,20 @@ import {
 import {
   emailValidationMessage,
   isValidOptionalEmail,
-  isValidPortugueseMobile,
   normalizeEmail,
-  normalizePortuguesePhone,
-  phoneValidationMessage,
 } from "@shared/customer-validation";
+import {
+  PHONE_COUNTRIES,
+  formatPhoneForDisplay,
+  formatPhoneInput,
+  getPhoneCountry,
+  normalizeSupportedPhone,
+  splitStoredPhone,
+  supportedPhoneValidationMessage,
+  supportedPhonesMatch,
+  toStoredPhone,
+  type PhoneCountryCode,
+} from "@shared/phone-countries";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
@@ -81,13 +90,7 @@ type AdminAppointment = {
 };
 
 function normalizeManualBookingPhoneForSubmit(phone: string) {
-  const normalizedPhone = normalizePortuguesePhone(phone);
-
-  if (/^9\d{8}$/.test(normalizedPhone)) {
-    return `+351${normalizedPhone}`;
-  }
-
-  return phone.trim() || "900000000";
+  return normalizeSupportedPhone(phone) || phone.trim() || "900000000";
 }
 
 type FutureBlacklistAppointment = {
@@ -181,6 +184,72 @@ type AuditLogItem = {
   createdAt: string;
 };
 
+type BusinessExpenseCategory =
+  | "rent"
+  | "utilities"
+  | "internet"
+  | "materials"
+  | "equipment"
+  | "marketing"
+  | "accounting"
+  | "staff"
+  | "other";
+type BusinessExpenseRecurrence = "once" | "weekly" | "monthly";
+type BusinessExpense = {
+  id: number;
+  category: BusinessExpenseCategory;
+  description: string;
+  amountCents: number;
+  expenseDate: string;
+  recurrence: BusinessExpenseRecurrence;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+type BusinessExpenseForm = {
+  category: BusinessExpenseCategory;
+  description: string;
+  amount: string;
+  expenseDate: Date;
+  recurrence: BusinessExpenseRecurrence;
+  notes: string;
+};
+
+const businessExpenseCategories: Array<{ value: BusinessExpenseCategory; label: string; help: string }> = [
+  { value: "rent", label: "Renda", help: "Valor fixo do espaco." },
+  { value: "utilities", label: "Agua / luz", help: "Contas de funcionamento." },
+  { value: "internet", label: "Internet / telefone", help: "Comunicações da loja." },
+  { value: "materials", label: "Material e produtos", help: "Produtos, laminas, toalhas e consumiveis." },
+  { value: "equipment", label: "Equipamentos", help: "Maquinas, cadeiras e reparacoes." },
+  { value: "marketing", label: "Marketing", help: "Publicidade e conteudo." },
+  { value: "accounting", label: "Contabilidade", help: "Apoio contabilistico e administrativo." },
+  { value: "staff", label: "Pagamentos de equipa", help: "Acertos manuais fora das regras automaticas." },
+  { value: "other", label: "Outros", help: "Qualquer despesa pontual." },
+];
+
+const businessExpenseRecurrences: Array<{ value: BusinessExpenseRecurrence; label: string }> = [
+  { value: "once", label: "Unica" },
+  { value: "weekly", label: "Semanal" },
+  { value: "monthly", label: "Mensal" },
+];
+
+const defaultBusinessExpenseForm: BusinessExpenseForm = {
+  category: "materials",
+  description: "",
+  amount: "",
+  expenseDate: startOfToday(),
+  recurrence: "once",
+  notes: "",
+};
+
+function getBusinessExpenseCategoryLabel(category: BusinessExpenseCategory) {
+  return businessExpenseCategories.find((item) => item.value === category)?.label || category;
+}
+
+function getBusinessExpenseRecurrenceLabel(recurrence: BusinessExpenseRecurrence) {
+  return businessExpenseRecurrences.find((item) => item.value === recurrence)?.label || recurrence;
+}
+
 const currencyFormatter = new Intl.NumberFormat("pt-PT", {
   style: "currency",
   currency: "EUR",
@@ -245,9 +314,11 @@ function hasAdminAppointmentConflict({
   const start = new Date(date);
   start.setHours(hours, minutes, 0, 0);
   const end = new Date(start.getTime() + duration * 60000);
+  const isHistoricalTime = end.getTime() <= Date.now();
 
   return appointments.some((appointment) => {
-    if (appointment.barberId !== barberId || appointment.status !== "booked") return false;
+    if (appointment.barberId !== barberId) return false;
+    if (appointment.status !== "booked" && !(isHistoricalTime && appointment.status === "completed")) return false;
 
     const appointmentStart = parseISO(appointment.startTime);
     const appointmentDuration = getAdminAppointmentDurationMinutes(appointment, services);
@@ -1288,6 +1359,7 @@ function validateAvailabilityForm(form: AvailabilityForm) {
 
 export default function Admin() {
   const [user, setUser] = useState<AdminUser | null>(null);
+  const sessionExpiryHandledRef = useRef(false);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
@@ -1305,6 +1377,7 @@ export default function Admin() {
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [barberCompensationDrafts, setBarberCompensationDrafts] = useState<Record<number, BarberCompensationFormData>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
+  const [editingBarberId, setEditingBarberId] = useState<number | null>(null);
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
   const [futureRemovalAppointments, setFutureRemovalAppointments] = useState<AdminAppointment[]>([]);
@@ -1312,6 +1385,7 @@ export default function Admin() {
   const [barberReassignments, setBarberReassignments] = useState<Record<number, string>>({});
   const [isReassigningBarber, setIsReassigningBarber] = useState(false);
   const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
+  const [editingServiceId, setEditingServiceId] = useState<number | null>(null);
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
@@ -1320,10 +1394,18 @@ export default function Admin() {
   const [appointmentViewMode, setAppointmentViewMode] = useState<AppointmentViewMode>("day");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportDates, setExportDates] = useState({
+    start: subDays(startOfToday(), 30),
+    end: startOfToday(),
+    barberId: "all"
+  });
+  const [expenseForm, setExpenseForm] = useState<BusinessExpenseForm>(() => ({
+    ...defaultBusinessExpenseForm,
+    expenseDate: startOfToday(),
+  }));
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
   const businessDashboardRef = useRef<HTMLDivElement>(null);
-  const [weeklyStartDate, setWeeklyStartDate] = useState<Date>(() =>
-    startOfWeek(startOfToday(), { weekStartsOn: 1 }),
-  );
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
@@ -1387,6 +1469,22 @@ export default function Admin() {
       return res.json();
     },
   });
+  const expensesUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      startDate: format(exportDates.start, "yyyy-MM-dd"),
+      endDate: format(exportDates.end, "yyyy-MM-dd"),
+      category: "all",
+    });
+    return `/api/admin/expenses?${params.toString()}`;
+  }, [exportDates.start, exportDates.end]);
+  const { data: businessExpenses = [], isLoading: isLoadingExpenses } = useQuery<BusinessExpense[]>({
+    queryKey: [expensesUrl],
+    enabled: user?.authorized === true && user.role === "admin",
+  });
+  const businessExpensesTotalCents = useMemo(
+    () => businessExpenses.reduce((total, expense) => total + expense.amountCents, 0),
+    [businessExpenses],
+  );
   const keepBusinessDashboardInView = () => {
     window.requestAnimationFrame(() => {
       businessDashboardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1416,30 +1514,23 @@ export default function Admin() {
       : appointmentList.filter((appointment) => appointment.status === selectedStatusFilter),
     [appointmentList, selectedStatusFilter],
   );
-  const weeklyAppointmentList = useMemo(() => {
+  const agendaAppointmentList = useMemo(() => {
     const list = Array.isArray(weeklyAppointments) ? (weeklyAppointments as AdminAppointment[]) : [];
-    const weekEnd = addDays(weeklyStartDate, 7);
-
-    return list
-      .filter((appointment) => {
-        const appointmentDate = parseISO(appointment.startTime);
-        return appointmentDate >= weeklyStartDate && appointmentDate < weekEnd;
-      })
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-  }, [weeklyAppointments, weeklyStartDate]);
-  const filteredWeeklyAppointmentList = useMemo(() => {
-    return weeklyAppointmentList.filter((appointment) => {
+    return [...list].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  }, [weeklyAppointments]);
+  const filteredAgendaAppointmentList = useMemo(() => {
+    return agendaAppointmentList.filter((appointment) => {
       const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       const matchesStatus = selectedAgendaStatusFilter === "all"
         ? appointment.status === "booked"
         : appointment.status === selectedAgendaStatusFilter;
       return matchesBarber && matchesStatus;
     });
-  }, [selectedAgendaStatusFilter, selectedBarberFilter, user?.role, weeklyAppointmentList]);
+  }, [agendaAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter, user?.role]);
   const todaySummary = useMemo<TodaySummary>(() => {
     const now = new Date();
     const todayKey = format(startOfToday(), "yyyy-MM-dd");
-    const todayAppointments = weeklyAppointmentList.filter((appointment) => {
+    const todayAppointments = agendaAppointmentList.filter((appointment) => {
       const matchesDay = format(parseISO(appointment.startTime), "yyyy-MM-dd") === todayKey;
       const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       return matchesDay && matchesBarber && isOperationalAdminAppointment(appointment);
@@ -1460,12 +1551,12 @@ export default function Admin() {
         .reduce((total, appointment) => total + getAppointmentServicePriceCents(appointment, services), 0),
       nextAppointment,
     };
-  }, [selectedBarberFilter, services, user?.role, weeklyAppointmentList]);
+  }, [agendaAppointmentList, selectedBarberFilter, services, user?.role]);
   const selectedAppointmentDetails = useMemo(() => {
     if (!selectedAppointment) return null;
-    const candidates = [...weeklyAppointmentList, ...appointmentList];
+    const candidates = [...agendaAppointmentList, ...appointmentList];
     return candidates.find((appointment) => appointment.id === selectedAppointment.id) || selectedAppointment;
-  }, [appointmentList, selectedAppointment, weeklyAppointmentList]);
+  }, [agendaAppointmentList, appointmentList, selectedAppointment]);
   const updateStatus = useUpdateAppointmentStatus();
   const { toast } = useToast();
 
@@ -1503,13 +1594,9 @@ export default function Admin() {
   const [loginData, setLoginData] = useState({ username: "", password: "" });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportDates, setExportDates] = useState({ 
-    start: subDays(startOfToday(), 30), 
-    end: startOfToday(),
-    barberId: "all"
-  });
   const [blacklistForm, setBlacklistForm] = useState({ phone: "", email: "" });
+  const blacklistPhoneParts = splitStoredPhone(blacklistForm.phone);
+  const blacklistPhoneCountry = getPhoneCountry(blacklistPhoneParts.countryCode);
   const [pendingBlacklistAction, setPendingBlacklistAction] = useState<PendingBlacklistAction | null>(null);
   const [pendingManualBookingBlacklistWarning, setPendingManualBookingBlacklistWarning] = useState<PendingManualBookingBlacklistWarning | null>(null);
   const [isSubmittingBlacklist, setIsSubmittingBlacklist] = useState(false);
@@ -1609,11 +1696,70 @@ export default function Admin() {
     }
   };
 
+  const invalidateExpensesQueries = () => {
+    void queryClient.invalidateQueries({
+      predicate: (query) => {
+        const key = query.queryKey[0];
+        return typeof key === "string" && key.startsWith("/api/admin/expenses");
+      },
+    });
+  };
+
+  const handleAddExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amountCents = eurosInputToCents(expenseForm.amount);
+
+    if (!expenseForm.description.trim()) {
+      toast({ title: "Descricao em falta", description: "Indique a descricao da despesa.", variant: "destructive" });
+      return;
+    }
+
+    if (amountCents <= 0) {
+      toast({ title: "Valor em falta", description: "Indique um valor superior a zero.", variant: "destructive" });
+      return;
+    }
+
+    setIsSavingExpense(true);
+    try {
+      await apiRequest("POST", "/api/admin/expenses", {
+        category: expenseForm.category,
+        description: expenseForm.description.trim(),
+        amountCents,
+        expenseDate: format(expenseForm.expenseDate, "yyyy-MM-dd"),
+        recurrence: expenseForm.recurrence,
+        notes: expenseForm.notes.trim() || null,
+      });
+      setExpenseForm({
+        ...defaultBusinessExpenseForm,
+        expenseDate: startOfToday(),
+      });
+      invalidateExpensesQueries();
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      toast({ title: "Sucesso", description: "Despesa registada." });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message || "Erro ao registar despesa.", variant: "destructive" });
+    } finally {
+      setIsSavingExpense(false);
+    }
+  };
+
+  const handleDeleteExpense = async (expense: BusinessExpense) => {
+    try {
+      await apiRequest("DELETE", `/api/admin/expenses/${expense.id}`);
+      invalidateExpensesQueries();
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      toast({ title: "Sucesso", description: "Despesa removida." });
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message || "Erro ao remover despesa.", variant: "destructive" });
+    }
+  };
+
   const checkAuth = async () => {
     try {
       const res = await apiFetch("/api/admin/me");
       if (res.ok) {
         const data = await res.json();
+        sessionExpiryHandledRef.current = false;
         setUser(data);
       } else {
         setUser({ authorized: false, role: "" });
@@ -1634,6 +1780,7 @@ export default function Admin() {
       });
       if (res.ok) {
         const data = await res.json();
+        sessionExpiryHandledRef.current = false;
         setUser({
           authorized: true,
           role: data.role,
@@ -1655,8 +1802,13 @@ export default function Admin() {
   };
 
   const handleLogout = async () => {
-    await apiFetch("/api/admin/logout", { method: "POST" });
-    setUser({ authorized: false, role: "" });
+    try {
+      await apiFetch("/api/admin/logout", { method: "POST" });
+    } finally {
+      queryClient.clear();
+      setSelectedAppointment(null);
+      setUser({ authorized: false, role: "" });
+    }
   };
 
   const availabilityRowsToForm = (rows: any[], openField: "isWorking" | "isOpen" = "isWorking") => {
@@ -1816,25 +1968,28 @@ export default function Admin() {
     return selectedBarberFilter !== "all" ? selectedBarberFilter : undefined;
   };
 
-  const openAgendaExceptionDialog = () => {
-    openExceptionDialog(getAgendaSelectedBarberId());
+  const openAgendaExceptionDialog = (date?: Date) => {
+    openExceptionDialog(getAgendaSelectedBarberId(), date);
   };
 
   const openManualBookingDialog = (date?: Date, time?: string) => {
     openScheduleBlockDialog("manual", getAgendaSelectedBarberId(), date, time);
   };
 
-  const openManualBookingAtSlot = (date: Date, time: string) => {
-    openManualBookingDialog(date, time);
+  const openManualBookingAtSlot = (date: Date, time: string, barberId?: number) => {
+    openScheduleBlockDialog("manual", barberId ? String(barberId) : getAgendaSelectedBarberId(), date, time);
   };
 
-  const handleMoveAppointment = async (appointmentId: number, date: Date, time: string) => {
+  const handleMoveAppointment = async (appointmentId: number, date: Date, time: string, barberId?: number) => {
     const [hours, minutes] = time.split(":").map(Number);
     const startTime = new Date(date);
     startTime.setHours(hours, minutes, 0, 0);
 
     try {
-      await apiRequest("PATCH", `/api/appointments/${appointmentId}`, { startTime });
+      await apiRequest("PATCH", `/api/appointments/${appointmentId}`, {
+        startTime,
+        ...(barberId ? { barberId } : {}),
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
@@ -2000,7 +2155,7 @@ export default function Admin() {
   const getReassignmentCandidateAppointments = () => {
     const appointmentsById = new Map<number, AdminAppointment>();
     [
-      ...weeklyAppointmentList,
+      ...agendaAppointmentList,
       ...appointmentList,
       ...futureRemovalAppointments,
       ...(absenceConflict?.appointments ?? []),
@@ -2148,13 +2303,18 @@ export default function Admin() {
     }
   };
 
-  const handleStatusChange = (appointmentId: number, status: AppointmentStatus) => {
+  const handleStatusChange = (
+    appointmentId: number,
+    status: AppointmentStatus,
+    options?: { onSuccess?: () => void; paymentMethod?: AppointmentPaymentMethod },
+  ) => {
     updateStatus.mutate(
-      { id: appointmentId, status },
+      { id: appointmentId, status, expectedStatus: "booked", paymentMethod: options?.paymentMethod },
       {
         onSuccess: () => {
           toast({ title: "Atualizado", description: `Estado alterado para ${getStatusLabel(status).toLowerCase()}.` });
           queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+          options?.onSuccess?.();
         },
         onError: (error: any) => {
           toast({ title: "Erro", description: error.message || "Não foi possível atualizar a marcação.", variant: "destructive" });
@@ -2177,7 +2337,7 @@ export default function Admin() {
   const handleAddBlacklistEntry = async () => {
     const phone = blacklistForm.phone;
     const email = blacklistForm.email;
-    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedPhone = normalizeSupportedPhone(phone);
     const normalizedEmail = normalizeEmail(email);
 
     if (!phone.trim()) {
@@ -2185,8 +2345,8 @@ export default function Admin() {
       return;
     }
 
-    if (!isValidPortugueseMobile(phone)) {
-      toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
+    if (!normalizedPhone) {
+      toast({ title: "Telemóvel inválido", description: supportedPhoneValidationMessage, variant: "destructive" });
       return;
     }
 
@@ -2232,7 +2392,7 @@ export default function Admin() {
           ...payload,
           futureAppointments: responseBody.futureAppointments || [],
         });
-        return;
+        return true;
       }
 
       if (!response.ok) {
@@ -2250,24 +2410,28 @@ export default function Admin() {
       }
 
       toast({
-        title: "Cliente bloqueado",
-        description: cancelledCount > 0
+        title: responseBody?.alreadyBlacklisted ? "Cliente já bloqueado" : "Cliente bloqueado",
+        description: responseBody?.alreadyBlacklisted
+          ? "Este contacto já se encontrava na lista de bloqueio. Não foi criado um duplicado."
+          : cancelledCount > 0
           ? `${cancelledCount} marcação(ões) futura(s) foram cancelada(s).`
           : "Cliente adicionado à lista de bloqueio.",
       });
+      return true;
     } catch (err: any) {
       toast({
         title: "Erro",
         description: err.message || "Não foi possível bloquear o cliente.",
         variant: "destructive",
       });
+      return false;
     } finally {
       setIsSubmittingBlacklist(false);
     }
   };
 
   const handleBlockCustomerWithFutureCheck = async (appointment: AdminAppointment) => {
-    await submitBlacklistEntryWithFutureCheck({
+    return submitBlacklistEntryWithFutureCheck({
       phone: appointment.customerPhone,
       email: appointment.customerEmail || undefined,
       reason: `Faltou à marcação de ${format(parseISO(appointment.startTime), "dd/MM/yyyy HH:mm")}`,
@@ -2277,7 +2441,7 @@ export default function Admin() {
   const handleAddBlacklistEntryWithFutureCheck = async () => {
     const phone = blacklistForm.phone;
     const email = blacklistForm.email;
-    const normalizedPhone = normalizePortuguesePhone(phone);
+    const normalizedPhone = normalizeSupportedPhone(phone);
     const normalizedEmail = normalizeEmail(email);
 
     if (!phone.trim()) {
@@ -2285,8 +2449,8 @@ export default function Admin() {
       return;
     }
 
-    if (!isValidPortugueseMobile(phone)) {
-      toast({ title: "Telemóvel inválido", description: phoneValidationMessage, variant: "destructive" });
+    if (!normalizedPhone) {
+      toast({ title: "Telemóvel inválido", description: supportedPhoneValidationMessage, variant: "destructive" });
       return;
     }
 
@@ -2324,7 +2488,26 @@ export default function Admin() {
   }), [appointmentList]);
 
   useEffect(() => {
+    const handleUnauthorized = () => {
+      if (sessionExpiryHandledRef.current) return;
+
+      sessionExpiryHandledRef.current = true;
+      queryClient.clear();
+      setSelectedAppointment(null);
+      setUser({ authorized: false, role: "" });
+      toast({
+        title: "Sessão terminada",
+        description: "Inicie sessão novamente para continuar.",
+        variant: "destructive",
+      });
+    };
+
+    window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
     checkAuth();
+
+    return () => {
+      window.removeEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
+    };
   }, []);
 
   const isDayClosed = (date: Date) => {
@@ -2358,7 +2541,7 @@ export default function Admin() {
 
   const selectedBlockBarber = barbers?.find((barber) => String(barber.id) === blockData.barberId);
   const manualBookingServices = useMemo(() => {
-    const serviceList = services || [];
+    const serviceList = (services || []).filter((service) => service.isVisible !== false);
     if (!blockData.barberId) return serviceList;
     return serviceList.filter((service) => canBarberPerformService(selectedBlockBarber, service.id));
   }, [blockData.barberId, selectedBlockBarber, services]);
@@ -2385,10 +2568,6 @@ export default function Admin() {
     return startTime;
   };
 
-  const isPastBlockStart = (date: Date, timeStr: string) => (
-    createBlockStartTime(date, timeStr).getTime() < Date.now()
-  );
-
   const availableBlockTimes = useMemo(() => {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
     const barberId = Number(blockData.barberId);
@@ -2398,10 +2577,6 @@ export default function Admin() {
       : blockTimeOptions;
 
     return timeOptions.filter((time) => {
-      if (blockData.isManualBooking && blockData.allowOutsideHours && isPastBlockStart(blockData.date, time)) {
-        return false;
-      }
-
       if (!blockData.allowOutsideHours && !isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
         return false;
       }
@@ -2452,11 +2627,11 @@ export default function Admin() {
   const findManualBookingBlacklistEntry = () => {
     if (!blockData.isManualBooking) return null;
 
-    const phone = normalizePortuguesePhone(blockData.phone);
+    const phone = normalizeSupportedPhone(blockData.phone);
     if (!phone) return null;
 
     return blacklistEntries?.find((entry: any) =>
-      normalizePortuguesePhone(entry.phone) === phone,
+      supportedPhonesMatch(entry.phone, phone),
     ) || null;
   };
 
@@ -2483,14 +2658,6 @@ export default function Admin() {
       return;
     }
 
-    const hasPastOutsideHoursTime = blockData.isManualBooking
-      && blockData.allowOutsideHours
-      && blockData.times.some((timeStr) => isPastBlockStart(blockData.date, timeStr));
-    if (hasPastOutsideHoursTime) {
-      toast({ title: "Erro", description: "Escolha uma hora futura para marcações fora do horário.", variant: "destructive" });
-      return;
-    }
-
     if (!options?.skipBlacklistCheck) {
       const blacklistEntry = findManualBookingBlacklistEntry();
       if (blacklistEntry) {
@@ -2503,8 +2670,6 @@ export default function Admin() {
     }
 
     try {
-      const promises: any[] = [];
-      
       if (blockData.isRecurring) {
         const timeStr = blockData.times[0];
         const startTime = createBlockStartTime(blockData.date, timeStr);
@@ -2537,24 +2702,24 @@ export default function Admin() {
           }
         }
         
-        for (const date of datesToBlock) {
-          for (const timeStr of blockData.times) {
-            const startTime = createBlockStartTime(date, timeStr);
-            
-            const payload = {
-              barberId: Number(blockData.barberId),
-              serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
-              startTime: startTime,
-              name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
-              phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
-              isManualBooking: blockData.isManualBooking,
-              allowOutsideHours: blockData.allowOutsideHours,
-            };
-
-            promises.push(apiRequest("POST", "/api/appointments/block", payload));
-          }
+        const startTimes = datesToBlock.flatMap((date) =>
+          blockData.times.map((timeStr) => createBlockStartTime(date, timeStr)),
+        );
+        if (startTimes.length === 0) {
+          toast({ title: "Erro", description: "Não existem dias abertos no período selecionado.", variant: "destructive" });
+          return;
         }
-        await Promise.all(promises);
+
+        await apiRequest("POST", "/api/appointments/block", {
+          barberId: Number(blockData.barberId),
+          serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
+          startTime: startTimes[0],
+          startTimes,
+          name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
+          phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
+          isManualBooking: blockData.isManualBooking,
+          allowOutsideHours: blockData.allowOutsideHours,
+        });
       }
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
@@ -2641,8 +2806,8 @@ export default function Admin() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-body p-4 md:p-8">
-      <div className="container mx-auto">
+    <div className="min-h-screen overflow-x-hidden bg-background text-foreground font-body p-4 md:p-8">
+      <div className="container mx-auto max-w-full overflow-x-hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8 text-white">
           <div className="flex-1">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-2">
@@ -2757,7 +2922,14 @@ export default function Admin() {
                   </SelectTrigger>
                   <SelectContent className="bg-card border-white/10 text-white">
                     {(barbers || [])
-                      .filter((barber) => barber.id !== barberRemovalCandidate?.id && barber.isVisible !== false)
+                      .filter((barber) =>
+                        barber.id !== barberRemovalCandidate?.id &&
+                        barber.isVisible !== false &&
+                        futureRemovalAppointments.some((appointment) =>
+                          canBarberPerformService(barber, appointment.serviceId) &&
+                          canReassignAppointmentToBarber(appointment, barber.id),
+                        )
+                      )
                       .map((barber) => (
                         <SelectItem key={barber.id} value={String(barber.id)}>
                           {barber.name}
@@ -2766,7 +2938,7 @@ export default function Admin() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-gray-500">
-                  Se algum barbeiro não fizer o serviço de uma marcação, essa linha fica por escolher manualmente.
+                  Só aparecem barbeiros que fazem o serviço, trabalham nesse horário e não têm marcação sobreposta.
                 </p>
               </div>
 
@@ -2924,7 +3096,7 @@ export default function Admin() {
           }}
           barbers={barbers}
           services={services}
-          appointments={[...weeklyAppointmentList, ...appointmentList]}
+          appointments={[...agendaAppointmentList, ...appointmentList]}
           availabilityRows={(allAvailabilityRows as AvailabilityRow[] | undefined) ?? []}
           shopAvailabilityRows={(shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? []}
           toast={toast}
@@ -2935,6 +3107,7 @@ export default function Admin() {
           onOpenHistory={openCustomerHistory}
           onStatusChange={handleStatusChange}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}
+          canManageSchedule={user.role === "admin"}
         />
 
         <Dialog
@@ -3058,7 +3231,8 @@ export default function Admin() {
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="admin-tabs-horizontal-scroll scrollbar-none sticky top-2 z-30 w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:static md:shadow-none">
+          <div className="sticky top-2 z-30 w-full max-w-full overflow-hidden rounded-xl md:static">
+          <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {user.role === "admin" && (
@@ -3071,6 +3245,7 @@ export default function Admin() {
               </>
             )}
           </TabsList>
+          </div>
 
           <TabsContent value="dashboard" className="space-y-6 outline-none">
             <TodayOverviewPanel
@@ -3080,19 +3255,16 @@ export default function Admin() {
             />
 
             <WeeklyAgenda
-              weekStartDate={weeklyStartDate}
-              appointments={filteredWeeklyAppointmentList}
+              appointments={filteredAgendaAppointmentList}
               barbers={weeklyAgendaBarberOptions}
               services={services}
               isLoading={isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices}
               selectedBarberFilter={selectedBarberFilter}
               selectedStatusFilter={selectedAgendaStatusFilter}
               canFilterBarbers={user.role === "admin"}
+              canManageSchedule={user.role === "admin"}
               onBarberFilterChange={setSelectedBarberFilter}
               onStatusFilterChange={setSelectedAgendaStatusFilter}
-              onPreviousWeek={() => setWeeklyStartDate((current) => addDays(current, -7))}
-              onNextWeek={() => setWeeklyStartDate((current) => addDays(current, 7))}
-              onToday={() => setWeeklyStartDate(startOfWeek(startOfToday(), { weekStartsOn: 1 }))}
               onException={openAgendaExceptionDialog}
               onManualBooking={openManualBookingDialog}
               onCreateAtSlot={openManualBookingAtSlot}
@@ -3281,7 +3453,12 @@ export default function Admin() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {activeBarbers.map(barber => (
-                <Card key={barber.id} className="bg-card border-white/10 overflow-hidden text-white">
+                <Card
+                  key={barber.id}
+                  data-testid="team-barber-card"
+                  data-barber-id={barber.id}
+                  className="bg-card border-white/10 overflow-hidden text-white"
+                >
                   <div className="aspect-square bg-muted relative">
                     <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
                     <ConfirmAction
@@ -3297,7 +3474,12 @@ export default function Admin() {
                         }
                       }}
                     >
-                      <Button variant="destructive" size="icon" className="absolute top-2 right-2 h-8 w-8">
+                      <Button
+                        variant="destructive"
+                        size="icon"
+                        className="absolute top-2 right-2 h-8 w-8"
+                        aria-label={`Remover ${barber.name}`}
+                      >
                         <XCircle className="w-4 h-4" />
                       </Button>
                     </ConfirmAction>
@@ -3315,7 +3497,7 @@ export default function Admin() {
                       {getCompensationSummary(barber)}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      <Dialog>
+                      <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => setEditingBarberId(open ? barber.id : null)}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
@@ -3410,6 +3592,7 @@ export default function Admin() {
                                     delete next[barber.id];
                                     return next;
                                   });
+                                  setEditingBarberId(null);
                                   toast({ title: "Sucesso", description: "Barbeiro atualizado." });
                                 } catch (err: any) {
                                   toast({
@@ -3430,7 +3613,7 @@ export default function Admin() {
                       </Dialog>
                       <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
-                        description="A palavra-passe atual deixa de funcionar até o barbeiro aceitar o novo convite."
+                        description="Se já existir outro convite, esse link deixa de funcionar. A palavra-passe atual mantém-se válida até o novo convite ser aceite."
                         confirmLabel="Criar convite"
                         confirmClassName="bg-primary text-primary-foreground hover:bg-primary/90"
                         onConfirm={() => handleCreateBarberInvite(barber)}
@@ -3546,18 +3729,44 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
                     <div className="space-y-2">
-                      <Label className="text-xs">Telemóvel (obrigatório)</Label>
-                      <Input
-                        id="bl-phone"
-                        type="tel"
-                        inputMode="numeric"
-                        autoComplete="tel"
-                        maxLength={18}
-                        value={blacklistForm.phone}
-                        onChange={(event) => setBlacklistForm((current) => ({ ...current, phone: event.target.value }))}
-                        className="bg-background border-white/10"
-                        placeholder="912345678"
-                      />
+                      <Label htmlFor="bl-phone" className="text-xs">Telemóvel (obrigatório)</Label>
+                      <div className="flex h-10 overflow-hidden rounded-md border border-white/10 bg-background focus-within:border-red-400/60 focus-within:ring-1 focus-within:ring-red-400/30">
+                        <div className="relative shrink-0 border-r border-white/10 bg-white/5">
+                          <select
+                            aria-label="País do telemóvel da blacklist"
+                            className="h-full w-[116px] appearance-none bg-transparent px-3 pr-6 text-sm font-semibold text-white outline-none"
+                            value={blacklistPhoneParts.countryCode}
+                            onChange={(event) => {
+                              const country = getPhoneCountry(event.target.value as PhoneCountryCode);
+                              setBlacklistForm((current) => ({ ...current, phone: country.dialCode }));
+                            }}
+                          >
+                            {PHONE_COUNTRIES.map((country) => (
+                              <option key={country.code} value={country.code} className="bg-card text-white">
+                                {country.flag} {country.dialCode}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
+                        </div>
+                        <Input
+                          id="bl-phone"
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel-national"
+                          maxLength={blacklistPhoneCountry.maxDigits}
+                          value={blacklistPhoneParts.localPhone}
+                          onChange={(event) => setBlacklistForm((current) => ({
+                            ...current,
+                            phone: toStoredPhone(
+                              formatPhoneInput(event.target.value, blacklistPhoneCountry.maxDigits),
+                              blacklistPhoneParts.countryCode,
+                            ),
+                          }))}
+                          className="h-full min-w-0 rounded-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+                          placeholder={blacklistPhoneCountry.placeholder}
+                        />
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <Label className="text-xs">Email (opcional)</Label>
@@ -3589,7 +3798,7 @@ export default function Admin() {
                       <tbody className="divide-y divide-white/5">
                         {blacklistEntries?.map((entry: any) => (
                           <tr key={entry.id} className="hover:bg-white/5">
-                            <td className="px-6 py-4 font-mono">{entry.phone}</td>
+                            <td className="px-6 py-4 font-mono whitespace-nowrap">{formatPhoneForDisplay(entry.phone)}</td>
                             <td className="px-6 py-4">{entry.email || "-"}</td>
                             <td className="px-6 py-4 text-gray-400">{format(parseISO(entry.createdAt), "dd/MM/yyyy")}</td>
                             <td className="px-6 py-4 text-right">
@@ -3615,6 +3824,7 @@ export default function Admin() {
                 </div>
               </CardContent>
             </Card>
+
           </TabsContent>
 
           <TabsContent value="services" className="outline-none">
@@ -3699,7 +3909,7 @@ export default function Admin() {
                       <p className="text-xs text-gray-500">Agenda: {service.agendaLabel || "etiqueta automática"}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Dialog>
+                      <Dialog open={editingServiceId === service.id} onOpenChange={(open) => setEditingServiceId(open ? service.id : null)}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
@@ -3731,6 +3941,7 @@ export default function Admin() {
                                 await assertServiceAgendaLabelPersisted(response, agendaLabel);
                                 queryClient.invalidateQueries({ queryKey: ["/api/services"] });
                                 queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+                                setEditingServiceId(null);
                                 toast({ title: "Sucesso", description: "Serviço atualizado." });
                               } catch (err: any) {
                                 toast({ title: "Erro", description: err.message || "Erro ao atualizar serviço.", variant: "destructive" });
@@ -3975,8 +4186,8 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="reports" className="outline-none">
-            <Card className="bg-card border-white/10 max-w-2xl mx-auto">
+          <TabsContent value="reports" className="outline-none space-y-6">
+            <Card className="bg-card border-white/10 max-w-3xl mx-auto">
               <CardHeader>
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
                 <p className="text-gray-400 text-sm">Gere um ficheiro .xlsx com resumo financeiro, estados e detalhe das marcações do período.</p>
@@ -4032,6 +4243,168 @@ export default function Admin() {
                 </Button>
               </CardContent>
             </Card>
+
+            <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.1fr] gap-6">
+              <Card className="bg-card border-white/10">
+                <CardHeader>
+                  <CardTitle className="text-xl font-display font-bold text-primary">Despesas da Barbearia</CardTitle>
+                  <p className="text-gray-400 text-sm">Registe renda, agua, luz, material, marketing ou outras despesas para entrarem no resumo financeiro.</p>
+                </CardHeader>
+                <CardContent>
+                  <form className="space-y-4" onSubmit={handleAddExpense}>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-white">Categoria</Label>
+                        <Select value={expenseForm.category} onValueChange={(value) => setExpenseForm({...expenseForm, category: value as BusinessExpenseCategory})}>
+                          <SelectTrigger className="border-white/10 bg-background text-white h-11">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card border-white/10 text-white">
+                            {businessExpenseCategories.map((category) => (
+                              <SelectItem key={category.value} value={category.value}>{category.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-gray-500">
+                          {businessExpenseCategories.find((category) => category.value === expenseForm.category)?.help}
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-white">Data</Label>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
+                              <CalendarIcon className="mr-2 h-4 w-4" />
+                              {format(expenseForm.expenseDate, "dd/MM/yyyy")}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 bg-card border-white/10">
+                            <Calendar mode="single" selected={expenseForm.expenseDate} onSelect={(d) => d && setExpenseForm({...expenseForm, expenseDate: d})} locale={pt} initialFocus />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-white">Descricao</Label>
+                      <Input
+                        value={expenseForm.description}
+                        onChange={(event) => setExpenseForm({...expenseForm, description: event.target.value})}
+                        className="border-white/10 bg-background text-white h-11"
+                        placeholder="Ex.: Renda de julho, laminas, eletricidade"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-white">Valor</Label>
+                        <Input
+                          value={expenseForm.amount}
+                          onChange={(event) => setExpenseForm({...expenseForm, amount: event.target.value})}
+                          className="border-white/10 bg-background text-white h-11"
+                          inputMode="decimal"
+                          placeholder="Ex.: 125,50"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-white">Recorrencia</Label>
+                        <Select value={expenseForm.recurrence} onValueChange={(value) => setExpenseForm({...expenseForm, recurrence: value as BusinessExpenseRecurrence})}>
+                          <SelectTrigger className="border-white/10 bg-background text-white h-11">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-card border-white/10 text-white">
+                            {businessExpenseRecurrences.map((recurrence) => (
+                              <SelectItem key={recurrence.value} value={recurrence.value}>{recurrence.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-gray-500">
+                          O valor entra no periodo pela data registada. Use a periodicidade para identificar despesas fixas ou recorrentes.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-white">Notas</Label>
+                      <Textarea
+                        value={expenseForm.notes}
+                        onChange={(event) => setExpenseForm({...expenseForm, notes: event.target.value})}
+                        className="min-h-[76px] border-white/10 bg-background text-white"
+                        placeholder="Opcional. Ex.: pago em dinheiro, fornecedor, referencia."
+                      />
+                    </div>
+
+                    <Button type="submit" variant="gold" className="w-full h-12 text-base font-bold gap-2" disabled={isSavingExpense}>
+                      {isSavingExpense ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
+                      Registar despesa
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card border-white/10">
+                <CardHeader>
+                  <CardTitle className="text-xl font-display font-bold text-primary">Resumo financeiro</CardTitle>
+                  <p className="text-gray-400 text-sm">Despesas registadas no periodo selecionado para o relatorio.</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="rounded-md border border-white/10 bg-background/70 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Total de despesas</p>
+                        <p className="text-2xl font-bold text-white">{(businessExpensesTotalCents / 100).toFixed(2).replace(".", ",")} €</p>
+                      </div>
+                      <Euro className="h-6 w-6 text-primary" />
+                    </div>
+                    <p className="mt-2 text-xs text-gray-500">O Excel combina este valor com a receita concluida e os pagamentos estimados aos barbeiros.</p>
+                  </div>
+
+                  {isLoadingExpenses ? (
+                    <div className="flex items-center justify-center rounded-md border border-white/10 py-10 text-gray-400">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      A carregar despesas...
+                    </div>
+                  ) : businessExpenses.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-white/10 py-10 text-center text-gray-500">
+                      Sem despesas registadas neste periodo.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-white/10 rounded-md border border-white/10">
+                      {businessExpenses.map((expense) => (
+                        <div key={expense.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold text-white">{expense.description}</p>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300">
+                                {getBusinessExpenseCategoryLabel(expense.category)}
+                              </span>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300">
+                                {getBusinessExpenseRecurrenceLabel(expense.recurrence)}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-sm text-gray-400">
+                              {format(parseISO(expense.expenseDate), "dd/MM/yyyy")}
+                              {expense.notes ? ` - ${expense.notes}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 md:justify-end">
+                            <p className="text-lg font-bold text-white">{(expense.amountCents / 100).toFixed(2).replace(".", ",")} €</p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-red-500/30 text-red-300 hover:bg-red-500/10"
+                              onClick={() => handleDeleteExpense(expense)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
         </Tabs>
       </div>

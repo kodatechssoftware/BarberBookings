@@ -188,15 +188,17 @@ export function AppointmentsTab({
           </SelectContent>
         </Select>
 
-        <div className="sm:ml-auto">
-          <Button
-            variant="gold"
-            className="h-11 min-w-0 gap-2 whitespace-normal px-3"
-            onClick={onOpenManualBooking}
-          >
-            <Plus className="h-4 w-4" /> Manual
-          </Button>
-        </div>
+        {user.role === "admin" && (
+          <div className="sm:ml-auto">
+            <Button
+              variant="gold"
+              className="h-11 min-w-0 gap-2 whitespace-normal px-3"
+              onClick={onOpenManualBooking}
+            >
+              <Plus className="h-4 w-4" /> Manual
+            </Button>
+          </div>
+        )}
       </div>
 
       {appointmentViewMode === "day" && (
@@ -263,7 +265,7 @@ export function AppointmentsTab({
                         </div>
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">{appointment.customerName}</p>
-                          <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
+                          <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemÃ³vel"}</p>
                         </div>
                         <div className="min-w-0">
                           <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Barbeiro</p>

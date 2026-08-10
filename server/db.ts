@@ -22,7 +22,7 @@ if (!process.env.DATABASE_URL && !useMemoryStorage) {
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL || fallbackMemoryDatabaseUrl,
-  max: getPositiveInteger(process.env.DATABASE_POOL_MAX, 5),
+  max: getPositiveInteger(process.env.DATABASE_POOL_MAX, 2),
   connectionTimeoutMillis: getPositiveInteger(
     process.env.DATABASE_CONNECTION_TIMEOUT_MS,
     10_000,
@@ -100,6 +100,30 @@ export async function ensureServiceAgendaLabelColumn() {
   `);
 }
 
+export async function ensureAppointmentPaymentMethodColumn() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
+  const constraintName = "appointments_payment_method_check";
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedTableName}
+    ADD COLUMN IF NOT EXISTS payment_method text NOT NULL DEFAULT 'pending'
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      ALTER TABLE ${qualifiedTableName}
+      ADD CONSTRAINT ${quoteIdentifier(constraintName)}
+      CHECK (payment_method IN ('pending', 'cash', 'card', 'gift'));
+    EXCEPTION
+      WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+}
+
 export async function ensureBarberServicesTable() {
   if (useMemoryStorage) return;
 
@@ -115,6 +139,67 @@ export async function ensureBarberServicesTable() {
       PRIMARY KEY (barber_id, service_id)
     )
   `);
+}
+
+const knownTextEncodingRepairs = [
+  ["Corte cl?ssico e barba", "Corte clássico e barba"],
+  ["Perfil de demonstra??o DEV", "Perfil de demonstração DEV"],
+  ["Perfil de demonstra\uFFFD\uFFFDo DEV", "Perfil de demonstração DEV"],
+  ["Jo?o Mendes", "João Mendes"],
+  ["Lu?s Freitas", "Luís Freitas"],
+  ["Tom?s Almeida", "Tomás Almeida"],
+  ["S?rgio Matos", "Sérgio Matos"],
+  ["Gon?alo Reis", "Gonçalo Reis"],
+  ["C?sar Monteiro", "César Monteiro"],
+  ["F?bio Lopes", "Fábio Lopes"],
+  ["Sim?o Pires", "Simão Pires"],
+  ["Andr\uFFFD Silva (DEV)", "André Silva (DEV)"],
+  ["Gon\uFFFDalo Costa (DEV)", "Gonçalo Costa (DEV)"],
+] as const;
+
+const encodingRepairTargets = [
+  ["barbers", "name"],
+  ["barbers", "specialty"],
+  ["barbers", "bio"],
+  ["appointments", "customer_name"],
+  ["audit_logs", "actor_name"],
+  ["audit_logs", "summary"],
+  ["audit_logs", "metadata"],
+] as const;
+
+export async function repairKnownTextEncodingArtifacts() {
+  if (useMemoryStorage) return 0;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const client = await pool.connect();
+  let repairedRows = 0;
+
+  try {
+    await client.query("BEGIN");
+
+    for (const [tableName, columnName] of encodingRepairTargets) {
+      const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
+      const quotedColumnName = quoteIdentifier(columnName);
+
+      for (const [corruptedText, correctedText] of knownTextEncodingRepairs) {
+        const result = await client.query(
+          `UPDATE ${qualifiedTableName}
+           SET ${quotedColumnName} = replace(${quotedColumnName}, $1, $2)
+           WHERE position($1 in ${quotedColumnName}) > 0`,
+          [corruptedText, correctedText],
+        );
+        repairedRows += result.rowCount || 0;
+      }
+    }
+
+    await client.query("COMMIT");
+    return repairedRows;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function ensureBarberCompensationRulesTable() {
@@ -140,6 +225,32 @@ export async function ensureBarberCompensationRulesTable() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS barber_compensation_rules_barber_effective_idx
     ON ${qualifiedTableName} (barber_id, effective_from DESC)
+  `);
+}
+
+export async function ensureBusinessExpensesTable() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("business_expenses")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
+      id serial PRIMARY KEY,
+      category text NOT NULL,
+      description text NOT NULL,
+      amount_cents integer NOT NULL,
+      expense_date timestamp NOT NULL,
+      recurrence text NOT NULL DEFAULT 'once',
+      notes text,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS business_expenses_expense_date_idx
+    ON ${qualifiedTableName} (expense_date DESC)
   `);
 }
 

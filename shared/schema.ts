@@ -21,6 +21,7 @@ export const barberInvitesIdSeq = appPgSchema?.sequence("barber_invites_id_seq")
 export const customerNotesIdSeq = appPgSchema?.sequence("customer_notes_id_seq");
 export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
+export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
 
 function idColumn(sequenceName: string) {
@@ -43,6 +44,13 @@ export const appointmentStatuses = [
   "no_show",
 ] as const;
 
+export const appointmentPaymentMethods = [
+  "pending",
+  "cash",
+  "card",
+  "gift",
+] as const;
+
 export const barberCompensationModels = [
   "none",
   "commission",
@@ -53,6 +61,24 @@ export const chairRentPeriods = [
   "day",
   "week",
   "month",
+] as const;
+
+export const businessExpenseCategories = [
+  "rent",
+  "utilities",
+  "internet",
+  "materials",
+  "equipment",
+  "marketing",
+  "accounting",
+  "staff",
+  "other",
+] as const;
+
+export const businessExpenseRecurrences = [
+  "once",
+  "weekly",
+  "monthly",
 ] as const;
 
 export const whatsappMessageStatuses = [
@@ -103,6 +129,7 @@ export const appointments = appPgTable("appointments", {
   status: text("status", { enum: appointmentStatuses }).default("booked").notNull(),
   cancelToken: text("cancel_token").notNull(),
   cancelledAt: timestamp("cancelled_at"),
+  paymentMethod: text("payment_method", { enum: appointmentPaymentMethods }).default("pending").notNull(),
   depositRequired: boolean("deposit_required").default(false).notNull(),
   depositReason: text("deposit_reason"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -200,6 +227,18 @@ export const barberCompensationRules = appPgTable("barber_compensation_rules", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const businessExpenses = appPgTable("business_expenses", {
+  id: idColumn("business_expenses_id_seq"),
+  category: text("category", { enum: businessExpenseCategories }).notNull(),
+  description: text("description").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  expenseDate: timestamp("expense_date").notNull(),
+  recurrence: text("recurrence", { enum: businessExpenseRecurrences }).default("once").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const whatsappMessages = appPgTable("whatsapp_messages", {
   id: idColumn("whatsapp_messages_id_seq"),
   appointmentId: integer("appointment_id").references(() => appointments.id),
@@ -263,7 +302,11 @@ export const barberCompensationRulesRelations = relations(barberCompensationRule
 
 export const insertBarberSchema = createInsertSchema(barbers).omit({ id: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true }).extend({
+  name: z.string().trim().min(1, "Indique o nome do serviço.").max(100, "O nome não pode ter mais de 100 caracteres."),
+  description: z.string().trim().max(500, "A descrição não pode ter mais de 500 caracteres.").optional().nullable(),
   agendaLabel: z.string().trim().max(40, "A etiqueta da agenda nao pode ter mais de 40 caracteres.").optional().nullable(),
+  price: z.number().int("O preço deve ser um número inteiro de cêntimos.").min(0, "O preço não pode ser negativo.").max(1_000_000, "O preço indicado é demasiado elevado."),
+  duration: z.number().int("A duração deve ser um número inteiro de minutos.").min(1, "A duração deve ser superior a zero.").max(720, "A duração não pode exceder 12 horas."),
 });
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;
@@ -280,6 +323,7 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   status: true,
   cancelToken: true,
   cancelledAt: true,
+  paymentMethod: true,
   durationMinutes: true,
   depositRequired: true,
   depositReason: true,
@@ -304,6 +348,15 @@ export const insertBarberCompensationRuleSchema = createInsertSchema(barberCompe
   id: true,
   createdAt: true,
 });
+export const insertBusinessExpenseSchema = createInsertSchema(businessExpenses).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  description: z.string().trim().min(1, "Indique a descricao da despesa.").max(160, "A descricao nao pode ter mais de 160 caracteres."),
+  amountCents: z.number().int("O valor deve ser indicado em centimos.").min(0, "O valor nao pode ser negativo.").max(10_000_000, "O valor indicado e demasiado elevado."),
+  notes: z.string().trim().max(500, "As notas nao podem ter mais de 500 caracteres.").optional().nullable(),
+});
 export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).omit({
   id: true,
   createdAt: true,
@@ -316,6 +369,7 @@ export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentStatus = typeof appointmentStatuses[number];
+export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
@@ -325,9 +379,12 @@ export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect;
+export type BusinessExpense = typeof businessExpenses.$inferSelect;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
+export type BusinessExpenseCategory = typeof businessExpenseCategories[number];
+export type BusinessExpenseRecurrence = typeof businessExpenseRecurrences[number];
 export type WhatsappMessageStatus = typeof whatsappMessageStatuses[number];
 export type WhatsappMessageType = typeof whatsappMessageTypes[number];
 
@@ -351,6 +408,7 @@ export type CreateBarberInviteRequest = z.infer<typeof insertBarberInviteSchema>
 export type CreateCustomerNoteRequest = z.infer<typeof insertCustomerNoteSchema>;
 export type CreateAuditLogRequest = z.infer<typeof insertAuditLogSchema>;
 export type CreateBarberCompensationRuleRequest = z.infer<typeof insertBarberCompensationRuleSchema>;
+export type CreateBusinessExpenseRequest = z.infer<typeof insertBusinessExpenseSchema>;
 export type CreateWhatsappMessageRequest = z.infer<typeof insertWhatsappMessageSchema>;
 
 export type AppointmentWithDetails = Appointment & {
