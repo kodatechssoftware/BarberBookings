@@ -57,6 +57,12 @@ function getTwilioConfig() {
   const apiKeySecret = process.env.TWILIO_API_KEY_SECRET?.trim();
   const fromNumber = process.env.TWILIO_WHATSAPP_FROM?.trim() || process.env.TWILIO_FROM_NUMBER?.trim();
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
+  const bookingConfirmationContentSid =
+    process.env.TWILIO_BOOKING_CONFIRMATION_CONTENT_SID?.trim() ||
+    process.env.TWILIO_CONTENT_SID?.trim();
+  const bookingCancellationContentSid =
+    process.env.TWILIO_BOOKING_CANCELLATION_CONTENT_SID?.trim() ||
+    process.env.TWILIO_CONTENT_SID?.trim();
 
   if (!accountSid || !apiKeySid || !apiKeySecret || (!fromNumber && !messagingServiceSid)) {
     if (!warnedMissingConfig && (accountSid || apiKeySid || apiKeySecret || fromNumber || messagingServiceSid)) {
@@ -74,6 +80,8 @@ function getTwilioConfig() {
     apiKeySecret,
     fromNumber,
     messagingServiceSid,
+    bookingConfirmationContentSid,
+    bookingCancellationContentSid,
   };
 }
 
@@ -259,6 +267,7 @@ async function sendWhatsAppText(
   options: {
     appointmentId?: number;
     messageType: WhatsappMessageType;
+    contentVariables?: Record<string, string>;
   },
 ) {
   const provider = getMessagingProvider();
@@ -340,6 +349,7 @@ async function sendTwilioWhatsApp(
   options: {
     appointmentId?: number;
     messageType: WhatsappMessageType;
+    contentVariables?: Record<string, string>;
   },
 ) {
   const config = getTwilioConfig();
@@ -356,10 +366,22 @@ async function sendTwilioWhatsApp(
     return false;
   }
 
+  const contentSid = options.messageType === "booking_cancellation"
+    ? config.bookingCancellationContentSid
+    : config.bookingConfirmationContentSid;
+
   const body = new URLSearchParams({
     To: number,
-    Body: text,
   });
+
+  if (contentSid) {
+    body.set("ContentSid", contentSid);
+    if (options.contentVariables) {
+      body.set("ContentVariables", JSON.stringify(options.contentVariables));
+    }
+  } else {
+    body.set("Body", text);
+  }
 
   if (config.messagingServiceSid) {
     body.set("MessagingServiceSid", config.messagingServiceSid);
@@ -418,6 +440,15 @@ export async function sendBookingWhatsAppConfirmation(params: AppointmentMessage
     {
       appointmentId: params.appointmentId,
       messageType: "booking_confirmation",
+      contentVariables: {
+        "1": params.customerName,
+        "2": formatAppointmentDate(params.startTime),
+        "3": formatAppointmentTime(params.startTime),
+        "4": params.barberName || "",
+        "5": params.serviceName,
+        "6": params.cancelUrl || "",
+        "7": SHOP_NAME,
+      },
     },
   );
 }
@@ -429,6 +460,13 @@ export async function sendBookingWhatsAppCancellation(params: AppointmentMessage
     {
       appointmentId: params.appointmentId,
       messageType: "booking_cancellation",
+      contentVariables: {
+        "1": params.customerName,
+        "2": formatAppointmentDate(params.startTime),
+        "3": formatAppointmentTime(params.startTime),
+        "4": params.serviceName,
+        "5": SHOP_NAME,
+      },
     },
   );
 }

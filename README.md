@@ -84,10 +84,30 @@ Para ativar WhatsApp pela Twilio, define as variaveis no ambiente de producao:
 - `TWILIO_API_KEY_SECRET`: segredo da API Key
 - `TWILIO_WHATSAPP_FROM`: remetente WhatsApp da Twilio, por exemplo `whatsapp:+14155238886` no sandbox ou `whatsapp:+...` no numero aprovado
 - `TWILIO_MESSAGING_SERVICE_SID`: opcional; se existir, substitui `TWILIO_WHATSAPP_FROM`
+- `TWILIO_BOOKING_CONFIRMATION_CONTENT_SID`: Content SID `HX...` do template aprovado para confirmacao de marcacao
+- `TWILIO_BOOKING_CANCELLATION_CONTENT_SID`: Content SID `HX...` do template aprovado para cancelamento de marcacao
 - `TWILIO_REQUEST_TIMEOUT_MS=10000`
 - `WHATSAPP_DEFAULT_COUNTRY_CODE=351`: usado para normalizar numeros nacionais antes de enviar para a Twilio
 
 Guarda `TWILIO_API_KEY_SECRET` apenas no painel do fornecedor de deploy. Nunca deve ser committed no repositorio.
+
+Para WhatsApp oficial fora da sandbox, a Twilio/Meta pode exigir templates aprovados. O template de confirmacao deve usar estas variaveis:
+
+- `{{1}}`: nome do cliente
+- `{{2}}`: data da marcacao
+- `{{3}}`: hora da marcacao
+- `{{4}}`: barbeiro
+- `{{5}}`: servico
+- `{{6}}`: link de cancelamento
+- `{{7}}`: nome da barbearia
+
+O template de cancelamento deve usar:
+
+- `{{1}}`: nome do cliente
+- `{{2}}`: data da marcacao
+- `{{3}}`: hora da marcacao
+- `{{4}}`: servico
+- `{{5}}`: nome da barbearia
 
 ## WhatsApp com Evolution API
 
