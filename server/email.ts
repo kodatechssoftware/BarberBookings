@@ -1,13 +1,12 @@
 ﻿import { Resend } from "resend";
 import "dotenv/config";
 
-const resend = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
-  : null;
+const resendApiKey = process.env.RESEND_API_KEY?.trim();
+const fromEmail = process.env.RESEND_FROM_EMAIL?.trim();
+const resend = resendApiKey && fromEmail ? new Resend(resendApiKey) : null;
 const isProduction = process.env.NODE_ENV === "production";
-const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
-const fromEmail = process.env.RESEND_FROM_EMAIL?.trim() || "onboarding@resend.dev";
-const emailFrom = `${shopName} <${fromEmail}>`;
+const shopName = "Baptista Barber Shop";
+const emailFrom = fromEmail ? `${shopName} <${fromEmail}>` : "";
 
 interface SendConfirmationParams {
   customerName: string;
@@ -66,7 +65,7 @@ export async function sendBookingConfirmation({
   cancellationPolicyHours = 4,
 }: SendConfirmationParams) {
   if (!resend) {
-    console.warn("RESEND_API_KEY not found; booking confirmation email was skipped.");
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking confirmation email was skipped.");
     return false;
   }
 
@@ -88,7 +87,7 @@ export async function sendBookingConfirmation({
   const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
   const calendarParams = new URLSearchParams({
     action: "TEMPLATE",
-    text: `Baptista Barber Shop - ${serviceName}`,
+    text: `${shopName} - ${serviceName}`,
     dates: `${toCalendarDate(startTime)}/${toCalendarDate(endTime)}`,
     details: `${serviceName} com ${barberName}`,
     location: "Rua Comandante Agatão Lança Nº28",
@@ -148,7 +147,7 @@ export async function sendBookingCancellationConfirmation({
   cancellationPolicyHours = 4,
 }: SendCancellationParams) {
   if (!resend) {
-    console.warn("RESEND_API_KEY not found; booking cancellation email was skipped.");
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking cancellation email was skipped.");
     return false;
   }
 

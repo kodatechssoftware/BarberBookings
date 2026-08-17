@@ -67,7 +67,6 @@ Para enviar notificacoes por email, configura no ambiente de producao:
 - `RESEND_API_KEY`: chave da API Resend.
 - `RESEND_FROM_EMAIL`: endereco remetente de um dominio verificado na Resend.
 - `PUBLIC_URL`: URL publica da app, usada nos links de cancelamento e reagendamento.
-- `SHOP_NAME`: nome apresentado no remetente e no conteudo do email.
 
 Se `RESEND_API_KEY` ficar vazio, a app continua a funcionar, mas nao envia notificacoes.
 

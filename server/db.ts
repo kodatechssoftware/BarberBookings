@@ -143,8 +143,9 @@ export async function ensureBarberServicesTable() {
 
 const knownTextEncodingRepairs = [
   ["Corte cl?ssico e barba", "Corte clássico e barba"],
-  ["Perfil de demonstra??o DEV", "Perfil de demonstração DEV"],
-  ["Perfil de demonstra\uFFFD\uFFFDo DEV", "Perfil de demonstração DEV"],
+  ["Perfil de demonstra??o DEV", "Perfil de demonstração"],
+  ["Perfil de demonstra\uFFFD\uFFFDo DEV", "Perfil de demonstração"],
+  ["Perfil de demonstração DEV", "Perfil de demonstração"],
   ["Jo?o Mendes", "João Mendes"],
   ["Lu?s Freitas", "Luís Freitas"],
   ["Tom?s Almeida", "Tomás Almeida"],
@@ -153,8 +154,10 @@ const knownTextEncodingRepairs = [
   ["C?sar Monteiro", "César Monteiro"],
   ["F?bio Lopes", "Fábio Lopes"],
   ["Sim?o Pires", "Simão Pires"],
-  ["Andr\uFFFD Silva (DEV)", "André Silva (DEV)"],
-  ["Gon\uFFFDalo Costa (DEV)", "Gonçalo Costa (DEV)"],
+  ["Andr\uFFFD Silva (DEV)", "André Silva"],
+  ["Gon\uFFFDalo Costa (DEV)", "Gonçalo Costa"],
+  ["André Silva (DEV)", "André Silva"],
+  ["Gonçalo Costa (DEV)", "Gonçalo Costa"],
 ] as const;
 
 const encodingRepairTargets = [
