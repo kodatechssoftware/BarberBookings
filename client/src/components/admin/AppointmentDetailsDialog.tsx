@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Banknote, CheckCircle, CreditCard, Gift, MessageCircle, Pencil, Phone, User, XCircle } from "lucide-react";
+import { Banknote, CheckCircle, CreditCard, Gift, Pencil, Phone, User, XCircle } from "lucide-react";
 import { type AppointmentPaymentMethod, type AppointmentStatus } from "@/hooks/use-appointments";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button-custom";
@@ -577,13 +577,6 @@ export function AppointmentDetailsDialog({
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-            {contactLinks.whatsapp && (
-              <Button asChild size="sm" variant="outline" className="h-9 border-white/10 text-xs text-green-300 hover:text-green-200">
-                <a href={contactLinks.whatsapp} target="_blank" rel="noreferrer">
-                  <MessageCircle className="mr-1 h-3.5 w-3.5" /> WhatsApp
-                </a>
-              </Button>
-            )}
             {contactLinks.tel && (
               <Button asChild size="sm" variant="outline" className="h-9 border-white/10 text-xs">
                 <a href={contactLinks.tel}>

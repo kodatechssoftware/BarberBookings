@@ -62,80 +62,18 @@ npm run test:e2e:ui
 - Admin inicial: `admin`
 - Password inicial: `baptista2026`
 
-`RESEND_API_KEY` e opcional. Se ficar vazio, a app continua a funcionar sem envio de emails.
+Para enviar notificacoes por email, configura no ambiente de producao:
+
+- `RESEND_API_KEY`: chave da API Resend.
+- `RESEND_FROM_EMAIL`: endereco remetente de um dominio verificado na Resend.
+- `PUBLIC_URL`: URL publica da app, usada nos links de cancelamento e reagendamento.
+- `SHOP_NAME`: nome apresentado no remetente e no conteudo do email.
+
+Se `RESEND_API_KEY` ficar vazio, a app continua a funcionar, mas nao envia notificacoes.
 
 ## Mensagens automaticas
 
-O canal de mensagens e escolhido por `MESSAGING_PROVIDER`:
-
-- `MESSAGING_PROVIDER=evolution`: usa Evolution API para WhatsApp.
-- `MESSAGING_PROVIDER=twilio`: usa Twilio para WhatsApp.
-- `MESSAGING_PROVIDER=none`: desativa mensagens automaticas e deixa apenas email, se configurado.
-
-Se o envio automatico falhar ou nao estiver configurado, a app tenta enviar email como fallback quando o cliente indicou email.
-
-## WhatsApp com Twilio
-
-Para ativar WhatsApp pela Twilio, define as variaveis no ambiente de producao:
-
-- `MESSAGING_PROVIDER=twilio`
-- `TWILIO_ACCOUNT_SID`: Account SID da conta Twilio, normalmente com prefixo `AC`
-- `TWILIO_API_KEY_SID`: API Key SID, normalmente com prefixo `SK`
-- `TWILIO_API_KEY_SECRET`: segredo da API Key
-- `TWILIO_WHATSAPP_FROM`: remetente WhatsApp da Twilio, por exemplo `whatsapp:+14155238886` no sandbox ou `whatsapp:+...` no numero aprovado
-- `TWILIO_MESSAGING_SERVICE_SID`: opcional; se existir, substitui `TWILIO_WHATSAPP_FROM`
-- `TWILIO_BOOKING_CONFIRMATION_CONTENT_SID`: Content SID `HX...` do template aprovado para confirmacao de marcacao
-- `TWILIO_BOOKING_CANCELLATION_CONTENT_SID`: Content SID `HX...` do template aprovado para cancelamento de marcacao
-- `TWILIO_REQUEST_TIMEOUT_MS=10000`
-- `WHATSAPP_DEFAULT_COUNTRY_CODE=351`: usado para normalizar numeros nacionais antes de enviar para a Twilio
-
-Guarda `TWILIO_API_KEY_SECRET` apenas no painel do fornecedor de deploy. Nunca deve ser committed no repositorio.
-
-Para WhatsApp oficial fora da sandbox, a Twilio/Meta pode exigir templates aprovados. O template de confirmacao deve usar estas variaveis:
-
-- `{{1}}`: nome do cliente
-- `{{2}}`: data da marcacao
-- `{{3}}`: hora da marcacao
-- `{{4}}`: barbeiro
-- `{{5}}`: servico
-- `{{6}}`: link de cancelamento
-- `{{7}}`: nome da barbearia
-
-O template de cancelamento deve usar:
-
-- `{{1}}`: nome do cliente
-- `{{2}}`: data da marcacao
-- `{{3}}`: hora da marcacao
-- `{{4}}`: servico
-- `{{5}}`: nome da barbearia
-
-## WhatsApp com Evolution API
-
-As mensagens de WhatsApp ficam inativas enquanto a Evolution API nao estiver configurada. A integracao usa o endpoint `POST /message/sendText/{instance}` da Evolution API, com a chave no header `apikey`.
-
-Para ativar no Railway, define:
-
-- `MESSAGING_PROVIDER=evolution`
-- `EVOLUTION_API_URL`: URL publica da tua Evolution API, sem barra final
-- `EVOLUTION_API_KEY`: chave da Evolution API
-- `EVOLUTION_API_INSTANCE`: nome da instancia ligada ao telemovel da barbearia
-- `PUBLIC_URL`: URL publica desta app, usada para gerar o link de cancelamento
-- `EVOLUTION_WEBHOOK_SECRET`: segredo opcional para validar webhooks da Evolution
-- `WHATSAPP_DEFAULT_COUNTRY_CODE=351`
-- `SHOP_NAME=Baptista Barber Shop`
-- `SHOP_TIME_ZONE=Europe/Lisbon`
-
-Quando estas variaveis existem, a app envia confirmacao de marcacao com link de cancelamento e confirmacao quando o cliente cancela pelo link.
-
-A resposta HTTP 2xx da Evolution API e tratada apenas como aceite para processamento. A entrega fica como `pending` na tabela `whatsapp_messages` e so e confirmada quando a Evolution enviar o webhook `MESSAGES_UPDATE`.
-
-Configura o webhook da instancia para:
-
-- URL: `${PUBLIC_URL}/api/webhooks/evolution`
-- Eventos: `MESSAGES_UPDATE`
-- Header opcional, se definires `EVOLUTION_WEBHOOK_SECRET`: `Authorization: Bearer <EVOLUTION_WEBHOOK_SECRET>` ou `X-Webhook-Secret: <EVOLUTION_WEBHOOK_SECRET>`
-
-Se usares `webhook_by_events=true`, tambem podes apontar a base para `${PUBLIC_URL}/api/webhooks/evolution`; a rota `/api/webhooks/evolution/messages-update` esta preparada para esse modo.
+As confirmacoes de marcacao e de cancelamento sao enviadas diretamente por email quando o cliente indica um endereco. O email de confirmacao inclui os detalhes da marcacao e os links para reagendar e cancelar.
 
 ## Deploy no Railway
 
@@ -160,7 +98,7 @@ Variaveis minimas para a app no Railway:
 - `SESSION_SECRET`: segredo forte para sessoes
 - `PUBLIC_URL`: dominio publico da app
 - `ALLOWED_ORIGINS`: mesmo dominio publico da app
-- variaveis do provider de mensagens escolhido, se quiseres envio automatico
+- `RESEND_API_KEY` e `RESEND_FROM_EMAIL` para envio das notificacoes
 
 Depois de ligares a base de dados, executa `npm run db:push` uma vez para criar/atualizar as tabelas.
 

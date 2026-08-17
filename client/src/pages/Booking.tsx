@@ -519,12 +519,20 @@ export default function Booking() {
           <p className="text-gray-400 mb-3">
             Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
           </p>
-          <p className="mb-8 text-sm text-gray-500">
-            Vai receber a confirmação por WhatsApp com os detalhes da marcação e o link de cancelamento.
-          </p>
-          <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
-            Se não receber a mensagem em poucos minutos, contacte diretamente a barbearia para alterar ou cancelar a marcação.
-          </p>
+          {customerDetails.email.trim() ? (
+            <>
+              <p className="mb-3 text-sm text-gray-500">
+                Enviámos para o seu email a confirmação com os detalhes da marcação e o link de cancelamento.
+              </p>
+              <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
+                Se não encontrar o email em poucos minutos, verifique a pasta de spam. Se ainda assim não o receber, contacte diretamente a barbearia.
+              </p>
+            </>
+          ) : (
+            <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-gray-400">
+              Como não indicou um email, não receberá o link de cancelamento. Se precisar de alterar ou cancelar a marcação, contacte diretamente a barbearia.
+            </p>
+          )}
           
           <div className="space-y-4">
             <Link href="/">
@@ -970,14 +978,18 @@ export default function Booking() {
                       )}
                       maxLength={MAX_EMAIL_LENGTH}
                       aria-invalid={showCustomerError("email")}
-                      aria-describedby={showCustomerError("email") ? "email-error" : undefined}
+                      aria-describedby={showCustomerError("email") ? "email-error" : "email-help"}
                       value={customerDetails.email}
                       onChange={(e) => setCustomerDetails(prev => ({ ...prev, email: e.target.value }))}
                       onBlur={() => markCustomerTouched("email")}
                     />
-                    {showCustomerError("email") && (
+                    {showCustomerError("email") ? (
                       <p id="email-error" className="text-xs font-medium text-red-400">
                         {customerFieldErrors.email}
+                      </p>
+                    ) : (
+                      <p id="email-help" className="text-[11px] leading-relaxed text-gray-500">
+                        Indique o email para receber a confirmação da marcação e o link de cancelamento.
                       </p>
                     )}
                   </div>

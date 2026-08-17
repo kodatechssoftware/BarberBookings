@@ -9,7 +9,6 @@ import {
   ensureBarberCompensationRulesTable,
   ensureBarberServicesTable,
   ensureBusinessExpensesTable,
-  ensureWhatsappMessagesTable,
   ensureServiceAgendaLabelColumn,
   pool,
   repairKnownTextEncodingArtifacts,
@@ -180,7 +179,6 @@ app.use((req, res, next) => {
   await ensureBarberServicesTable();
   await ensureBarberCompensationRulesTable();
   await ensureBusinessExpensesTable();
-  await ensureWhatsappMessagesTable();
   await ensureAppointmentOverlapProtection();
   const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
   if (repairedEncodingRows > 0) {

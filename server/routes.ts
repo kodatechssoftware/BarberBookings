@@ -9,11 +9,6 @@ import {
   sendBookingCancellationConfirmation,
   sendBookingConfirmation,
 } from "./email";
-import {
-  recordEvolutionMessagesUpdate,
-  sendBookingWhatsAppCancellation,
-  sendBookingWhatsAppConfirmation,
-} from "./whatsapp";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import session from "express-session";
@@ -914,10 +909,8 @@ function buildPublicUrl(path: string) {
 }
 
 type BookingCreatedNotificationParams = {
-  appointmentId: number;
   customerName: string;
   customerEmail?: string | null;
-  customerPhone: string;
   barberName?: string;
   serviceName: string;
   startTime: Date;
@@ -927,7 +920,7 @@ type BookingCreatedNotificationParams = {
   depositReason?: string | null;
 };
 
-type NotificationChannel = "whatsapp_pending" | "email" | "none";
+type NotificationChannel = "email" | "none";
 
 function runNotificationJob(
   label: string,
@@ -943,24 +936,6 @@ function runNotificationJob(
 }
 
 async function sendBookingCreatedNotification(params: BookingCreatedNotificationParams) {
-  let whatsappAccepted = false;
-
-  try {
-    const whatsappResult = await sendBookingWhatsAppConfirmation({
-      appointmentId: params.appointmentId,
-      customerName: params.customerName,
-      customerPhone: params.customerPhone,
-      barberName: params.barberName,
-      serviceName: params.serviceName,
-      startTime: params.startTime,
-      cancelUrl: buildPublicUrl(`/cancel/${params.cancelToken}`),
-    });
-    whatsappAccepted = Boolean(whatsappResult && whatsappResult.accepted);
-  } catch (error) {
-    console.error("WhatsApp booking confirmation failed; trying email fallback:", error);
-  }
-
-  if (whatsappAccepted) return "whatsapp_pending";
   if (!params.customerEmail) return "none";
 
   const emailSent = await sendBookingConfirmation({
@@ -980,10 +955,8 @@ async function sendBookingCreatedNotification(params: BookingCreatedNotification
 }
 
 type BookingCancelledNotificationParams = {
-  appointmentId: number;
   customerName: string;
   customerEmail?: string | null;
-  customerPhone: string;
   barberName?: string;
   serviceName: string;
   startTime: Date;
@@ -991,23 +964,6 @@ type BookingCancelledNotificationParams = {
 };
 
 async function sendBookingCancelledNotification(params: BookingCancelledNotificationParams) {
-  let whatsappAccepted = false;
-
-  try {
-    const whatsappResult = await sendBookingWhatsAppCancellation({
-      appointmentId: params.appointmentId,
-      customerName: params.customerName,
-      customerPhone: params.customerPhone,
-      barberName: params.barberName,
-      serviceName: params.serviceName,
-      startTime: params.startTime,
-    });
-    whatsappAccepted = Boolean(whatsappResult && whatsappResult.accepted);
-  } catch (error) {
-    console.error("WhatsApp booking cancellation failed; trying email fallback:", error);
-  }
-
-  if (whatsappAccepted) return "whatsapp_pending";
   if (!params.customerEmail) return "none";
 
   const emailSent = await sendBookingCancellationConfirmation({
@@ -1380,27 +1336,6 @@ function getCustomerIdentity(appointment: Appointment) {
   return name ? `${contact}:${name}` : contact;
 }
 
-function isEvolutionWebhookAuthorized(req: Request) {
-  const expectedSecret = process.env.EVOLUTION_WEBHOOK_SECRET?.trim();
-  if (!expectedSecret) return true;
-
-  const authorization = req.headers.authorization || "";
-  const bearerToken = authorization.toLowerCase().startsWith("bearer ")
-    ? authorization.slice(7).trim()
-    : "";
-  const headerSecret = typeof req.headers["x-webhook-secret"] === "string"
-    ? req.headers["x-webhook-secret"].trim()
-    : "";
-
-  return bearerToken === expectedSecret || headerSecret === expectedSecret;
-}
-
-function isEvolutionMessagesUpdatePayload(req: Request) {
-  const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
-  const rawEvent = String(body.event || "").trim().toUpperCase().replace(/\./g, "_");
-  return rawEvent === "MESSAGES_UPDATE" || req.path.endsWith("/messages-update");
-}
-
 export async function registerRoutes(
   app: Express,
   httpServer: Server
@@ -1429,25 +1364,6 @@ export async function registerRoutes(
   }
 
   app.use(session(sessionConfig));
-
-  app.post(["/api/webhooks/evolution", "/api/webhooks/evolution/messages-update"], (req, res) => {
-    if (!isEvolutionWebhookAuthorized(req)) {
-      return res.status(401).json({ message: "Webhook nao autorizado." });
-    }
-
-    res.status(200).json({ ok: true });
-
-    if (!isEvolutionMessagesUpdatePayload(req)) return;
-
-    void recordEvolutionMessagesUpdate(req.body)
-      .then((updates) => {
-        const matched = updates.filter((update) => update.updated).length;
-        console.log(`Evolution MESSAGES_UPDATE processed: ${matched}/${updates.length} delivery record(s) matched.`);
-      })
-      .catch((error) => {
-        console.error("Evolution MESSAGES_UPDATE processing failed:", error);
-      });
-  });
 
   // === AUTH ===
   app.post("/api/admin/login", async (req, res) => {
@@ -2501,7 +2417,6 @@ export async function registerRoutes(
         return sendBookingCreatedNotification({
           customerName: input.customerName,
           customerEmail: normalizedCustomerEmail || null,
-          customerPhone: normalizedCustomerPhone,
           barberName: barber?.name,
           serviceName: service?.name || "Serviço indisponível",
           startTime: input.startTime,
@@ -2509,7 +2424,6 @@ export async function registerRoutes(
           durationMinutes: appointment.durationMinutes,
           depositRequired: appointment.depositRequired,
           depositReason: appointment.depositReason,
-          appointmentId: appointment.id,
         });
       });
 
@@ -3171,12 +3085,10 @@ export async function registerRoutes(
       return sendBookingCancelledNotification({
         customerName: appointment.customerName,
         customerEmail: appointment.customerEmail,
-        customerPhone: appointment.customerPhone,
         barberName: barber?.name,
         serviceName: service?.name || "Serviço indisponível",
         startTime: toDate(appointment.startTime),
         lateCancellation,
-        appointmentId: appointment.id,
       });
     });
 

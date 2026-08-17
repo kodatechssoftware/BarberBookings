@@ -5,6 +5,9 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 const isProduction = process.env.NODE_ENV === "production";
+const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
+const fromEmail = process.env.RESEND_FROM_EMAIL?.trim() || "onboarding@resend.dev";
+const emailFrom = `${shopName} <${fromEmail}>`;
 
 interface SendConfirmationParams {
   customerName: string;
@@ -94,12 +97,12 @@ export async function sendBookingConfirmation({
 
   try {
     const response = await resend.emails.send({
-      from: "Baptista Barber Shop <onboarding@resend.dev>",
+      from: emailFrom,
       to: customerEmail,
-      subject: "Confirmação de marcação - Baptista Barber Shop",
+      subject: `Confirmação de marcação - ${shopName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">Baptista Barber Shop</h2>
+          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(shopName)}</h2>
           <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
           <p>A sua marcação foi confirmada com sucesso.</p>
           <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
@@ -163,12 +166,12 @@ export async function sendBookingCancellationConfirmation({
 
   try {
     const response = await resend.emails.send({
-      from: "Baptista Barber Shop <onboarding@resend.dev>",
+      from: emailFrom,
       to: customerEmail,
-      subject: "Cancelamento de marcação - Baptista Barber Shop",
+      subject: `Cancelamento de marcação - ${shopName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">Baptista Barber Shop</h2>
+          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(shopName)}</h2>
           <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
           <p>A sua marcação foi cancelada com sucesso.</p>
           <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
@@ -181,7 +184,7 @@ export async function sendBookingCancellationConfirmation({
               : ""
           }
           <p>Se quiser voltar a marcar, estamos disponíveis para agendar uma nova data quando quiser.</p>
-          <p>Obrigado,<br />Baptista Barber Shop</p>
+          <p>Obrigado,<br />${escapeHtml(shopName)}</p>
         </div>
       `,
     });

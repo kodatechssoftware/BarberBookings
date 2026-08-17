@@ -486,7 +486,6 @@ export function getAppointmentContactLinks(phone: string) {
   return {
     displayPhone,
     tel: normalizedDigits ? `tel:+${normalizedDigits}` : "",
-    whatsapp: normalizedDigits ? `https://wa.me/${normalizedDigits}` : "",
   };
 }
 

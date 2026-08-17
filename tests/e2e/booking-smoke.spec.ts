@@ -426,6 +426,8 @@ test.describe("public booking flow", () => {
     expect(createResponse.status(), await createResponse.text()).toBe(201);
     const appointment = await createResponse.json();
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
+    await expect(page.getByText(/Enviámos para o seu email a confirmação/)).toBeVisible();
+    await expect(page.getByText(/verifique a pasta de spam/)).toBeVisible();
 
     await page.goto(`/cancel/${appointment.cancelToken}`);
     await expect(page.getByRole("heading", { name: "Cancelar marcação" })).toBeVisible();
@@ -437,6 +439,32 @@ test.describe("public booking flow", () => {
     await page.reload();
     await expect(page.getByRole("heading", { name: "Marcação Cancelada" })).toBeVisible();
     await expect(page.getByText(/já se encontra cancelada/i)).toBeVisible();
+  });
+
+  test("explains email notifications and the no-email cancellation path", async ({ page }) => {
+    const bookingDate = dateKeyFromIso(futureThursdayIso(39, 15, 30));
+    await page.goto(`/book?barberId=1&serviceId=1&date=${bookingDate}&time=15:30`);
+
+    await expect(page.getByText(
+      "Indique o email para receber a confirmação da marcação e o link de cancelamento.",
+    )).toBeVisible();
+
+    await page.route("**/api/appointments", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ id: 999999, cancelToken: "email-optional-test" }),
+      });
+    });
+
+    await page.getByPlaceholder("O seu nome").fill("Cliente Sem Email");
+    await page.getByPlaceholder("912 345 678").fill("912695761");
+    await page.getByRole("button", { name: "Confirmar" }).click();
+
+    await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
+    await expect(page.getByText(/Como não indicou um email, não receberá o link de cancelamento/)).toBeVisible();
+    await expect(page.getByText(/contacte diretamente a barbearia/)).toBeVisible();
   });
 
   test("refuses a blacklisted contact in the real public booking UI without occupying the slot", async ({ page, request }) => {
@@ -3402,12 +3430,22 @@ test.describe("booking rules", () => {
 
     const [barber] = await barbersResponse.json();
     const [service] = await servicesResponse.json();
+    const outsideScheduleStart = futureThursdayIso(52, 19, 30);
+    const expectedLocalDateTime = new Intl.DateTimeFormat("pt-PT", {
+      timeZone: "Europe/Lisbon",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(outsideScheduleStart)).replace(",", "");
 
     const response = await request.post("/api/appointments/block", {
       data: {
         barberId: barber.id,
         serviceId: service.id,
-        startTime: "2026-08-06T18:30:00.000Z",
+        startTime: outsideScheduleStart,
         name: "Recorrente Fora Horario QA",
         phone: "912695737",
         isManualBooking: true,
@@ -3419,7 +3457,7 @@ test.describe("booking rules", () => {
 
     expect(response.status()).toBe(400);
     const body = await response.json();
-    expect(body.message).toContain("06/08/2026 19:30");
+    expect(body.message).toContain(expectedLocalDateTime);
     expect(body.message).toContain("60 min");
   });
 

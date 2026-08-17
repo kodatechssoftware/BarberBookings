@@ -21,7 +21,7 @@ export type AppointmentRecord = {
   depositRequired: boolean;
   depositReason: string | null;
   createdAt: string | null;
-  notificationChannel?: "whatsapp" | "email" | "none";
+  notificationChannel?: "email" | "none";
   notificationSent?: boolean;
 };
 
@@ -56,7 +56,7 @@ export type CancelAppointmentResponse = {
   lateCancellation?: boolean;
   policyHours?: number;
   alreadyCancelled?: boolean;
-  notificationChannel?: "whatsapp" | "email" | "none";
+  notificationChannel?: "email" | "none";
   notificationSent?: boolean;
 };
 
