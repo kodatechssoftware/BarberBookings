@@ -671,6 +671,10 @@ function getErrorCode(error: unknown) {
 }
 
 function validateAppointmentFilters(query: Request["query"]) {
+  if (query.scope !== undefined && query.scope !== "team") {
+    return "Âmbito de agenda inválido.";
+  }
+
   const barberIdValue = query.barberId;
   if (barberIdValue !== undefined) {
     const barberId = Number(barberIdValue);
@@ -2260,14 +2264,36 @@ export async function registerRoutes(
     const filterError = validateAppointmentFilters(req.query);
     if (filterError) return res.status(400).json({ message: filterError });
     const appSession = getAppSession(req);
+    const isBarberTeamAgenda = appSession.role === "barber" && req.query.scope === "team";
     const barberId = appSession.role === "barber"
-      ? Number(appSession.barberId)
+      ? (isBarberTeamAgenda ? undefined : Number(appSession.barberId))
       : (req.query.barberId ? Number(req.query.barberId) : undefined);
     const date = req.query.date as string | undefined;
     // If barberId is 0 (Any), we fetch for all barbers to find combined busy slots
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
     const appointments = await storage.getAppointments(effectiveBarberId, date);
-    res.json(appointments);
+
+    if (appSession.role !== "barber") {
+      return res.json(appointments.map((appointment) => ({ ...appointment, canManage: true })));
+    }
+
+    const ownBarberId = Number(appSession.barberId);
+    return res.json(appointments.map((appointment) => {
+      const canManage = appointment.barberId === ownBarberId;
+      if (canManage) return { ...appointment, canManage: true };
+
+      return {
+        ...appointment,
+        customerEmail: null,
+        customerPhone: "",
+        cancelToken: "",
+        paymentMethod: "pending",
+        depositRequired: false,
+        depositReason: null,
+        createdAt: null,
+        canManage: false,
+      };
+    }));
   });
 
   app.post(api.appointments.create.path, async (req, res) => {

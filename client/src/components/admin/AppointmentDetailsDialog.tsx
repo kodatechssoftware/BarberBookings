@@ -46,6 +46,7 @@ type AdminAppointment = {
   customerEmail?: string | null;
   depositRequired?: boolean;
   depositReason?: string | null;
+  canManage?: boolean;
 };
 
 type ServiceListItem = {
@@ -374,6 +375,7 @@ export function AppointmentDetailsDialog({
   onStatusChange,
   onBlockCustomer,
   canManageSchedule,
+  canManageAppointment,
 }: {
   appointment: AdminAppointment | null;
   open: boolean;
@@ -396,6 +398,7 @@ export function AppointmentDetailsDialog({
   ) => void;
   onBlockCustomer: (appointment: AdminAppointment) => Promise<boolean | void>;
   canManageSchedule: boolean;
+  canManageAppointment: boolean;
 }) {
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
@@ -404,7 +407,11 @@ export function AppointmentDetailsDialog({
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
 
   useEffect(() => {
-    if (!open || !appointment?.customerPhone) return;
+    if (!open || !canManageAppointment || !appointment?.customerPhone) {
+      setCustomerNotes("");
+      setCustomerNotesUpdatedAt(null);
+      return;
+    }
 
     let isMounted = true;
     const loadCustomerNotes = async () => {
@@ -433,7 +440,7 @@ export function AppointmentDetailsDialog({
     return () => {
       isMounted = false;
     };
-  }, [appointment?.customerEmail, appointment?.customerName, appointment?.customerPhone, open]);
+  }, [appointment?.customerEmail, appointment?.customerName, appointment?.customerPhone, canManageAppointment, open]);
 
   const handleSaveCustomerNotes = async () => {
     if (!appointment?.customerPhone) return;
@@ -512,7 +519,9 @@ export function AppointmentDetailsDialog({
               <div className="min-w-0">
                 <p className="text-2xl font-display font-bold text-primary">{format(start, "HH:mm")}</p>
                 <h3 className="mt-1 truncate text-lg font-bold text-white">{appointment.customerName}</h3>
-                <p className="text-sm text-gray-400">{contactLinks.displayPhone || appointment.customerPhone}</p>
+                {canManageAppointment && (
+                  <p className="text-sm text-gray-400">{contactLinks.displayPhone || appointment.customerPhone}</p>
+                )}
               </div>
               <span className={cn("shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide", getStatusClass(appointment.status))}>
                 {getStatusLabel(appointment.status)}
@@ -528,7 +537,7 @@ export function AppointmentDetailsDialog({
                 <p className="text-xs uppercase tracking-widest text-gray-500">Serviço</p>
                 <p className="mt-1 font-semibold text-white">{getServiceName(appointment.serviceId)}</p>
               </div>
-              {appointment.status === "completed" && (
+              {canManageAppointment && appointment.status === "completed" && (
                 <div className="rounded-xl border border-white/10 bg-card px-3 py-2 sm:col-span-2">
                   <p className="text-xs uppercase tracking-widest text-gray-500">Pagamento</p>
                   <p className="mt-1 font-semibold text-white">{getPaymentMethodLabel(appointment.paymentMethod)}</p>
@@ -537,6 +546,7 @@ export function AppointmentDetailsDialog({
             </div>
           </div>
 
+          {canManageAppointment ? (
           <div className="rounded-2xl border border-white/10 bg-background/50 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -575,20 +585,25 @@ export function AppointmentDetailsDialog({
               </Button>
             </div>
           </div>
+          ) : (
+            <div className="rounded-2xl border border-white/10 bg-background/50 p-4 text-sm text-gray-400">
+              Esta marcação pertence a outro barbeiro. Pode consultar o horário, o cliente e o serviço para coordenar a agenda, mas apenas o barbeiro responsável ou um administrador pode gerir os detalhes.
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-            {contactLinks.tel && (
+            {canManageAppointment && contactLinks.tel && (
               <Button asChild size="sm" variant="outline" className="h-9 border-white/10 text-xs">
                 <a href={contactLinks.tel}>
                   <Phone className="mr-1 h-3.5 w-3.5" /> Ligar
                 </a>
               </Button>
             )}
-            <Button size="sm" variant="outline" onClick={handleOpenHistory} className="h-9 border-white/10 text-xs">
+            {canManageAppointment && <Button size="sm" variant="outline" onClick={handleOpenHistory} className="h-9 border-white/10 text-xs">
               <User className="mr-1 h-3.5 w-3.5" /> Histórico
-            </Button>
+            </Button>}
 
-            {appointment.status === "booked" && (
+            {canManageAppointment && appointment.status === "booked" && (
               <>
                 <Button
                   size="sm"

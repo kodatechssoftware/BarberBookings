@@ -87,6 +87,7 @@ type AdminAppointment = {
   customerEmail?: string | null;
   depositRequired?: boolean;
   depositReason?: string | null;
+  canManage?: boolean;
 };
 
 function normalizeManualBookingPhoneForSubmit(phone: string) {
@@ -1426,7 +1427,7 @@ export default function Admin() {
   });
   const { data: weeklyAppointments, isLoading: isLoadingWeeklyAppointments } = useAppointments({
     enabled: user?.authorized === true,
-    barberId: user?.role === "barber" ? (user.id ? String(user.id) : undefined) : undefined,
+    scope: user?.role === "barber" ? "team" : undefined,
     refetchInterval: 10000,
   });
   const {
@@ -1528,19 +1529,19 @@ export default function Admin() {
   }, [weeklyAppointments]);
   const filteredAgendaAppointmentList = useMemo(() => {
     return agendaAppointmentList.filter((appointment) => {
-      const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
+      const matchesBarber = selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       const matchesStatus = selectedAgendaStatusFilter === "all"
         ? appointment.status === "booked"
         : appointment.status === selectedAgendaStatusFilter;
       return matchesBarber && matchesStatus;
     });
-  }, [agendaAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter, user?.role]);
+  }, [agendaAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter]);
   const todaySummary = useMemo<TodaySummary>(() => {
     const now = new Date();
     const todayKey = format(startOfToday(), "yyyy-MM-dd");
     const todayAppointments = agendaAppointmentList.filter((appointment) => {
       const matchesDay = format(parseISO(appointment.startTime), "yyyy-MM-dd") === todayKey;
-      const matchesBarber = user?.role === "barber" || selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
+      const matchesBarber = selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       return matchesDay && matchesBarber && isOperationalAdminAppointment(appointment);
     });
     const bookedToday = todayAppointments.filter((appointment) => appointment.status === "booked");
@@ -1559,7 +1560,7 @@ export default function Admin() {
         .reduce((total, appointment) => total + getAppointmentServicePriceCents(appointment, services), 0),
       nextAppointment,
     };
-  }, [agendaAppointmentList, selectedBarberFilter, services, user?.role]);
+  }, [agendaAppointmentList, selectedBarberFilter, services]);
   const selectedAppointmentDetails = useMemo(() => {
     if (!selectedAppointment) return null;
     const candidates = [...agendaAppointmentList, ...appointmentList];
@@ -2478,18 +2479,13 @@ export default function Admin() {
   };
 
   const activeBarberColumns = useMemo(() => {
-    const allBarbers = user?.role === "barber" ? (barbers || []) : activeBarbers;
-    if (user?.role === "barber") {
-      return allBarbers.filter((barber) => barber.id === user.id);
-    }
+    const allBarbers = activeBarbers;
     if (selectedBarberFilter !== "all") {
       return allBarbers.filter((barber) => String(barber.id) === selectedBarberFilter);
     }
     return allBarbers;
   }, [activeBarbers, barbers, selectedBarberFilter, user]);
-  const weeklyAgendaBarberOptions = user?.role === "barber"
-    ? activeBarberColumns
-    : activeBarbers;
+  const weeklyAgendaBarberOptions = activeBarberColumns;
 
   const dayAppointmentSummary = useMemo(() => ({
     total: appointmentList.length,
@@ -3119,6 +3115,7 @@ export default function Admin() {
           onStatusChange={handleStatusChange}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}
           canManageSchedule={user.role === "admin"}
+          canManageAppointment={user.role === "admin" || selectedAppointmentDetails?.canManage !== false}
         />
 
         <Dialog

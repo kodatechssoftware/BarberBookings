@@ -21,6 +21,7 @@ export type WeeklyAgendaAppointment = {
   customerEmail?: string | null;
   depositRequired?: boolean;
   depositReason?: string | null;
+  canManage?: boolean;
 };
 
 type AppointmentStatusFilter = AppointmentStatus | "all";
@@ -647,7 +648,10 @@ export function WeeklyAgenda({
   );
 
   const handleDragStart = (event: DragEvent, appointment: WeeklyAgendaAppointment) => {
-    if (appointment.status !== "booked") return;
+    if (!canManageSchedule || appointment.status !== "booked") {
+      event.preventDefault();
+      return;
+    }
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", String(appointment.id));
   };
@@ -1074,7 +1078,7 @@ export function WeeklyAgenda({
                                     <button
                                       key={appointment.id}
                                       type="button"
-                                      draggable={appointment.status === "booked"}
+                                      draggable={Boolean(canManageSchedule && appointment.status === "booked")}
                                       aria-label={appointmentLabel}
                                       title={appointmentLabel}
                                       onDragStart={(event) => handleDragStart(event, appointment)}
@@ -1399,7 +1403,7 @@ export function WeeklyAgenda({
                               <button
                                 key={appointment.id}
                                 type="button"
-                                draggable={appointment.status === "booked"}
+                                draggable={Boolean(canManageSchedule && appointment.status === "booked")}
                                 aria-label={appointmentLabel}
                                 title={appointmentLabel}
                                 onDragStart={(event) => handleDragStart(event, appointment)}

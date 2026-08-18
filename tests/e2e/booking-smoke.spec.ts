@@ -5018,6 +5018,46 @@ test.describe("booking rules", () => {
         });
         expect(acceptResponse.status(), await acceptResponse.text()).toBe(200);
 
+        const ownAppointmentsResponse = await barberContext.get(`/api/appointments?date=${exportDateKey}`);
+        expect(ownAppointmentsResponse.ok(), await ownAppointmentsResponse.text()).toBe(true);
+        const ownAppointments = await ownAppointmentsResponse.json();
+        expect(ownAppointments.some((appointment: any) => appointment.id === ownAppointmentId)).toBe(true);
+        expect(ownAppointments.some((appointment: any) => appointment.id === otherAppointmentId)).toBe(false);
+
+        const teamAgendaResponse = await barberContext.get(`/api/appointments?date=${exportDateKey}&scope=team`);
+        expect(teamAgendaResponse.ok(), await teamAgendaResponse.text()).toBe(true);
+        const teamAgenda = await teamAgendaResponse.json();
+        const ownTeamAppointment = teamAgenda.find((appointment: any) => appointment.id === ownAppointmentId);
+        const colleagueAppointment = teamAgenda.find((appointment: any) => appointment.id === otherAppointmentId);
+        expect(ownTeamAppointment).toMatchObject({
+          barberId: ownBarber.id,
+          customerName: ownCustomerName,
+          canManage: true,
+        });
+        expect(ownTeamAppointment.customerPhone).toBeTruthy();
+        expect(ownTeamAppointment.cancelToken).toBeTruthy();
+        expect(colleagueAppointment).toMatchObject({
+          barberId: otherBarber.id,
+          customerName: otherCustomerName,
+          customerPhone: "",
+          customerEmail: null,
+          cancelToken: "",
+          paymentMethod: "pending",
+          depositRequired: false,
+          depositReason: null,
+          createdAt: null,
+          canManage: false,
+        });
+
+        const forbiddenColleagueUpdate = await barberContext.patch(
+          `/api/appointments/${otherAppointmentId}/status`,
+          { data: { status: "cancelled", expectedStatus: "booked" } },
+        );
+        expect(forbiddenColleagueUpdate.status(), await forbiddenColleagueUpdate.text()).toBe(403);
+
+        const invalidAgendaScopeResponse = await barberContext.get("/api/appointments?scope=invalid");
+        expect(invalidAgendaScopeResponse.status(), await invalidAgendaScopeResponse.text()).toBe(400);
+
         const listResponse = await barberContext.get("/api/barbers?includeHidden=true");
         expect(listResponse.ok()).toBe(true);
         const listedBarbers = await listResponse.json();
@@ -5091,7 +5131,9 @@ test.describe("booking rules", () => {
     const email = `barber-ui-${suffix}@example.com`;
     const password = `Password-${suffix}`;
     const customerName = `Cliente Barber UI ${suffix}`;
+    const colleagueCustomerName = `Cliente Colega UI ${suffix}`;
     const startTime = futureThursdayIso(4, 10, 0);
+    const colleagueStartTime = futureThursdayIso(4, 11, 0);
     const servicesResponse = await request.get("/api/services?includeHidden=true");
     expect(servicesResponse.ok()).toBe(true);
     const [service] = await servicesResponse.json();
@@ -5108,7 +5150,20 @@ test.describe("booking rules", () => {
     });
     expect(createBarberResponse.status(), await createBarberResponse.text()).toBe(201);
     const barber = await createBarberResponse.json();
+    const createColleagueResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Barber Colega UI ${suffix}`,
+        specialty: "QA",
+        email: `barber-colleague-ui-${suffix}@example.com`,
+        color: "#8B5CF6",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(createColleagueResponse.status(), await createColleagueResponse.text()).toBe(201);
+    const colleague = await createColleagueResponse.json();
     let appointmentId: number | undefined;
+    let colleagueAppointmentId: number | undefined;
 
     try {
       const appointmentResponse = await request.post("/api/appointments/block", {
@@ -5129,6 +5184,24 @@ test.describe("booking rules", () => {
       )?.id;
       expect(appointmentId).toBeTruthy();
 
+      const colleagueAppointmentResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: colleague.id,
+          serviceId: service.id,
+          startTime: colleagueStartTime,
+          name: colleagueCustomerName,
+          phone: "+351912345680",
+          isManualBooking: true,
+        },
+      });
+      expect(colleagueAppointmentResponse.status(), await colleagueAppointmentResponse.text()).toBe(201);
+      const allAppointmentsResponse = await request.get(`/api/appointments?date=${dateKeyFromIso(colleagueStartTime)}`);
+      expect(allAppointmentsResponse.ok()).toBe(true);
+      colleagueAppointmentId = (await allAppointmentsResponse.json()).find(
+        (appointment: any) => appointment.customerName === colleagueCustomerName,
+      )?.id;
+      expect(colleagueAppointmentId).toBeTruthy();
+
       const inviteResponse = await request.post(`/api/barbers/${barber.id}/invite`, { data: {} });
       expect(inviteResponse.status(), await inviteResponse.text()).toBe(201);
       const invite = await inviteResponse.json();
@@ -5140,7 +5213,21 @@ test.describe("booking rules", () => {
 
       await page.goto("/admin");
       await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+      await selectAgendaDay(page, colleagueStartTime);
       await expect(page.getByText(barber.name, { exact: true }).first()).toBeVisible();
+      await expect(page.getByText(colleague.name, { exact: true }).first()).toBeVisible();
+      const colleagueAgendaButton = page.getByRole("button", {
+        name: new RegExp(`Abrir detalhes da marcação de ${colleagueCustomerName}`),
+      }).first();
+      await expect(colleagueAgendaButton).toBeVisible();
+      await colleagueAgendaButton.click();
+      const colleagueDialog = page.getByRole("dialog");
+      await expect(colleagueDialog.getByText(/pertence a outro barbeiro/i)).toBeVisible();
+      await expect(colleagueDialog.getByText("+351912345680")).toHaveCount(0);
+      await expect(colleagueDialog.getByRole("button", { name: "Feita" })).toHaveCount(0);
+      await expect(colleagueDialog.getByRole("button", { name: /Histórico/ })).toHaveCount(0);
+      await expect(colleagueDialog.getByRole("button", { name: /Ligar/ })).toHaveCount(0);
+      await page.keyboard.press("Escape");
       await expect(page.getByRole("button", { name: "Ausência" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Marcação manual" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: /^Criar marcação para/ })).toHaveCount(0);
@@ -5161,6 +5248,10 @@ test.describe("booking rules", () => {
       if (appointmentId) {
         await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
       }
+      if (colleagueAppointmentId) {
+        await request.patch(`/api/appointments/${colleagueAppointmentId}/status`, { data: { status: "cancelled" } });
+      }
+      await request.delete(`/api/barbers/${colleague.id}`);
       await request.delete(`/api/barbers/${barber.id}`);
     }
   });

@@ -23,6 +23,7 @@ export type AppointmentRecord = {
   createdAt: string | null;
   notificationChannel?: "email" | "none";
   notificationSent?: boolean;
+  canManage?: boolean;
 };
 
 export type PublicAppointment = {
@@ -67,18 +68,20 @@ type AppointmentQueryParams = {
   endDate?: string;
   enabled?: boolean;
   refetchInterval?: number | false;
+  scope?: "team";
 };
 
 const PUBLIC_APPOINTMENTS_PATH = "/api/appointments/public";
 
 function appendAppointmentQuery(path: string, params?: AppointmentQueryParams) {
-  if (!params?.barberId && !params?.date && !params?.startDate && !params?.endDate) return path;
+  if (!params?.barberId && !params?.date && !params?.startDate && !params?.endDate && !params?.scope) return path;
 
   const queryParams = new URLSearchParams();
   if (params.barberId) queryParams.append("barberId", params.barberId);
   if (params.date) queryParams.append("date", params.date);
   if (params.startDate) queryParams.append("startDate", params.startDate);
   if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.scope) queryParams.append("scope", params.scope);
   return `${path}?${queryParams.toString()}`;
 }
 
