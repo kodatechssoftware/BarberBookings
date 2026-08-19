@@ -2579,7 +2579,7 @@ test.describe("booking rules", () => {
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor liquido estimado dos barbeiros")).toBe(90);
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor estimado da barbearia antes de despesas")).toBe(110);
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBe(30);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Resultado estimado apos despesas")).toBe(80);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Resultado estimado após despesas")).toBe(80);
 
     expect(getCellValueByFirstColumnLabel(summarySheet!, "Receita realizada")).toBe(200);
     expect(getCellValueByFirstColumnLabel(summarySheet!, "Aluguer de cadeira recebido pela barbearia")).toBe(0);
@@ -2718,7 +2718,7 @@ test.describe("booking rules", () => {
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor liquido estimado dos barbeiros")).toBe(75);
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor estimado da barbearia antes de despesas")).toBe(25);
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Resultado estimado apos despesas")).toBe(25);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Resultado estimado após despesas")).toBe(25);
 
     expect(getCellValueByFirstColumnLabel(summarySheet!, "Receita realizada")).toBe(100);
     expect(getCellValueByFirstColumnLabel(summarySheet!, "Aluguer de cadeira recebido pela barbearia")).toBe(25);
@@ -2770,19 +2770,54 @@ test.describe("booking rules", () => {
     expect(compensationRow!.getCell(shopValueCol).value).toBe(25);
   });
 
-  test("adds a business expense from the reports screen", async ({ page }) => {
+  test("adds, summarizes, exports and removes a business expense from the reports screen", async ({ page }) => {
     await loginAdmin(page);
 
     const expenseDescription = `Despesa UI ${Date.now()}`;
-    await page.getByRole("tab", { name: "Relatórios" }).click();
-    await page.getByPlaceholder("Ex.: Renda de julho, laminas, eletricidade").fill(expenseDescription);
-    await page.getByPlaceholder("Ex.: 125,50").fill("42,75");
-    await page.getByPlaceholder("Opcional. Ex.: pago em dinheiro, fornecedor, referencia.").fill("Registo criado pelo teste UI");
-    await page.getByRole("button", { name: "Registar despesa" }).click();
+    let expenseId: number | undefined;
+    try {
+      await page.getByRole("tab", { name: "Relatórios" }).click();
+      await page.getByPlaceholder("Ex.: renda de julho, lâminas, eletricidade").fill(expenseDescription);
+      await page.getByPlaceholder("Ex.: 125,50").fill("42,75");
+      await page.getByPlaceholder("Opcional. Ex.: pago em dinheiro, fornecedor, referência.").fill("Registo criado pelo teste UI");
+      await page.getByRole("button", { name: "Registar despesa" }).click();
 
-    await expect(page.getByText("Despesa registada.", { exact: true })).toBeVisible();
-    await expect(page.getByText(expenseDescription)).toBeVisible();
-    await expect(page.getByText("42,75 €").last()).toBeVisible();
+      await expect(page.getByText("Despesa registada.", { exact: true })).toBeVisible();
+      const expensesResponse = await page.request.get("/api/admin/expenses");
+      expect(expensesResponse.ok(), await expensesResponse.text()).toBe(true);
+      const expenses = await expensesResponse.json();
+      const createdExpense = expenses.find((expense: any) => expense.description === expenseDescription);
+      expect(createdExpense).toBeTruthy();
+      expenseId = createdExpense.id;
+      const expectedTotalCents = expenses.reduce((total: number, expense: any) => total + expense.amountCents, 0);
+
+      const expenseRow = page.getByTestId(`business-expense-${expenseId}`);
+      await expect(expenseRow.getByText(expenseDescription)).toBeVisible();
+      await expect(expenseRow.getByText("42,75 €", { exact: true })).toBeVisible();
+      await expect(page.getByTestId("business-expenses-total")).toHaveText(
+        `${(expectedTotalCents / 100).toFixed(2).replace(".", ",")} €`,
+      );
+
+      const today = new Date().toISOString().slice(0, 10);
+      const exportResponse = await page.request.get(`/api/admin/export?startDate=${today}&endDate=${today}&barberId=all`);
+      expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await exportResponse.body());
+      const expensesSheet = workbook.getWorksheet("Despesas");
+      expect(expensesSheet).toBeTruthy();
+      const exportedDescriptions: string[] = [];
+      expensesSheet!.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) exportedDescriptions.push(String(row.getCell(3).value || ""));
+      });
+      expect(exportedDescriptions).toContain(expenseDescription);
+
+      await expenseRow.getByRole("button").click();
+      await expect(page.getByText("Despesa removida.", { exact: true })).toBeVisible();
+      await expect(page.getByTestId(`business-expense-${expenseId}`)).toHaveCount(0);
+      expenseId = undefined;
+    } finally {
+      if (expenseId) await page.request.delete(`/api/admin/expenses/${expenseId}`);
+    }
   });
 
   test("records a historical manual booking as completed and includes it in the Excel report", async ({ request }) => {
@@ -5234,6 +5269,33 @@ test.describe("booking rules", () => {
       await expect(page.getByRole("button", { name: "Criar" })).toHaveCount(0);
       await expect(page.getByRole("tab", { name: "Equipa" })).toHaveCount(0);
       await expect(page.getByRole("tab", { name: "Serviços" })).toHaveCount(0);
+
+      const expensesResponse = await page.request.get("/api/admin/expenses");
+      expect(expensesResponse.status(), await expensesResponse.text()).toBe(401);
+      const createExpenseResponse = await page.request.post("/api/admin/expenses", {
+        data: {
+          category: "other",
+          description: `Despesa proibida ${suffix}`,
+          amountCents: 100,
+          expenseDate: dateKeyFromIso(startTime),
+          recurrence: "once",
+        },
+      });
+      expect(createExpenseResponse.status(), await createExpenseResponse.text()).toBe(401);
+
+      await page.getByRole("tab", { name: "Relatórios" }).click();
+      await expect(page.getByText("Exportar Relatório Excel")).toBeVisible();
+      await expect(page.getByText(barber.name, { exact: true })).toBeVisible();
+      await expect(page.getByText("Despesas da Barbearia")).toHaveCount(0);
+      await expect(page.getByText("Resumo financeiro")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Registar despesa" })).toHaveCount(0);
+      await expectNoHorizontalOverflow(page);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(page.getByText("Exportar Relatório Excel")).toBeVisible();
+      await expect(page.getByText(barber.name, { exact: true })).toBeVisible();
+      await expect(page.locator(".admin-tabs-horizontal-scroll")).toHaveCSS("overflow-x", "auto");
+      await expectNoHorizontalOverflow(page);
 
       await page.getByRole("tab", { name: "Marcações" }).click();
       await expect(page.getByRole("button", { name: "Manual", exact: true })).toHaveCount(0);

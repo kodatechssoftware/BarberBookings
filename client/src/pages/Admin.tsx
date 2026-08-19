@@ -217,19 +217,19 @@ type BusinessExpenseForm = {
 };
 
 const businessExpenseCategories: Array<{ value: BusinessExpenseCategory; label: string; help: string }> = [
-  { value: "rent", label: "Renda", help: "Valor fixo do espaco." },
-  { value: "utilities", label: "Agua / luz", help: "Contas de funcionamento." },
+  { value: "rent", label: "Renda", help: "Valor fixo do espaço." },
+  { value: "utilities", label: "Água / luz", help: "Contas de funcionamento." },
   { value: "internet", label: "Internet / telefone", help: "Comunicações da loja." },
-  { value: "materials", label: "Material e produtos", help: "Produtos, laminas, toalhas e consumiveis." },
-  { value: "equipment", label: "Equipamentos", help: "Maquinas, cadeiras e reparacoes." },
-  { value: "marketing", label: "Marketing", help: "Publicidade e conteudo." },
-  { value: "accounting", label: "Contabilidade", help: "Apoio contabilistico e administrativo." },
-  { value: "staff", label: "Pagamentos de equipa", help: "Acertos manuais fora das regras automaticas." },
+  { value: "materials", label: "Material e produtos", help: "Produtos, lâminas, toalhas e consumíveis." },
+  { value: "equipment", label: "Equipamentos", help: "Máquinas, cadeiras e reparações." },
+  { value: "marketing", label: "Marketing", help: "Publicidade e conteúdo." },
+  { value: "accounting", label: "Contabilidade", help: "Apoio contabilístico e administrativo." },
+  { value: "staff", label: "Pagamentos de equipa", help: "Acertos manuais fora das regras automáticas." },
   { value: "other", label: "Outros", help: "Qualquer despesa pontual." },
 ];
 
 const businessExpenseRecurrences: Array<{ value: BusinessExpenseRecurrence; label: string }> = [
-  { value: "once", label: "Unica" },
+  { value: "once", label: "Única" },
   { value: "weekly", label: "Semanal" },
   { value: "monthly", label: "Mensal" },
 ];
@@ -1673,8 +1673,8 @@ export default function Admin() {
     try {
       if (exportDates.start > exportDates.end) {
         toast({
-          title: "Datas invalidas",
-          description: "A data de inicio nao pode ser posterior a data de fim.",
+          title: "Datas inválidas",
+          description: "A data de início não pode ser posterior à data de fim.",
           variant: "destructive",
         });
         return;
@@ -1688,21 +1688,21 @@ export default function Admin() {
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.message || "Falha ao gerar o relatorio.");
+        throw new Error(errorBody?.message || "Falha ao gerar o relatório.");
       }
 
       const blob = await response.blob();
       const downloadUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = downloadUrl;
-      link.download = getFilenameFromContentDisposition(response.headers.get("Content-Disposition")) || "Relatorio.xlsx";
+      link.download = getFilenameFromContentDisposition(response.headers.get("Content-Disposition")) || "Relatório.xlsx";
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(downloadUrl);
-      toast({ title: "Sucesso", description: "O relatorio foi descarregado." });
+      toast({ title: "Sucesso", description: "O relatório foi descarregado." });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Falha ao gerar o relatorio.", variant: "destructive" });
+      toast({ title: "Erro", description: err.message || "Falha ao gerar o relatório.", variant: "destructive" });
     } finally {
       setIsExporting(false);
     }
@@ -1722,7 +1722,7 @@ export default function Admin() {
     const amountCents = eurosInputToCents(expenseForm.amount);
 
     if (!expenseForm.description.trim()) {
-      toast({ title: "Descricao em falta", description: "Indique a descricao da despesa.", variant: "destructive" });
+      toast({ title: "Descrição em falta", description: "Indique a descrição da despesa.", variant: "destructive" });
       return;
     }
 
@@ -4218,14 +4218,14 @@ export default function Admin() {
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
                 <p className="text-gray-400 text-sm">
                   {user.role === "admin"
-                    ? "Gere um ficheiro .xlsx com resumo financeiro, estados e detalhe das marcações do período."
+                    ? "Gere um ficheiro .xlsx com o resumo financeiro, os estados e os detalhes das marcações do período."
                     : "Gere um ficheiro .xlsx apenas com as suas marcações e resumo do período."}
                 </p>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label className="text-white">Data Início</Label>
+                    <Label className="text-white">Data de início</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
@@ -4239,7 +4239,7 @@ export default function Admin() {
                     </Popover>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-white">Data Fim</Label>
+                    <Label className="text-white">Data de fim</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
@@ -4262,7 +4262,7 @@ export default function Admin() {
                         <SelectValue placeholder="Selecione o barbeiro" />
                       </SelectTrigger>
                       <SelectContent className="bg-card border-white/10 text-white">
-                        <SelectItem value="all">Todos os Barbeiros</SelectItem>
+                        <SelectItem value="all">Todos os barbeiros</SelectItem>
                         {barbers?.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
@@ -4288,7 +4288,7 @@ export default function Admin() {
               <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:flex xl:h-full xl:flex-col">
                 <CardHeader>
                   <CardTitle className="text-xl font-display font-bold text-primary">Despesas da Barbearia</CardTitle>
-                  <p className="text-gray-400 text-sm">Registe renda, agua, luz, material, marketing ou outras despesas para entrarem no resumo financeiro.</p>
+                  <p className="text-gray-400 text-sm">Registe renda, água, luz, material, marketing ou outras despesas para serem incluídas no resumo financeiro.</p>
                 </CardHeader>
                 <CardContent className="xl:flex xl:flex-1 xl:flex-col">
                   <form className="flex flex-1 flex-col gap-4" onSubmit={handleAddExpense}>
@@ -4326,12 +4326,12 @@ export default function Admin() {
                     </div>
 
                     <div className="space-y-2">
-                      <Label className="text-white">Descricao</Label>
+                      <Label className="text-white">Descrição</Label>
                       <Input
                         value={expenseForm.description}
                         onChange={(event) => setExpenseForm({...expenseForm, description: event.target.value})}
                         className="border-white/10 bg-background text-white h-11"
-                        placeholder="Ex.: Renda de julho, laminas, eletricidade"
+                        placeholder="Ex.: renda de julho, lâminas, eletricidade"
                       />
                     </div>
 
@@ -4347,7 +4347,7 @@ export default function Admin() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label className="text-white">Recorrencia</Label>
+                        <Label className="text-white">Recorrência</Label>
                         <Select value={expenseForm.recurrence} onValueChange={(value) => setExpenseForm({...expenseForm, recurrence: value as BusinessExpenseRecurrence})}>
                           <SelectTrigger className="border-white/10 bg-background text-white h-11">
                             <SelectValue />
@@ -4359,7 +4359,7 @@ export default function Admin() {
                           </SelectContent>
                         </Select>
                         <p className="text-xs text-gray-500">
-                          O valor entra no periodo pela data registada. Use a periodicidade para identificar despesas fixas ou recorrentes.
+                          O valor é incluído no período correspondente à data registada. Use a periodicidade para identificar despesas fixas ou recorrentes.
                         </p>
                       </div>
                     </div>
@@ -4370,7 +4370,7 @@ export default function Admin() {
                         value={expenseForm.notes}
                         onChange={(event) => setExpenseForm({...expenseForm, notes: event.target.value})}
                         className="min-h-[76px] border-white/10 bg-background text-white"
-                        placeholder="Opcional. Ex.: pago em dinheiro, fornecedor, referencia."
+                        placeholder="Opcional. Ex.: pago em dinheiro, fornecedor, referência."
                       />
                     </div>
 
@@ -4385,18 +4385,18 @@ export default function Admin() {
               <Card className="bg-card border-white/10 xl:col-start-2 xl:row-start-2">
                 <CardHeader>
                   <CardTitle className="text-xl font-display font-bold text-primary">Resumo financeiro</CardTitle>
-                  <p className="text-gray-400 text-sm">Despesas registadas no periodo selecionado para o relatorio.</p>
+                  <p className="text-gray-400 text-sm">Despesas registadas no período selecionado para o relatório.</p>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="rounded-md border border-white/10 bg-background/70 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Total de despesas</p>
-                        <p className="text-2xl font-bold text-white">{(businessExpensesTotalCents / 100).toFixed(2).replace(".", ",")} €</p>
+                        <p data-testid="business-expenses-total" className="text-2xl font-bold text-white">{(businessExpensesTotalCents / 100).toFixed(2).replace(".", ",")} €</p>
                       </div>
                       <Euro className="h-6 w-6 text-primary" />
                     </div>
-                    <p className="mt-2 text-xs text-gray-500">O Excel combina este valor com a receita concluida e os pagamentos estimados aos barbeiros.</p>
+                    <p className="mt-2 text-xs text-gray-500">O Excel combina este valor com a receita concluída e os pagamentos estimados aos barbeiros.</p>
                   </div>
 
                   {isLoadingExpenses ? (
@@ -4406,12 +4406,12 @@ export default function Admin() {
                     </div>
                   ) : businessExpenses.length === 0 ? (
                     <div className="rounded-md border border-dashed border-white/10 py-10 text-center text-gray-500">
-                      Sem despesas registadas neste periodo.
+                      Sem despesas registadas neste período.
                     </div>
                   ) : (
                     <div className="divide-y divide-white/10 rounded-md border border-white/10">
                       {businessExpenses.map((expense) => (
-                        <div key={expense.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+                        <div key={expense.id} data-testid={`business-expense-${expense.id}`} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="font-semibold text-white">{expense.description}</p>

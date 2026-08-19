@@ -150,11 +150,11 @@ const customerNotesInputSchema = z.object({
 const barberUpdateInputSchema = api.barbers.create.input.partial();
 const businessExpenseInputSchema = z.object({
   category: z.enum(businessExpenseCategories),
-  description: z.string().trim().min(1, "Indique a descricao da despesa.").max(160, "A descricao nao pode ter mais de 160 caracteres."),
-  amountCents: z.number().int().min(0, "O valor nao pode ser negativo.").max(10_000_000, "O valor indicado e demasiado elevado."),
-  expenseDate: z.string().trim().refine(isCalendarDate, "Data invalida."),
+  description: z.string().trim().min(1, "Indique a descrição da despesa.").max(160, "A descrição não pode ter mais de 160 caracteres."),
+  amountCents: z.number().int().min(0, "O valor não pode ser negativo.").max(10_000_000, "O valor indicado é demasiado elevado."),
+  expenseDate: z.string().trim().refine(isCalendarDate, "Data inválida."),
   recurrence: z.enum(businessExpenseRecurrences).default("once"),
-  notes: z.string().trim().max(500, "As notas nao podem ter mais de 500 caracteres.").optional().nullable(),
+  notes: z.string().trim().max(500, "As notas não podem ter mais de 500 caracteres.").optional().nullable(),
 });
 
 type BarberCompensationInput = {
@@ -1510,16 +1510,16 @@ export async function registerRoutes(
       const category = req.query.category ? String(req.query.category) : undefined;
 
       if (startDate && !isCalendarDate(startDate)) {
-        return res.status(400).json({ message: "Data de inicio invalida." });
+        return res.status(400).json({ message: "Data de início inválida." });
       }
       if (endDate && !isCalendarDate(endDate)) {
-        return res.status(400).json({ message: "Data de fim invalida." });
+        return res.status(400).json({ message: "Data de fim inválida." });
       }
       if (startDate && endDate && startDate > endDate) {
-        return res.status(400).json({ message: "A data de inicio nao pode ser posterior a data de fim." });
+        return res.status(400).json({ message: "A data de início não pode ser posterior à data de fim." });
       }
       if (category && category !== "all" && !businessExpenseCategories.includes(category as BusinessExpenseCategory)) {
-        return res.status(400).json({ message: "Categoria invalida." });
+        return res.status(400).json({ message: "Categoria inválida." });
       }
 
       const expenses = await storage.getBusinessExpenses({ startDate, endDate, category });
@@ -1569,7 +1569,7 @@ export async function registerRoutes(
   app.patch("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
     try {
       const expenseId = parsePositiveInteger(req.params.id);
-      if (expenseId === null) return res.status(400).json({ message: "Despesa invalida." });
+      if (expenseId === null) return res.status(400).json({ message: "Despesa inválida." });
 
       const parsed = businessExpenseInputSchema.partial().parse(req.body);
       const patch = {
@@ -1578,7 +1578,7 @@ export async function registerRoutes(
         notes: parsed.notes === undefined ? undefined : parsed.notes || null,
       };
       const updated = await storage.updateBusinessExpense(expenseId, patch);
-      if (!updated) return res.status(404).json({ message: "Despesa nao encontrada" });
+      if (!updated) return res.status(404).json({ message: "Despesa não encontrada" });
 
       await recordAuditLog(req, {
         action: "business_expense.updated",
@@ -1603,10 +1603,10 @@ export async function registerRoutes(
   app.delete("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
     try {
       const expenseId = parsePositiveInteger(req.params.id);
-      if (expenseId === null) return res.status(400).json({ message: "Despesa invalida." });
+      if (expenseId === null) return res.status(400).json({ message: "Despesa inválida." });
 
       const existing = (await storage.getBusinessExpenses()).find((expense) => expense.id === expenseId);
-      if (!existing) return res.status(404).json({ message: "Despesa nao encontrada" });
+      if (!existing) return res.status(404).json({ message: "Despesa não encontrada" });
       await storage.deleteBusinessExpense(expenseId);
       await recordAuditLog(req, {
         action: "business_expense.deleted",
@@ -4320,9 +4320,9 @@ export async function registerRoutes(
         [
           "Data",
           "Categoria",
-          "Descricao",
+          "Descrição",
           "Valor (€)",
-          "Recorrencia",
+          "Recorrência",
           "Notas",
         ],
         businessExpenses
@@ -4365,7 +4365,7 @@ export async function registerRoutes(
         ["", ""],
         ["Despesas e resultado", ""],
         ["Despesas registadas", centsToEuros(businessExpensesCents)],
-        ["Resultado estimado apos despesas", centsToEuros(estimatedResultCents)],
+        ["Resultado estimado após despesas", centsToEuros(estimatedResultCents)],
         ["", ""],
         ["Nota", "No modelo de comissão, o barbeiro recebe a percentagem definida. No modelo de aluguer de cadeira, o barbeiro fica com a receita dos serviços e paga a renda ao salão; essa renda aparece como receita da barbearia, não como despesa operacional."],
       ]);
@@ -4391,7 +4391,7 @@ export async function registerRoutes(
             "Valor líquido estimado dos barbeiros",
             "Valor estimado da barbearia antes de despesas",
             "Despesas registadas",
-            "Resultado estimado apos despesas",
+            "Resultado estimado após despesas",
           ].includes(label)) {
             row.getCell(2).numFmt = currencyFormat;
           }
