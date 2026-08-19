@@ -4276,7 +4276,7 @@ export default function Admin() {
                   </div>
                 )}
 
-                <Button variant="gold" className="w-full h-12 text-base font-bold gap-2" onClick={handleExport} disabled={isExporting}>
+                <Button variant="gold" className="h-12 min-h-12 w-full gap-2 text-base font-bold" onClick={handleExport} disabled={isExporting}>
                   {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileDown className="w-5 h-5" />}
                   Gerar Relatório Excel
                 </Button>
@@ -4291,7 +4291,7 @@ export default function Admin() {
                   <p className="text-gray-400 text-sm">Registe renda, agua, luz, material, marketing ou outras despesas para entrarem no resumo financeiro.</p>
                 </CardHeader>
                 <CardContent className="xl:flex xl:flex-1 xl:flex-col">
-                  <form className="space-y-4 xl:flex xl:flex-1 xl:flex-col xl:space-y-0 xl:gap-4" onSubmit={handleAddExpense}>
+                  <form className="flex flex-1 flex-col gap-4" onSubmit={handleAddExpense}>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label className="text-white">Categoria</Label>
@@ -4374,7 +4374,7 @@ export default function Admin() {
                       />
                     </div>
 
-                    <Button type="submit" variant="gold" className="w-full h-12 text-base font-bold gap-2 xl:mt-auto" disabled={isSavingExpense}>
+                    <Button type="submit" variant="gold" className="mt-0 h-12 min-h-12 w-full gap-2 text-base font-bold xl:mt-auto" disabled={isSavingExpense}>
                       {isSavingExpense ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
                       Registar despesa
                     </Button>
