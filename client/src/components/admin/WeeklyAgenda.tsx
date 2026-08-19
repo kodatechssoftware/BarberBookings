@@ -910,7 +910,7 @@ export function WeeklyAgenda({
                         data-testid={`weekly-agenda-day-${key}`}
                         onClick={() => setSelectedDayKey(key)}
                         className={cn(
-                          "h-[108px] rounded-lg border p-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                          "flex h-[108px] flex-col items-stretch justify-start rounded-lg border p-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                           isSelected
                             ? "border-primary bg-primary/10 shadow-[0_0_0_1px_rgba(212,175,55,0.35)]"
                             : "border-white/10 bg-background/50 hover:border-white/20 hover:bg-white/[0.04]",
@@ -928,9 +928,9 @@ export function WeeklyAgenda({
                         <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                           {bookedAppointments.length === 0 ? "Livre" : "Marcações"}
                         </p>
-                        {bookedAppointments.length > 0 && (
-                          <div className="mt-2 flex -space-x-1">
-                            {bookedAppointments.slice(0, 6).map((appointment) => {
+                        <div className="mt-2 flex h-3 -space-x-1" aria-hidden={bookedAppointments.length === 0}>
+                          {bookedAppointments.length > 0 &&
+                            bookedAppointments.slice(0, 6).map((appointment) => {
                               const barber = barbersById.get(appointment.barberId);
                               return (
                                 <span
@@ -940,8 +940,7 @@ export function WeeklyAgenda({
                                 />
                               );
                             })}
-                          </div>
-                        )}
+                        </div>
                       </button>
                     );
                   })}
