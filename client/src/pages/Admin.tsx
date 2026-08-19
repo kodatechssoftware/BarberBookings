@@ -544,7 +544,7 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
         <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <CardTitle className="text-xl font-bold">Dashboard simples</CardTitle>
-            <p className="mt-1 text-sm text-gray-400">Receita, procura e faltas sem ruído.</p>
+            <p className="mt-1 text-sm text-gray-400">Receita, marcações e faltas num só lugar.</p>
           </div>
           <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
             Últimos {data.range.days} dias

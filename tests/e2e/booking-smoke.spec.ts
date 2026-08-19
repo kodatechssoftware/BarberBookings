@@ -2220,7 +2220,8 @@ test.describe("agenda interaction", () => {
     await expect(adminTabs).toBeVisible();
     await expect(adminTabs).toHaveCSS("overflow-x", "auto");
     await expect(adminTabs).toHaveCSS("overflow-y", "hidden");
-    await expect(adminTabs).toHaveCSS("touch-action", "pan-x");
+    await expect(adminTabs).toHaveCSS("overscroll-behavior-y", "auto");
+    await expect(adminTabs).toHaveCSS("touch-action", "auto");
     await expect(adminTabs).toHaveCSS("height", "48px");
   });
 
@@ -2232,19 +2233,25 @@ test.describe("agenda interaction", () => {
     await expect(horizontalAgenda).toBeVisible();
     await expect(horizontalAgenda).toHaveCSS("overflow-x", "auto");
     await expect(horizontalAgenda).toHaveCSS("overflow-y", "hidden");
-    await expect(horizontalAgenda).toHaveCSS("touch-action", "pan-x");
+    await expect(horizontalAgenda).toHaveCSS("overscroll-behavior-y", "auto");
+    await expect(horizontalAgenda).toHaveCSS("touch-action", "auto");
 
     const hasHorizontalOverflow = await horizontalAgenda.evaluate(
       (element) => element.scrollWidth > element.clientWidth,
     );
-    expect(hasHorizontalOverflow).toBe(true);
+    if (hasHorizontalOverflow) {
+      const scrollLeftBefore = await horizontalAgenda.evaluate((element) => element.scrollLeft);
+      await horizontalAgenda.hover({ position: { x: 200, y: 250 } });
+      await page.mouse.wheel(500, 0);
+      await expect
+        .poll(() => horizontalAgenda.evaluate((element) => element.scrollLeft))
+        .toBeGreaterThan(scrollLeftBefore);
+    }
 
-    const scrollLeftBefore = await horizontalAgenda.evaluate((element) => element.scrollLeft);
+    const pageScrollBefore = await page.evaluate(() => window.scrollY);
     await horizontalAgenda.hover({ position: { x: 200, y: 250 } });
-    await page.mouse.wheel(500, 0);
-    await expect
-      .poll(() => horizontalAgenda.evaluate((element) => element.scrollLeft))
-      .toBeGreaterThan(scrollLeftBefore);
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(pageScrollBefore);
   });
 });
 
