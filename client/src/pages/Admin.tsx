@@ -4204,7 +4204,7 @@ export default function Admin() {
               className={cn(
                 "grid grid-cols-1 gap-6",
                 user.role === "admin"
-                  ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] xl:items-start"
+                  ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
                   : "mx-auto max-w-3xl",
               )}
             >
@@ -4285,13 +4285,13 @@ export default function Admin() {
 
             {user.role === "admin" && (
             <>
-              <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1">
+              <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:flex xl:h-full xl:flex-col">
                 <CardHeader>
                   <CardTitle className="text-xl font-display font-bold text-primary">Despesas da Barbearia</CardTitle>
                   <p className="text-gray-400 text-sm">Registe renda, agua, luz, material, marketing ou outras despesas para entrarem no resumo financeiro.</p>
                 </CardHeader>
-                <CardContent>
-                  <form className="space-y-4" onSubmit={handleAddExpense}>
+                <CardContent className="xl:flex xl:flex-1 xl:flex-col">
+                  <form className="space-y-4 xl:flex xl:flex-1 xl:flex-col xl:space-y-0 xl:gap-4" onSubmit={handleAddExpense}>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label className="text-white">Categoria</Label>
@@ -4374,7 +4374,7 @@ export default function Admin() {
                       />
                     </div>
 
-                    <Button type="submit" variant="gold" className="w-full h-12 text-base font-bold gap-2" disabled={isSavingExpense}>
+                    <Button type="submit" variant="gold" className="w-full h-12 text-base font-bold gap-2 xl:mt-auto" disabled={isSavingExpense}>
                       {isSavingExpense ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
                       Registar despesa
                     </Button>
