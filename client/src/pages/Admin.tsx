@@ -4200,7 +4200,20 @@ export default function Admin() {
           </TabsContent>
 
           <TabsContent value="reports" className="outline-none space-y-6">
-            <Card className="bg-card border-white/10 max-w-3xl mx-auto">
+            <div
+              className={cn(
+                "grid grid-cols-1 gap-6",
+                user.role === "admin"
+                  ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] xl:items-start"
+                  : "mx-auto max-w-3xl",
+              )}
+            >
+            <Card
+              className={cn(
+                "bg-card border-white/10",
+                user.role === "admin" && "xl:col-start-2 xl:row-start-1",
+              )}
+            >
               <CardHeader>
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
                 <p className="text-gray-400 text-sm">
@@ -4271,8 +4284,8 @@ export default function Admin() {
             </Card>
 
             {user.role === "admin" && (
-            <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.1fr] gap-6">
-              <Card className="bg-card border-white/10">
+            <>
+              <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1">
                 <CardHeader>
                   <CardTitle className="text-xl font-display font-bold text-primary">Despesas da Barbearia</CardTitle>
                   <p className="text-gray-400 text-sm">Registe renda, agua, luz, material, marketing ou outras despesas para entrarem no resumo financeiro.</p>
@@ -4369,7 +4382,7 @@ export default function Admin() {
                 </CardContent>
               </Card>
 
-              <Card className="bg-card border-white/10">
+              <Card className="bg-card border-white/10 xl:col-start-2 xl:row-start-2">
                 <CardHeader>
                   <CardTitle className="text-xl font-display font-bold text-primary">Resumo financeiro</CardTitle>
                   <p className="text-gray-400 text-sm">Despesas registadas no periodo selecionado para o relatorio.</p>
@@ -4431,8 +4444,9 @@ export default function Admin() {
                   )}
                 </CardContent>
               </Card>
-            </div>
+            </>
             )}
+            </div>
           </TabsContent>
         </Tabs>
       </div>
