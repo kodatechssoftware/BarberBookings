@@ -910,7 +910,7 @@ export function WeeklyAgenda({
                         data-testid={`weekly-agenda-day-${key}`}
                         onClick={() => setSelectedDayKey(key)}
                         className={cn(
-                          "min-h-[92px] rounded-lg border p-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
+                          "h-[108px] rounded-lg border p-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                           isSelected
                             ? "border-primary bg-primary/10 shadow-[0_0_0_1px_rgba(212,175,55,0.35)]"
                             : "border-white/10 bg-background/50 hover:border-white/20 hover:bg-white/[0.04]",
