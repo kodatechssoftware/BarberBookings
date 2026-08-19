@@ -4528,38 +4528,18 @@ async function seedDatabase() {
   console.log("Seeding database...");
 
   const barber1 = await storage.createBarber({
-    name: "Tiago Martins",
-    specialty: "Cortes clássicos e barba",
-    bio: "Especialista em cortes clássicos, acabamento à tesoura e cuidado de barba.",
-    avatar: "/images/demo-barbers/tiago-martins.jpg",
+    name: "Fábio Baptista",
+    specialty: "Cortes Clássicos e Barba",
+    bio: "Especialista em cortes tradicionais na Barbearia Baptista.",
     color: "#38BDF8",
     isVisible: true
   });
 
   const barber2 = await storage.createBarber({
-    name: "Miguel Rocha",
-    specialty: "Degradê e freestyle",
-    bio: "Focado em degradês, cortes urbanos e estilos personalizados.",
-    avatar: "/images/demo-barbers/miguel-rocha.jpg",
+    name: "Bruno Santos",
+    specialty: "Degradê e Freestyle",
+    bio: "Mestre em designs modernos e cortes urbanos.",
     color: "#22C55E",
-    isVisible: true
-  });
-
-  await storage.createBarber({
-    name: "Luís Carvalho",
-    specialty: "Corte tradicional",
-    bio: "Experiência em cortes tradicionais, cabelo grisalho e barba clássica.",
-    avatar: "/images/demo-barbers/luis-carvalho.jpg",
-    color: "#A78BFA",
-    isVisible: true
-  });
-
-  await storage.createBarber({
-    name: "Rafael Mendes",
-    specialty: "Cortes modernos",
-    bio: "Especialista em cortes modernos, cabelo texturizado e contornos precisos.",
-    avatar: "/images/demo-barbers/rafael-mendes.jpg",
-    color: "#F97316",
     isVisible: true
   });
 
