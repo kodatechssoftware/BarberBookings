@@ -913,7 +913,7 @@ type BarberListCacheItem = {
 };
 
 const barberColorPalette = ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
-const defaultBarberColor = "#D4AF37";
+const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#2F91E8" : "#D4AF37";
 const defaultBarberCompensationFormData: BarberCompensationFormData = {
   compensationModel: "none",
   commissionPercent: "40",

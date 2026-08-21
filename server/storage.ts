@@ -199,6 +199,7 @@ export interface IStorage {
   // Admins
   getAdminByUsername(username: string): Promise<Admin | undefined>;
   createAdmin(admin: CreateAdminRequest): Promise<Admin>;
+  updateAdminPassword(id: number, password: string): Promise<void>;
 
   // Blacklist
   getBlacklist(): Promise<Blacklist[]>;
@@ -612,6 +613,10 @@ export class DatabaseStorage implements IStorage {
   async createAdmin(admin: CreateAdminRequest): Promise<Admin> {
     const [newAdmin] = await db.insert(admins).values(admin).returning();
     return newAdmin;
+  }
+
+  async updateAdminPassword(id: number, password: string): Promise<void> {
+    await db.update(admins).set({ password }).where(eq(admins.id, id));
   }
 
   async getBlacklist(): Promise<Blacklist[]> {
@@ -1300,6 +1305,11 @@ export class MemoryStorage implements IStorage {
     };
     this.admins.push(newAdmin);
     return newAdmin;
+  }
+
+  async updateAdminPassword(id: number, password: string): Promise<void> {
+    const admin = this.admins.find((candidate) => candidate.id === id);
+    if (admin) admin.password = password;
   }
 
   async getBlacklist(): Promise<Blacklist[]> {

@@ -5,6 +5,7 @@ server/public
 vite.config.ts.*
 *.tar.gz
 .env
+render-*.env
 migrations
 .dev-server.log
 .dev-server.err.log

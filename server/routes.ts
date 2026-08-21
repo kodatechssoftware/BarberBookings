@@ -4515,12 +4515,28 @@ export async function registerRoutes(
 
 async function seedDatabase() {
   const isDemoEnvironment = process.env.DEMO_MODE === "true";
+  const configuredAdminPassword = (
+    isDemoEnvironment ? process.env.DEMO_ADMIN_PASSWORD : process.env.ADMIN_INITIAL_PASSWORD
+  )?.trim();
+  if (isDemoEnvironment && (!configuredAdminPassword || configuredAdminPassword.length < 4)) {
+    throw new Error("DEMO_ADMIN_PASSWORD é obrigatória em modo demo e deve ter pelo menos 4 caracteres.");
+  }
+
   if (await storage.hasData()) {
     // Check if admin exists, if not create one
     const admin = await storage.getAdminByUsername("admin");
     if (!admin) {
-      const hashedPassword = await bcrypt.hash("baptista2026", 10);
+      if (!configuredAdminPassword) {
+        throw new Error("ADMIN_INITIAL_PASSWORD é obrigatória para criar o administrador inicial.");
+      }
+      const hashedPassword = await bcrypt.hash(configuredAdminPassword, 10);
       await storage.createAdmin({ username: "admin", password: hashedPassword });
+    } else if (isDemoEnvironment && configuredAdminPassword) {
+      const matchesConfiguredPassword = await bcrypt.compare(configuredAdminPassword, admin.password);
+      if (!matchesConfiguredPassword) {
+        await storage.updateAdminPassword(admin.id, await bcrypt.hash(configuredAdminPassword, 10));
+        console.log("Demo administrator password synchronized from DEMO_ADMIN_PASSWORD.");
+      }
     }
     await ensureDefaultShopAvailability();
     return;
@@ -4618,7 +4634,10 @@ async function seedDatabase() {
     isVisible: true
   });
 
-  const hashedPassword = await bcrypt.hash("baptista2026", 10);
+  if (!configuredAdminPassword) {
+    throw new Error("ADMIN_INITIAL_PASSWORD é obrigatória para criar o administrador inicial.");
+  }
+  const hashedPassword = await bcrypt.hash(configuredAdminPassword, 10);
   await storage.createAdmin({ username: "admin", password: hashedPassword });
   await ensureDefaultShopAvailability();
 

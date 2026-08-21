@@ -512,7 +512,7 @@ export default function Booking() {
           <motion.div 
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="w-24 h-24 bg-primary rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(212,175,55,0.4)]"
+            className="brand-selection-glow w-24 h-24 bg-primary rounded-full flex items-center justify-center mx-auto mb-6"
           >
             <Check className="w-12 h-12 text-background" />
           </motion.div>
@@ -598,7 +598,7 @@ export default function Booking() {
                       className={cn(
                         "min-h-44 cursor-pointer group relative overflow-hidden rounded-xl bg-card border transition-all duration-300 flex flex-col justify-center items-center text-center p-4 md:min-h-0 md:p-6",
                         selectedBarberId === 0 
-                          ? "border-primary shadow-[0_0_20px_rgba(212,175,55,0.3)] bg-primary/5" 
+                          ? "brand-selection-glow border-primary bg-primary/5"
                           : "border-white/5 hover:border-primary/50"
                       )}
                     >
@@ -639,7 +639,7 @@ export default function Booking() {
                           className={cn(
                             "cursor-pointer group relative overflow-hidden rounded-xl bg-card border transition-all duration-300",
                             selectedBarberId === barber.id 
-                              ? "border-primary shadow-[0_0_20px_rgba(212,175,55,0.3)]" 
+                              ? "brand-selection-glow border-primary"
                               : "border-white/5 hover:border-primary/50"
                           )}
                         >

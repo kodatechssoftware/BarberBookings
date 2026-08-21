@@ -20,7 +20,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: `npx cross-env TZ=UTC NODE_ENV=development USE_MEMORY_STORAGE=true PORT=${port} SESSION_SECRET=playwright-test tsx server/index.ts`,
+    command: `npx cross-env TZ=UTC NODE_ENV=development USE_MEMORY_STORAGE=true PORT=${port} SESSION_SECRET=playwright-test ADMIN_INITIAL_PASSWORD=Playwright-Test-Admin-2026! tsx server/index.ts`,
     url: `${baseURL}/health`,
     reuseExistingServer: false,
     timeout: 120_000,

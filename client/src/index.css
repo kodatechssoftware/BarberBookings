@@ -35,6 +35,11 @@
   --border: 0 0% 20%;
   --input: 0 0% 20%;
   --ring: 43 74% 49%;
+
+  --brand-gradient-from: 43 74% 55%;
+  --brand-gradient-to: 43 67% 43%;
+  --brand-highlight: 45 82% 68%;
+  --brand-red: 0 84% 60%;
   
   /* Cards */
   --card: 0 0% 12%;
@@ -48,10 +53,50 @@
   --font-body: 'DM Sans', sans-serif;
 }
 
+:root[data-brand-theme="barber-pole"] {
+  --background: 218 27% 8%;
+  --foreground: 210 25% 97%;
+  --primary: 207 82% 53%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 216 22% 15%;
+  --secondary-foreground: 210 25% 97%;
+  --muted: 216 18% 20%;
+  --muted-foreground: 215 15% 66%;
+  --accent: 209 70% 45%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 354 72% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 215 18% 22%;
+  --input: 215 18% 22%;
+  --ring: 207 82% 53%;
+  --card: 218 23% 12%;
+  --card-foreground: 210 25% 97%;
+  --brand-gradient-from: 207 88% 58%;
+  --brand-gradient-to: 216 82% 46%;
+  --brand-highlight: 210 100% 82%;
+  --brand-red: 354 72% 52%;
+}
+
 @layer base {
   body {
     @apply bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary-foreground;
     font-family: var(--font-body);
+  }
+
+  :root[data-brand-theme="barber-pole"] body::before {
+    content: "";
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 100;
+    height: 4px;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      135deg,
+      hsl(207 82% 53%) 0 22px,
+      hsl(0 0% 100%) 22px 44px,
+      hsl(354 72% 52%) 44px 66px
+    );
+    box-shadow: 0 1px 12px hsl(207 82% 53% / 0.35);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -137,13 +182,42 @@
   }
 }
 
-/* Utilities for gold gradients */
+/* Brand utilities: classic gold in production, barber-pole blue in demo. */
 .gold-gradient-text {
-  @apply bg-clip-text text-transparent bg-gradient-to-r from-[#D4AF37] via-[#F2D06B] to-[#D4AF37];
+  color: transparent;
+  background-image: linear-gradient(to right, hsl(var(--brand-gradient-from)), hsl(var(--brand-highlight)), hsl(var(--brand-gradient-from)));
+  background-clip: text;
+  -webkit-background-clip: text;
 }
 
 .gold-border {
-  @apply border border-[#D4AF37]/30;
+  border: 1px solid hsl(var(--primary) / 0.3);
+}
+
+.brand-primary-button {
+  color: hsl(var(--primary-foreground));
+  background: linear-gradient(110deg, hsl(var(--brand-gradient-from)), hsl(var(--brand-gradient-to)));
+  box-shadow: 0 0 18px hsl(var(--primary) / 0.28);
+}
+
+.brand-primary-button:hover {
+  box-shadow: 0 0 24px hsl(var(--primary) / 0.48);
+}
+
+.brand-default-button {
+  box-shadow: 0 0 15px hsl(var(--primary) / 0.3);
+}
+
+.brand-selection-glow {
+  box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+}
+
+.brand-selection-ring {
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.35);
+}
+
+:root[data-brand-theme="barber-pole"] .brand-primary-button {
+  border-bottom: 2px solid hsl(var(--brand-red));
 }
 
 .booking-day-available::after {

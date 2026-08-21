@@ -52,14 +52,14 @@ async function expectNoBrokenImages(page: Page) {
 async function loginAdmin(page: Page) {
   await page.goto("/admin");
   await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
-  await page.locator('input[type="password"]').fill("baptista2026");
+  await page.locator('input[type="password"]').fill("Playwright-Test-Admin-2026!");
   await page.getByRole("button", { name: "Entrar" }).click();
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
 }
 
 async function loginAdminRequest(request: APIRequestContext) {
   const loginResponse = await request.post("/api/admin/login", {
-    data: { username: "admin", password: "baptista2026" },
+    data: { username: "admin", password: "Playwright-Test-Admin-2026!" },
   });
   expect(loginResponse.ok()).toBe(true);
 }
@@ -638,7 +638,7 @@ test.describe("admin navigation", () => {
 
     await page.goto("/admin");
     await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
-    await page.locator('input[type="password"]').fill("baptista2026");
+    await page.locator('input[type="password"]').fill("Playwright-Test-Admin-2026!");
     await page.getByRole("button", { name: "Entrar" }).click();
 
     await expect(page.getByText("Login efetuado com sucesso", { exact: true })).toBeVisible();

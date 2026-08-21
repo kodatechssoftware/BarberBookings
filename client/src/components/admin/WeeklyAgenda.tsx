@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { AppointmentStatus } from "@/hooks/use-appointments";
+import { shopBranding } from "@/lib/branding";
 
 export type WeeklyAgendaAppointment = {
   id: number;
@@ -42,7 +43,7 @@ const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; la
   { value: "no_show", label: "Faltas" },
 ];
 
-const defaultBarberColor = "#D4AF37";
+const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#2F91E8" : "#D4AF37";
 
 function normalizeBarberColor(color?: string | null) {
   return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : defaultBarberColor;
@@ -912,7 +913,7 @@ export function WeeklyAgenda({
                         className={cn(
                           "flex h-[108px] flex-col items-stretch justify-start rounded-lg border p-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary",
                           isSelected
-                            ? "border-primary bg-primary/10 shadow-[0_0_0_1px_rgba(212,175,55,0.35)]"
+                            ? "brand-selection-ring border-primary bg-primary/10"
                             : "border-white/10 bg-background/50 hover:border-white/20 hover:bg-white/[0.04]",
                         )}
                       >

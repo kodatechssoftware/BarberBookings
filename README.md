@@ -60,7 +60,9 @@ npm run test:e2e:ui
 - App local: `http://localhost:5000`
 - PostgreSQL: `postgresql://postgres:postgres@localhost:5432/barberbookings`
 - Admin inicial: `admin`
-- Password inicial: `baptista2026`
+- Password inicial: definida através de `ADMIN_INITIAL_PASSWORD`.
+
+No ambiente de demonstração (`DEMO_MODE=true`), define `DEMO_ADMIN_PASSWORD` com pelo menos 4 caracteres. A conta `admin` existente é sincronizada com esse valor em cada arranque do serviço demo; esta credencial simplificada nunca deve ser reutilizada em produção.
 
 Para enviar notificacoes por email, configura no ambiente de producao:
 

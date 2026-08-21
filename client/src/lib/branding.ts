@@ -1,6 +1,7 @@
 const env = import.meta.env;
 
 export const shopBranding = {
+  theme: env.VITE_BRAND_THEME?.trim() || "classic-gold",
   name: env.VITE_SHOP_NAME?.trim() || "Baptista Barber Shop",
   shortName: env.VITE_SHOP_SHORT_NAME?.trim() || "Baptista",
   address: env.VITE_SHOP_ADDRESS?.trim() || "Rua Comandante Agatão Lança Nº28",
@@ -13,6 +14,7 @@ export const shopBranding = {
 };
 
 export function applyShopBrandingToDocument() {
+  document.documentElement.dataset.brandTheme = shopBranding.theme;
   document.title = shopBranding.name;
   document.querySelector('meta[name="application-name"]')?.setAttribute("content", shopBranding.name);
   document.querySelector('meta[name="description"]')?.setAttribute("content", `Marcações online da ${shopBranding.name}.`);
