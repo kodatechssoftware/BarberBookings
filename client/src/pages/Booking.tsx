@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
+import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 import {
   DEFAULT_PHONE_COUNTRY,
@@ -183,16 +184,16 @@ function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
   if (customAvatar) return customAvatar;
 
   const name = barber.name.toLowerCase();
-  if (name.includes("baptista")) return fabioAvatar;
-  if (name.includes("bruno")) return brunoAvatar;
-  return "/images/logo.jpg";
+  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
+  if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
+  return shopBranding.logoUrl;
 }
 
 function getBarberAvatarFallback(barber: { name: string }) {
   const name = barber.name.toLowerCase();
-  if (name.includes("baptista")) return fabioAvatar;
-  if (name.includes("bruno")) return brunoAvatar;
-  return "/images/logo.jpg";
+  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
+  if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
+  return shopBranding.logoUrl;
 }
 
 const BarberCardSkeleton = () => (

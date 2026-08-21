@@ -3805,7 +3805,7 @@ export async function registerRoutes(
         : 0;
 
       const workbook = new ExcelJS.Workbook();
-      workbook.creator = "Baptista Barber Shop";
+      workbook.creator = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
       workbook.created = new Date();
       workbook.modified = new Date();
 
@@ -4514,6 +4514,7 @@ export async function registerRoutes(
 }
 
 async function seedDatabase() {
+  const isDemoEnvironment = process.env.DEMO_MODE === "true";
   if (await storage.hasData()) {
     // Check if admin exists, if not create one
     const admin = await storage.getAdminByUsername("admin");
@@ -4527,21 +4528,55 @@ async function seedDatabase() {
 
   console.log("Seeding database...");
 
-  const barber1 = await storage.createBarber({
-    name: "Fábio Baptista",
-    specialty: "Cortes Clássicos e Barba",
-    bio: "Especialista em cortes tradicionais na Barbearia Baptista.",
-    color: "#38BDF8",
-    isVisible: true
-  });
+  const seedBarbers = isDemoEnvironment
+    ? [
+        {
+          name: "Tiago Martins",
+          specialty: "Cortes clássicos e barba",
+          bio: "Especialista em cortes clássicos, acabamento à tesoura e cuidado de barba.",
+          avatar: "/images/demo-barbers/tiago-martins.jpg",
+          color: "#38BDF8",
+        },
+        {
+          name: "Miguel Rocha",
+          specialty: "Degradê e freestyle",
+          bio: "Focado em degradês, cortes urbanos e estilos personalizados.",
+          avatar: "/images/demo-barbers/miguel-rocha.jpg",
+          color: "#22C55E",
+        },
+        {
+          name: "Luís Carvalho",
+          specialty: "Corte tradicional",
+          bio: "Experiência em cortes tradicionais, cabelo grisalho e barba clássica.",
+          avatar: "/images/demo-barbers/luis-carvalho.jpg",
+          color: "#A78BFA",
+        },
+        {
+          name: "Rafael Mendes",
+          specialty: "Cortes modernos",
+          bio: "Especialista em cortes modernos, cabelo texturizado e contornos precisos.",
+          avatar: "/images/demo-barbers/rafael-mendes.jpg",
+          color: "#F97316",
+        },
+      ]
+    : [
+        {
+          name: "Fábio Baptista",
+          specialty: "Cortes Clássicos e Barba",
+          bio: "Especialista em cortes tradicionais na Barbearia Baptista.",
+          color: "#38BDF8",
+        },
+        {
+          name: "Bruno Santos",
+          specialty: "Degradê e Freestyle",
+          bio: "Mestre em designs modernos e cortes urbanos.",
+          color: "#22C55E",
+        },
+      ];
 
-  const barber2 = await storage.createBarber({
-    name: "Bruno Santos",
-    specialty: "Degradê e Freestyle",
-    bio: "Mestre em designs modernos e cortes urbanos.",
-    color: "#22C55E",
-    isVisible: true
-  });
+  for (const barber of seedBarbers) {
+    await storage.createBarber({ ...barber, isVisible: true });
+  }
 
   await storage.createService({
     name: "Corte de Cabelo (Degradê)",

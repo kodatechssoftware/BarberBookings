@@ -1,7 +1,7 @@
 {
-  "name": "Baptista Barber Shop",
-  "short_name": "Baptista",
-  "description": "Marcações e painel móvel para a Baptista Barber Shop.",
+  "name": "BarberBookings",
+  "short_name": "BarberBookings",
+  "description": "Marcações e painel móvel para barbearias.",
   "start_url": "/admin",
   "scope": "/",
   "display": "standalone",

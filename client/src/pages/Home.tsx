@@ -9,14 +9,14 @@ import { preloadAdminPage, preloadBookingPage } from "@/lib/page-preloads";
 import { queryClient } from "@/lib/queryClient";
 import { useBarbers } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
+import { shopBranding } from "@/lib/branding";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
-const instagramUrl = import.meta.env.VITE_INSTAGRAM_URL || "";
+const instagramUrl = shopBranding.instagramUrl;
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
-const googleMapsUrl = "https://www.google.com/maps/search/?api=1&query=Rua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%20N%C2%BA28";
 
 const weeklySchedule = [
   { day: 0, periods: [] },
@@ -88,9 +88,9 @@ function getTodayOpeningStatus() {
 function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
   if (barber.avatar) return barber.avatar;
   const name = barber.name.toLowerCase();
-  if (name.includes("baptista")) return fabioAvatar;
-  if (name.includes("bruno")) return brunoAvatar;
-  return "/images/logo.jpg";
+  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
+  if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
+  return shopBranding.logoUrl;
 }
 
 function getLocalDateKey(date = new Date()) {
@@ -168,11 +168,11 @@ export default function Home() {
         <div className="container mx-auto flex min-w-0 items-center justify-between px-4 py-3 md:px-6 md:py-4">
           <a href="#top" className="flex items-center gap-3">
             <img
-              src="/images/logo.jpg"
-              alt="Baptista Barber Shop"
+              src={shopBranding.logoUrl}
+              alt={shopBranding.name}
               className="h-10 w-10 rounded-full border border-primary/20 object-contain md:h-12 md:w-12"
             />
-            <span className="hidden font-display text-lg font-bold text-white sm:inline">Baptista</span>
+            <span className="hidden font-display text-lg font-bold text-white sm:inline">{shopBranding.shortName}</span>
           </a>
 
           <div className="hidden gap-7 text-xs font-semibold uppercase tracking-widest md:flex">
@@ -206,7 +206,7 @@ export default function Home() {
 
         <div className="container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center px-4 pb-10 md:min-h-[calc(72vh-5rem)] md:pb-12">
           <div className="w-full min-w-0 sm:max-w-xl md:max-w-3xl">
-            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">Baptista Barber Shop</p>
+            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">{shopBranding.name}</p>
             <h1 className="font-display text-3xl font-bold leading-[0.98] text-white sm:text-5xl md:text-7xl">
               Corte e barba com hora marcada
             </h1>
@@ -292,7 +292,7 @@ export default function Home() {
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Equipa</p>
               <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Conhece a equipa</h2>
               <p className="mt-4 text-sm leading-relaxed text-gray-400 md:text-base">
-                Dois estilos, o mesmo cuidado nos detalhes e no acabamento final.
+                Diferentes estilos, o mesmo cuidado nos detalhes e no acabamento final.
               </p>
             </div>
           </div>
@@ -336,27 +336,27 @@ export default function Home() {
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Morada</p>
             <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Estamos à tua espera</h2>
             <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-gray-400">
-              Rua Comandante Agatão Lança Nº28, com acesso direto ao mapa para chegares sem voltas.
+              {shopBranding.address}{shopBranding.showMap ? ", com acesso direto ao mapa para chegares sem voltas." : "."}
             </p>
-            <div className="mt-5 flex flex-wrap justify-center gap-2">
+            {shopBranding.showMap && <div className="mt-5 flex flex-wrap justify-center gap-2">
               {["Estacionamento nas proximidades", "Fácil acesso"].map((item) => (
                 <span key={item} className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs font-semibold text-gray-300">
                   {item}
                 </span>
               ))}
-            </div>
-            <a href={googleMapsUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
+            </div>}
+            {shopBranding.showMap && <a href={shopBranding.mapUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
               <Button variant="outline" className="border-white/15 bg-card text-white hover:bg-white/10">
                 <MapPin className="mr-2 h-4 w-4" />
                 Abrir no Google Maps
                 <ExternalLink className="ml-2 h-4 w-4" />
               </Button>
-            </a>
+            </a>}
           </div>
 
-          <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
+          {shopBranding.showMap && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
             <iframe
-              src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3118.067464013444!2d-9.0658763!3d38.5901374!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0xd1939638c4c340d%3A0x6734c26a6a2a6b2!2sRua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%2028!5e0!3m2!1spt-PT!2spt!4v1700000000000!5m2!1spt-PT!2spt"
+              src={shopBranding.mapEmbedUrl || "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3118.067464013444!2d-9.0658763!3d38.5901374!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0xd1939638c4c340d%3A0x6734c26a6a2a6b2!2sRua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%2028!5e0!3m2!1spt-PT!2spt!4v1700000000000!5m2!1spt-PT!2spt"}
               width="100%"
               height="100%"
               style={{ border: 0 }}
@@ -365,14 +365,14 @@ export default function Home() {
               referrerPolicy="no-referrer-when-downgrade"
               className="grayscale contrast-[1.1]"
             />
-          </div>
+          </div>}
         </div>
       </section>
 
       <footer className="mt-auto border-t border-white/10 bg-black/50 py-10">
         <div className="container mx-auto flex flex-col items-center gap-5 px-4 text-center">
-          <img src="/images/logo.jpg" alt="Baptista Barber Shop" className="h-10 w-10 rounded-full object-contain" />
-          <p className="text-sm text-gray-500">© 2026 Baptista Barber Shop. Rua Comandante Agatão Lança Nº28.</p>
+          <img src={shopBranding.logoUrl} alt={shopBranding.name} className="h-10 w-10 rounded-full object-contain" />
+          <p className="text-sm text-gray-500">© 2026 {shopBranding.name}. {shopBranding.address}.</p>
           <div className="flex flex-wrap justify-center gap-5 text-sm">
             {instagramUrl && (
               <a href={instagramUrl} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-primary">

@@ -15,6 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { shopBranding } from "@/lib/branding";
 
 function formatAppointmentDate(value?: string) {
   if (!value) return "";
@@ -138,7 +139,7 @@ export default function Cancellation() {
     <div className="min-h-[100svh] bg-background text-white flex items-center justify-center px-4 py-6">
       <main className="w-full max-w-md">
         <div className="mb-5 text-center">
-          <p className="text-xs font-semibold uppercase text-primary">Baptista Barber Shop</p>
+          <p className="text-xs font-semibold uppercase text-primary">{shopBranding.name}</p>
           <h1 className="mt-2 font-display text-3xl font-bold leading-tight">Cancelar marcação</h1>
           <p className="mt-3 text-sm leading-6 text-gray-300">
             Confirme os dados antes de libertar este horário.

@@ -64,6 +64,7 @@ import {
   type PhoneCountryCode,
 } from "@shared/phone-countries";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
+import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
@@ -643,9 +644,9 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
 function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
   if (barber.avatar) return barber.avatar;
   const name = barber.name.toLowerCase();
-  if (name.includes("baptista")) return fabioAvatar;
+  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
   if (name.includes("bruno")) return brunoAvatar;
-  return "/images/logo.jpg";
+  return shopBranding.logoUrl;
 }
 
 const MAX_BARBER_PHOTO_INPUT_BYTES = 25 * 1024 * 1024;
@@ -2790,7 +2791,7 @@ export default function Admin() {
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <Card className="max-w-md w-full bg-card border-white/10">
           <CardHeader>
-            <CardTitle className="text-2xl font-display font-bold text-center text-white">Baptista Barber Shop</CardTitle>
+            <CardTitle className="text-2xl font-display font-bold text-center text-white">{shopBranding.name}</CardTitle>
             <p className="text-center text-gray-400 text-sm mt-2">Acesso para Administradores e Barbeiros</p>
           </CardHeader>
           <CardContent>

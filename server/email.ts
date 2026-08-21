@@ -5,7 +5,8 @@ const resendApiKey = process.env.RESEND_API_KEY?.trim();
 const fromEmail = process.env.RESEND_FROM_EMAIL?.trim();
 const resend = resendApiKey && fromEmail ? new Resend(resendApiKey) : null;
 const isProduction = process.env.NODE_ENV === "production";
-const shopName = "Baptista Barber Shop";
+const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
+const shopAddress = process.env.SHOP_ADDRESS?.trim() || "Rua Comandante Agatão Lança Nº28";
 const emailFrom = fromEmail ? `${shopName} <${fromEmail}>` : "";
 
 interface SendConfirmationParams {
@@ -90,7 +91,7 @@ export async function sendBookingConfirmation({
     text: `${shopName} - ${serviceName}`,
     dates: `${toCalendarDate(startTime)}/${toCalendarDate(endTime)}`,
     details: `${serviceName} com ${barberName}`,
-    location: "Rua Comandante Agatão Lança Nº28",
+    location: shopAddress,
   });
   const googleCalendarUrl = `https://calendar.google.com/calendar/render?${calendarParams.toString()}`;
 
@@ -109,7 +110,7 @@ export async function sendBookingConfirmation({
             <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
             <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
             <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
-            <p style="margin: 6px 0;"><strong>Morada:</strong> Rua Comandante Agatão Lança Nº28</p>
+            <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(shopAddress)}</p>
           </div>
           <p style="font-size: 0.92em; color: #555;">
             Caso não consiga comparecer, pode reagendar ou cancelar através dos links abaixo. Cancelamentos a menos de ${cancellationPolicyHours} horas da marcação podem ficar registados como cancelamento tardio.

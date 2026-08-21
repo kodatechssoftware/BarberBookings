@@ -1,3 +1,5 @@
+import { shopBranding } from "@/lib/branding";
+
 type CalendarEvent = {
   title: string;
   start: Date;
@@ -37,9 +39,9 @@ export function buildIcsDataUri(event: CalendarEvent) {
   const ics = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Baptista Barber Shop//Bookings//PT",
+    `PRODID:-//${escapeIcsText(shopBranding.name)}//Bookings//PT`,
     "BEGIN:VEVENT",
-    `UID:${uid}@baptistabarbershop`,
+    `UID:${uid}@barberbookings`,
     `DTSTAMP:${toCalendarDate(new Date())}`,
     `DTSTART:${toCalendarDate(event.start)}`,
     `DTEND:${toCalendarDate(end)}`,

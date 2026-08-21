@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import {
   preloadCancellationPage,
   preloadReschedulePage,
 } from "@/lib/page-preloads";
+import { applyShopBrandingToDocument } from "@/lib/branding";
 
 const Home = lazy(() => import("@/pages/Home"));
 const Booking = lazy(preloadBookingPage);
@@ -45,6 +46,10 @@ function Router() {
 }
 
 function App() {
+  useEffect(() => {
+    applyShopBrandingToDocument();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
