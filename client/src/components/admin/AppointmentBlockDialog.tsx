@@ -424,6 +424,28 @@ export function AppointmentBlockDialog({
                 </div>
               )}
             </div>
+
+            {blockData.isManualBooking && (
+              <div className="space-y-3">
+                <Label htmlFor="manual-booking-email" className="text-sm font-medium text-gray-300">
+                  Email (opcional)
+                </Label>
+                <Input
+                  id="manual-booking-email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  maxLength={120}
+                  value={blockData.email}
+                  onChange={(event) => onBlockDataChange({ ...blockData, email: event.target.value })}
+                  className="h-12 rounded-xl border-white/10 bg-background/50 text-white"
+                  placeholder="cliente@email.com"
+                />
+                <p className="text-xs text-gray-500">
+                  Se preencher, o cliente recebe a confirmação da marcação e o link de cancelamento.
+                </p>
+              </div>
+            )}
           </div>
         </div>
         <div className="border-t border-white/10 bg-card/95 px-5 py-4 sm:px-6">

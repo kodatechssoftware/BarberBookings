@@ -19,6 +19,7 @@ export type AppointmentBlockData = {
   times: string[];
   name: string;
   phone: string;
+  email: string;
   date: Date;
   endDate: Date;
   isMultiDay: boolean;

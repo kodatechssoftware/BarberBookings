@@ -1547,7 +1547,7 @@ test.describe("admin navigation", () => {
     const warningDialog = page.getByRole("alertdialog", { name: "Cliente na blacklist" });
     await expect(warningDialog).toBeVisible();
     await expect(warningDialog).toContainText(blacklistedPhone);
-    await expect(warningDialog).toContainText("Para criar esta marcacao, remova primeiro o cliente da blacklist.");
+    await expect(warningDialog).toContainText("Para criar esta marcação, remova primeiro o cliente da blacklist.");
     await expect(warningDialog.getByRole("button", { name: "Criar na mesma" })).toHaveCount(0);
     await expect(warningDialog.getByRole("button", { name: "Remover da blacklist e criar" })).toBeVisible();
     await warningDialog.getByRole("button", { name: "Remover da blacklist e criar" }).click();
@@ -2824,6 +2824,158 @@ test.describe("booking rules", () => {
       expenseId = undefined;
     } finally {
       if (expenseId) await page.request.delete(`/api/admin/expenses/${expenseId}`);
+    }
+  });
+
+  test("stores an optional email for a manual booking and keeps its cancellation link usable", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
+    const customerName = `Manual Email QA ${Date.now()}`;
+    const customerEmail = `manual-email-${Date.now()}@example.com`;
+    let appointmentId: number | undefined;
+
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await loginAdmin(page);
+      await advanceAgendaToNextOpenDay(page, 15);
+      await page.getByRole("button", { name: "Marcação manual" }).click();
+
+      const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByText(/recebe a confirmação da marcação e o link de cancelamento/i)).toBeVisible();
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await selectDialogOption(page, dialog, 1, service.name);
+      await dialog.getByPlaceholder("João").fill(customerName);
+      await dialog.locator("#manual-booking-phone").fill("912695781");
+      await dialog.locator("#manual-booking-email").fill(`  ${customerEmail.toUpperCase()}  `);
+      await clickFirstEnabledManualTime(dialog);
+      await expectNoHorizontalOverflow(page);
+      await dialog.getByRole("button", { name: "Criar marcação" }).click();
+      await expect(dialog).not.toBeVisible();
+
+      const appointmentsResponse = await request.get("/api/appointments");
+      expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+      const appointment = (await appointmentsResponse.json()).find(
+        (candidate: any) => candidate.customerName === customerName,
+      );
+      expect(appointment).toBeTruthy();
+      expect(appointment.customerEmail).toBe(customerEmail);
+      expect(appointment.cancelToken).toBeTruthy();
+      appointmentId = appointment.id;
+
+      const cancellationResponse = await request.post(`/api/appointments/cancel/${appointment.cancelToken}`);
+      expect(cancellationResponse.ok(), await cancellationResponse.text()).toBe(true);
+
+      await page.getByRole("button", { name: "Marcação manual" }).click();
+      await expect(page.locator("#manual-booking-email")).toHaveValue("");
+    } finally {
+      if (appointmentId) {
+        await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
+      }
+    }
+  });
+
+  test("rejects an invalid optional email in manual bookings at the UI and API boundaries", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
+
+    const apiResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(8, 16, 0),
+        name: "Email inválido API",
+        phone: "912695782",
+        customerEmail: "email-invalido",
+        isManualBooking: true,
+      },
+    });
+    expect(apiResponse.status()).toBe(400);
+    expect(await apiResponse.json()).toMatchObject({ field: "customerEmail" });
+
+    const nonStringEmailResponse = await request.post("/api/appointments/block", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(8, 16, 30),
+        name: "Email inválido API objeto",
+        phone: "912695784",
+        customerEmail: { address: "cliente@example.com" },
+        isManualBooking: true,
+      },
+    });
+    expect(nonStringEmailResponse.status()).toBe(400);
+    expect(await nonStringEmailResponse.json()).toMatchObject({ field: "customerEmail" });
+
+    await loginAdmin(page);
+    await advanceAgendaToNextOpenDay(page, 22);
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+    const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+    await dialog.getByPlaceholder("João").fill("Email inválido UI");
+    await dialog.locator("#manual-booking-phone").fill("912695783");
+    await dialog.locator("#manual-booking-email").fill("email-invalido");
+    await clickFirstEnabledManualTime(dialog);
+    await dialog.getByRole("button", { name: "Criar marcação" }).click();
+    await expect(page.getByText("Introduza um email válido, por exemplo cliente@email.com.", { exact: true })).toBeVisible();
+    await expect(dialog).toBeVisible();
+  });
+
+  test("warns when a manual booking uses a blacklisted email", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const email = `manual-blacklist-${Date.now()}@example.com`;
+    const blacklistResponse = await request.post("/api/admin/blacklist", {
+      data: {
+        phone: "+351912695785",
+        email,
+        reason: "Teste de email em marcação manual",
+      },
+    });
+    expect(blacklistResponse.ok(), await blacklistResponse.text()).toBe(true);
+    const blacklistEntry = await blacklistResponse.json();
+
+    try {
+      const [barbersResponse, servicesResponse] = await Promise.all([
+        request.get("/api/barbers"),
+        request.get("/api/services"),
+      ]);
+      const { barber, service } = getCompatibleBarberAndService(
+        await barbersResponse.json(),
+        await servicesResponse.json(),
+      );
+
+      await loginAdmin(page);
+      await advanceAgendaToNextOpenDay(page, 29);
+      await page.getByRole("button", { name: "Marcação manual" }).click();
+      const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await selectDialogOption(page, dialog, 1, service.name);
+      await dialog.getByPlaceholder("João").fill("Cliente Email Blacklist");
+      await dialog.locator("#manual-booking-phone").fill("912695786");
+      await dialog.locator("#manual-booking-email").fill(email.toUpperCase());
+      await clickFirstEnabledManualTime(dialog);
+      await dialog.getByRole("button", { name: "Criar marcação" }).click();
+
+      const warning = page.getByRole("alertdialog", { name: "Cliente na blacklist" });
+      await expect(warning).toBeVisible();
+      await expect(warning).toContainText(`Este email (${email}) está na blacklist.`);
+    } finally {
+      await request.delete(`/api/admin/blacklist/${blacklistEntry.id}`);
     }
   });
 

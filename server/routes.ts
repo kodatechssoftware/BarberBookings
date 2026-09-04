@@ -2473,7 +2473,7 @@ export async function registerRoutes(
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
-      const { barberId, startTime, startTimes, name, phone, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
+      const { barberId, startTime, startTimes, name, phone, customerEmail, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
@@ -2528,6 +2528,23 @@ export async function registerRoutes(
       if (isManualBooking && !normalizeSupportedPhone(phone)) {
         return res.status(400).json({ message: supportedPhoneValidationMessage });
       }
+      if (
+        isManualBooking &&
+        customerEmail !== undefined &&
+        customerEmail !== null &&
+        typeof customerEmail !== "string"
+      ) {
+        return res.status(400).json({ message: emailValidationMessage, field: "customerEmail" });
+      }
+      if (
+        isManualBooking &&
+        (normalizeEmail(customerEmail).length > 120 || !isValidOptionalEmail(customerEmail))
+      ) {
+        return res.status(400).json({ message: emailValidationMessage, field: "customerEmail" });
+      }
+      if (!isManualBooking && customerEmail !== undefined && normalizeEmail(customerEmail)) {
+        return res.status(400).json({ message: "Uma ausência não pode ter um email de cliente associado." });
+      }
       if (isRecurring && !isManualBooking) {
         return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
       }
@@ -2536,6 +2553,7 @@ export async function registerRoutes(
       }
 
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(phone);
+      const normalizedCustomerEmail = isManualBooking ? normalizeEmail(customerEmail) : "";
       const appointments: Array<Parameters<typeof storage.createAppointment>[0]> = [];
       const conflicts = [];
       const services = await storage.getServices();
@@ -2671,7 +2689,7 @@ export async function registerRoutes(
           startTime: currentStart,
           customerName: isManualBooking ? normalizedName : (occurrences > 1 ? `RECORRENTE: ${normalizedName}` : (normalizedName || "BLOQUEIO MANUAL")),
           customerPhone: isManualBooking ? normalizedCustomerPhone : "",
-          customerEmail: "",
+          customerEmail: normalizedCustomerEmail || null,
           durationMinutes: duration,
           status: isHistoricalManualBooking ? "completed" : "booked",
           cancelToken: randomUUID(),
@@ -2705,6 +2723,26 @@ export async function registerRoutes(
           recurring: Boolean(isRecurring),
         },
       });
+
+      if (isManualBooking && normalizedCustomerEmail && selectedService) {
+        const appointmentsToNotify = isRecurring
+          ? createdAppointments.slice(0, 1)
+          : createdAppointments;
+        for (const appointment of appointmentsToNotify) {
+          if (appointment.status !== "booked") continue;
+          runNotificationJob("Manual booking confirmation", () => sendBookingCreatedNotification({
+            customerName: appointment.customerName,
+            customerEmail: appointment.customerEmail,
+            barberName: selectedBarber.name,
+            serviceName: isRecurring ? `${selectedService.name} (marcação recorrente)` : selectedService.name,
+            startTime: new Date(appointment.startTime),
+            cancelToken: appointment.cancelToken,
+            durationMinutes: appointment.durationMinutes,
+            depositRequired: appointment.depositRequired,
+            depositReason: appointment.depositReason,
+          }));
+        }
+      }
 
       res.status(201).json({ message: `${appointments.length} marcações criadas.` });
     } catch (error) {

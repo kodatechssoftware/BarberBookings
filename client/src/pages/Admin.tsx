@@ -115,6 +115,8 @@ type PendingBlacklistAction = {
 type PendingManualBookingBlacklistWarning = {
   entryId: number;
   phone: string;
+  email?: string | null;
+  matchedByEmail?: boolean;
 };
 type DashboardData = {
   range: {
@@ -1577,6 +1579,7 @@ export default function Admin() {
     times: [],
     name: "",
     phone: "900000000",
+    email: "",
     date: startOfToday(),
     endDate: startOfToday(),
     isMultiDay: false,
@@ -1962,6 +1965,7 @@ export default function Admin() {
       times: time ? [time] : [],
       name: "",
       phone: mode === "manual" ? "" : "900000000",
+      email: "",
       date: date || current.date,
       endDate: date || current.endDate,
       isMultiDay: false,
@@ -2636,11 +2640,12 @@ export default function Admin() {
     if (!blockData.isManualBooking) return null;
 
     const phone = normalizeSupportedPhone(blockData.phone);
-    if (!phone) return null;
+    const email = normalizeEmail(blockData.email);
 
-    return blacklistEntries?.find((entry: any) =>
-      supportedPhonesMatch(entry.phone, phone),
-    ) || null;
+    return blacklistEntries?.find((entry: any) => (
+      (phone && supportedPhonesMatch(entry.phone, phone)) ||
+      (email && normalizeEmail(entry.email) === email)
+    )) || null;
   };
 
   const handleBlockTime = async (options?: { skipBlacklistCheck?: boolean }) => {
@@ -2660,6 +2665,10 @@ export default function Admin() {
       toast({ title: "Erro", description: "Escolha apenas uma hora para a marcação recorrente.", variant: "destructive" });
       return;
     }
+    if (blockData.isManualBooking && !isValidOptionalEmail(blockData.email)) {
+      toast({ title: "Email inválido", description: emailValidationMessage, variant: "destructive" });
+      return;
+    }
 
     if (blockData.isRecurring && format(blockData.date, "yyyy-MM-dd") < format(startOfToday(), "yyyy-MM-dd")) {
       toast({ title: "Erro", description: "A recorrência deve começar hoje ou numa data futura.", variant: "destructive" });
@@ -2671,7 +2680,12 @@ export default function Admin() {
       if (blacklistEntry) {
         setPendingManualBookingBlacklistWarning({
           entryId: blacklistEntry.id,
-          phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
+          phone: blacklistEntry.phone,
+          email: blacklistEntry.email,
+          matchedByEmail: Boolean(
+            normalizeEmail(blockData.email) &&
+            normalizeEmail(blacklistEntry.email) === normalizeEmail(blockData.email),
+          ),
         });
         return;
       }
@@ -2693,6 +2707,7 @@ export default function Admin() {
           startTime: startTime,
           name: blockData.name || "Cliente Manual",
           phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
+          customerEmail: normalizeEmail(blockData.email),
           isManualBooking: true,
           isRecurring: true,
           recurringWeeks: Number(blockData.recurringWeeks),
@@ -2725,6 +2740,7 @@ export default function Admin() {
           startTimes,
           name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
           phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
+          customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
           isManualBooking: blockData.isManualBooking,
           allowOutsideHours: blockData.allowOutsideHours,
         });
@@ -2732,7 +2748,7 @@ export default function Admin() {
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
       setIsBlocking(false);
-      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", serviceId: "", isMultiDay: false, isManualBooking: false, allowOutsideHours: false, isRecurring: false });
+      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", email: "", serviceId: "", isMultiDay: false, isManualBooking: false, allowOutsideHours: false, isRecurring: false });
       refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
@@ -3201,9 +3217,12 @@ export default function Admin() {
             <AlertDialogHeader>
               <AlertDialogTitle>Cliente na blacklist</AlertDialogTitle>
               <AlertDialogDescription className="text-gray-400">
-                Este numero ({pendingManualBookingBlacklistWarning
-                  ? getAppointmentContactLinks(pendingManualBookingBlacklistWarning.phone).displayPhone
-                  : ""}) esta na blacklist. Para criar esta marcacao, remova primeiro o cliente da blacklist.
+                {pendingManualBookingBlacklistWarning?.matchedByEmail
+                  ? `Este email (${pendingManualBookingBlacklistWarning.email}) está na blacklist.`
+                  : `Este número (${pendingManualBookingBlacklistWarning
+                    ? getAppointmentContactLinks(pendingManualBookingBlacklistWarning.phone).displayPhone
+                    : ""}) está na blacklist.`}{" "}
+                Para criar esta marcação, remova primeiro o cliente da blacklist.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter className="gap-2 sm:gap-2">
