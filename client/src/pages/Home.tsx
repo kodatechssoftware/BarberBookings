@@ -10,6 +10,7 @@ import { queryClient } from "@/lib/queryClient";
 import { useBarbers } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { shopBranding } from "@/lib/branding";
+import { useLocations } from "@/hooks/use-locations";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -115,6 +116,38 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState("");
   const { data: services, isLoading: isLoadingServices } = useServices();
   const { data: barbers, isLoading: isLoadingBarbers } = useBarbers();
+  const { data: locations } = useLocations();
+  const publicLocations = useMemo(() => {
+    const available = locations?.filter((location) => location.isActive) ?? [];
+    if (available.length > 0) {
+      return available.map((location) => location.isDefault ? {
+        ...location,
+        address: location.address || shopBranding.address,
+        mapUrl: location.mapUrl || shopBranding.mapUrl,
+        mapEmbedUrl: location.mapEmbedUrl || shopBranding.mapEmbedUrl,
+      } : location);
+    }
+    return [{
+      id: 0,
+      name: shopBranding.name,
+      slug: "principal",
+      address: shopBranding.address,
+      mapUrl: shopBranding.mapUrl,
+      mapEmbedUrl: shopBranding.mapEmbedUrl,
+      phone: null,
+      email: null,
+      timezone: "Europe/Lisbon",
+      isActive: true,
+      isDefault: true,
+      sortOrder: 0,
+      createdAt: "",
+      updatedAt: "",
+    }];
+  }, [locations]);
+  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
+  const selectedLocation = publicLocations.find((location) => location.id === selectedLocationId)
+    ?? publicLocations.find((location) => location.isDefault)
+    ?? publicLocations[0];
 
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
@@ -336,8 +369,41 @@ export default function Home() {
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Morada</p>
             <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Estamos à tua espera</h2>
             <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-gray-400">
-              {shopBranding.address}{shopBranding.showMap ? ", com acesso direto ao mapa para chegares sem voltas." : "."}
+              {publicLocations.length > 1
+                ? "Escolhe a localização mais conveniente e consulta a respetiva morada e mapa."
+                : `${selectedLocation.address}${shopBranding.showMap ? ", com acesso direto ao mapa para chegares sem voltas." : "."}`}
             </p>
+            {publicLocations.length > 1 && (
+              <div className="mx-auto mt-7 grid max-w-5xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {publicLocations.map((location) => {
+                  const selected = location.id === selectedLocation.id;
+                  return (
+                    <button
+                      key={location.id}
+                      type="button"
+                      onClick={() => setSelectedLocationId(location.id)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "min-h-28 rounded-xl border p-4 text-left transition-colors",
+                        selected
+                          ? "border-primary bg-primary/10"
+                          : "border-white/10 bg-card hover:border-primary/40",
+                      )}
+                    >
+                      <span className="flex items-center gap-2 font-bold text-white">
+                        <MapPin className="h-4 w-4 shrink-0 text-primary" /> {location.name}
+                      </span>
+                      <span className="mt-2 block text-xs leading-relaxed text-gray-400">{location.address}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {publicLocations.length > 1 && (
+              <p className="mx-auto mt-6 max-w-xl text-sm leading-relaxed text-gray-300">
+                <strong className="text-white">{selectedLocation.name}</strong><br />{selectedLocation.address}
+              </p>
+            )}
             {shopBranding.showMap && <div className="mt-5 flex flex-wrap justify-center gap-2">
               {["Estacionamento nas proximidades", "Fácil acesso"].map((item) => (
                 <span key={item} className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs font-semibold text-gray-300">
@@ -345,7 +411,7 @@ export default function Home() {
                 </span>
               ))}
             </div>}
-            {shopBranding.showMap && <a href={shopBranding.mapUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
+            {shopBranding.showMap && selectedLocation.mapUrl && <a href={selectedLocation.mapUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
               <Button variant="outline" className="border-white/15 bg-card text-white hover:bg-white/10">
                 <MapPin className="mr-2 h-4 w-4" />
                 Abrir no Google Maps
@@ -354,9 +420,11 @@ export default function Home() {
             </a>}
           </div>
 
-          {shopBranding.showMap && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
+          {shopBranding.showMap && selectedLocation.mapEmbedUrl && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
             <iframe
-              src={shopBranding.mapEmbedUrl || "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3118.067464013444!2d-9.0658763!3d38.5901374!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0xd1939638c4c340d%3A0x6734c26a6a2a6b2!2sRua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%2028!5e0!3m2!1spt-PT!2spt!4v1700000000000!5m2!1spt-PT!2spt"}
+              key={selectedLocation.id}
+              title={`Mapa de ${selectedLocation.name}`}
+              src={selectedLocation.mapEmbedUrl}
               width="100%"
               height="100%"
               style={{ border: 0 }}

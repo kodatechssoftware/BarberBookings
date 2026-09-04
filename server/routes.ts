@@ -46,6 +46,8 @@ import {
   PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
 } from "@shared/public-booking-window";
 import { parseMultiLocationConfig } from "@shared/multi-location-config";
+import { locationInputSchema, locationUpdateSchema } from "@shared/locations";
+import { createLocation, listLocations, updateLocation } from "./location-store";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -1398,6 +1400,11 @@ export async function registerRoutes(
     res.json(MULTI_LOCATION_CONFIG);
   });
 
+  app.get("/api/locations", async (_req, res) => {
+    const locations = await listLocations(false);
+    res.json(MULTI_LOCATION_CONFIG.enabled ? locations : locations.filter((location) => location.isDefault));
+  });
+
   // === AUTH ===
   app.post("/api/admin/login", async (req, res) => {
     try {
@@ -1517,6 +1524,54 @@ export async function registerRoutes(
       return res.status(401).json({ message: "Não autorizado" });
     });
   };
+
+  app.get("/api/admin/locations", requireAdmin, async (_req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Gestão de localizações não disponível." });
+    }
+    res.json(await listLocations(true));
+  });
+
+  app.post("/api/admin/locations", requireAdmin, async (req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Gestão de localizações não disponível." });
+    }
+    const parsed = locationInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Localização inválida." });
+    }
+    try {
+      const created = await createLocation(parsed.data, MULTI_LOCATION_CONFIG.maxLocations);
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof Error && error.message === "LOCATION_LIMIT_REACHED") {
+        return res.status(409).json({ message: `O plano permite até ${MULTI_LOCATION_CONFIG.maxLocations} localizações.` });
+      }
+      throw error;
+    }
+  });
+
+  app.patch("/api/admin/locations/:id", requireAdmin, async (req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Gestão de localizações não disponível." });
+    }
+    const locationId = parsePositiveInteger(req.params.id);
+    if (locationId === null) return res.status(400).json({ message: "Localização inválida." });
+    const parsed = locationUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Localização inválida." });
+    }
+    try {
+      const updated = await updateLocation(locationId, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Localização não encontrada." });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof Error && error.message === "DEFAULT_LOCATION_CANNOT_BE_DEACTIVATED") {
+        return res.status(409).json({ message: "A localização principal não pode ser desativada." });
+      }
+      throw error;
+    }
+  });
 
   app.get("/api/admin/audit-logs", requireAdmin, async (req, res) => {
     try {

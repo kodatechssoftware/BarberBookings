@@ -4,7 +4,7 @@ import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments,
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2 } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -35,6 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppointmentsTab, blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
+import { LocationsTab } from "@/components/admin/LocationsTab";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
@@ -1461,6 +1462,10 @@ export default function Admin() {
     queryKey: ["/api/admin/audit-logs"],
     enabled: user?.role === "admin",
     refetchInterval: 15000,
+  });
+  const { data: multiLocationConfig } = useQuery<{ enabled: boolean; maxLocations: number }>({
+    queryKey: ["/api/multi-location/config"],
+    enabled: user?.authorized === true && user.role === "admin",
   });
   const { data: allAvailabilityRows } = useQuery<any[]>({
     queryKey: ["/api/barbers/availability"],
@@ -3272,6 +3277,9 @@ export default function Admin() {
                 <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>
                 <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
                 <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>
+                {multiLocationConfig?.enabled && (
+                  <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
+                )}
                 <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>
               </>
             )}
@@ -4222,6 +4230,12 @@ export default function Admin() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {user.role === "admin" && multiLocationConfig?.enabled && (
+            <TabsContent value="locations" className="outline-none">
+              <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
+            </TabsContent>
+          )}
 
           <TabsContent value="reports" className="outline-none space-y-6">
             <div

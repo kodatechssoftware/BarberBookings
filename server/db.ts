@@ -69,6 +69,8 @@ export async function ensureMultiLocationFoundation() {
         address text NOT NULL DEFAULT '',
         map_url text,
         map_embed_url text,
+        phone text,
+        email text,
         timezone text NOT NULL DEFAULT 'Europe/Lisbon',
         is_active boolean NOT NULL DEFAULT true,
         is_default boolean NOT NULL DEFAULT false,
@@ -77,6 +79,8 @@ export async function ensureMultiLocationFoundation() {
         updated_at timestamp NOT NULL DEFAULT now()
       )
     `);
+    await client.query(`ALTER TABLE ${locationsTable} ADD COLUMN IF NOT EXISTS phone text`);
+    await client.query(`ALTER TABLE ${locationsTable} ADD COLUMN IF NOT EXISTS email text`);
     await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS locations_slug_idx
       ON ${locationsTable} (slug)
