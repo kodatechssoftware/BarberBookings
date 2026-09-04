@@ -4530,6 +4530,75 @@ test.describe("booking rules", () => {
     }
   });
 
+  test("allows only one booking when a customer and the barber confirm the same slot simultaneously", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const barber = (await barbersResponse.json()).find((item: any) => item.isVisible !== false);
+    const services = await servicesResponse.json();
+    const service = services.find((item: any) =>
+      !Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id),
+    );
+    const startTime = futureThursdayIso(150 + (Date.now() % 10), 15, 30);
+    const publicCustomerName = `Cliente Concorrente ${Date.now()}`;
+    const manualCustomerName = `Manual Concorrente ${Date.now()}`;
+    let createdAppointment: any;
+
+    try {
+      const [publicResponse, manualResponse] = await Promise.all([
+        request.post("/api/appointments", {
+          data: {
+            barberId: barber.id,
+            serviceId: service.id,
+            startTime,
+            customerName: publicCustomerName,
+            customerPhone: "+351912695790",
+            customerEmail: null,
+          },
+        }),
+        request.post("/api/appointments/block", {
+          data: {
+            barberId: barber.id,
+            serviceId: service.id,
+            startTime,
+            name: manualCustomerName,
+            phone: "+351912695791",
+            customerEmail: null,
+            isManualBooking: true,
+          },
+        }),
+      ]);
+
+      const responseDiagnostics = {
+        public: { status: publicResponse.status(), body: await publicResponse.text() },
+        manual: { status: manualResponse.status(), body: await manualResponse.text() },
+      };
+      const statuses = [publicResponse.status(), manualResponse.status()];
+      expect(statuses.filter((status) => status === 201), JSON.stringify(responseDiagnostics)).toHaveLength(1);
+      expect(statuses.filter((status) => status === 400 || status === 409), JSON.stringify(responseDiagnostics)).toHaveLength(1);
+      const rejectedResponse = publicResponse.status() === 201 ? responseDiagnostics.manual : responseDiagnostics.public;
+      expect(rejectedResponse.body).toMatch(/horário.*(indisponível|reservado)/i);
+
+      const dateKey = dateKeyFromIso(startTime);
+      const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+      expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+      const matchingAppointments = (await appointmentsResponse.json()).filter((appointment: any) =>
+        appointment.startTime === startTime &&
+        [publicCustomerName, manualCustomerName].includes(appointment.customerName),
+      );
+      expect(matchingAppointments).toHaveLength(1);
+      createdAppointment = matchingAppointments[0];
+    } finally {
+      if (createdAppointment?.id) {
+        await request.patch(`/api/appointments/${createdAppointment.id}/status`, {
+          data: { status: "cancelled" },
+        });
+      }
+    }
+  });
+
   test("formats confirmation and cancellation email times in Lisbon in summer and winter", () => {
     const summer = formatAppointmentForEmail(new Date("2026-09-05T08:30:00.000Z"));
     const winter = formatAppointmentForEmail(new Date("2026-12-05T09:30:00.000Z"));
