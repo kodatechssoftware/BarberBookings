@@ -376,12 +376,17 @@ export function AppointmentBlockDialog({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-3">
-                <Label className="text-sm font-medium text-gray-300">Nome do cliente / nota</Label>
+                <Label htmlFor="manual-booking-name" className="text-sm font-medium text-gray-300">
+                  {blockData.isManualBooking ? "Nome do cliente" : "Motivo / nota"}
+                </Label>
                 <Input
+                  id="manual-booking-name"
                   value={blockData.name}
                   onChange={(event) => onBlockDataChange({ ...blockData, name: event.target.value })}
                   className="h-12 rounded-xl border-white/10 bg-background/50 text-white"
-                  placeholder="João"
+                  placeholder={blockData.isManualBooking ? "Ex.: João Silva" : "Ex.: Férias ou assunto pessoal"}
+                  autoComplete={blockData.isManualBooking ? "name" : "off"}
+                  maxLength={80}
                 />
               </div>
 

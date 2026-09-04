@@ -2661,6 +2661,10 @@ export default function Admin() {
       toast({ title: "Erro", description: "Selecione um serviço.", variant: "destructive" });
       return;
     }
+    if (blockData.isManualBooking && !blockData.name.trim()) {
+      toast({ title: "Erro", description: "Indique o nome do cliente.", variant: "destructive" });
+      return;
+    }
     if (blockData.isRecurring && blockData.times.length !== 1) {
       toast({ title: "Erro", description: "Escolha apenas uma hora para a marcação recorrente.", variant: "destructive" });
       return;
@@ -2705,7 +2709,7 @@ export default function Admin() {
           barberId: Number(blockData.barberId),
           serviceId: Number(blockData.serviceId),
           startTime: startTime,
-          name: blockData.name || "Cliente Manual",
+          name: blockData.name.trim(),
           phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
           customerEmail: normalizeEmail(blockData.email),
           isManualBooking: true,
@@ -2738,7 +2742,7 @@ export default function Admin() {
           serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
           startTime: startTimes[0],
           startTimes,
-          name: blockData.isManualBooking ? (blockData.name || "Cliente Manual") : (blockData.name || "BLOQUEIO MANUAL"),
+          name: blockData.isManualBooking ? blockData.name.trim() : (blockData.name.trim() || "BLOQUEIO MANUAL"),
           phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
           isManualBooking: blockData.isManualBooking,

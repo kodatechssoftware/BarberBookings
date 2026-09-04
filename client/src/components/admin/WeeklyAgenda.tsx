@@ -537,7 +537,7 @@ export function WeeklyAgenda({
   const [selectedCrowdedGroup, setSelectedCrowdedGroup] = useState<WeeklyAgendaCrowdedGroup | null>(null);
   const [internalWeekStartDate, setInternalWeekStartDate] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const visibleWeekStartDate = weekStartDate || internalWeekStartDate;
-  const [selectedDayKey, setSelectedDayKey] = useState(() => getDateKey(visibleWeekStartDate));
+  const [selectedDayKey, setSelectedDayKey] = useState(() => getDateKey(new Date()));
   const handlePreviousWeek = () => {
     if (onPreviousWeek) {
       onPreviousWeek();

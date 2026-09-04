@@ -754,11 +754,18 @@ test.describe("admin navigation", () => {
     await page.getByRole("button", { name: "Marcação manual" }).click();
     const manualDialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(manualDialog).toBeVisible();
+    const todayParts = lisbonDateTimeParts(new Date().toISOString());
+    const todayLabel = `${todayParts.day}/${todayParts.month}/${todayParts.year}`;
+    await expect(manualDialog.getByRole("button", { name: todayLabel, exact: true })).toBeVisible();
+    await expect(manualDialog.getByLabel("Nome do cliente", { exact: true })).toHaveAttribute("placeholder", "Ex.: João Silva");
+    await expect(manualDialog.getByText("Nome do cliente / nota", { exact: true })).toHaveCount(0);
     await expect(manualDialog.getByText("Horas afetadas")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(manualDialog).not.toBeVisible();
     await page.getByRole("button", { name: "Ausência" }).click();
-    await expect(page.getByRole("dialog", { name: "Ausência na agenda" })).toBeVisible();
+    const absenceDialog = page.getByRole("dialog", { name: "Ausência na agenda" });
+    await expect(absenceDialog).toBeVisible();
+    await expect(absenceDialog.getByLabel("Motivo / nota", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await selectAgendaDay(page);
     const weeklyAppointment = page.getByRole("button", {
