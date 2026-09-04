@@ -7,6 +7,7 @@ const resend = resendApiKey && fromEmail ? new Resend(resendApiKey) : null;
 const isProduction = process.env.NODE_ENV === "production";
 const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
 const shopAddress = process.env.SHOP_ADDRESS?.trim() || "Rua Comandante Agatão Lança Nº28";
+const shopTimeZone = process.env.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon";
 const emailFrom = fromEmail ? `${shopName} <${fromEmail}>` : "";
 
 interface SendConfirmationParams {
@@ -43,6 +44,23 @@ const escapeHtml = (value: string) =>
 const toCalendarDate = (date: Date) =>
   date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 
+export function formatAppointmentForEmail(startTime: Date) {
+  return {
+    date: startTime.toLocaleDateString("pt-PT", {
+      timeZone: shopTimeZone,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }),
+    time: startTime.toLocaleTimeString("pt-PT", {
+      timeZone: shopTimeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  };
+}
+
 function getPublicUrl() {
   return (
     process.env.PUBLIC_URL ||
@@ -70,17 +88,7 @@ export async function sendBookingConfirmation({
     return false;
   }
 
-  const dateStr = startTime.toLocaleDateString("pt-PT", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-
-  const timeStr = startTime.toLocaleTimeString("pt-PT", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime);
 
   const publicUrl = getPublicUrl();
   const cancelUrl = `${publicUrl}/cancel/${cancelToken}`;
@@ -152,17 +160,7 @@ export async function sendBookingCancellationConfirmation({
     return false;
   }
 
-  const dateStr = startTime.toLocaleDateString("pt-PT", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-
-  const timeStr = startTime.toLocaleTimeString("pt-PT", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime);
 
   try {
     const response = await resend.emails.send({

@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import { Link, useRoute } from "wouter";
-import { addDays, format, parseISO, startOfToday } from "date-fns";
+import { format, parseISO, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Calendar as CalendarIcon, Check, Clock, Loader2, XCircle } from "lucide-react";
 import { motion } from "framer-motion";
@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
 import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
+import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 
 export default function Reschedule() {
   const [, params] = useRoute("/reschedule/:token");
@@ -25,13 +26,25 @@ export default function Reschedule() {
   const { data: appointment, isLoading: loadingAppointment } = useAppointmentByToken(token);
   const { data: availabilityRows } = useBarberAvailability();
   const { data: shopAvailabilityRows } = useShopAvailability();
+  const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const rescheduleAppointment = useRescheduleAppointment();
+  const maxPublicBookingDate = useMemo(
+    () => publicBookingWindow ? parseISO(publicBookingWindow.maxDate) : startOfToday(),
+    [publicBookingWindow],
+  );
+  const isPublicDateAllowed = (date: Date) => Boolean(
+    publicBookingWindow &&
+    format(date, "yyyy-MM-dd") >= publicBookingWindow.today &&
+    format(date, "yyyy-MM-dd") <= publicBookingWindow.maxDate
+  );
 
   useEffect(() => {
-    if (appointment?.startTime) {
-      setSelectedDate(parseISO(appointment.startTime));
+    if (appointment?.startTime && publicBookingWindow) {
+      const appointmentDate = parseISO(appointment.startTime);
+      setSelectedDate(isPublicDateAllowed(appointmentDate) ? appointmentDate : parseISO(publicBookingWindow.today));
+      setSelectedTime(null);
     }
-  }, [appointment?.startTime]);
+  }, [appointment?.startTime, publicBookingWindow]);
 
   useEffect(() => {
     if (appointment?.status === "booked") {
@@ -42,7 +55,7 @@ export default function Reschedule() {
   const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
     barberId: appointment?.barberId ? String(appointment.barberId) : undefined,
     date: selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined,
-    enabled: Boolean(appointment?.barberId && selectedDate),
+    enabled: Boolean(appointment?.barberId && selectedDate && isPublicDateAllowed(selectedDate)),
   });
 
   const timeSlots = useMemo(() => {
@@ -62,6 +75,16 @@ export default function Reschedule() {
 
   const handleSubmit = async () => {
     if (!token || !selectedDate || !selectedTime) return;
+    if (!isPublicDateAllowed(selectedDate)) {
+      toast({
+        title: "Data ainda indisponível",
+        description: publicBookingWindow
+          ? `O próximo mês abre para marcações no dia ${publicBookingWindow.openDay}.`
+          : "Não foi possível confirmar o período disponível. Tente novamente.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     const [hours, minutes] = selectedTime.split(":").map(Number);
     const startTime = new Date(selectedDate);
@@ -142,10 +165,16 @@ export default function Reschedule() {
                 setSelectedDate(date);
                 setSelectedTime(null);
               }}
-              disabled={(date) => date < addDays(new Date(), -1)}
+              toMonth={maxPublicBookingDate}
+              disabled={(date) => !isPublicDateAllowed(date)}
               locale={pt}
               className="rounded-md mx-auto"
             />
+            {publicBookingWindow?.enabled !== false && <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
+              {loadingPublicBookingWindow
+                ? "A carregar o período disponível..."
+                : `As marcações para o próximo mês ficam disponíveis a partir do dia ${publicBookingWindow?.openDay ?? 20}.`}
+            </p>}
           </div>
 
           <div className="bg-card border border-white/10 rounded-xl p-4">
@@ -177,7 +206,7 @@ export default function Reschedule() {
         </div>
 
         <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
-          <Button variant="gold" disabled={!selectedTime || rescheduleAppointment.isPending} onClick={handleSubmit}>
+          <Button variant="gold" disabled={!selectedTime || !selectedDate || !isPublicDateAllowed(selectedDate) || rescheduleAppointment.isPending} onClick={handleSubmit}>
             {rescheduleAppointment.isPending ? "A reagendar..." : "Confirmar nova data"}
           </Button>
           <Link

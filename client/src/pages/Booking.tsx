@@ -28,6 +28,7 @@ import {
   toStoredPhone,
   type PhoneCountryCode,
 } from "@shared/phone-countries";
+import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 
 type BookingPreference = {
   step: number;
@@ -279,7 +280,14 @@ export default function Booking() {
   const { data: services, isLoading: loadingServices } = useServices();
   const { data: availabilityRows } = useBarberAvailability();
   const { data: shopAvailabilityRows } = useShopAvailability();
+  const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const createAppointment = useCreateAppointment();
+  const maxPublicBookingDate = useMemo(
+    () => parseDateParam(publicBookingWindow?.maxDate ?? null),
+    [publicBookingWindow?.maxDate],
+  );
+  const isPublicDateAllowed = (date: Date) =>
+    Boolean(publicBookingWindow && format(date, "yyyy-MM-dd") >= publicBookingWindow.today && format(date, "yyyy-MM-dd") <= publicBookingWindow.maxDate);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
@@ -296,8 +304,18 @@ export default function Booking() {
   // Fetch appointments for selected date/barber to block slots
   const { data: existingAppointments, isLoading: loadingAppointments, isError: appointmentsError } = usePublicAppointments({
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
-    date: selectedDate ? format(selectedDate, 'yyyy-MM-dd') : undefined,
+    date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, 'yyyy-MM-dd') : undefined,
+    enabled: Boolean(selectedDate && isPublicDateAllowed(selectedDate)),
   });
+
+  useEffect(() => {
+    if (!publicBookingWindow || !selectedDate || isPublicDateAllowed(selectedDate)) return;
+    const today = parseDateParam(publicBookingWindow.today) ?? startOfToday();
+    setSelectedDate(today);
+    setVisibleCalendarMonth(today);
+    setSelectedTime(null);
+    setStep((currentStep) => Math.min(currentStep, 3));
+  }, [publicBookingWindow, selectedDate]);
 
   const monthStart = startOfMonth(visibleCalendarMonth);
   const monthEnd = endOfMonth(visibleCalendarMonth);
@@ -404,7 +422,7 @@ export default function Booking() {
     const availableKeys = new Set<string>();
 
     eachDayOfInterval({ start: calendarStart, end: calendarEnd }).forEach((date) => {
-      if (date < today) return;
+      if (date < today || !isPublicDateAllowed(date)) return;
       if (periodsForShop({ dayOfWeek: date.getDay(), shopAvailabilityRows: shopAvailabilityForCalendar }).length === 0) return;
 
       const slots = getAvailableTimeSlots({
@@ -456,6 +474,16 @@ export default function Booking() {
   const handleSubmit = async () => {
     if (selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime) {
       toast({ title: "Erro", description: "Confirme barbeiro, serviço, data e hora.", variant: "destructive" });
+      return;
+    }
+    if (!publicBookingWindow || !isPublicDateAllowed(selectedDate)) {
+      toast({
+        title: "Data ainda indisponível",
+        description: publicBookingWindow
+          ? `O próximo mês abre para marcações no dia ${publicBookingWindow.openDay}.`
+          : "Não foi possível confirmar o período disponível. Tente novamente.",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -761,7 +789,8 @@ export default function Booking() {
                         setSelectedTime(null);
                         setShowTimeError(false);
                       }}
-                      disabled={(date) => date < startOfToday() || isShopClosedDate(date)}
+                      toMonth={maxPublicBookingDate ?? startOfToday()}
+                      disabled={(date) => !isPublicDateAllowed(date) || isShopClosedDate(date)}
                       initialFocus
                       className="w-full rounded-md px-1 py-2 md:px-3 md:py-3"
                       locale={pt}
@@ -786,6 +815,11 @@ export default function Booking() {
                         ),
                       }}
                     />
+                    {publicBookingWindow?.enabled !== false && <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
+                      {loadingPublicBookingWindow
+                        ? "A carregar o período disponível..."
+                        : `As marcações para o próximo mês ficam disponíveis a partir do dia ${publicBookingWindow?.openDay ?? 20}.`}
+                    </p>}
                     <div className="mt-2 flex items-center justify-center gap-2 text-[11px] text-gray-500">
                       <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_0.45rem_hsl(var(--primary)/0.45)]" />
                       <span>Dias com horários disponíveis</span>
@@ -1010,7 +1044,7 @@ export default function Booking() {
                 disabled={
                   (step === 1 && selectedBarberId === null) ||
                   (step === 2 && !selectedServiceId) ||
-                  (step === 3 && (!selectedDate || !selectedTime))
+                  (step === 3 && (!selectedDate || !selectedTime || !isPublicDateAllowed(selectedDate)))
                 }
               >
                 Seguinte

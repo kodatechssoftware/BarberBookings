@@ -40,11 +40,18 @@ import {
   supportedPhoneValidationMessage,
   supportedPhonesMatch,
 } from "@shared/phone-countries";
+import {
+  getPublicBookingWindow,
+  isDateWithinPublicBookingWindow,
+  PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
+} from "@shared/public-booking-window";
 
 const PostgresSessionStore = connectPg(session);
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
+const PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY = process.env.PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY;
+const PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED = process.env.PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED === "true";
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
 const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MINUTES || 45);
 const DEPOSIT_RISK_THRESHOLD = Number(process.env.DEPOSIT_RISK_THRESHOLD || 2);
@@ -348,6 +355,22 @@ function isBeforeShopToday(date: Date) {
 
 function isBeforeNow(date: Date) {
   return date.getTime() < Date.now();
+}
+
+function currentPublicBookingWindow(now = new Date()) {
+  const bookingWindow = getPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY);
+  return PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED
+    ? bookingWindow
+    : { ...bookingWindow, enabled: false, maxDate: "9999-12-31" };
+}
+
+function sendPublicBookingWindowClosed(res: Response) {
+  const bookingWindow = currentPublicBookingWindow();
+  return res.status(400).json({
+    code: PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
+    message: `Esta data ainda não está disponível. O próximo mês abre para marcações no dia ${bookingWindow.openDay}.`,
+    bookingWindow,
+  });
 }
 
 function addDaysToShopCalendarDate(year: number, month: number, day: number, days: number) {
@@ -2260,6 +2283,11 @@ export async function registerRoutes(
   });
 
   // === APPOINTMENTS ===
+  app.get("/api/public-booking-window", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(currentPublicBookingWindow());
+  });
+
   app.get(api.appointments.list.path, requireAuth, async (req, res) => {
     const filterError = validateAppointmentFilters(req.query);
     if (filterError) return res.status(400).json({ message: filterError });
@@ -2309,6 +2337,9 @@ export async function registerRoutes(
 
       if (isBeforeNow(input.startTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+      }
+      if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED && !isDateWithinPublicBookingWindow(input.startTime, currentPublicBookingWindow(), SHOP_TIME_ZONE)) {
+        return sendPublicBookingWindowClosed(res);
       }
 
       if (!isValidOptionalEmail(input.customerEmail)) {
@@ -2760,7 +2791,16 @@ export async function registerRoutes(
     const barberId = req.query.barberId ? Number(req.query.barberId) : undefined;
     const date = req.query.date as string | undefined;
     const startDate = req.query.startDate as string | undefined;
-    const endDate = req.query.endDate as string | undefined;
+    let endDate = req.query.endDate as string | undefined;
+    const bookingWindow = currentPublicBookingWindow();
+    if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED) {
+      if ((date && date > bookingWindow.maxDate) || (startDate && startDate > bookingWindow.maxDate)) {
+        return res.json([]);
+      }
+      if (endDate && endDate > bookingWindow.maxDate) {
+        endDate = bookingWindow.maxDate;
+      }
+    }
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
     const appointments = date
       ? await storage.getAppointments(effectiveBarberId, date)
@@ -3052,9 +3092,8 @@ export async function registerRoutes(
       if (isBeforeNow(startTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
-
-      if (isBeforeNow(startTime)) {
-        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+      if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED && !isDateWithinPublicBookingWindow(startTime, currentPublicBookingWindow(), SHOP_TIME_ZONE)) {
+        return sendPublicBookingWindowClosed(res);
       }
 
       const services = await storage.getServices();

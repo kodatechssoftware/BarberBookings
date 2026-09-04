@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
 import { getAvailableTimeSlots } from "../../client/src/lib/availability";
+import { formatAppointmentForEmail } from "../../server/email";
 
 async function expectNoHorizontalOverflow(page: Page) {
   try {
@@ -3761,6 +3762,9 @@ test.describe("booking rules", () => {
         new Date(appointment.startTime).getUTCHours(),
       ))].sort();
       expect(utcHours).toEqual([13, 14]);
+      expect(createdSeries.every((appointment: any) =>
+        formatAppointmentForEmail(new Date(appointment.startTime)).time === "14:00"
+      )).toBe(true);
     } finally {
       if (createdSeries.length === 0) {
         const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}`);
@@ -4524,6 +4528,16 @@ test.describe("booking rules", () => {
       }
       await request.delete(`/api/barbers/${barber.id}`);
     }
+  });
+
+  test("formats confirmation and cancellation email times in Lisbon in summer and winter", () => {
+    const summer = formatAppointmentForEmail(new Date("2026-09-05T08:30:00.000Z"));
+    const winter = formatAppointmentForEmail(new Date("2026-12-05T09:30:00.000Z"));
+
+    expect(summer.time).toBe("09:30");
+    expect(summer.date).toContain("5 de setembro de 2026");
+    expect(winter.time).toBe("09:30");
+    expect(winter.date).toContain("5 de dezembro de 2026");
   });
 
   test("validates service name, price and duration at the API boundary", async ({ request }) => {
