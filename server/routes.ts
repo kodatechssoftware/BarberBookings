@@ -45,6 +45,7 @@ import {
   isDateWithinPublicBookingWindow,
   PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
 } from "@shared/public-booking-window";
+import { parseMultiLocationConfig } from "@shared/multi-location-config";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -52,6 +53,7 @@ const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY = process.env.PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY;
 const PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED = process.env.PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED === "true";
+const MULTI_LOCATION_CONFIG = parseMultiLocationConfig(process.env);
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
 const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MINUTES || 45);
 const DEPOSIT_RISK_THRESHOLD = Number(process.env.DEPOSIT_RISK_THRESHOLD || 2);
@@ -1391,6 +1393,10 @@ export async function registerRoutes(
   }
 
   app.use(session(sessionConfig));
+
+  app.get("/api/multi-location/config", (_req, res) => {
+    res.json(MULTI_LOCATION_CONFIG);
+  });
 
   // === AUTH ===
   app.post("/api/admin/login", async (req, res) => {

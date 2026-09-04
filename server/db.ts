@@ -47,6 +47,170 @@ function quoteIdentifier(identifier: string) {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
 
+export async function ensureMultiLocationFoundation() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const locationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
+  const barbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
+  const servicesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+  const barberLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_locations")}`;
+  const serviceLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("service_locations")}`;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${locationsTable} (
+        id serial PRIMARY KEY,
+        name text NOT NULL,
+        slug text NOT NULL,
+        address text NOT NULL DEFAULT '',
+        map_url text,
+        map_embed_url text,
+        timezone text NOT NULL DEFAULT 'Europe/Lisbon',
+        is_active boolean NOT NULL DEFAULT true,
+        is_default boolean NOT NULL DEFAULT false,
+        sort_order integer NOT NULL DEFAULT 0,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS locations_slug_idx
+      ON ${locationsTable} (slug)
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS locations_single_default_idx
+      ON ${locationsTable} (is_default)
+      WHERE is_default = true
+    `);
+
+    const existingLocations = await client.query<{ id: number; is_default: boolean }>(`
+      SELECT id, is_default
+      FROM ${locationsTable}
+      ORDER BY is_default DESC, sort_order ASC, id ASC
+    `);
+
+    let defaultLocationId: number;
+    if (existingLocations.rows.length === 0) {
+      const insertedLocation = await client.query<{ id: number }>(`
+        INSERT INTO ${locationsTable} (
+          name,
+          slug,
+          address,
+          map_url,
+          map_embed_url,
+          timezone,
+          is_default
+        )
+        VALUES ($1, 'principal', $2, $3, $4, $5, true)
+        RETURNING id
+      `, [
+        process.env.SHOP_NAME?.trim() || "Barbearia",
+        process.env.SHOP_ADDRESS?.trim() || "",
+        process.env.SHOP_MAP_URL?.trim() || process.env.VITE_SHOP_MAP_URL?.trim() || null,
+        process.env.SHOP_MAP_EMBED_URL?.trim() || process.env.VITE_SHOP_MAP_EMBED_URL?.trim() || null,
+        process.env.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon",
+      ]);
+      defaultLocationId = insertedLocation.rows[0].id;
+    } else {
+      const defaultLocation = existingLocations.rows.find((location) => location.is_default);
+      defaultLocationId = defaultLocation?.id ?? existingLocations.rows[0].id;
+      if (!defaultLocation) {
+        await client.query(`
+          UPDATE ${locationsTable}
+          SET is_default = true, updated_at = now()
+          WHERE id = $1
+        `, [defaultLocationId]);
+      }
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${barberLocationsTable} (
+        barber_id integer NOT NULL REFERENCES ${barbersTable}(id) ON DELETE CASCADE,
+        location_id integer NOT NULL REFERENCES ${locationsTable}(id) ON DELETE RESTRICT,
+        is_active boolean NOT NULL DEFAULT true,
+        created_at timestamp NOT NULL DEFAULT now(),
+        PRIMARY KEY (barber_id, location_id)
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS barber_locations_location_idx
+      ON ${barberLocationsTable} (location_id, barber_id)
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${serviceLocationsTable} (
+        service_id integer NOT NULL REFERENCES ${servicesTable}(id) ON DELETE CASCADE,
+        location_id integer NOT NULL REFERENCES ${locationsTable}(id) ON DELETE RESTRICT,
+        is_active boolean NOT NULL DEFAULT true,
+        price_override integer,
+        duration_override integer,
+        created_at timestamp NOT NULL DEFAULT now(),
+        PRIMARY KEY (service_id, location_id),
+        CONSTRAINT service_locations_price_override_check
+          CHECK (price_override IS NULL OR price_override >= 0),
+        CONSTRAINT service_locations_duration_override_check
+          CHECK (duration_override IS NULL OR duration_override > 0)
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS service_locations_location_idx
+      ON ${serviceLocationsTable} (location_id, service_id)
+    `);
+
+    for (const tableName of [
+      "appointments",
+      "shop_availability",
+      "barber_availability",
+      "business_expenses",
+    ]) {
+      const qualifiedTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
+      const constraintName = `${tableName}_location_id_fkey`;
+      const indexName = `${tableName}_location_id_idx`;
+
+      await client.query(`ALTER TABLE ${qualifiedTable} ADD COLUMN IF NOT EXISTS location_id integer`);
+      await client.query(`UPDATE ${qualifiedTable} SET location_id = $1 WHERE location_id IS NULL`, [defaultLocationId]);
+      await client.query(`ALTER TABLE ${qualifiedTable} ALTER COLUMN location_id SET DEFAULT ${defaultLocationId}`);
+      await client.query(`ALTER TABLE ${qualifiedTable} ALTER COLUMN location_id SET NOT NULL`);
+      await client.query(`
+        DO $$
+        BEGIN
+          ALTER TABLE ${qualifiedTable}
+          ADD CONSTRAINT ${quoteIdentifier(constraintName)}
+          FOREIGN KEY (location_id) REFERENCES ${locationsTable}(id) ON DELETE RESTRICT;
+        EXCEPTION
+          WHEN duplicate_object THEN NULL;
+        END $$
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)}
+        ON ${qualifiedTable} (location_id)
+      `);
+    }
+
+    await client.query(`
+      INSERT INTO ${barberLocationsTable} (barber_id, location_id)
+      SELECT id, $1 FROM ${barbersTable}
+      ON CONFLICT (barber_id, location_id) DO NOTHING
+    `, [defaultLocationId]);
+    await client.query(`
+      INSERT INTO ${serviceLocationsTable} (service_id, location_id)
+      SELECT id, $1 FROM ${servicesTable}
+      ON CONFLICT (service_id, location_id) DO NOTHING
+    `, [defaultLocationId]);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function ensureAppointmentOverlapProtection() {
   if (useMemoryStorage) return;
 

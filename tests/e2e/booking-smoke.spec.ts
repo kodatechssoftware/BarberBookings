@@ -2,6 +2,23 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 import ExcelJS from "exceljs";
 import { getAvailableTimeSlots } from "../../client/src/lib/availability";
 import { formatAppointmentForEmail } from "../../server/email";
+import { parseMultiLocationConfig } from "../../shared/multi-location-config";
+
+test.describe("configuração multi-localização", () => {
+  test("mantém uma única localização por omissão e valida os limites", async ({ request }) => {
+    expect(parseMultiLocationConfig({})).toEqual({ enabled: false, maxLocations: 1 });
+    expect(parseMultiLocationConfig({
+      MULTI_LOCATION_ENABLED: "true",
+      MAX_LOCATIONS: "3",
+    })).toEqual({ enabled: true, maxLocations: 3 });
+    expect(() => parseMultiLocationConfig({ MAX_LOCATIONS: "0" })).toThrow(/entre 1 e 50/);
+    expect(() => parseMultiLocationConfig({ MAX_LOCATIONS: "3.5" })).toThrow(/entre 1 e 50/);
+
+    const response = await request.get("/api/multi-location/config");
+    expect(response.ok(), await response.text()).toBe(true);
+    expect(await response.json()).toEqual({ enabled: false, maxLocations: 1 });
+  });
+});
 
 async function expectNoHorizontalOverflow(page: Page) {
   try {
@@ -1548,6 +1565,7 @@ test.describe("admin navigation", () => {
     await expect(manualCountrySelect.locator("option")).toHaveCount(9);
     await manualCountrySelect.selectOption("ES");
     await expect(dialog.locator("#manual-booking-phone")).toHaveAttribute("placeholder", "612 345 678");
+    await dialog.locator("#manual-booking-name").fill("Cliente Manual");
     await dialog.locator("#manual-booking-phone").fill("612696001");
     await clickFirstEnabledManualTime(dialog);
     await dialog.getByRole("button", { name: /Criar/i }).click();
