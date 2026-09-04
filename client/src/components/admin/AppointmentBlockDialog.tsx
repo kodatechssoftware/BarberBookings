@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { format, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { AlertTriangle, Calendar as CalendarIcon, User } from "lucide-react";
@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
+import { emailValidationMessage, isValidOptionalEmail } from "@shared/customer-validation";
 import {
   PHONE_COUNTRIES,
   formatPhoneInput,
@@ -57,6 +59,7 @@ export function AppointmentBlockDialog({
   isCheckingAvailability = false,
   onSubmit,
 }: AppointmentBlockDialogProps) {
+  const [isEmailTouched, setIsEmailTouched] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking && blockData.isRecurring;
   const visibleBlockTimeOptions = blockData.isManualBooking && blockData.allowOutsideHours
     ? outsideHoursBlockTimeOptions
@@ -68,6 +71,11 @@ export function AppointmentBlockDialog({
   const isHistoricalManualBooking = blockData.isManualBooking && !blockData.isRecurring && blockData.date < today;
   const manualPhoneParts = splitStoredPhone(blockData.phone);
   const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
+  const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
+
+  useEffect(() => {
+    if (!open) setIsEmailTouched(false);
+  }, [open]);
 
   const setQuickBlockTimes = (times: string[]) => {
     const available = times.filter((time) => availableBlockTimes.includes(time));
@@ -438,12 +446,24 @@ export function AppointmentBlockDialog({
                   maxLength={120}
                   value={blockData.email}
                   onChange={(event) => onBlockDataChange({ ...blockData, email: event.target.value })}
-                  className="h-12 rounded-xl border-white/10 bg-background/50 text-white"
-                  placeholder="cliente@email.com"
+                  onBlur={() => setIsEmailTouched(true)}
+                  className={cn(
+                    "h-12 rounded-xl bg-background/50 text-white focus:border-primary",
+                    showEmailError ? "border-red-500 focus:border-red-500" : "border-white/10",
+                  )}
+                  placeholder="exemplo@email.com"
+                  aria-invalid={showEmailError}
+                  aria-describedby={showEmailError ? "manual-booking-email-error" : "manual-booking-email-help"}
                 />
-                <p className="text-xs text-gray-500">
-                  Se preencher, o cliente recebe a confirmação da marcação e o link de cancelamento.
-                </p>
+                {showEmailError ? (
+                  <p id="manual-booking-email-error" className="text-xs font-medium text-red-400">
+                    {emailValidationMessage}
+                  </p>
+                ) : (
+                  <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-500">
+                    Indique o email para receber a confirmação da marcação e o link de cancelamento.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -454,7 +474,10 @@ export function AppointmentBlockDialog({
             variant="gold"
             className="h-12 w-full rounded-xl text-base font-bold"
             disabled={!blockData.barberId || blockData.times.length === 0 || (blockData.isManualBooking && !blockData.serviceId)}
-            onClick={onSubmit}
+            onClick={() => {
+              if (blockData.isManualBooking) setIsEmailTouched(true);
+              onSubmit();
+            }}
           >
             {blockData.isManualBooking ? "Criar marcação" : "Guardar ausência"}
           </Button>

@@ -2849,7 +2849,9 @@ test.describe("booking rules", () => {
 
       const dialog = page.getByRole("dialog", { name: "Marcação manual" });
       await expect(dialog).toBeVisible();
-      await expect(dialog.getByText(/recebe a confirmação da marcação e o link de cancelamento/i)).toBeVisible();
+      await expect(dialog.getByText(/email para receber a confirmação da marcação e o link de cancelamento/i)).toBeVisible();
+      await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("placeholder", "exemplo@email.com");
+      await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("aria-invalid", "false");
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, service.name);
       await dialog.getByPlaceholder("João").fill(customerName);
@@ -2932,8 +2934,57 @@ test.describe("booking rules", () => {
     await dialog.locator("#manual-booking-email").fill("email-invalido");
     await clickFirstEnabledManualTime(dialog);
     await dialog.getByRole("button", { name: "Criar marcação" }).click();
-    await expect(page.getByText("Introduza um email válido, por exemplo cliente@email.com.", { exact: true })).toBeVisible();
+    await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.locator("#manual-booking-email-error")).toHaveText(
+      "Introduza um email válido, por exemplo cliente@email.com.",
+    );
     await expect(dialog).toBeVisible();
+  });
+
+  test("stores the optional email across every recurring manual appointment", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
+    const customerName = `Manual Recorrente Email QA ${Date.now()}`;
+    const customerEmail = `manual-recorrente-${Date.now()}@example.com`;
+    let createdAppointments: any[] = [];
+
+    try {
+      const response = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: futureThursdayIso(12, 17, 0),
+          name: customerName,
+          phone: "+351912695787",
+          customerEmail,
+          isManualBooking: true,
+          isRecurring: true,
+          recurringWeeks: 2,
+          recurringMonths: 1,
+        },
+      });
+      expect(response.status(), await response.text()).toBe(201);
+
+      const appointmentsResponse = await request.get("/api/appointments");
+      expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+      createdAppointments = (await appointmentsResponse.json()).filter(
+        (appointment: any) => appointment.customerName === customerName,
+      );
+      expect(createdAppointments.length).toBeGreaterThan(1);
+      expect(createdAppointments.every((appointment: any) => appointment.customerEmail === customerEmail)).toBe(true);
+      expect(createdAppointments.every((appointment: any) => appointment.cancelToken)).toBe(true);
+    } finally {
+      await Promise.all(createdAppointments.map((appointment: any) =>
+        request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),
+      ));
+    }
   });
 
   test("warns when a manual booking uses a blacklisted email", async ({ page, request }) => {
