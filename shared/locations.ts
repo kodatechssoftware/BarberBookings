@@ -13,9 +13,13 @@ const optionalHttpUrl = z.string().trim().max(1000).refine((value) => {
 const optionalGoogleMapsEmbedUrl = optionalHttpUrl.refine((value) => {
   if (!value) return true;
   try {
-    const { hostname, pathname } = new URL(value);
+    const { protocol, hostname, pathname, searchParams, username, password } = new URL(value);
     const googleHost = hostname === "google.com" || hostname.endsWith(".google.com");
-    return googleHost && pathname.startsWith("/maps/embed");
+    const embedPath = pathname === "/maps/embed" || pathname.startsWith("/maps/embed/");
+    const addressEmbed = (pathname === "/maps" || pathname === "/maps/")
+      && searchParams.get("output") === "embed"
+      && Boolean(searchParams.get("q")?.trim());
+    return protocol === "https:" && !username && !password && googleHost && (embedPath || addressEmbed);
   } catch {
     return false;
   }

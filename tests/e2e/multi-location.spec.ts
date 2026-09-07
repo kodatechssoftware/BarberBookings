@@ -25,8 +25,10 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
       data: {
         name: `Loja ${name}`,
         address: `Avenida Central, ${city}`,
-        mapUrl: `https://www.google.com/maps?q=${city}`,
-        mapEmbedUrl: embed(city),
+        ...(city === "Braga" ? {} : {
+          mapUrl: `https://www.google.com/maps?q=${city}`,
+          mapEmbedUrl: embed(city),
+        }),
         timezone: "Europe/Lisbon",
         isActive: true,
       },
@@ -34,6 +36,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     expect(response.status(), await response.text()).toBe(201);
     const location = await response.json();
     expect(location.isActive).toBe(false);
+    if (city === "Braga") expect(location).toMatchObject({ mapUrl: null, mapEmbedUrl: null });
     created.push(location);
   }
 
@@ -145,13 +148,16 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await locationSection.getByRole("button", { name: /Loja Braga/ }).click();
   await expect(locationSection.locator("iframe")).toHaveCount(1);
   await expect(locationSection.locator("iframe")).toHaveAttribute("title", "Mapa de Loja Braga");
-  await expect(locationSection.locator("iframe")).toHaveAttribute("src", embed("Braga"));
+  await expect(locationSection.locator("iframe")).toHaveAttribute("src", `https://www.google.com/maps?q=${encodeURIComponent(created[1].address)}&output=embed`);
+  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(created[1].address)}`);
   // A shop change from another tab must update the map and the public catalogue together.
   await page.evaluate((id) => {
     localStorage.setItem("barberbookings:location-id", String(id));
     window.dispatchEvent(new StorageEvent("storage", { key: "barberbookings:location-id", newValue: String(id) }));
   }, created[0].id);
   await expect(locationSection.locator("iframe")).toHaveAttribute("title", "Mapa de Loja Porto");
+  await expect(locationSection.locator("iframe")).toHaveAttribute("src", embed("Porto"));
+  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", "https://www.google.com/maps?q=Porto");
   await expect(page.getByText("Rui Porto", { exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -179,6 +185,41 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await locationsTab.click();
   await expect(page.getByText("4 de 4 localizações utilizadas neste plano.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nova localização" })).toBeDisabled();
+
+  // Editing existing custom links must not discard them merely because advanced fields are collapsed.
+  await page.getByRole("button", { name: "Editar Loja Porto", exact: true }).click();
+  const locationDialog = page.getByRole("dialog", { name: "Editar localização" });
+  await expect(locationDialog.getByLabel("Link do Google Maps", { exact: true })).not.toBeVisible();
+  await locationDialog.getByRole("button", { name: "Guardar localização" }).click();
+  await expect(locationDialog).not.toBeVisible();
+  const preservedLocations = await (await request.get("/api/admin/locations")).json();
+  expect(preservedLocations.find((location: any) => location.id === created[0].id)).toMatchObject({
+    mapUrl: "https://www.google.com/maps?q=Porto", mapEmbedUrl: embed("Porto"),
+  });
+
+  // The default shop can also use address-only maps, even with legacy environment links configured.
+  await page.getByRole("button", { name: `Editar ${initial[0].name}`, exact: true }).click();
+  const updatedAddress = "Praça do Comércio, 25, 1100-148 Lisboa";
+  await locationDialog.getByLabel("Morada completa").fill(updatedAddress);
+  await locationDialog.locator("summary").click();
+  await expect(locationDialog.getByLabel("Link do Google Maps", { exact: true })).toBeVisible();
+  expect(await locationDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await locationDialog.getByRole("button", { name: "Usar apenas a morada" }).click();
+  await expect(locationDialog.getByLabel("Link do Google Maps", { exact: true })).toHaveValue("");
+  await expect(locationDialog.getByLabel("Link de incorporação do mapa")).toHaveValue("");
+  await locationDialog.getByRole("button", { name: "Guardar localização" }).click();
+  await expect(locationDialog).not.toBeVisible();
+  const addressOnlyLocations = await (await request.get("/api/admin/locations")).json();
+  expect(addressOnlyLocations.find((location: any) => location.id === initial[0].id)).toMatchObject({
+    address: updatedAddress, mapUrl: null, mapEmbedUrl: null,
+  });
+  await page.goto("/");
+  await locationSection.getByRole("button", { name: new RegExp(initial[0].name) }).click();
+  await expect(locationSection.locator("iframe")).toHaveAttribute("src", `https://www.google.com/maps?q=${encodeURIComponent(updatedAddress)}&output=embed`);
+  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(updatedAddress)}`);
+  // Keep the remainder of the isolation tests managing Porto.
+  await locationSection.getByRole("button", { name: /Loja Porto/ }).click();
+  await page.goto("/admin");
 
   const primaryHeaders = { "X-Location-Id": String(initial[0].id) };
   const sharedBarber = defaultBarbers[0];

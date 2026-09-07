@@ -16,7 +16,7 @@ Uma instalação de uma única loja mantém `MULTI_LOCATION_ENABLED=false` e `MA
 
 ## Preparar uma nova loja
 
-1. Como administrador, abrir **Localizações** e criar a loja com nome, morada e ligações do mapa. Nasce como rascunho.
+1. Como administrador, abrir **Localizações** e criar a loja com nome e morada completa (rua, número, código postal e localidade). Nasce como rascunho. O mapa e a ligação para o Google Maps são gerados automaticamente a partir da morada.
 2. Escolher essa loja em **Loja em gestão**.
 3. Criar os serviços, preços e durações; configurar o horário da loja.
 4. Criar barbeiros ou usar **Associar barbeiro existente**. Rever os serviços e o horário de cada um nessa loja.
@@ -24,6 +24,8 @@ Uma instalação de uma única loja mantém `MULTI_LOCATION_ENABLED=false` e `MA
 6. No site público, confirmar equipa, serviços, mapa e um percurso de marcação nessa loja.
 
 Uma loja ativa pode aparecer no mapa, mas só é oferecida para marcação se tiver um barbeiro ativo que execute um serviço ativo dessa loja. Uma única loja disponível é selecionada automaticamente; com várias, o cliente escolhe primeiro a loja.
+
+Confirmar sempre que o Google Maps identifica a entrada correta. Em **Opções avançadas do mapa**, é possível indicar ligações específicas; cada campo vazio continua a usar a morada. As ligações personalizadas existentes são preservadas. **Usar apenas a morada** limpa essas substituições ao guardar. As ligações automáticas são calculadas na apresentação, não gravadas, pelo que acompanham alterações de morada sem migração da base de dados.
 
 Não se pode desativar a localização principal nem uma loja com marcações futuras por resolver. Arquivar um barbeiro numa loja não o retira das restantes nem apaga o histórico.
 
@@ -66,17 +68,20 @@ Antes de uma futura promoção a PRD: backup verificado, migração numa cópia 
 
 ## Testes reproduzíveis
 
-Validação local em 6–7 de setembro de 2026: 99 testes de regressão/branding, 7 de abertura mensal e a bateria integrada de várias localizações passaram. `npm run check`, `npm run build` e o teste de migração PostgreSQL também passaram. Isto não substitui a validação do deploy real de DEV nem constitui autorização para promover a PRD.
+Validação local em 6–7 de setembro de 2026: 127 testes de regressão/branding/mapas, 7 de abertura mensal e a bateria integrada de várias localizações passaram. `npm run check`, `npm run build` e o teste de migração PostgreSQL também passaram. A simplificação dos mapas não altera o esquema da base de dados. Isto não substitui a validação do deploy real de DEV nem constitui autorização para promover a PRD.
 
 ```powershell
 npm run check
 npm run build
 npx playwright test --config=playwright.multilocation.config.ts
+npx playwright test tests/e2e/location-maps.spec.ts
 npx playwright test tests/e2e/booking-smoke.spec.ts
 npx playwright test --config=playwright.booking-window.config.ts
 ```
 
 A bateria multi-localização cobre quatro lojas, rascunhos, limites, mapas responsivos, isolamento, associação pela interface, conflitos simultâneos, ocupação sem dados pessoais, reagendamento, despesas/Excel, arquivo/reativação e acesso de barbeiros.
+
+Os testes dos mapas cobrem geração a partir da morada (incluindo acentos), ligações opcionais, validação dos endereços de incorporação, preservação das ligações personalizadas e regresso ao modo automático pela interface. A localização principal é testada com ligações antigas no ambiente, para garantir que não reaparecem depois de escolher **Usar apenas a morada**.
 
 Teste da migração numa instância PostgreSQL local e descartável:
 

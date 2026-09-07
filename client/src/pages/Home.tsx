@@ -13,6 +13,7 @@ import { useServices } from "@/hooks/use-services";
 import { shopBranding } from "@/lib/branding";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
+import { resolveLocationMapLinks } from "@shared/location-maps";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -122,8 +123,10 @@ export default function Home() {
       return available.map((location) => location.isDefault ? {
         ...location,
         address: location.address || shopBranding.address,
-        mapUrl: location.mapUrl || shopBranding.mapUrl,
-        mapEmbedUrl: location.mapEmbedUrl || shopBranding.mapEmbedUrl,
+        // Legacy branding only fills records without their own address. Empty links
+        // on a configured location mean automatic maps, not old environment URLs.
+        mapUrl: location.mapUrl || (!location.address.trim() ? shopBranding.mapUrl : ""),
+        mapEmbedUrl: location.mapEmbedUrl || (!location.address.trim() ? shopBranding.mapEmbedUrl : ""),
       } : location);
     }
     return [{
@@ -147,9 +150,7 @@ export default function Home() {
   const selectedLocation = publicLocations.find((location) => location.id === selectedLocationId)
     ?? publicLocations.find((location) => location.isDefault)
     ?? publicLocations[0];
-  const selectedMapEmbedUrl = selectedLocation.mapEmbedUrl || (selectedLocation.address
-    ? `https://www.google.com/maps?q=${encodeURIComponent(selectedLocation.address)}&output=embed`
-    : "");
+  const selectedMapLinks = resolveLocationMapLinks(selectedLocation);
 
   useEffect(() => {
     if (!locations?.length || selectedLocationId === null) return;
@@ -423,7 +424,7 @@ export default function Home() {
                 </span>
               ))}
             </div>}
-            {shopBranding.showMap && selectedLocation.mapUrl && <a href={selectedLocation.mapUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
+            {shopBranding.showMap && selectedMapLinks.mapUrl && <a href={selectedMapLinks.mapUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
               <Button variant="outline" className="border-white/15 bg-card text-white hover:bg-white/10">
                 <MapPin className="mr-2 h-4 w-4" />
                 Abrir no Google Maps
@@ -432,11 +433,11 @@ export default function Home() {
             </a>}
           </div>
 
-          {shopBranding.showMap && selectedMapEmbedUrl && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
+          {shopBranding.showMap && selectedMapLinks.mapEmbedUrl && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
             <iframe
               key={selectedLocation.id}
               title={`Mapa de ${selectedLocation.name}`}
-              src={selectedMapEmbedUrl}
+              src={selectedMapLinks.mapEmbedUrl}
               width="100%"
               height="100%"
               style={{ border: 0 }}

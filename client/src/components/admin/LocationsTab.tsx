@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, ExternalLink, MapPin, Pencil, Plus } from "lucide-react";
 import type { ShopLocation } from "@shared/locations";
+import { resolveLocationMapLinks } from "@shared/location-maps";
 import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button-custom";
@@ -40,6 +41,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<LocationForm>(emptyForm);
+  const hasCustomMapLinks = Boolean(form.mapUrl.trim() || form.mapEmbedUrl.trim());
   const { data: locations = [], isLoading } = useQuery<ShopLocation[]>({
     queryKey: ["/api/admin/locations"],
   });
@@ -139,12 +141,12 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
                       <p className="mt-2 text-sm leading-relaxed text-gray-400">{location.address}</p>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => openEdit(location)}>
+                  <Button variant="outline" size="sm" aria-label={`Editar ${location.name}`} onClick={() => openEdit(location)}>
                     <Pencil className="mr-2 h-4 w-4" /> Editar
                   </Button>
                 </div>
-                {location.mapUrl && (
-                  <a href={location.mapUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center text-sm text-primary hover:underline">
+                {(location.mapUrl || location.address.trim()) && (
+                  <a href={resolveLocationMapLinks(location).mapUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center text-sm text-primary hover:underline">
                     <MapPin className="mr-1.5 h-4 w-4" /> Ver mapa <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
                   </a>
                 )}
@@ -167,15 +169,11 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="location-address">Morada completa</Label>
               <Input id="location-address" value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="Rua, número, código postal e localidade" maxLength={300} />
-            </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor="location-map-url">Link do Google Maps</Label>
-              <Input id="location-map-url" value={form.mapUrl} onChange={(event) => setForm({ ...form, mapUrl: event.target.value })} placeholder="https://maps.google.com/..." />
-            </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor="location-map-embed">Link de incorporação do mapa</Label>
-              <Input id="location-map-embed" value={form.mapEmbedUrl} onChange={(event) => setForm({ ...form, mapEmbedUrl: event.target.value })} placeholder="https://www.google.com/maps/embed?..." />
-              <p className="text-xs text-gray-500">No Google Maps, utilize Partilhar → Incorporar um mapa e copie apenas o endereço de `src`.</p>
+              <p className="text-xs leading-relaxed text-gray-400">
+                {hasCustomMapLinks
+                  ? "Esta localização usa ligações personalizadas. Para usar apenas a morada, reponha o mapa automático nas opções avançadas."
+                  : "O mapa e a ligação para o Google Maps são gerados automaticamente a partir desta morada. Confirme a localização no mapa depois de guardar."}
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="location-phone">Telefone</Label>
@@ -185,6 +183,31 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
               <Label htmlFor="location-email">Email</Label>
               <Input id="location-email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="Opcional" maxLength={120} />
             </div>
+            <details className="min-w-0 rounded-lg border border-white/10 p-4 sm:col-span-2">
+              <summary className="cursor-pointer text-sm font-medium text-gray-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                Opções avançadas do mapa{hasCustomMapLinks ? " — ligações personalizadas" : " (opcional)"}
+              </summary>
+              <div className="mt-4 space-y-4">
+                <p className="text-xs leading-relaxed text-gray-400">
+                  Só precisa destas ligações se o Google Maps não localizar corretamente a entrada.
+                  Cada campo vazio usa automaticamente a morada.
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="location-map-url">Link do Google Maps</Label>
+                  <Input id="location-map-url" value={form.mapUrl} onChange={(event) => setForm({ ...form, mapUrl: event.target.value })} placeholder="Opcional — gerado a partir da morada" maxLength={1000} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="location-map-embed">Link de incorporação do mapa</Label>
+                  <Input id="location-map-embed" value={form.mapEmbedUrl} onChange={(event) => setForm({ ...form, mapEmbedUrl: event.target.value })} placeholder="Opcional — https://www.google.com/maps/embed?..." maxLength={1000} />
+                  <p className="text-xs leading-relaxed text-gray-500">No Google Maps, utilize Partilhar → Incorporar um mapa e copie apenas o endereço de «src».</p>
+                </div>
+                {hasCustomMapLinks && (
+                  <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setForm({ ...form, mapUrl: "", mapEmbedUrl: "" })}>
+                    Usar apenas a morada
+                  </Button>
+                )}
+              </div>
+            </details>
             {editing && (
               <div className="flex items-center justify-between rounded-lg border border-white/10 p-4 sm:col-span-2">
                 <div>
