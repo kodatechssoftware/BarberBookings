@@ -19,6 +19,7 @@ export type ShopAvailabilityRow = {
 export type BarberOption = {
   id: number;
   serviceIds?: number[] | null;
+  allServicesAllowed?: boolean;
 };
 
 export type ServiceOption = {
@@ -34,7 +35,7 @@ export type TimeSlot = {
 export function canBarberPerformService(barber: BarberOption | undefined | null, serviceId?: number | null) {
   if (!barber || !serviceId) return true;
   const serviceIds = barber.serviceIds ?? [];
-  return serviceIds.length === 0 || serviceIds.includes(serviceId);
+  return (barber.allServicesAllowed !== false && serviceIds.length === 0) || serviceIds.includes(serviceId);
 }
 
 type MinutePeriod = {

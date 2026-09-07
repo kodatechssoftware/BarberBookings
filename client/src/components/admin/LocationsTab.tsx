@@ -46,7 +46,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
 
   const openCreate = () => {
     setEditing(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, timezone: locations.find((location) => location.isDefault)?.timezone ?? emptyForm.timezone });
     setOpen(true);
   };
 
@@ -72,7 +72,9 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
       await apiRequest(editing ? "PATCH" : "POST", path, form);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["/api/admin/locations"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/account/locations"] }),
         queryClient.invalidateQueries({ queryKey: ["/api/locations"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/locations?purpose=booking"] }),
       ]);
       setOpen(false);
       toast({
@@ -205,4 +207,3 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
     </div>
   );
 }
-

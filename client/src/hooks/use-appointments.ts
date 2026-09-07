@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateAppointmentRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
+import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
 export type AppointmentStatus = "booked" | "completed" | "cancelled" | "late_cancelled" | "no_show";
 export type AppointmentPaymentMethod = "pending" | "cash" | "card" | "gift";
 
 export type AppointmentRecord = {
   id: number;
+  locationId: number;
   barberId: number;
   serviceId: number | null;
   startTime: string;
@@ -36,6 +38,9 @@ export type PublicAppointment = {
 
 export type AppointmentByToken = {
   id: number;
+  locationId: number;
+  locationName: string;
+  locationAddress: string;
   barberId: number;
   serviceId: number | null;
   startTime: string;
@@ -68,7 +73,8 @@ type AppointmentQueryParams = {
   endDate?: string;
   enabled?: boolean;
   refetchInterval?: number | false;
-  scope?: "team";
+  scope?: "team" | "busy";
+  locationId?: number;
 };
 
 const PUBLIC_APPOINTMENTS_PATH = "/api/appointments/public";
@@ -86,13 +92,14 @@ function appendAppointmentQuery(path: string, params?: AppointmentQueryParams) {
 }
 
 export function useAppointments(params?: AppointmentQueryParams) {
+  const locationId = useActiveLocationId();
   return useQuery<AppointmentRecord[]>({
-    queryKey: [api.appointments.list.path, params],
+    queryKey: [api.appointments.list.path, params, { locationId }],
     enabled: params?.enabled ?? true,
     refetchInterval: params?.refetchInterval,
     queryFn: async () => {
       const url = appendAppointmentQuery(api.appointments.list.path, params);
-      const res = await apiFetch(url);
+      const res = await apiFetch(url, { headers: locationHeaders(locationId) });
       if (!res.ok) throw new Error("Failed to fetch appointments");
       return await res.json() as AppointmentRecord[];
     },
@@ -100,13 +107,15 @@ export function useAppointments(params?: AppointmentQueryParams) {
 }
 
 export function usePublicAppointments(params?: AppointmentQueryParams) {
+  const activeLocationId = useActiveLocationId();
+  const locationId = params?.locationId ?? activeLocationId;
   return useQuery<PublicAppointment[]>({
-    queryKey: [PUBLIC_APPOINTMENTS_PATH, params],
+    queryKey: [PUBLIC_APPOINTMENTS_PATH, params, { locationId }],
     enabled: params?.enabled ?? true,
     refetchInterval: params?.refetchInterval,
     queryFn: async () => {
       const url = appendAppointmentQuery(PUBLIC_APPOINTMENTS_PATH, params);
-      const res = await apiFetch(url);
+      const res = await apiFetch(url, { headers: locationHeaders(locationId) });
       if (!res.ok) throw new Error("Failed to fetch public appointments");
       return await res.json() as PublicAppointment[];
     },

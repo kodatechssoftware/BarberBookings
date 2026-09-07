@@ -114,7 +114,7 @@ export const api = {
       input: z.object({
         barberId: z.string().optional(),
         date: z.string().optional(),
-        scope: z.enum(["team"]).optional(),
+        scope: z.enum(["team", "busy"]).optional(),
       }).optional(),
       responses: {
         200: z.array(z.custom<typeof appointments.$inferSelect>()),

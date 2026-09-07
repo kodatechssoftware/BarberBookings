@@ -12,6 +12,8 @@ function quoteIdentifier(identifier: string) {
 }
 
 const locationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
+const barberLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_locations")}`;
+const serviceLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("service_locations")}`;
 
 function toSlug(value: string) {
   return value
@@ -58,6 +60,9 @@ let memoryLocations: ShopLocation[] = [{
   createdAt: new Date(),
   updatedAt: new Date(),
 }];
+const memoryBarberLocations = new Map<number, Set<number>>();
+const memoryInactiveBarberLocations = new Map<number, Set<number>>();
+const memoryServiceLocations = new Map<number, Set<number>>();
 
 export async function listLocations(includeInactive = false) {
   if (useMemoryStorage) {
@@ -74,9 +79,131 @@ export async function listLocations(includeInactive = false) {
   return result.rows.map(mapLocation);
 }
 
-async function uniqueSlug(name: string, existingId?: number) {
-  const baseSlug = toSlug(name);
+export async function getLocation(id: number, includeInactive = false) {
+  const locations = await listLocations(includeInactive);
+  return locations.find((location) => location.id === id);
+}
+
+export async function getDefaultLocation() {
   const locations = await listLocations(true);
+  return locations.find((location) => location.isDefault) ?? locations[0];
+}
+
+export async function getBarberIdsForLocation(locationId: number, includeInactive = false) {
+  if (useMemoryStorage) {
+    const assigned = memoryBarberLocations.get(locationId);
+    return Array.from(new Set([
+      ...Array.from(assigned ?? []),
+      ...Array.from(includeInactive ? memoryInactiveBarberLocations.get(locationId) ?? [] : []),
+    ]));
+  }
+  const result = await pool.query<{ barber_id: number }>(`
+    SELECT barber_id FROM ${barberLocationsTable}
+    WHERE location_id = $1 ${includeInactive ? "" : "AND is_active = true"}
+    ORDER BY barber_id
+  `, [locationId]);
+  return result.rows.map((row) => Number(row.barber_id));
+}
+
+export async function getServiceIdsForLocation(locationId: number) {
+  if (useMemoryStorage) {
+    const assigned = memoryServiceLocations.get(locationId);
+    return Array.from(assigned ?? []);
+  }
+  const result = await pool.query<{ service_id: number }>(`
+    SELECT service_id FROM ${serviceLocationsTable}
+    WHERE location_id = $1 AND is_active = true
+    ORDER BY service_id
+  `, [locationId]);
+  return result.rows.map((row) => Number(row.service_id));
+}
+
+export async function getLocationIdsForBarber(barberId: number) {
+  if (useMemoryStorage) {
+    return Array.from(memoryBarberLocations.entries())
+      .filter(([, barberIds]) => barberIds.has(barberId))
+      .map(([locationId]) => locationId);
+  }
+  const result = await pool.query<{ location_id: number }>(`
+    SELECT location_id FROM ${barberLocationsTable}
+    WHERE barber_id = $1 AND is_active = true
+    ORDER BY location_id
+  `, [barberId]);
+  return result.rows.map((row) => Number(row.location_id));
+}
+
+export async function getLocationIdsForService(serviceId: number) {
+  if (useMemoryStorage) {
+    return Array.from(memoryServiceLocations.entries())
+      .filter(([, serviceIds]) => serviceIds.has(serviceId))
+      .map(([locationId]) => locationId);
+  }
+  const result = await pool.query<{ location_id: number }>(`
+    SELECT location_id FROM ${serviceLocationsTable}
+    WHERE service_id = $1 AND is_active = true
+    ORDER BY location_id
+  `, [serviceId]);
+  return result.rows.map((row) => Number(row.location_id));
+}
+
+export async function assignBarberToLocation(barberId: number, locationId: number) {
+  if (useMemoryStorage) {
+    const assigned = memoryBarberLocations.get(locationId) ?? new Set<number>();
+    assigned.add(barberId);
+    memoryBarberLocations.set(locationId, assigned);
+    memoryInactiveBarberLocations.get(locationId)?.delete(barberId);
+    return;
+  }
+  await pool.query(`
+    INSERT INTO ${barberLocationsTable} (barber_id, location_id, is_active)
+    VALUES ($1, $2, true)
+    ON CONFLICT (barber_id, location_id) DO UPDATE SET is_active = true
+  `, [barberId, locationId]);
+}
+
+export async function assignServiceToLocation(serviceId: number, locationId: number) {
+  if (useMemoryStorage) {
+    const assigned = memoryServiceLocations.get(locationId) ?? new Set<number>();
+    assigned.add(serviceId);
+    memoryServiceLocations.set(locationId, assigned);
+    return;
+  }
+  await pool.query(`
+    INSERT INTO ${serviceLocationsTable} (service_id, location_id, is_active)
+    VALUES ($1, $2, true)
+    ON CONFLICT (service_id, location_id) DO UPDATE SET is_active = true
+  `, [serviceId, locationId]);
+}
+
+export async function removeBarberFromLocation(barberId: number, locationId: number) {
+  if (useMemoryStorage) {
+    memoryBarberLocations.get(locationId)?.delete(barberId);
+    const inactive = memoryInactiveBarberLocations.get(locationId) ?? new Set<number>();
+    inactive.add(barberId);
+    memoryInactiveBarberLocations.set(locationId, inactive);
+    return;
+  }
+  await pool.query(`
+    UPDATE ${barberLocationsTable}
+    SET is_active = false
+    WHERE barber_id = $1 AND location_id = $2
+  `, [barberId, locationId]);
+}
+
+export async function removeServiceFromLocation(serviceId: number, locationId: number) {
+  if (useMemoryStorage) {
+    memoryServiceLocations.get(locationId)?.delete(serviceId);
+    return;
+  }
+  await pool.query(`
+    UPDATE ${serviceLocationsTable}
+    SET is_active = false
+    WHERE service_id = $1 AND location_id = $2
+  `, [serviceId, locationId]);
+}
+
+function chooseUniqueSlug(name: string, locations: Array<{ id: number; slug: string }>, existingId?: number) {
+  const baseSlug = toSlug(name);
   const usedSlugs = new Set(
     locations.filter((location) => location.id !== existingId).map((location) => location.slug),
   );
@@ -86,6 +213,10 @@ async function uniqueSlug(name: string, existingId?: number) {
   return `${baseSlug}-${suffix}`;
 }
 
+async function uniqueSlug(name: string, existingId?: number) {
+  return chooseUniqueSlug(name, await listLocations(true), existingId);
+}
+
 export async function createLocation(input: LocationInput, maxLocations: number) {
   if (useMemoryStorage) {
     if (memoryLocations.length >= maxLocations) throw new Error("LOCATION_LIMIT_REACHED");
@@ -93,7 +224,7 @@ export async function createLocation(input: LocationInput, maxLocations: number)
     const created: ShopLocation = {
       id: Math.max(...memoryLocations.map((location) => location.id), 0) + 1,
       name: input.name,
-      slug: await uniqueSlug(input.name),
+      slug: chooseUniqueSlug(input.name, memoryLocations),
       address: input.address,
       mapUrl: input.mapUrl || null,
       mapEmbedUrl: input.mapEmbedUrl || null,
@@ -114,9 +245,11 @@ export async function createLocation(input: LocationInput, maxLocations: number)
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(424242, 1101)");
-    const count = await client.query<{ count: number }>(`SELECT count(*)::int AS count FROM ${locationsTable}`);
-    if (count.rows[0].count >= maxLocations) throw new Error("LOCATION_LIMIT_REACHED");
-    const slug = await uniqueSlug(input.name);
+    // Use this transaction's connection: requesting another pool connection while
+    // holding the lock can deadlock a small pool during concurrent creation.
+    const existing = await client.query<{ id: number; slug: string }>(`SELECT id, slug FROM ${locationsTable}`);
+    if (existing.rows.length >= maxLocations) throw new Error("LOCATION_LIMIT_REACHED");
+    const slug = chooseUniqueSlug(input.name, existing.rows);
     const inserted = await client.query(`
       INSERT INTO ${locationsTable} (
         name, slug, address, map_url, map_embed_url, phone, email, timezone,
@@ -133,7 +266,7 @@ export async function createLocation(input: LocationInput, maxLocations: number)
       input.phone || null,
       input.email || null,
       input.timezone,
-      count.rows[0].count,
+      existing.rows.length,
     ]);
     await client.query("COMMIT");
     return mapLocation(inserted.rows[0]);
@@ -155,7 +288,7 @@ export async function updateLocation(id: number, input: LocationUpdate) {
     memoryLocations[index] = {
       ...memoryLocations[index],
       ...input,
-      slug: input.name ? await uniqueSlug(input.name, id) : memoryLocations[index].slug,
+      slug: input.name ? chooseUniqueSlug(input.name, memoryLocations, id) : memoryLocations[index].slug,
       mapUrl: input.mapUrl === undefined ? memoryLocations[index].mapUrl : input.mapUrl || null,
       mapEmbedUrl: input.mapEmbedUrl === undefined ? memoryLocations[index].mapEmbedUrl : input.mapEmbedUrl || null,
       phone: input.phone === undefined ? memoryLocations[index].phone : input.phone || null,
@@ -201,4 +334,3 @@ export async function updateLocation(id: number, input: LocationUpdate) {
   ]);
   return mapLocation(updated.rows[0]);
 }
-

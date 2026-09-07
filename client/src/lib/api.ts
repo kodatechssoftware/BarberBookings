@@ -1,4 +1,5 @@
 import { buildUrl } from "@shared/routes";
+import { getActiveLocationId } from "@/lib/location-context";
 
 const ABSOLUTE_URL_REGEX = /^https?:\/\//i;
 
@@ -33,14 +34,20 @@ export function buildApiUrl(
 }
 
 export async function apiFetch(path: string, init?: RequestInit) {
-  const response = await fetch(toApiUrl(path), {
-    ...init,
-    credentials: init?.credentials ?? "include",
-  });
-
   const relativePath = path.startsWith("http")
     ? new URL(path).pathname
     : path.split("?", 1)[0];
+  const headers = new Headers(init?.headers);
+  if (!headers.has("X-Location-Id") && !AUTH_PROBE_PATHS.has(relativePath)) {
+    const locationId = getActiveLocationId();
+    if (locationId !== null) headers.set("X-Location-Id", String(locationId));
+  }
+  const response = await fetch(toApiUrl(path), {
+    ...init,
+    headers,
+    credentials: init?.credentials ?? "include",
+  });
+
   if (
     response.status === 401
     && !AUTH_PROBE_PATHS.has(relativePath)

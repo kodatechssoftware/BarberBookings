@@ -1,5 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import { locationHeaders } from "@/lib/location-context";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -59,7 +60,9 @@ export const getQueryFn: <T>(options: {
       throw new Error("Query key must start with an API path");
     }
 
-    const res = await apiFetch(path);
+    const scope = queryKey.find((part): part is { locationId: number | null } =>
+      Boolean(part && typeof part === "object" && "locationId" in part));
+    const res = await apiFetch(path, scope ? { headers: locationHeaders(scope.locationId) } : undefined);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

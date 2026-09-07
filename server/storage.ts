@@ -52,6 +52,7 @@ import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
 
 type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
+  locationId?: number;
   cancelToken: string;
   durationMinutes: number;
   status?: AppointmentStatus;
@@ -173,8 +174,8 @@ export interface IStorage {
   deleteService(id: number): Promise<void>;
 
   // Appointments
-  getAppointments(barberId?: number, date?: string): Promise<Appointment[]>;
-  getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]>;
+  getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]>;
+  getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string, locationId?: number): Promise<Appointment[]>;
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
@@ -208,11 +209,11 @@ export interface IStorage {
   isBlacklisted(email?: string, phone?: string): Promise<boolean>;
 
   // Barber availability
-  getShopAvailability(): Promise<ShopAvailability[]>;
-  replaceShopAvailability(rows: CreateShopAvailabilityRequest[]): Promise<ShopAvailability[]>;
-  getBarberAvailability(barberId: number): Promise<BarberAvailability[]>;
-  getAllBarberAvailability(): Promise<BarberAvailability[]>;
-  replaceBarberAvailability(barberId: number, rows: Omit<CreateBarberAvailabilityRequest, "barberId">[]): Promise<BarberAvailability[]>;
+  getShopAvailability(locationId?: number): Promise<ShopAvailability[]>;
+  replaceShopAvailability(rows: CreateShopAvailabilityRequest[], locationId?: number): Promise<ShopAvailability[]>;
+  getBarberAvailability(barberId: number, locationId?: number): Promise<BarberAvailability[]>;
+  getAllBarberAvailability(locationId?: number): Promise<BarberAvailability[]>;
+  replaceBarberAvailability(barberId: number, rows: Omit<CreateBarberAvailabilityRequest, "barberId">[], locationId?: number): Promise<BarberAvailability[]>;
   getAllBarberServices(): Promise<BarberService[]>;
   getBarberServiceIds(barberId: number): Promise<number[]>;
   replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]>;
@@ -242,6 +243,7 @@ export interface IStorage {
     startDate?: string;
     endDate?: string;
     category?: string;
+    locationId?: number;
   }): Promise<BusinessExpense[]>;
   createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense>;
   updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined>;
@@ -413,11 +415,12 @@ export class DatabaseStorage implements IStorage {
     await db.delete(services).where(eq(services.id, id));
   }
 
-  async getAppointments(barberId?: number, date?: string): Promise<Appointment[]> {
+  async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {
     const conditions: SQL[] = [];
     if (barberId !== undefined) {
       conditions.push(eq(appointments.barberId, barberId));
     }
+    if (locationId !== undefined) conditions.push(eq(appointments.locationId, locationId));
     
     if (date) {
       const { start, endExclusive } = getShopDateBounds(date);
@@ -435,11 +438,12 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(appointments).orderBy(appointments.startTime);
   }
 
-  async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]> {
+  async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string, locationId?: number): Promise<Appointment[]> {
     const conditions: SQL[] = [];
     if (barberId !== undefined) {
       conditions.push(eq(appointments.barberId, barberId));
     }
+    if (locationId !== undefined) conditions.push(eq(appointments.locationId, locationId));
 
     if (startDate) {
       const { start } = getShopDateBounds(startDate);
@@ -644,46 +648,55 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
-  async getShopAvailability(): Promise<ShopAvailability[]> {
+  async getShopAvailability(locationId?: number): Promise<ShopAvailability[]> {
     return await db
       .select()
       .from(shopAvailability)
+      .where(locationId === undefined ? undefined : eq(shopAvailability.locationId, locationId))
       .orderBy(shopAvailability.dayOfWeek, shopAvailability.startTime);
   }
 
-  async replaceShopAvailability(rows: CreateShopAvailabilityRequest[]): Promise<ShopAvailability[]> {
+  async replaceShopAvailability(rows: CreateShopAvailabilityRequest[], locationId = 1): Promise<ShopAvailability[]> {
     return await db.transaction(async (tx) => {
-      await tx.delete(shopAvailability);
+      await tx.delete(shopAvailability).where(eq(shopAvailability.locationId, locationId));
 
       if (rows.length === 0) {
         return [];
       }
 
-      return await tx.insert(shopAvailability).values(rows).returning();
+      return await tx.insert(shopAvailability).values(rows.map((row) => ({ ...row, locationId }))).returning();
     });
   }
 
-  async getBarberAvailability(barberId: number): Promise<BarberAvailability[]> {
+  async getBarberAvailability(barberId: number, locationId?: number): Promise<BarberAvailability[]> {
     return await db
       .select()
       .from(barberAvailability)
-      .where(eq(barberAvailability.barberId, barberId))
+      .where(and(
+        eq(barberAvailability.barberId, barberId),
+        ...(locationId === undefined ? [] : [eq(barberAvailability.locationId, locationId)]),
+      ))
       .orderBy(barberAvailability.dayOfWeek, barberAvailability.startTime);
   }
 
-  async getAllBarberAvailability(): Promise<BarberAvailability[]> {
+  async getAllBarberAvailability(locationId?: number): Promise<BarberAvailability[]> {
     return await db
       .select()
       .from(barberAvailability)
+      .where(locationId === undefined ? undefined : eq(barberAvailability.locationId, locationId))
       .orderBy(barberAvailability.barberId, barberAvailability.dayOfWeek, barberAvailability.startTime);
   }
 
   async replaceBarberAvailability(
     barberId: number,
     rows: Omit<CreateBarberAvailabilityRequest, "barberId">[],
+    locationId = 1,
   ): Promise<BarberAvailability[]> {
     return await db.transaction(async (tx) => {
-      await tx.delete(barberAvailability).where(eq(barberAvailability.barberId, barberId));
+      await tx.delete(barberAvailability).where(and(
+        eq(barberAvailability.barberId, barberId),
+        eq(barberAvailability.locationId, locationId),
+      ));
 
       if (rows.length === 0) {
         return [];
@@ -691,7 +704,7 @@ export class DatabaseStorage implements IStorage {
 
       return await tx
         .insert(barberAvailability)
-        .values(rows.map((row) => ({ ...row, barberId })))
+        .values(rows.map((row) => ({ ...row, barberId, locationId })))
         .returning();
     });
   }
@@ -863,8 +876,10 @@ export class DatabaseStorage implements IStorage {
     startDate?: string;
     endDate?: string;
     category?: string;
+    locationId?: number;
   } = {}): Promise<BusinessExpense[]> {
     const conditions: SQL[] = [];
+    if (filters.locationId !== undefined) conditions.push(eq(businessExpenses.locationId, filters.locationId));
 
     if (filters.startDate) {
       const { start } = getShopDateBounds(filters.startDate);
@@ -1167,11 +1182,12 @@ export class MemoryStorage implements IStorage {
     this.services = this.services.filter((service) => service.id !== id);
   }
 
-  async getAppointments(barberId?: number, date?: string): Promise<Appointment[]> {
+  async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {
     const bounds = date ? getShopDateBounds(date) : null;
 
     return this.appointments
       .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
+      .filter((appointment) => locationId === undefined || appointment.locationId === locationId)
       .filter((appointment) => {
         if (!bounds) return true;
         const appointmentDate = new Date(appointment.startTime);
@@ -1180,12 +1196,13 @@ export class MemoryStorage implements IStorage {
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }
 
-  async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string): Promise<Appointment[]> {
+  async getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string, locationId?: number): Promise<Appointment[]> {
     const start = startDate ? getShopDateBounds(startDate).start : null;
     const endExclusive = endDate ? getShopDateBounds(endDate).endExclusive : null;
 
     return this.appointments
       .filter((appointment) => barberId === undefined || appointment.barberId === barberId)
+      .filter((appointment) => locationId === undefined || appointment.locationId === locationId)
       .filter((appointment) => {
         const appointmentDate = new Date(appointment.startTime);
         return (!start || appointmentDate >= start) && (!endExclusive || appointmentDate < endExclusive);
@@ -1217,6 +1234,7 @@ export class MemoryStorage implements IStorage {
       for (const appointment of appointmentInputs) {
         const newAppointment: Appointment = {
           id: this.nextIds.appointment++,
+          locationId: appointment.locationId ?? 1,
           barberId: appointment.barberId,
           serviceId: appointment.serviceId ?? null,
           startTime: appointment.startTime,
@@ -1345,16 +1363,17 @@ export class MemoryStorage implements IStorage {
     );
   }
 
-  async getShopAvailability(): Promise<ShopAvailability[]> {
-    return [...this.shopAvailability].sort(
+  async getShopAvailability(locationId?: number): Promise<ShopAvailability[]> {
+    return this.shopAvailability.filter((row) => locationId === undefined || row.locationId === locationId).sort(
       (a, b) => a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime),
     );
   }
 
-  async replaceShopAvailability(rows: CreateShopAvailabilityRequest[]): Promise<ShopAvailability[]> {
-    this.shopAvailability = [];
+  async replaceShopAvailability(rows: CreateShopAvailabilityRequest[], locationId = 1): Promise<ShopAvailability[]> {
+    this.shopAvailability = this.shopAvailability.filter((row) => row.locationId !== locationId);
     const createdRows = rows.map((row) => ({
       id: this.nextIds.shopAvailability++,
+      locationId,
       dayOfWeek: row.dayOfWeek,
       startTime: row.startTime,
       endTime: row.endTime,
@@ -1364,14 +1383,15 @@ export class MemoryStorage implements IStorage {
     return createdRows;
   }
 
-  async getBarberAvailability(barberId: number): Promise<BarberAvailability[]> {
+  async getBarberAvailability(barberId: number, locationId?: number): Promise<BarberAvailability[]> {
     return this.barberAvailability
       .filter((row) => row.barberId === barberId)
+      .filter((row) => locationId === undefined || row.locationId === locationId)
       .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime));
   }
 
-  async getAllBarberAvailability(): Promise<BarberAvailability[]> {
-    return [...this.barberAvailability].sort(
+  async getAllBarberAvailability(locationId?: number): Promise<BarberAvailability[]> {
+    return this.barberAvailability.filter((row) => locationId === undefined || row.locationId === locationId).sort(
       (a, b) => a.barberId - b.barberId || a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime),
     );
   }
@@ -1379,10 +1399,12 @@ export class MemoryStorage implements IStorage {
   async replaceBarberAvailability(
     barberId: number,
     rows: Omit<CreateBarberAvailabilityRequest, "barberId">[],
+    locationId = 1,
   ): Promise<BarberAvailability[]> {
-    this.barberAvailability = this.barberAvailability.filter((row) => row.barberId !== barberId);
+    this.barberAvailability = this.barberAvailability.filter((row) => row.barberId !== barberId || row.locationId !== locationId);
     const createdRows = rows.map((row) => ({
       id: this.nextIds.availability++,
+      locationId,
       barberId,
       dayOfWeek: row.dayOfWeek,
       startTime: row.startTime,
@@ -1551,12 +1573,14 @@ export class MemoryStorage implements IStorage {
     startDate?: string;
     endDate?: string;
     category?: string;
+    locationId?: number;
   } = {}): Promise<BusinessExpense[]> {
     const start = filters.startDate ? getShopDateBounds(filters.startDate).start : undefined;
     const endExclusive = filters.endDate ? getShopDateBounds(filters.endDate).endExclusive : undefined;
 
     return this.businessExpenses
       .filter((expense) => {
+        if (filters.locationId !== undefined && expense.locationId !== filters.locationId) return false;
         const expenseDate = new Date(expense.expenseDate);
         if (start && expenseDate < start) return false;
         if (endExclusive && expenseDate >= endExclusive) return false;
@@ -1572,6 +1596,7 @@ export class MemoryStorage implements IStorage {
     const now = new Date();
     const created: BusinessExpense = {
       id: this.nextIds.businessExpense++,
+      locationId: expense.locationId ?? 1,
       category: expense.category,
       description: expense.description,
       amountCents: expense.amountCents,

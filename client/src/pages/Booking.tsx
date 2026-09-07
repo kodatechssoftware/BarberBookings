@@ -1,10 +1,10 @@
-import { useEffect, useState, useMemo, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
+import { useEffect, useState, useMemo, useRef, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { type AppointmentRecord, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
-import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2 } from "lucide-react";
+import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2, MapPin } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { eachDayOfInterval, endOfMonth, endOfWeek, format, parseISO, startOfMonth, startOfToday, startOfWeek } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -29,6 +29,8 @@ import {
   type PhoneCountryCode,
 } from "@shared/phone-countries";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
+import { useLocations } from "@/hooks/use-locations";
+import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 
 type BookingPreference = {
   step: number;
@@ -275,6 +277,25 @@ export default function Booking() {
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { data: locations = [], isLoading: loadingLocations, isError: locationsError } = useLocations({ purpose: "booking" });
+  const activeLocationId = useActiveLocationId();
+  const activeLocation = locations.find((location) => location.id === activeLocationId);
+
+  useEffect(() => {
+    if (locations.length === 1 && !activeLocation) setActiveLocationId(locations[0].id);
+  }, [locations, activeLocation]);
+
+  const previousLocationId = useRef(activeLocationId);
+  useEffect(() => {
+    const previous = previousLocationId.current;
+    previousLocationId.current = activeLocationId;
+    // Initial selection must preserve valid direct booking links and repeat-booking preferences.
+    if (previous === null || previous === activeLocationId) return;
+    setSelectedBarberId(null);
+    setSelectedServiceId(null);
+    setSelectedTime(null);
+    setStep(1);
+  }, [activeLocationId]);
 
   const { data: barbers, isLoading: loadingBarbers } = useBarbers();
   const { data: services, isLoading: loadingServices } = useServices();
@@ -533,6 +554,55 @@ export default function Booking() {
   };
 
 
+  if (loadingLocations || (locations.length === 1 && !activeLocation)) {
+    return <div className="flex min-h-screen items-center justify-center bg-background"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
+
+  if (locationsError || locations.length === 0) {
+    return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6 text-center text-white">
+      <h1 className="text-2xl font-display">Marcações indisponíveis</h1>
+      <p>{locationsError ? "Não foi possível carregar as lojas. Tente novamente dentro de instantes." : "Ainda não existem lojas disponíveis para marcação online."}</p>
+      <Button variant="outline" onClick={() => navigate("/")}>Voltar ao início</Button>
+    </div>;
+  }
+
+  if (locations.length > 1 && !activeLocation) {
+    return (
+      <div className="min-h-screen bg-background px-4 py-10 text-white">
+        <div className="mx-auto max-w-5xl">
+          <Button variant="ghost" className="mb-8" onClick={() => navigate("/")}>
+            <ChevronLeft className="mr-2 h-4 w-4" /> Voltar
+          </Button>
+          <div className="mb-8 text-center">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Nova marcação</p>
+            <h1 className="mt-2 text-3xl font-display font-bold md:text-5xl">Escolhe a localização</h1>
+            <p className="mt-3 text-gray-400">Os barbeiros, serviços e horários dependem da loja escolhida.</p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {locations.map((location) => (
+              <button
+                key={location.id}
+                type="button"
+                className="min-h-40 rounded-xl border border-white/10 bg-card p-5 text-left transition hover:border-primary hover:bg-primary/5"
+                onClick={() => {
+                  setActiveLocationId(location.id);
+                  setSelectedBarberId(null);
+                  setSelectedServiceId(null);
+                  setSelectedTime(null);
+                  setStep(1);
+                }}
+              >
+                <MapPin className="mb-4 h-6 w-6 text-primary" />
+                <span className="block text-lg font-bold">{location.name}</span>
+                <span className="mt-2 block text-sm leading-relaxed text-gray-400">{location.address}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (step === 5) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -581,7 +651,7 @@ export default function Booking() {
           <Button 
             variant="ghost" 
             size="icon" 
-            className="hover:bg-white/10"
+            className="shrink-0 hover:bg-white/10"
             onClick={() => {
               if (step > 1) setStep(prev => prev - 1);
               else navigate("/");
@@ -589,7 +659,13 @@ export default function Booking() {
           >
             <ChevronLeft className="w-5 h-5" />
           </Button>
-          <span className="font-display font-bold text-lg">Nova Marcação</span>
+          <div className="min-w-0 flex-1">
+            <span className="font-display font-bold text-lg">Nova Marcação</span>
+            {locations.length > 1 && activeLocation && <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>{activeLocation.name}</span>}
+          </div>
+          {locations.length > 1 && (
+            <Button className="shrink-0" variant="ghost" size="sm" onClick={() => setActiveLocationId(null)}>Mudar loja</Button>
+          )}
         </div>
       </nav>
 

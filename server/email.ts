@@ -21,6 +21,9 @@ interface SendConfirmationParams {
   depositRequired?: boolean;
   depositReason?: string | null;
   cancellationPolicyHours?: number;
+  locationName?: string;
+  locationAddress?: string;
+  locationTimeZone?: string;
 }
 
 interface SendCancellationParams {
@@ -31,6 +34,8 @@ interface SendCancellationParams {
   startTime: Date;
   lateCancellation?: boolean;
   cancellationPolicyHours?: number;
+  locationName?: string;
+  locationTimeZone?: string;
 }
 
 const escapeHtml = (value: string) =>
@@ -44,17 +49,17 @@ const escapeHtml = (value: string) =>
 const toCalendarDate = (date: Date) =>
   date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 
-export function formatAppointmentForEmail(startTime: Date) {
+export function formatAppointmentForEmail(startTime: Date, timeZone = shopTimeZone) {
   return {
     date: startTime.toLocaleDateString("pt-PT", {
-      timeZone: shopTimeZone,
+      timeZone,
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
     }),
     time: startTime.toLocaleTimeString("pt-PT", {
-      timeZone: shopTimeZone,
+      timeZone,
       hour: "2-digit",
       minute: "2-digit",
     }),
@@ -82,13 +87,16 @@ export async function sendBookingConfirmation({
   depositRequired = false,
   depositReason,
   cancellationPolicyHours = 4,
+  locationName = shopName,
+  locationAddress = shopAddress,
+  locationTimeZone = shopTimeZone,
 }: SendConfirmationParams) {
   if (!resend) {
     console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking confirmation email was skipped.");
     return false;
   }
 
-  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime);
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
 
   const publicUrl = getPublicUrl();
   const cancelUrl = `${publicUrl}/cancel/${cancelToken}`;
@@ -96,10 +104,10 @@ export async function sendBookingConfirmation({
   const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
   const calendarParams = new URLSearchParams({
     action: "TEMPLATE",
-    text: `${shopName} - ${serviceName}`,
+    text: `${locationName} - ${serviceName}`,
     dates: `${toCalendarDate(startTime)}/${toCalendarDate(endTime)}`,
     details: `${serviceName} com ${barberName}`,
-    location: shopAddress,
+    location: locationAddress,
   });
   const googleCalendarUrl = `https://calendar.google.com/calendar/render?${calendarParams.toString()}`;
 
@@ -107,10 +115,10 @@ export async function sendBookingConfirmation({
     const response = await resend.emails.send({
       from: emailFrom,
       to: customerEmail,
-      subject: `Confirmação de marcação - ${shopName}`,
+      subject: `Confirmação de marcação - ${locationName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(shopName)}</h2>
+          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
           <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
           <p>A sua marcação foi confirmada com sucesso.</p>
           <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
@@ -118,7 +126,7 @@ export async function sendBookingConfirmation({
             <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
             <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
             <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
-            <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(shopAddress)}</p>
+            <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
           </div>
           <p style="font-size: 0.92em; color: #555;">
             Caso não consiga comparecer, pode reagendar ou cancelar através dos links abaixo. Cancelamentos a menos de ${cancellationPolicyHours} horas da marcação podem ficar registados como cancelamento tardio.
@@ -154,22 +162,24 @@ export async function sendBookingCancellationConfirmation({
   startTime,
   lateCancellation = false,
   cancellationPolicyHours = 4,
+  locationName = shopName,
+  locationTimeZone = shopTimeZone,
 }: SendCancellationParams) {
   if (!resend) {
     console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking cancellation email was skipped.");
     return false;
   }
 
-  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime);
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
 
   try {
     const response = await resend.emails.send({
       from: emailFrom,
       to: customerEmail,
-      subject: `Cancelamento de marcação - ${shopName}`,
+      subject: `Cancelamento de marcação - ${locationName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(shopName)}</h2>
+          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
           <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
           <p>A sua marcação foi cancelada com sucesso.</p>
           <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
@@ -182,7 +192,7 @@ export async function sendBookingCancellationConfirmation({
               : ""
           }
           <p>Se quiser voltar a marcar, estamos disponíveis para agendar uma nova data quando quiser.</p>
-          <p>Obrigado,<br />${escapeHtml(shopName)}</p>
+          <p>Obrigado,<br />${escapeHtml(locationName)}</p>
         </div>
       `,
     });

@@ -23,6 +23,7 @@ export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
 export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
+export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -95,6 +96,23 @@ export const whatsappMessageTypes = [
   "booking_cancellation",
 ] as const;
 
+export const locations = appPgTable("locations", {
+  id: idColumn("locations_id_seq"),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  address: text("address").notNull().default(""),
+  mapUrl: text("map_url"),
+  mapEmbedUrl: text("map_embed_url"),
+  phone: text("phone"),
+  email: text("email"),
+  timezone: text("timezone").notNull().default("Europe/Lisbon"),
+  isActive: boolean("is_active").notNull().default(true),
+  isDefault: boolean("is_default").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const barbers = appPgTable("barbers", {
   id: idColumn("barbers_id_seq"),
   name: text("name").notNull(),
@@ -119,6 +137,7 @@ export const services = appPgTable("services", {
 
 export const appointments = appPgTable("appointments", {
   id: idColumn("appointments_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
   serviceId: integer("service_id").references(() => services.id),
   startTime: timestamp("start_time").notNull(),
@@ -160,6 +179,7 @@ export const verificationCodes = appPgTable("verification_codes", {
 
 export const shopAvailability = appPgTable("shop_availability", {
   id: idColumn("shop_availability_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   dayOfWeek: integer("day_of_week").notNull(),
   startTime: text("start_time").notNull(),
   endTime: text("end_time").notNull(),
@@ -168,6 +188,7 @@ export const shopAvailability = appPgTable("shop_availability", {
 
 export const barberAvailability = appPgTable("barber_availability", {
   id: idColumn("barber_availability_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
   dayOfWeek: integer("day_of_week").notNull(),
   startTime: text("start_time").notNull(),
@@ -180,6 +201,26 @@ export const barberServices = appPgTable("barber_services", {
   serviceId: integer("service_id").references(() => services.id).notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.barberId, table.serviceId] }),
+}));
+
+export const barberLocations = appPgTable("barber_locations", {
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.barberId, table.locationId] }),
+}));
+
+export const serviceLocations = appPgTable("service_locations", {
+  serviceId: integer("service_id").references(() => services.id).notNull(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  priceOverride: integer("price_override"),
+  durationOverride: integer("duration_override"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.serviceId, table.locationId] }),
 }));
 
 export const barberInvites = appPgTable("barber_invites", {
@@ -229,6 +270,7 @@ export const barberCompensationRules = appPgTable("barber_compensation_rules", {
 
 export const businessExpenses = appPgTable("business_expenses", {
   id: idColumn("business_expenses_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   category: text("category", { enum: businessExpenseCategories }).notNull(),
   description: text("description").notNull(),
   amountCents: integer("amount_cents").notNull(),
@@ -319,6 +361,7 @@ const bookingPhoneSchema = z.string().trim().refine((value) => {
 }, "Indique um telemovel valido.");
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   id: true,
+  locationId: true,
   createdAt: true,
   status: true,
   cancelToken: true,
@@ -390,6 +433,8 @@ export type WhatsappMessageType = typeof whatsappMessageTypes[number];
 
 export type BarberWithServices = Barber & {
   serviceIds: number[];
+  allServicesAllowed?: boolean;
+  locationCount?: number;
   compensationModel?: BarberCompensationModel;
   commissionPercent?: number | null;
   chairRentCents?: number | null;

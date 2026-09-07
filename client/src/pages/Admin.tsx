@@ -36,9 +36,12 @@ import { AppointmentsTab, blockTimeOptions, outsideHoursBlockTimeOptions, type A
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { LocationsTab } from "@/components/admin/LocationsTab";
+import { AssociateBarberDialog } from "@/components/admin/AssociateBarberDialog";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
+import { locationHeaders, setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
+import type { ShopLocation } from "@shared/locations";
 import {
   canBarberPerformService,
   getEffectivePeriodsForBarber,
@@ -1010,22 +1013,18 @@ function isBarbersQuery(queryKey: readonly unknown[]) {
   return queryKey[0] === "/api/barbers";
 }
 
-function refreshBarbersCache(updatedBarber?: BarberListCacheItem) {
-  if (updatedBarber) {
-    queryClient.setQueriesData<BarberListCacheItem[]>(
-      { predicate: (query) => isBarbersQuery(query.queryKey) },
-      (current) => {
-        if (!Array.isArray(current)) return current;
-        return current.map((barber) =>
-          barber.id === updatedBarber.id ? { ...barber, ...updatedBarber } : barber,
-        );
-      },
-    );
-  }
+function refreshBarbersCache(_updatedBarber?: BarberListCacheItem) {
+  // A shared profile can have different visibility and services in each shop.
+  // Refetch every affected cache using its own location instead of copying a response.
+  return Promise.all([
+    queryClient.invalidateQueries({ predicate: (query) => isBarbersQuery(query.queryKey) }),
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/available-barbers"] }),
+    queryClient.invalidateQueries({ queryKey: ["/api/locations?purpose=booking"] }),
+  ]);
+}
 
-  void queryClient.invalidateQueries({
-    predicate: (query) => isBarbersQuery(query.queryKey),
-  });
+function refreshBookableLocationsCache() {
+  void queryClient.invalidateQueries({ queryKey: ["/api/locations?purpose=booking"] });
 }
 
 function getAllServiceIds(services?: ServiceListItem[]) {
@@ -1047,11 +1046,12 @@ function getEffectiveServiceSelection(
 }
 
 function formatBarberServicesSummary(
-  barber: { serviceIds?: number[] | null },
+  barber: { serviceIds?: number[] | null; allServicesAllowed?: boolean },
   services?: ServiceListItem[],
 ) {
   const allServices = services || [];
   const serviceIds = barber.serviceIds || [];
+  if (allServices.length === 0 || (serviceIds.length === 0 && barber.allServicesAllowed === false)) return "Sem serviços ativos";
   if (allServices.length === 0 || serviceIds.length === 0 || serviceIds.length >= allServices.length) {
     return "Todos os serviços";
   }
@@ -1465,15 +1465,28 @@ export default function Admin() {
   });
   const { data: multiLocationConfig } = useQuery<{ enabled: boolean; maxLocations: number }>({
     queryKey: ["/api/multi-location/config"],
-    enabled: user?.authorized === true && user.role === "admin",
+    enabled: user?.authorized === true,
   });
+  const activeLocationId = useActiveLocationId();
+  const { data: availableLocations = [] } = useQuery<ShopLocation[]>({
+    queryKey: ["/api/account/locations"],
+    enabled: user?.authorized === true && multiLocationConfig?.enabled === true,
+  });
+  const activeLocation = availableLocations.find((location) => location.id === activeLocationId)
+    ?? availableLocations.find((location) => location.isDefault)
+    ?? availableLocations[0];
+  useEffect(() => {
+    if (!multiLocationConfig?.enabled || !activeLocation) return;
+    if (availableLocations.some((location) => location.id === activeLocationId)) return;
+    setActiveLocationId(activeLocation.id);
+  }, [activeLocation, activeLocationId, availableLocations, multiLocationConfig?.enabled]);
   const { data: allAvailabilityRows } = useQuery<any[]>({
-    queryKey: ["/api/barbers/availability"],
+    queryKey: ["/api/barbers/availability", { locationId: activeLocationId }],
     enabled: user?.authorized === true,
   });
   const { data: shopAvailabilityRows } = useShopAvailability();
   const { data: dashboardData, isLoading: isLoadingDashboard } = useQuery<DashboardData>({
-    queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.id],
+    queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.id, { locationId: activeLocationId }],
     enabled: user?.authorized === true && user.role === "admin",
     queryFn: async () => {
       const params = new URLSearchParams({ days: dashboardDays });
@@ -1481,7 +1494,9 @@ export default function Admin() {
         params.set("barberId", dashboardBarberFilter);
       }
 
-      const res = await apiFetch(`/api/admin/dashboard?${params.toString()}`);
+      const res = await apiFetch(`/api/admin/dashboard?${params.toString()}`, {
+        headers: locationHeaders(activeLocationId),
+      });
       if (!res.ok) throw new Error("Não foi possível carregar o dashboard.");
       return res.json();
     },
@@ -1495,7 +1510,7 @@ export default function Admin() {
     return `/api/admin/expenses?${params.toString()}`;
   }, [exportDates.start, exportDates.end]);
   const { data: businessExpenses = [], isLoading: isLoadingExpenses } = useQuery<BusinessExpense[]>({
-    queryKey: [expensesUrl],
+    queryKey: [expensesUrl, { locationId: activeLocationId }],
     enabled: user?.authorized === true && user.role === "admin",
   });
   const businessExpensesTotalCents = useMemo(
@@ -1599,6 +1614,7 @@ export default function Admin() {
     data: blockAppointments,
   } = useAppointments({
     enabled: user?.authorized === true && Boolean(blockData.barberId),
+    scope: "busy",
     date: blockAppointmentDate,
     barberId: blockData.barberId || undefined,
     refetchInterval: 10000,
@@ -1626,6 +1642,25 @@ export default function Admin() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [customerNotes, setCustomerNotes] = useState("");
   const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
+
+  useEffect(() => {
+    // Never carry an unfinished operation into another shop, including a change in another tab.
+    setSelectedBarberFilter("all");
+    setDashboardBarberFilter("all");
+    setExportDates((current) => ({ ...current, barberId: "all" }));
+    setSelectedAppointment(null);
+    setEditingBarberId(null);
+    setEditingServiceId(null);
+    setIsAddingBarber(false);
+    setIsAddingService(false);
+    setIsBlocking(false);
+    setIsHistoryOpen(false);
+    setBarberRemovalCandidate(null);
+    setAbsenceConflict(null);
+    setBarberServiceDrafts({});
+    setPendingManualBookingBlacklistWarning(null);
+    setBlockData((current) => ({ ...current, barberId: "", serviceId: "", times: [] }));
+  }, [activeLocationId]);
 
   const handleAddBarber = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1668,6 +1703,7 @@ export default function Admin() {
       const createdService = await response.json().catch(() => null);
       await rollbackServiceIfAgendaLabelFailed(createdService, payload.agendaLabel);
       queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+      refreshBookableLocationsCache();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingService(false);
       setServiceFormData(emptyServiceFormData);
@@ -2852,6 +2888,31 @@ export default function Admin() {
             </div>
             <p className="text-gray-400 text-sm">Faça a gestão das marcações, da equipa e dos serviços.</p>
           </div>
+          {multiLocationConfig?.enabled && availableLocations.length > 0 && (
+            <div className="w-full lg:w-80">
+              <Label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-500">Loja em gestão</Label>
+              <Select
+                value={String(activeLocation?.id ?? "")}
+                onValueChange={(value) => {
+                  setActiveLocationId(Number(value));
+                  setSelectedBarberFilter("all");
+                  setDashboardBarberFilter("all");
+                  void queryClient.invalidateQueries();
+                }}
+              >
+                <SelectTrigger className="border-white/10 bg-card text-white">
+                  <SelectValue placeholder="Selecionar localização" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableLocations.map((location) => (
+                    <SelectItem key={location.id} value={String(location.id)}>
+                      {location.name}{location.isActive ? "" : " (rascunho)"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
 
         <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
@@ -3414,6 +3475,7 @@ export default function Admin() {
                     {showArchivedBarbers ? "Ocultar arquivados" : `Mostrar arquivados (${archivedBarbers.length})`}
                   </Button>
                 ) : null}
+              {multiLocationConfig?.enabled && <AssociateBarberDialog key={activeLocationId} />}
               <Dialog open={isAddingBarber} onOpenChange={setIsAddingBarber}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="gap-2">
@@ -3535,6 +3597,9 @@ export default function Admin() {
                       <h3 className="font-bold text-lg">{barber.name}</h3>
                     </div>
                     <p className="text-sm text-primary mb-2">{barber.specialty}</p>
+                    {multiLocationConfig?.enabled && (barber.locationCount ?? 0) > 1 && (
+                      <p className="mb-3 text-xs text-gray-400">Partilhado entre lojas: perfil, acesso e remuneração comuns; serviços e horário próprios de cada loja.</p>
+                    )}
                     <p className="mb-3 line-clamp-2 text-xs text-gray-400">
                       {formatBarberServicesSummary(barber, services)}
                     </p>
@@ -3985,6 +4050,7 @@ export default function Admin() {
                                 const response = await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, agendaLabel, price, duration });
                                 await assertServiceAgendaLabelPersisted(response, agendaLabel);
                                 queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                                refreshBookableLocationsCache();
                                 queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                                 setEditingServiceId(null);
                                 toast({ title: "Sucesso", description: "Serviço atualizado." });
@@ -4004,6 +4070,7 @@ export default function Admin() {
                           try {
                             await apiRequest("DELETE", `/api/services/${service.id}`);
                             queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                            refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({ title: "Sucesso", description: "Serviço removido." });
                           } catch {
@@ -4023,6 +4090,7 @@ export default function Admin() {
                           try {
                             await apiRequest("PATCH", `/api/services/${service.id}`, { isVisible: !service.isVisible });
                             queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                            refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
                               title: "Sucesso",

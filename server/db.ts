@@ -60,6 +60,7 @@ export async function ensureMultiLocationFoundation() {
 
   try {
     await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(424242, 1101)");
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS ${locationsTable} (
@@ -197,12 +198,18 @@ export async function ensureMultiLocationFoundation() {
 
     await client.query(`
       INSERT INTO ${barberLocationsTable} (barber_id, location_id)
-      SELECT id, $1 FROM ${barbersTable}
+      SELECT barber.id, $1 FROM ${barbersTable} barber
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${barberLocationsTable} assignment WHERE assignment.barber_id = barber.id
+      )
       ON CONFLICT (barber_id, location_id) DO NOTHING
     `, [defaultLocationId]);
     await client.query(`
       INSERT INTO ${serviceLocationsTable} (service_id, location_id)
-      SELECT id, $1 FROM ${servicesTable}
+      SELECT service.id, $1 FROM ${servicesTable} service
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${serviceLocationsTable} assignment WHERE assignment.service_id = service.id
+      )
       ON CONFLICT (service_id, location_id) DO NOTHING
     `, [defaultLocationId]);
 

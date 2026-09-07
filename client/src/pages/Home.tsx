@@ -4,13 +4,15 @@ import { Clock, ExternalLink, MapPin, Scissors } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
+import { periodsForShop } from "@/lib/availability";
 import { apiFetch } from "@/lib/api";
 import { preloadAdminPage, preloadBookingPage } from "@/lib/page-preloads";
 import { queryClient } from "@/lib/queryClient";
-import { useBarbers } from "@/hooks/use-barbers";
+import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { shopBranding } from "@/lib/branding";
 import { useLocations } from "@/hooks/use-locations";
+import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -18,16 +20,6 @@ import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 const instagramUrl = shopBranding.instagramUrl;
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
-
-const weeklySchedule = [
-  { day: 0, periods: [] },
-  { day: 1, periods: [{ start: "14:00", end: "20:00" }] },
-  { day: 2, periods: [{ start: "09:00", end: "13:00" }, { start: "14:00", end: "20:00" }] },
-  { day: 3, periods: [{ start: "09:00", end: "13:00" }, { start: "14:00", end: "20:00" }] },
-  { day: 4, periods: [{ start: "09:00", end: "13:00" }, { start: "14:00", end: "20:00" }] },
-  { day: 5, periods: [{ start: "09:00", end: "13:00" }, { start: "14:00", end: "20:00" }] },
-  { day: 6, periods: [{ start: "09:00", end: "13:00" }, { start: "14:00", end: "19:00" }] },
-];
 
 const navItems = [
   { id: "services", label: "Serviços" },
@@ -46,10 +38,16 @@ function formatScheduleHour(time: string) {
   return minutes === "00" ? `${hour}h` : `${hour}h${minutes}`;
 }
 
-function getTodayOpeningStatus() {
+function getTodayOpeningStatus(rows: Array<{ dayOfWeek: number; startTime: string; endTime: string; isOpen: boolean }> | undefined, timeZone: string) {
+  if (!rows) return { title: "Consulte os horários", detail: "Atendimento por hora marcada." };
   const now = new Date();
-  const today = weeklySchedule.find((day) => day.day === now.getDay());
-  const periods = today?.periods ?? [];
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(part("weekday"));
+  const asTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  const periods = periodsForShop({ dayOfWeek: weekday, shopAvailabilityRows: rows })
+    .map((period) => ({ start: asTime(period.start), end: asTime(period.end) }))
+    .sort((a, b) => a.start.localeCompare(b.start));
 
   if (periods.length === 0) {
     return {
@@ -58,7 +56,7 @@ function getTodayOpeningStatus() {
     };
   }
 
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const currentMinutes = Number(part("hour")) * 60 + Number(part("minute"));
   const activePeriod = periods.find((period) => {
     const start = timeToMinutes(period.start);
     const end = timeToMinutes(period.end);
@@ -117,6 +115,7 @@ export default function Home() {
   const { data: services, isLoading: isLoadingServices } = useServices();
   const { data: barbers, isLoading: isLoadingBarbers } = useBarbers();
   const { data: locations } = useLocations();
+  const activeLocationId = useActiveLocationId();
   const publicLocations = useMemo(() => {
     const available = locations?.filter((location) => location.isActive) ?? [];
     if (available.length > 0) {
@@ -144,14 +143,25 @@ export default function Home() {
       updatedAt: "",
     }];
   }, [locations]);
-  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
+  const selectedLocationId = activeLocationId;
   const selectedLocation = publicLocations.find((location) => location.id === selectedLocationId)
     ?? publicLocations.find((location) => location.isDefault)
     ?? publicLocations[0];
+  const selectedMapEmbedUrl = selectedLocation.mapEmbedUrl || (selectedLocation.address
+    ? `https://www.google.com/maps?q=${encodeURIComponent(selectedLocation.address)}&output=embed`
+    : "");
+
+  useEffect(() => {
+    if (!locations?.length || selectedLocationId === null) return;
+    if (!publicLocations.some((location) => location.id === selectedLocationId)) {
+      setActiveLocationId(null);
+    }
+  }, [locations, publicLocations, selectedLocationId]);
 
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
-  const openingStatus = useMemo(() => getTodayOpeningStatus(), []);
+  const { data: shopHours } = useShopAvailability({ locationId: selectedLocation.id || undefined });
+  const openingStatus = getTodayOpeningStatus(shopHours, selectedLocation.timezone);
   const warmBookingFlow = useCallback(() => {
     void preloadBookingPage();
 
@@ -381,7 +391,9 @@ export default function Home() {
                     <button
                       key={location.id}
                       type="button"
-                      onClick={() => setSelectedLocationId(location.id)}
+                      onClick={() => {
+                        setActiveLocationId(location.id);
+                      }}
                       aria-pressed={selected}
                       className={cn(
                         "min-h-28 rounded-xl border p-4 text-left transition-colors",
@@ -420,11 +432,11 @@ export default function Home() {
             </a>}
           </div>
 
-          {shopBranding.showMap && selectedLocation.mapEmbedUrl && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
+          {shopBranding.showMap && selectedMapEmbedUrl && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
             <iframe
               key={selectedLocation.id}
               title={`Mapa de ${selectedLocation.name}`}
-              src={selectedLocation.mapEmbedUrl}
+              src={selectedMapEmbedUrl}
               width="100%"
               height="100%"
               style={{ border: 0 }}

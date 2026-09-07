@@ -24,8 +24,8 @@ export default function Reschedule() {
   const [rescheduledStart, setRescheduledStart] = useState<Date | null>(null);
 
   const { data: appointment, isLoading: loadingAppointment } = useAppointmentByToken(token);
-  const { data: availabilityRows } = useBarberAvailability();
-  const { data: shopAvailabilityRows } = useShopAvailability();
+  const { data: availabilityRows, isLoading: loadingAvailability } = useBarberAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
+  const { data: shopAvailabilityRows, isLoading: loadingShopAvailability } = useShopAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const rescheduleAppointment = useRescheduleAppointment();
   const maxPublicBookingDate = useMemo(
@@ -53,13 +53,14 @@ export default function Reschedule() {
   }, [appointment?.status]);
 
   const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
+    locationId: appointment?.locationId,
     barberId: appointment?.barberId ? String(appointment.barberId) : undefined,
     date: selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined,
     enabled: Boolean(appointment?.barberId && selectedDate && isPublicDateAllowed(selectedDate)),
   });
 
   const timeSlots = useMemo(() => {
-    if (!appointment || !existingAppointments || !selectedDate) return [];
+    if (!appointment || !existingAppointments || !selectedDate || !availabilityRows || !shopAvailabilityRows) return [];
 
     const duration = appointment.duration || 30;
     return getAvailableTimeSlots({
@@ -150,6 +151,7 @@ export default function Reschedule() {
           <p className="text-gray-400">
             {appointment.serviceName} com {appointment.barberName}
           </p>
+          <p className="mt-2 text-sm text-gray-400">{appointment.locationName} · {appointment.locationAddress}</p>
           <p className="text-sm text-gray-500 mt-2">
             Atual: {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")}
           </p>
@@ -179,7 +181,7 @@ export default function Reschedule() {
 
           <div className="bg-card border border-white/10 rounded-xl p-4">
             <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" /> Nova hora</h2>
-            {loadingAppointments ? (
+            {loadingAppointments || loadingAvailability || loadingShopAvailability ? (
               <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
             ) : timeSlots.length === 0 ? (
               <p className="text-gray-500 text-sm text-center py-10">Não existem horários disponíveis para esta data.</p>

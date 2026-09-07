@@ -177,7 +177,7 @@ async function selectAgendaDay(page: Page, isoDate = futureThursdayIso(1)) {
     return;
   }
 
-  await expect(page.getByText(dateLabelFromIso(isoDate))).toBeVisible();
+  await expect(page.getByText(dateLabelFromIso(isoDate)).filter({ visible: true })).toBeVisible();
 }
 
 async function navigateAgendaToWeek(page: Page, dayKey: string) {

@@ -1,10 +1,12 @@
-import { keepPreviousData, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type CreateServiceRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
+import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
 export function useServices(options?: { enabled?: boolean; includeHidden?: boolean }) {
+  const locationId = useActiveLocationId();
   return useQuery({
-    queryKey: [api.services.list.path, { includeHidden: options?.includeHidden ?? false }],
+    queryKey: [api.services.list.path, { includeHidden: options?.includeHidden ?? false, locationId }],
     enabled: options?.enabled ?? true,
     queryFn: async () => {
       const url = options?.includeHidden
@@ -12,12 +14,11 @@ export function useServices(options?: { enabled?: boolean; includeHidden?: boole
         : api.services.list.path;
       const res = await apiFetch(url, {
         cache: "no-store",
-        headers: { "Cache-Control": "no-cache" },
+        headers: { "Cache-Control": "no-cache", ...locationHeaders(locationId) },
       });
       if (!res.ok) throw new Error("Failed to fetch services");
       return api.services.list.responses[200].parse(await res.json());
     },
-    placeholderData: keepPreviousData,
     retry: 2,
     retryDelay: 800,
   });
