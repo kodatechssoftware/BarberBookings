@@ -23,6 +23,7 @@ export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
 export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
+export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 
 function idColumn(sequenceName: string) {
@@ -152,6 +153,9 @@ export const appointments = appPgTable("appointments", {
   paymentMethod: text("payment_method", { enum: appointmentPaymentMethods }).default("pending").notNull(),
   depositRequired: boolean("deposit_required").default(false).notNull(),
   depositReason: text("deposit_reason"),
+  rescheduleRevision: integer("reschedule_revision").default(0).notNull(),
+  whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
+  whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -299,6 +303,36 @@ export const whatsappMessages = appPgTable("whatsapp_messages", {
   providerMessageIdIdx: uniqueIndex("whatsapp_messages_provider_message_id_idx").on(table.providerMessageId),
 }));
 
+export const appointmentNotificationEvents = appPgTable("appointment_notification_events", {
+  id: idColumn("appointment_notification_events_id_seq"),
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }).notNull(),
+  eventType: text("event_type").notNull(),
+  eventRevision: integer("event_revision").notNull(),
+  eventKey: text("event_key").notNull(),
+  previousStartTime: timestamp("previous_start_time").notNull(),
+  newStartTime: timestamp("new_start_time").notNull(),
+  provider: text("provider"),
+  templateName: text("template_name"),
+  whatsappStatus: text("whatsapp_status").default("pending").notNull(),
+  providerMessageId: text("provider_message_id"),
+  providerStatus: text("provider_status"),
+  responseStatus: integer("response_status"),
+  errorCode: text("error_code"),
+  processingStartedAt: timestamp("processing_started_at"),
+  whatsappAttemptedAt: timestamp("whatsapp_attempted_at"),
+  whatsappAcceptedAt: timestamp("whatsapp_accepted_at"),
+  emailStatus: text("email_status").default("not_needed").notNull(),
+  emailProviderMessageId: text("email_provider_message_id"),
+  emailErrorCode: text("email_error_code"),
+  emailAttemptedAt: timestamp("email_attempted_at"),
+  emailSentAt: timestamp("email_sent_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  eventKeyIdx: uniqueIndex("appointment_notification_events_event_key_idx").on(table.eventKey),
+  providerMessageIdIdx: uniqueIndex("appointment_notification_events_provider_message_id_idx").on(table.providerMessageId),
+}));
+
 // === RELATIONS ===
 
 export const appointmentsRelations = relations(appointments, ({ one }) => ({
@@ -371,10 +405,13 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   durationMinutes: true,
   depositRequired: true,
   depositReason: true,
+  rescheduleRevision: true,
+  whatsappOptInAt: true,
 }).extend({
   customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome não pode ter mais de 80 caracteres."),
   customerEmail: z.string().trim().email("Indique um email válido.").max(120, "O email não pode ter mais de 120 caracteres.").optional().nullable(),
   customerPhone: bookingPhoneSchema,
+  whatsappOptIn: z.boolean().optional().default(false),
 });
 export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });
 export const insertBlacklistSchema = createInsertSchema(blacklist).omit({ id: true, createdAt: true });
@@ -425,6 +462,7 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect;
 export type BusinessExpense = typeof businessExpenses.$inferSelect;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
+export type AppointmentNotificationEvent = typeof appointmentNotificationEvents.$inferSelect;
 export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
 export type BusinessExpenseCategory = typeof businessExpenseCategories[number];

@@ -13,6 +13,7 @@ import {
   ensureMultiLocationFoundation,
   ensureServiceAgendaLabelColumn,
   ensureWhatsappMessagesTable,
+  ensureRescheduleNotificationFoundation,
   pool,
   repairKnownTextEncodingArtifacts,
 } from "./db";
@@ -186,6 +187,7 @@ app.use((req, res, next) => {
   await ensureAppointmentOverlapProtection();
   if (isDevelopmentDeployment) {
     await ensureWhatsappMessagesTable();
+    await ensureRescheduleNotificationFoundation();
   }
   const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
   if (repairedEncodingRows > 0) {

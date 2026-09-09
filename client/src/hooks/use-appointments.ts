@@ -22,6 +22,10 @@ export type AppointmentRecord = {
   cancelledAt: string | null;
   depositRequired: boolean;
   depositReason: string | null;
+  rescheduleRevision: number;
+  whatsappOptIn: boolean;
+  whatsappOptInAt: string | null;
+  notificationEventId?: number;
   createdAt: string | null;
   notificationChannel?: "email" | "none";
   notificationSent?: boolean;

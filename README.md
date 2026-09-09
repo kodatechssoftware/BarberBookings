@@ -100,6 +100,8 @@ META_WHATSAPP_WABA_ID=
 META_WHATSAPP_ACCESS_TOKEN=
 META_WHATSAPP_TEST_TEMPLATE=hello_world
 META_WHATSAPP_TEST_TEMPLATE_LANGUAGE=en_US
+META_WHATSAPP_RESCHEDULED_TEMPLATE=appointment_rescheduled_v1
+META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_DEV_ALLOWLIST=3519XXXXXXXX
 ```
 
@@ -143,6 +145,23 @@ e o destinatario mascarado. O `GET` devolve o mesmo `wamid` a partir da tabela
 No fim do teste, volta a colocar `WHATSAPP_NOTIFICATIONS_ENABLED=false`. A Evolution API continua
 disponivel no codigo, mas so pode ser selecionada explicitamente com
 `MESSAGING_PROVIDER=evolution`; o email permanece independente.
+
+### Notificacao de reagendamento em Development
+
+Em Development, cada reagendamento concluido cria um evento persistente e tenta o template Meta
+`appointment_rescheduled_v1` quando a marcacao tem opt-in WhatsApp. A allowlist continua
+obrigatoria. Se a Meta nao aceitar a mensagem, o backend tenta uma unica vez o email de fallback;
+um `wamid` aceite impede esse email. Falhas de ambos os canais nao revertem o reagendamento.
+
+A resposta do reagendamento inclui `notificationEventId`. Depois de autenticar como admin, o
+resultado seguro pode ser consultado em:
+
+```text
+GET /api/admin/dev/notifications/reschedule/:notificationEventId
+```
+
+Este endpoint, a criacao do outbox e o envio automatico de reagendamento ficam desativados quando
+o deployment nao for reconhecido como Development.
 
 ## Mensagens automaticas
 

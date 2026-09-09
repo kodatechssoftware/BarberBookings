@@ -15,6 +15,7 @@ import {
   barberCompensationRules,
   businessExpenses,
   whatsappMessages,
+  appointmentNotificationEvents,
   type Barber,
   type Service,
   type Appointment,
@@ -31,6 +32,7 @@ import {
   type BarberCompensationRule,
   type BusinessExpense,
   type WhatsappMessage,
+  type AppointmentNotificationEvent,
   type WhatsappMessageStatus,
   type CreateBarberRequest,
   type CreateServiceRequest,
@@ -51,7 +53,8 @@ import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
 
-type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
+type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappOptIn"> & {
+  whatsappOptIn?: boolean;
   locationId?: number;
   cancelToken: string;
   durationMinutes: number;
@@ -59,6 +62,12 @@ type CreateAppointmentStorageRequest = CreateAppointmentRequest & {
   paymentMethod?: AppointmentPaymentMethod;
   depositRequired?: boolean;
   depositReason?: string | null;
+  whatsappOptInAt?: Date | null;
+};
+
+export type RescheduleAppointmentResult = {
+  appointment: Appointment;
+  notificationEvent: AppointmentNotificationEvent;
 };
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
@@ -185,6 +194,11 @@ export interface IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined>;
+  rescheduleAppointment(
+    id: number,
+    expectedRevision: number,
+    startTime: Date,
+  ): Promise<RescheduleAppointmentResult | undefined>;
   updateAppointmentStatus(
     id: number,
     status: AppointmentStatus,
@@ -258,6 +272,14 @@ export interface IStorage {
     providerStatus?: string | null,
     webhookPayload?: string | null,
   ): Promise<WhatsappMessage | undefined>;
+
+  // Transactional notification outbox
+  getAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
+  claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
+  updateAppointmentNotificationEvent(
+    id: number,
+    patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
+  ): Promise<AppointmentNotificationEvent | undefined>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -504,7 +526,12 @@ export class DatabaseStorage implements IStorage {
         const createdAppointments: Appointment[] = [];
         for (const appointment of appointmentInputs) {
           await this.assertNoAppointmentConflict(tx, appointment);
-          const [newAppointment] = await tx.insert(appointments).values(appointment).returning();
+          const [newAppointment] = await tx.insert(appointments).values({
+            ...appointment,
+            whatsappOptInAt: appointment.whatsappOptIn
+              ? appointment.whatsappOptInAt ?? new Date()
+              : null,
+          }).returning();
           createdAppointments.push(newAppointment);
         }
 
@@ -618,6 +645,63 @@ export class DatabaseStorage implements IStorage {
   async createAdmin(admin: CreateAdminRequest): Promise<Admin> {
     const [newAdmin] = await db.insert(admins).values(admin).returning();
     return newAdmin;
+  }
+
+  async rescheduleAppointment(
+    id: number,
+    expectedRevision: number,
+    startTime: Date,
+  ): Promise<RescheduleAppointmentResult | undefined> {
+    try {
+      return await db.transaction(async (tx) => {
+        // Serialize changes to the same appointment, including requests targeting different days.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(-2, ${id})`);
+        const [current] = await tx
+          .select()
+          .from(appointments)
+          .where(and(
+            eq(appointments.id, id),
+            eq(appointments.status, "booked"),
+            eq(appointments.rescheduleRevision, expectedRevision),
+          ))
+          .limit(1);
+        if (!current) return undefined;
+
+        const candidate = { ...current, startTime };
+        await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
+        await this.assertNoAppointmentConflict(tx, candidate, id);
+
+        const nextRevision = current.rescheduleRevision + 1;
+        const [updated] = await tx
+          .update(appointments)
+          .set({ startTime, rescheduleRevision: nextRevision })
+          .where(and(
+            eq(appointments.id, id),
+            eq(appointments.status, "booked"),
+            eq(appointments.rescheduleRevision, expectedRevision),
+          ))
+          .returning();
+        if (!updated) return undefined;
+
+        const eventKey = `appointment:${id}:rescheduled:${nextRevision}`;
+        const [notificationEvent] = await tx
+          .insert(appointmentNotificationEvents)
+          .values({
+            appointmentId: id,
+            eventType: "appointment_rescheduled",
+            eventRevision: nextRevision,
+            eventKey,
+            previousStartTime: toAppointmentDate(current.startTime),
+            newStartTime: startTime,
+          })
+          .returning();
+
+        return { appointment: updated, notificationEvent };
+      });
+    } catch (error) {
+      if (isAppointmentConflictError(error)) throw new AppointmentConflictError();
+      throw error;
+    }
   }
 
   async updateAdminPassword(id: number, password: string): Promise<void> {
@@ -933,6 +1017,39 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async getAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const [event] = await db
+      .select()
+      .from(appointmentNotificationEvents)
+      .where(eq(appointmentNotificationEvents.id, id))
+      .limit(1);
+    return event;
+  }
+
+  async claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const [event] = await db
+      .update(appointmentNotificationEvents)
+      .set({ processingStartedAt: new Date(), updatedAt: new Date() })
+      .where(and(
+        eq(appointmentNotificationEvents.id, id),
+        isNull(appointmentNotificationEvents.processingStartedAt),
+      ))
+      .returning();
+    return event;
+  }
+
+  async updateAppointmentNotificationEvent(
+    id: number,
+    patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
+  ): Promise<AppointmentNotificationEvent | undefined> {
+    const [event] = await db
+      .update(appointmentNotificationEvents)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(appointmentNotificationEvents.id, id))
+      .returning();
+    return event;
+  }
+
   async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {
     const [message] = await db
       .select()
@@ -1020,6 +1137,7 @@ export class MemoryStorage implements IStorage {
   private barberCompensationRules: BarberCompensationRule[] = [];
   private businessExpenses: BusinessExpense[] = [];
   private whatsappMessages: WhatsappMessage[] = [];
+  private appointmentNotificationEvents: AppointmentNotificationEvent[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
   private nextIds = {
@@ -1037,6 +1155,7 @@ export class MemoryStorage implements IStorage {
     barberCompensationRule: 1,
     businessExpense: 1,
     whatsappMessage: 1,
+    appointmentNotificationEvent: 1,
   };
 
   private assertNoAppointmentConflict(
@@ -1258,6 +1377,11 @@ export class MemoryStorage implements IStorage {
           cancelledAt: null,
           depositRequired: appointment.depositRequired ?? false,
           depositReason: appointment.depositReason ?? null,
+          rescheduleRevision: 0,
+          whatsappOptIn: appointment.whatsappOptIn ?? false,
+          whatsappOptInAt: appointment.whatsappOptIn
+            ? appointment.whatsappOptInAt ?? new Date()
+            : null,
           createdAt: new Date(),
         };
         this.assertNoAppointmentConflict(newAppointment);
@@ -1284,6 +1408,55 @@ export class MemoryStorage implements IStorage {
     this.assertNoAppointmentConflict(updatedAppointment, id);
     this.appointments[index] = updatedAppointment;
     return this.appointments[index];
+  }
+
+  async rescheduleAppointment(
+    id: number,
+    expectedRevision: number,
+    startTime: Date,
+  ): Promise<RescheduleAppointmentResult | undefined> {
+    const index = this.appointments.findIndex((appointment) => appointment.id === id);
+    if (index === -1) return undefined;
+    const current = this.appointments[index];
+    if (current.status !== "booked" || current.rescheduleRevision !== expectedRevision) return undefined;
+
+    const updated: Appointment = {
+      ...current,
+      startTime,
+      rescheduleRevision: current.rescheduleRevision + 1,
+    };
+    this.assertNoAppointmentConflict(updated, id);
+    this.appointments[index] = updated;
+
+    const now = new Date();
+    const notificationEvent: AppointmentNotificationEvent = {
+      id: this.nextIds.appointmentNotificationEvent++,
+      appointmentId: id,
+      eventType: "appointment_rescheduled",
+      eventRevision: updated.rescheduleRevision,
+      eventKey: `appointment:${id}:rescheduled:${updated.rescheduleRevision}`,
+      previousStartTime: toAppointmentDate(current.startTime),
+      newStartTime: startTime,
+      provider: null,
+      templateName: null,
+      whatsappStatus: "pending",
+      providerMessageId: null,
+      providerStatus: null,
+      responseStatus: null,
+      errorCode: null,
+      processingStartedAt: null,
+      whatsappAttemptedAt: null,
+      whatsappAcceptedAt: null,
+      emailStatus: "not_needed",
+      emailProviderMessageId: null,
+      emailErrorCode: null,
+      emailAttemptedAt: null,
+      emailSentAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.appointmentNotificationEvents.push(notificationEvent);
+    return { appointment: updated, notificationEvent };
   }
 
   async updateAppointmentStatus(
@@ -1653,6 +1826,36 @@ export class MemoryStorage implements IStorage {
     };
     this.whatsappMessages.push(created);
     return created;
+  }
+
+  async getAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    return this.appointmentNotificationEvents.find((event) => event.id === id);
+  }
+
+  async claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const index = this.appointmentNotificationEvents.findIndex((event) => event.id === id);
+    if (index === -1 || this.appointmentNotificationEvents[index].processingStartedAt) return undefined;
+    const now = new Date();
+    this.appointmentNotificationEvents[index] = {
+      ...this.appointmentNotificationEvents[index],
+      processingStartedAt: now,
+      updatedAt: now,
+    };
+    return this.appointmentNotificationEvents[index];
+  }
+
+  async updateAppointmentNotificationEvent(
+    id: number,
+    patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
+  ): Promise<AppointmentNotificationEvent | undefined> {
+    const index = this.appointmentNotificationEvents.findIndex((event) => event.id === id);
+    if (index === -1) return undefined;
+    this.appointmentNotificationEvents[index] = {
+      ...this.appointmentNotificationEvents[index],
+      ...patch,
+      updatedAt: new Date(),
+    };
+    return this.appointmentNotificationEvents[index];
   }
 
   async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {

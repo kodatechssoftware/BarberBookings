@@ -10,6 +10,7 @@ import {
   sendBookingConfirmation,
 } from "./email";
 import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
+import { processRescheduleNotification } from "./reschedule-notifications";
 import { isDevelopmentDeployment } from "./runtime-environment";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
@@ -1041,7 +1042,7 @@ type BookingCreatedNotificationParams = {
   locationId?: number;
 };
 
-type NotificationChannel = "email" | "none";
+type NotificationChannel = "whatsapp" | "email" | "none";
 
 function runNotificationJob(
   label: string,
@@ -1722,6 +1723,37 @@ export async function registerRoutes(
         recipient: maskWhatsappRecipient(message.phone),
         createdAt: message.createdAt,
         updatedAt: message.updatedAt,
+      });
+    });
+
+    app.get("/api/admin/dev/notifications/reschedule/:id", requireAdmin, async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ message: "Identificador de notificacao invalido." });
+      }
+
+      const event = await storage.getAppointmentNotificationEvent(id);
+      if (!event || event.eventType !== "appointment_rescheduled") {
+        return res.status(404).json({ message: "Notificacao de reagendamento nao encontrada." });
+      }
+
+      return res.json({
+        id: event.id,
+        appointmentId: event.appointmentId,
+        revision: event.eventRevision,
+        eventKey: event.eventKey,
+        provider: event.provider,
+        template: event.templateName,
+        whatsappStatus: event.whatsappStatus,
+        wamid: event.providerMessageId,
+        providerStatus: event.providerStatus,
+        responseStatus: event.responseStatus,
+        errorCode: event.errorCode,
+        emailStatus: event.emailStatus,
+        emailProviderMessageId: event.emailProviderMessageId,
+        emailErrorCode: event.emailErrorCode,
+        createdAt: event.createdAt,
+        updatedAt: event.updatedAt,
       });
     });
   }
@@ -3568,12 +3600,46 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Este horário já está reservado." });
       }
 
-      const updated = await storage.updateAppointment(appointment.id, { startTime }, "booked");
+      const result = isDevelopmentDeployment
+        ? await storage.rescheduleAppointment(appointment.id, appointment.rescheduleRevision, startTime)
+        : null;
+      const updated = isDevelopmentDeployment
+        ? result?.appointment
+        : await storage.updateAppointment(appointment.id, { startTime }, "booked");
       if (!updated) {
         return res.status(409).json({ message: "Esta marcação já não pode ser reagendada." });
       }
 
-      res.json(updated);
+      if (result) runNotificationJob("Booking reschedule", async () => {
+        const [barber, service, currentLocation] = await Promise.all([
+          storage.getBarber(updated.barberId),
+          updated.serviceId ? storage.getService(updated.serviceId) : Promise.resolve(undefined),
+          getLocation(updated.locationId, true),
+        ]);
+
+        return processRescheduleNotification({
+          eventId: result.notificationEvent.id,
+          appointmentId: updated.id,
+          eventRevision: updated.rescheduleRevision,
+          customerName: updated.customerName,
+          customerEmail: updated.customerEmail,
+          customerPhone: updated.customerPhone,
+          whatsappOptIn: updated.whatsappOptIn,
+          barberName: barber?.name || "Barbeiro indisponível",
+          serviceName: service?.name || "Serviço indisponível",
+          startTime: toDate(updated.startTime),
+          cancelToken: updated.cancelToken,
+          durationMinutes: updated.durationMinutes,
+          locationName: currentLocation?.name || process.env.SHOP_NAME || "Barbearia",
+          locationAddress: currentLocation?.address || process.env.SHOP_ADDRESS || "",
+          locationTimeZone: currentLocation?.timezone || SHOP_TIME_ZONE,
+        });
+      });
+
+      res.json({
+        ...updated,
+        ...(result ? { notificationEventId: result.notificationEvent.id } : {}),
+      });
     } catch (error) {
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Este horário já está reservado." });

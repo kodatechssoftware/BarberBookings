@@ -38,6 +38,26 @@ interface SendCancellationParams {
   locationTimeZone?: string;
 }
 
+interface SendRescheduleParams {
+  customerName: string;
+  customerEmail: string;
+  barberName: string;
+  serviceName: string;
+  startTime: Date;
+  cancelToken: string;
+  durationMinutes?: number;
+  locationName?: string;
+  locationAddress?: string;
+  locationTimeZone?: string;
+  idempotencyKey?: string;
+}
+
+export type EmailDeliveryResult = {
+  sent: boolean;
+  providerMessageId: string | null;
+  errorCode: string | null;
+};
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, "&amp;")
@@ -76,6 +96,40 @@ function getPublicUrl() {
   ).replace(/\/$/, "");
 }
 
+export function buildAppointmentManagementLinks(cancelToken: string) {
+  const publicUrl = getPublicUrl();
+  return {
+    rescheduleUrl: `${publicUrl}/reschedule/${cancelToken}`,
+    cancelUrl: `${publicUrl}/cancel/${cancelToken}`,
+  };
+}
+
+export function buildGoogleCalendarUrl({
+  locationName,
+  locationAddress,
+  serviceName,
+  barberName,
+  startTime,
+  durationMinutes,
+}: {
+  locationName: string;
+  locationAddress: string;
+  serviceName: string;
+  barberName: string;
+  startTime: Date;
+  durationMinutes: number;
+}) {
+  const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
+  const calendarParams = new URLSearchParams({
+    action: "TEMPLATE",
+    text: `${locationName} - ${serviceName}`,
+    dates: `${toCalendarDate(startTime)}/${toCalendarDate(endTime)}`,
+    details: `${serviceName} com ${barberName}`,
+    location: locationAddress,
+  });
+  return `https://calendar.google.com/calendar/render?${calendarParams.toString()}`;
+}
+
 export async function sendBookingConfirmation({
   customerName,
   customerEmail,
@@ -98,18 +152,10 @@ export async function sendBookingConfirmation({
 
   const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
 
-  const publicUrl = getPublicUrl();
-  const cancelUrl = `${publicUrl}/cancel/${cancelToken}`;
-  const rescheduleUrl = `${publicUrl}/reschedule/${cancelToken}`;
-  const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
-  const calendarParams = new URLSearchParams({
-    action: "TEMPLATE",
-    text: `${locationName} - ${serviceName}`,
-    dates: `${toCalendarDate(startTime)}/${toCalendarDate(endTime)}`,
-    details: `${serviceName} com ${barberName}`,
-    location: locationAddress,
+  const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
+  const googleCalendarUrl = buildGoogleCalendarUrl({
+    locationName, locationAddress, serviceName, barberName, startTime, durationMinutes,
   });
-  const googleCalendarUrl = `https://calendar.google.com/calendar/render?${calendarParams.toString()}`;
 
   try {
     const response = await resend.emails.send({
@@ -129,7 +175,7 @@ export async function sendBookingConfirmation({
             <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
           </div>
           <p style="font-size: 0.92em; color: #555;">
-            Caso não consiga comparecer, pode reagendar ou cancelar através dos links abaixo. Cancelamentos a menos de ${cancellationPolicyHours} horas da marcação podem ficar registados como cancelamento tardio.
+            Caso não consiga comparecer, pode reagendar ou cancelar a sua marcação através dos links abaixo.
           </p>
           <p style="text-align: center; margin-top: 20px;">
             <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
@@ -153,6 +199,70 @@ export async function sendBookingConfirmation({
   } catch (error) {
     console.error("Error sending confirmation email:", error);
     return false;
+  }
+}
+
+export async function sendBookingRescheduled({
+  customerName,
+  customerEmail,
+  barberName,
+  serviceName,
+  startTime,
+  cancelToken,
+  durationMinutes = 30,
+  locationName = shopName,
+  locationAddress = shopAddress,
+  locationTimeZone = shopTimeZone,
+  idempotencyKey,
+}: SendRescheduleParams): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; reschedule email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
+  const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
+  const googleCalendarUrl = buildGoogleCalendarUrl({
+    locationName, locationAddress, serviceName, barberName, startTime, durationMinutes,
+  });
+
+  try {
+    const response = await resend.emails.send({
+      from: emailFrom,
+      to: customerEmail,
+      subject: `Marcação reagendada - ${locationName}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
+          <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+          <p>A sua marcação foi reagendada com sucesso.</p>
+          <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+            <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
+            <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
+            <p style="margin: 6px 0;"><strong>Nova data:</strong> ${escapeHtml(dateStr)}</p>
+            <p style="margin: 6px 0;"><strong>Nova hora:</strong> ${escapeHtml(timeStr)}</p>
+            <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
+          </div>
+          <p style="font-size: 0.92em; color: #555;">Caso não consiga comparecer, pode voltar a reagendar ou cancelar a sua marcação.</p>
+          <p style="text-align: center; margin-top: 20px;">
+            <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
+            <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
+            <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
+          </p>
+        </div>
+      `,
+    }, idempotencyKey ? { idempotencyKey } : undefined);
+
+    if (response.error) {
+      console.error("Resend error while sending reschedule notification:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
+    }
+
+    if (!isProduction) console.log("Reschedule email sent.");
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
+  } catch (error) {
+    console.error("Error sending reschedule email:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
   }
 }
 

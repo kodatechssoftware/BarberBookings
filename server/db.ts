@@ -467,3 +467,57 @@ export async function ensureWhatsappMessagesTable() {
     ON ${qualifiedTableName} (status, updated_at DESC)
   `);
 }
+
+export async function ensureRescheduleNotificationFoundation() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedAppointmentsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
+  const qualifiedEventsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointment_notification_events")}`;
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedAppointmentsTable}
+      ADD COLUMN IF NOT EXISTS reschedule_revision integer NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS whatsapp_opt_in boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS whatsapp_opt_in_at timestamp
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedEventsTable} (
+      id serial PRIMARY KEY,
+      appointment_id integer NOT NULL REFERENCES ${qualifiedAppointmentsTable}(id) ON DELETE CASCADE,
+      event_type text NOT NULL,
+      event_revision integer NOT NULL,
+      event_key text NOT NULL,
+      previous_start_time timestamp NOT NULL,
+      new_start_time timestamp NOT NULL,
+      provider text,
+      template_name text,
+      whatsapp_status text NOT NULL DEFAULT 'pending',
+      provider_message_id text,
+      provider_status text,
+      response_status integer,
+      error_code text,
+      processing_started_at timestamp,
+      whatsapp_attempted_at timestamp,
+      whatsapp_accepted_at timestamp,
+      email_status text NOT NULL DEFAULT 'not_needed',
+      email_provider_message_id text,
+      email_error_code text,
+      email_attempted_at timestamp,
+      email_sent_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_event_key_idx
+    ON ${qualifiedEventsTable} (event_key)
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_provider_message_id_idx
+    ON ${qualifiedEventsTable} (provider_message_id)
+    WHERE provider_message_id IS NOT NULL
+  `);
+}

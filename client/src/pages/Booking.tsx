@@ -275,6 +275,7 @@ export default function Booking() {
     email: false,
   });
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const { data: locations = [], isLoading: loadingLocations, isError: locationsError } = useLocations({ purpose: "booking" });
@@ -534,6 +535,7 @@ export default function Booking() {
         customerName,
         customerEmail: customerEmail || undefined,
         customerPhone: normalizedPhone,
+        whatsappOptIn,
       });
       saveLastBookingPreference({
         barberId: selectedBarberId,
@@ -1104,6 +1106,17 @@ export default function Booking() {
                       </p>
                     )}
                   </div>
+                  <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-white/10 bg-background/40 p-4 text-sm leading-relaxed text-gray-300">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 shrink-0 accent-[#d4af37]"
+                      checked={whatsappOptIn}
+                      onChange={(event) => setWhatsappOptIn(event.target.checked)}
+                    />
+                    <span>
+                      Quero receber pelo WhatsApp confirmações e atualizações relacionadas com as minhas marcações. Posso retirar este consentimento a qualquer momento.
+                    </span>
+                  </label>
                 </div>
               </div>
             )}
