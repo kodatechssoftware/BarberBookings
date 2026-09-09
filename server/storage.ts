@@ -250,6 +250,7 @@ export interface IStorage {
   deleteBusinessExpense(id: number): Promise<void>;
 
   // WhatsApp deliveries
+  getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined>;
   createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage>;
   updateWhatsappMessageStatusByProviderId(
     providerMessageId: string,
@@ -930,6 +931,15 @@ export class DatabaseStorage implements IStorage {
   async createWhatsappMessage(message: CreateWhatsappMessageRequest): Promise<WhatsappMessage> {
     const [created] = await db.insert(whatsappMessages).values(message).returning();
     return created;
+  }
+
+  async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {
+    const [message] = await db
+      .select()
+      .from(whatsappMessages)
+      .where(eq(whatsappMessages.id, id))
+      .limit(1);
+    return message;
   }
 
   async updateWhatsappMessageStatusByProviderId(
@@ -1643,6 +1653,10 @@ export class MemoryStorage implements IStorage {
     };
     this.whatsappMessages.push(created);
     return created;
+  }
+
+  async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {
+    return this.whatsappMessages.find((message) => message.id === id);
   }
 
   async updateWhatsappMessageStatusByProviderId(

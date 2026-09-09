@@ -72,6 +72,78 @@ Para enviar notificacoes por email, configura no ambiente de producao:
 
 Se `RESEND_API_KEY` ficar vazio, a app continua a funcionar, mas nao envia notificacoes.
 
+### Teste isolado da Meta WhatsApp Cloud API em Development
+
+Esta fase nao esta ligada às marcacoes. O endpoint existe apenas em desenvolvimento local ou
+quando o deployment define explicitamente `APP_ENV=development`, exige uma sessao de
+administrador e recusa qualquer destinatario que nao esteja na allowlist.
+
+Mantem estes valores por defeito:
+
+```env
+WHATSAPP_NOTIFICATIONS_ENABLED=false
+MESSAGING_PROVIDER=none
+```
+
+Para executar especificamente o teste, preenche apenas o ficheiro local `.env` (ignorado pelo
+Git) com os dados apresentados no painel da app de teste da Meta:
+
+```env
+WHATSAPP_NOTIFICATIONS_ENABLED=true
+MESSAGING_PROVIDER=meta
+APP_ENV=development
+WHATSAPP_DEFAULT_COUNTRY_CODE=351
+WHATSAPP_REQUEST_TIMEOUT_MS=10000
+META_WHATSAPP_GRAPH_API_VERSION=vXX.X
+META_WHATSAPP_PHONE_NUMBER_ID=
+META_WHATSAPP_WABA_ID=
+META_WHATSAPP_ACCESS_TOKEN=
+META_WHATSAPP_TEST_TEMPLATE=hello_world
+META_WHATSAPP_TEST_TEMPLATE_LANGUAGE=en_US
+META_WHATSAPP_DEV_ALLOWLIST=3519XXXXXXXX
+```
+
+`META_WHATSAPP_DEV_ALLOWLIST` aceita varios numeros E.164 separados por virgula. Com o numero de
+teste da Meta, cada destinatario tambem tem de estar adicionado e verificado no painel da Meta.
+Reinicia `npm run dev` depois de alterar o `.env`.
+
+Num deployment DEV que execute o build com `NODE_ENV=production`, como o comando `npm start` no
+Render ou Railway, `APP_ENV=development` e obrigatoria. Nao definir esta variavel em Production.
+
+Com o backend a correr, este exemplo PowerShell autentica no backend sem colocar a password na
+linha de comandos, envia o template e consulta o registo persistido:
+
+```powershell
+$baseUrl = "http://localhost:5000"
+$credential = Get-Credential -UserName "admin" -Message "Credenciais do admin de Development"
+$session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+$loginBody = @{
+  username = $credential.UserName
+  password = $credential.GetNetworkCredential().Password
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri "$baseUrl/api/admin/login" `
+  -WebSession $session -ContentType "application/json" -Body $loginBody
+
+$test = Invoke-RestMethod -Method Post -Uri "$baseUrl/api/admin/dev/whatsapp/meta/test" `
+  -WebSession $session -ContentType "application/json" `
+  -Body (@{ recipient = "+3519XXXXXXXX" } | ConvertTo-Json)
+$test
+
+Invoke-RestMethod -Method Get `
+  -Uri "$baseUrl/api/admin/dev/whatsapp/meta/test/$($test.recordId)" `
+  -WebSession $session
+```
+
+Uma resposta aceite inclui `accepted=true`, `recordId`, `wamid`, `status=pending`, o HTTP da Meta
+e o destinatario mascarado. O `GET` devolve o mesmo `wamid` a partir da tabela
+`whatsapp_messages`. Uma recusa da Meta tambem cria um registo `failed` e devolve o respetivo
+`recordId`, sem expor o access token nem o corpo integral do provider.
+
+No fim do teste, volta a colocar `WHATSAPP_NOTIFICATIONS_ENABLED=false`. A Evolution API continua
+disponivel no codigo, mas so pode ser selecionada explicitamente com
+`MESSAGING_PROVIDER=evolution`; o email permanece independente.
+
 ## Mensagens automaticas
 
 As confirmacoes de marcacao e de cancelamento sao enviadas diretamente por email quando o cliente indica um endereco. O email de confirmacao inclui os detalhes da marcacao e os links para reagendar e cancelar.

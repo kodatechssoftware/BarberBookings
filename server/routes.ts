@@ -9,6 +9,8 @@ import {
   sendBookingCancellationConfirmation,
   sendBookingConfirmation,
 } from "./email";
+import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
+import { isDevelopmentDeployment } from "./runtime-environment";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import session from "express-session";
@@ -77,6 +79,14 @@ const useMemoryStorage = process.env.USE_MEMORY_STORAGE === "true";
 const databaseSchema = process.env.DATABASE_SCHEMA?.trim();
 const sessionSchemaName =
   databaseSchema && databaseSchema !== "public" ? databaseSchema : undefined;
+const metaWhatsappTestInputSchema = z.object({
+  recipient: z.string().trim().min(7).max(32),
+}).strict();
+
+function maskWhatsappRecipient(phone: string) {
+  if (phone.length <= 5) return phone;
+  return `${phone.slice(0, 3)}***${phone.slice(-3)}`;
+}
 
 function quoteSqlIdentifier(identifier: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
@@ -1671,6 +1681,50 @@ export async function registerRoutes(
       return res.status(401).json({ message: "Não autorizado" });
     });
   };
+
+  if (isDevelopmentDeployment) {
+    app.post("/api/admin/dev/whatsapp/meta/test", requireAdmin, async (req, res) => {
+      const parsed = metaWhatsappTestInputSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Indique um destinatario WhatsApp valido." });
+      }
+
+      try {
+        return res.json(await sendMetaWhatsAppTestMessage(parsed.data.recipient));
+      } catch (error) {
+        if (error instanceof MetaWhatsAppTestError) {
+          return res.status(error.statusCode).json({
+            message: error.message,
+            ...(error.recordId ? { recordId: error.recordId } : {}),
+          });
+        }
+        throw error;
+      }
+    });
+
+    app.get("/api/admin/dev/whatsapp/meta/test/:id", requireAdmin, async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ message: "Identificador de teste invalido." });
+      }
+
+      const message = await storage.getWhatsappMessage(id);
+      if (!message || message.messageType !== "provider_test") {
+        return res.status(404).json({ message: "Teste Meta WhatsApp nao encontrado." });
+      }
+
+      return res.json({
+        recordId: message.id,
+        wamid: message.providerMessageId,
+        status: message.status,
+        providerStatus: message.providerStatus,
+        responseStatus: message.responseStatus,
+        recipient: maskWhatsappRecipient(message.phone),
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+      });
+    });
+  }
 
   app.get("/api/account/locations", requireAuth, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {

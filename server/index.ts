@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
+import { isDevelopmentDeployment } from "./runtime-environment";
 import {
   ensureAppointmentOverlapProtection,
   ensureAppointmentPaymentMethodColumn,
@@ -11,6 +12,7 @@ import {
   ensureBusinessExpensesTable,
   ensureMultiLocationFoundation,
   ensureServiceAgendaLabelColumn,
+  ensureWhatsappMessagesTable,
   pool,
   repairKnownTextEncodingArtifacts,
 } from "./db";
@@ -182,6 +184,9 @@ app.use((req, res, next) => {
   await ensureBusinessExpensesTable();
   await ensureMultiLocationFoundation();
   await ensureAppointmentOverlapProtection();
+  if (isDevelopmentDeployment) {
+    await ensureWhatsappMessagesTable();
+  }
   const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
   if (repairedEncodingRows > 0) {
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);

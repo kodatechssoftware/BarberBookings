@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { storage } from "./storage";
 import type { WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
+import { isDevelopmentDeployment } from "./runtime-environment";
 
 type AppointmentMessageParams = {
   appointmentId?: number;
@@ -22,21 +23,24 @@ const isProduction = process.env.NODE_ENV === "production";
 
 let warnedMissingConfig = false;
 
-function getMessagingProvider() {
+function areWhatsappNotificationsEnabled() {
+  const value = process.env.WHATSAPP_NOTIFICATIONS_ENABLED?.trim().toLowerCase();
+  return value === "true" || value === "1";
+}
+
+function getMessagingProvider(): "none" | "evolution" | "twilio" | "meta" {
   const provider = process.env.MESSAGING_PROVIDER?.trim().toLowerCase();
-  if (provider === "none") return "none";
+  if (provider === "evolution") return "evolution";
   if (provider === "twilio" || provider === "twilio_whatsapp") return "twilio";
-  return "evolution";
+  if (provider === "meta") return "meta";
+  return "none";
 }
 
 function getEvolutionConfig() {
   const apiUrl = process.env.EVOLUTION_API_URL?.trim().replace(/\/$/, "");
   const apiKey = process.env.EVOLUTION_API_KEY?.trim();
   const instance = process.env.EVOLUTION_API_INSTANCE?.trim();
-  const notificationsSetting = process.env.WHATSAPP_NOTIFICATIONS_ENABLED?.trim().toLowerCase();
-  const notificationsEnabled = notificationsSetting !== "false" && notificationsSetting !== "0";
-
-  if (!notificationsEnabled) return null;
+  if (!areWhatsappNotificationsEnabled()) return null;
 
   if (!apiUrl || !apiKey || !instance) {
     if (!warnedMissingConfig && (apiUrl || apiKey || instance)) {
@@ -52,6 +56,8 @@ function getEvolutionConfig() {
 }
 
 function getTwilioConfig() {
+  if (!areWhatsappNotificationsEnabled()) return null;
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
   const apiKeySid = process.env.TWILIO_API_KEY_SID?.trim();
   const apiKeySecret = process.env.TWILIO_API_KEY_SECRET?.trim();
@@ -86,8 +92,14 @@ function getTwilioConfig() {
 }
 
 function normalizeWhatsAppNumber(phone: string) {
-  const digits = phone.replace(/\D/g, "").replace(/^00/, "").replace(/^0+/, "");
+  const trimmed = phone.trim();
+  const hasExplicitCountryCode = trimmed.startsWith("+") || trimmed.startsWith("00");
+  const digits = trimmed.replace(/\D/g, "").replace(/^00/, "").replace(/^0+/, "");
   if (!digits) return "";
+
+  if (hasExplicitCountryCode) {
+    return digits;
+  }
 
   if (digits.startsWith(DEFAULT_COUNTRY_CODE)) {
     return digits;
@@ -112,6 +124,194 @@ function normalizeTwilioWhatsAppAddress(phone: string) {
 function maskPhoneNumber(phone: string) {
   if (phone.length <= 5) return phone;
   return `${phone.slice(0, 3)}***${phone.slice(-3)}`;
+}
+
+type MetaConfig = {
+  graphApiVersion: string;
+  phoneNumberId: string;
+  wabaId: string;
+  accessToken: string;
+  testTemplate: string;
+  testTemplateLanguage: string;
+  allowedRecipients: Set<string>;
+};
+
+export class MetaWhatsAppTestError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+    public readonly recordId?: number,
+  ) {
+    super(message);
+    this.name = "MetaWhatsAppTestError";
+  }
+}
+
+function getMetaConfig(): MetaConfig {
+  if (!areWhatsappNotificationsEnabled()) {
+    throw new MetaWhatsAppTestError("As notificacoes WhatsApp estao desativadas em Development.", 400);
+  }
+  if (getMessagingProvider() !== "meta") {
+    throw new MetaWhatsAppTestError("O provider WhatsApp ativo em Development nao e meta.", 400);
+  }
+
+  const graphApiVersion = process.env.META_WHATSAPP_GRAPH_API_VERSION?.trim() || "";
+  const phoneNumberId = process.env.META_WHATSAPP_PHONE_NUMBER_ID?.trim() || "";
+  const wabaId = process.env.META_WHATSAPP_WABA_ID?.trim() || "";
+  const accessToken = process.env.META_WHATSAPP_ACCESS_TOKEN?.trim() || "";
+  const testTemplate = process.env.META_WHATSAPP_TEST_TEMPLATE?.trim() || "hello_world";
+  const testTemplateLanguage = process.env.META_WHATSAPP_TEST_TEMPLATE_LANGUAGE?.trim() || "en_US";
+  const allowlist = process.env.META_WHATSAPP_DEV_ALLOWLIST?.trim() || "";
+
+  if (!/^v\d+\.\d+$/.test(graphApiVersion)) {
+    throw new MetaWhatsAppTestError("META_WHATSAPP_GRAPH_API_VERSION esta em falta ou e invalida.", 400);
+  }
+  if (!phoneNumberId || !wabaId || !accessToken) {
+    throw new MetaWhatsAppTestError("A configuracao Meta WhatsApp de Development esta incompleta.", 400);
+  }
+
+  const allowedRecipients = new Set(
+    allowlist.split(",").map(normalizeWhatsAppNumber).filter(Boolean),
+  );
+  if (allowedRecipients.size === 0) {
+    throw new MetaWhatsAppTestError("META_WHATSAPP_DEV_ALLOWLIST e obrigatoria em Development.", 400);
+  }
+
+  return {
+    graphApiVersion,
+    phoneNumberId,
+    wabaId,
+    accessToken,
+    testTemplate,
+    testTemplateLanguage,
+    allowedRecipients,
+  };
+}
+
+function getSafeMetaResponse(responseJson: unknown) {
+  const wamid = getNestedString(responseJson, ["messages", "0", "id"]);
+  const messageStatus = getNestedString(responseJson, ["messages", "0", "message_status"]);
+  const waId = getNestedString(responseJson, ["contacts", "0", "wa_id"]);
+  const error = getNestedValue(responseJson, ["error"]);
+  const safeError = error && typeof error === "object" ? {
+    type: typeof (error as Record<string, unknown>).type === "string"
+      ? (error as Record<string, unknown>).type
+      : undefined,
+    code: typeof (error as Record<string, unknown>).code === "number"
+      ? (error as Record<string, unknown>).code
+      : undefined,
+    error_subcode: typeof (error as Record<string, unknown>).error_subcode === "number"
+      ? (error as Record<string, unknown>).error_subcode
+      : undefined,
+  } : undefined;
+
+  return {
+    wamid,
+    messageStatus,
+    waId,
+    storedBody: truncate(safeStringify({
+      messaging_product: getNestedString(responseJson, ["messaging_product"]),
+      message_id: wamid,
+      message_status: messageStatus,
+      error: safeError,
+    }), 4000),
+    providerStatus: safeError?.code
+      ? `META_ERROR_${safeError.code}`
+      : messageStatus || (wamid ? "META_ACCEPTED" : "META_RESPONSE_UNKNOWN"),
+  };
+}
+
+export async function sendMetaWhatsAppTestMessage(recipient: string) {
+  if (!isDevelopmentDeployment) {
+    throw new MetaWhatsAppTestError("Este teste so esta disponivel em Development.", 404);
+  }
+
+  const config = getMetaConfig();
+  const number = normalizeWhatsAppNumber(recipient);
+  if (!number || !config.allowedRecipients.has(number)) {
+    throw new MetaWhatsAppTestError("O destinatario nao pertence a allowlist de Development.", 403);
+  }
+
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://graph.facebook.com/${encodeURIComponent(config.graphApiVersion)}/${encodeURIComponent(config.phoneNumberId)}/messages`,
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          Authorization: `Bearer ${config.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: number,
+          type: "template",
+          template: {
+            name: config.testTemplate,
+            language: { code: config.testTemplateLanguage },
+          },
+        }),
+      },
+    );
+  } catch (error) {
+    const created = await storage.createWhatsappMessage({
+      messageType: "provider_test",
+      phone: number,
+      status: "failed",
+      providerStatus: error instanceof DOMException && error.name === "TimeoutError"
+        ? "META_TIMEOUT"
+        : "META_NETWORK_ERROR",
+      responseBody: safeStringify({ error: "Meta request failed before an HTTP response." }),
+    });
+    console.warn(
+      `Meta WhatsApp DEV test failed for ${maskPhoneNumber(number)} before an HTTP response; record=${created.id}; durationMs=${Date.now() - startedAt}.`,
+    );
+    throw new MetaWhatsAppTestError("Nao foi possivel contactar a Meta Cloud API.", 502, created.id);
+  }
+
+  const responseText = await response.text();
+  let responseJson: unknown = null;
+  try {
+    responseJson = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    responseJson = null;
+  }
+  const safeResponse = getSafeMetaResponse(responseJson);
+  const created = await storage.createWhatsappMessage({
+    messageType: "provider_test",
+    phone: number,
+    providerMessageId: safeResponse.wamid,
+    status: response.ok && safeResponse.wamid ? "pending" : "failed",
+    providerStatus: safeResponse.providerStatus,
+    responseStatus: response.status,
+    responseBody: safeResponse.storedBody,
+  });
+
+  if (!response.ok || !safeResponse.wamid) {
+    console.warn(
+      `Meta WhatsApp DEV test rejected for ${maskPhoneNumber(number)}; HTTP=${response.status}; record=${created.id}; durationMs=${Date.now() - startedAt}.`,
+    );
+    throw new MetaWhatsAppTestError("A Meta Cloud API nao aceitou a mensagem de teste.", 502, created.id);
+  }
+
+  console.log(
+    `Meta WhatsApp DEV test accepted for ${maskPhoneNumber(number)}; wamid=${safeResponse.wamid}; record=${created.id}; durationMs=${Date.now() - startedAt}.`,
+  );
+  return {
+    accepted: true as const,
+    recordId: created.id,
+    wamid: safeResponse.wamid,
+    status: created.status,
+    providerStatus: created.providerStatus,
+    responseStatus: created.responseStatus,
+    recipient: maskPhoneNumber(number),
+    template: config.testTemplate,
+    language: config.testTemplateLanguage,
+    createdAt: created.createdAt,
+  };
 }
 
 function safeStringify(value: unknown) {
@@ -280,6 +480,13 @@ async function sendWhatsAppText(
 
   if (provider === "twilio") {
     return sendTwilioWhatsApp(phone, text, options);
+  }
+
+  if (provider === "meta") {
+    if (!isProduction) {
+      console.log("Automatic WhatsApp notification skipped; Meta is only enabled for the isolated DEV test.");
+    }
+    return false;
   }
 
   const config = getEvolutionConfig();

@@ -94,6 +94,7 @@ export const whatsappMessageStatuses = [
 export const whatsappMessageTypes = [
   "booking_confirmation",
   "booking_cancellation",
+  "provider_test",
 ] as const;
 
 export const locations = appPgTable("locations", {
