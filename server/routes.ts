@@ -10,8 +10,13 @@ import {
   sendBookingConfirmation,
 } from "./email";
 import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
-import { processRescheduleNotification } from "./reschedule-notifications";
 import { isDevelopmentDeployment } from "./runtime-environment";
+import {
+  isMetaWebhookEnabled,
+  recordMetaWebhookStatuses,
+  verifyMetaWebhookChallenge,
+  verifyMetaWebhookSignature,
+} from "./meta-webhook";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import session from "express-session";
@@ -1077,7 +1082,7 @@ async function sendBookingCreatedNotification(params: BookingCreatedNotification
     locationTimeZone: location?.timezone,
   });
 
-  return emailSent ? "email" : "none";
+  return emailSent.sent ? "email" : "none";
 }
 
 type BookingCancelledNotificationParams = {
@@ -1106,7 +1111,7 @@ async function sendBookingCancelledNotification(params: BookingCancelledNotifica
     locationTimeZone: location?.timezone,
   });
 
-  return emailSent ? "email" : "none";
+  return emailSent.sent ? "email" : "none";
 }
 
 async function getBarberWorkingPeriods(barberId: number, weekday: number, locationId?: number) {
@@ -1684,6 +1689,27 @@ export async function registerRoutes(
   };
 
   if (isDevelopmentDeployment) {
+    if (isMetaWebhookEnabled()) {
+      app.get("/api/webhooks/whatsapp/meta", (req, res) => {
+        const challenge = verifyMetaWebhookChallenge(req.query as Record<string, unknown>);
+        return challenge ? res.type("text/plain").status(200).send(challenge) : res.sendStatus(403);
+      });
+
+      app.post("/api/webhooks/whatsapp/meta", async (req, res) => {
+        const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from("");
+        if (!verifyMetaWebhookSignature(rawBody, req.header("x-hub-signature-256"))) return res.sendStatus(401);
+        try {
+          const result = await recordMetaWebhookStatuses(req.body);
+          return res.status(200).json({ received: true, ...result });
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "META_WEBHOOK_INVALID";
+          if (["META_WEBHOOK_ACCOUNT_MISMATCH", "META_WEBHOOK_PHONE_MISMATCH"].includes(code)) return res.sendStatus(403);
+          if (code === "META_WEBHOOK_PAYLOAD_INVALID") return res.sendStatus(400);
+          throw error;
+        }
+      });
+    }
+
     app.post("/api/admin/dev/whatsapp/meta/test", requireAdmin, async (req, res) => {
       const parsed = metaWhatsappTestInputSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -1755,6 +1781,32 @@ export async function registerRoutes(
         createdAt: event.createdAt,
         updatedAt: event.updatedAt,
       });
+    });
+
+    app.get("/api/admin/dev/notifications/appointment/:appointmentId", requireAdmin, async (req, res) => {
+      const appointmentId = Number(req.params.appointmentId);
+      if (!Number.isInteger(appointmentId) || appointmentId <= 0) return res.status(400).json({ message: "Identificador invalido." });
+      const events = await storage.getAppointmentNotificationEvents(appointmentId);
+      return res.json(events.map((event) => ({
+        id: event.id, appointmentId: event.appointmentId, eventType: event.eventType,
+        revision: event.eventRevision, eventKey: event.eventKey, provider: event.provider,
+        template: event.templateName, whatsappStatus: event.whatsappStatus, wamid: event.providerMessageId,
+        providerStatus: event.providerStatus, responseStatus: event.responseStatus, errorCode: event.errorCode,
+        emailStatus: event.emailStatus, emailProviderMessageId: event.emailProviderMessageId,
+        sentAt: event.sentAt, deliveredAt: event.deliveredAt, readAt: event.readAt,
+        failedAt: event.failedAt, createdAt: event.createdAt, updatedAt: event.updatedAt,
+      })));
+    });
+
+    app.get("/api/admin/dev/webhooks/meta/receipts/:wamid", requireAdmin, async (req, res) => {
+      const wamid = req.params.wamid.trim();
+      if (!wamid || wamid.length > 500) return res.status(400).json({ message: "wamid invalido." });
+      const receipts = await storage.getMetaWebhookReceipts(wamid);
+      return res.json(receipts.map((receipt) => ({
+        id: receipt.id, wamid: receipt.providerMessageId, status: receipt.status,
+        providerTimestamp: receipt.providerTimestamp, errorCode: receipt.errorCode,
+        notificationEventId: receipt.notificationEventId, createdAt: receipt.createdAt,
+      })));
     });
   }
 
@@ -2900,6 +2952,7 @@ export async function registerRoutes(
         durationMinutes: requestedDuration,
         depositRequired: false,
         depositReason: null,
+        notificationEventType: isDevelopmentDeployment ? "appointment_confirmation" : undefined,
       });
       await recordAuditLog(req, {
         actorType: "client",
@@ -2918,7 +2971,7 @@ export async function registerRoutes(
 
       const service = services.find(s => s.id === input.serviceId);
 
-      runNotificationJob("Booking confirmation", async () => {
+      if (!isDevelopmentDeployment) runNotificationJob("Booking confirmation", async () => {
         const barber = await storage.getBarber(finalBarberId);
 
         return sendBookingCreatedNotification({
@@ -3182,6 +3235,9 @@ export async function registerRoutes(
           cancelToken: randomUUID(),
           depositRequired: false,
           depositReason: null,
+          notificationEventType: isDevelopmentDeployment && isManualBooking && !isHistoricalManualBooking && (!isRecurring || appointments.length === 0)
+            ? "appointment_confirmation"
+            : undefined,
         });
       }
 
@@ -3211,7 +3267,7 @@ export async function registerRoutes(
         },
       });
 
-      if (isManualBooking && normalizedCustomerEmail && selectedService) {
+      if (!isDevelopmentDeployment && isManualBooking && normalizedCustomerEmail && selectedService) {
         const appointmentsToNotify = isRecurring
           ? createdAppointments.slice(0, 1)
           : createdAppointments;
@@ -3399,6 +3455,9 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Estado de marcação inválido." });
         }
         Object.assign(updateData, getStatusPatch(status));
+      }
+      if (isDevelopmentDeployment && Object.keys(updateData).length > 0) {
+        updateData.notificationRevision = currentApp.notificationRevision + 1;
       }
 
       const updated = await storage.updateAppointment(appointmentId, updateData);
@@ -3610,32 +3669,6 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Esta marcação já não pode ser reagendada." });
       }
 
-      if (result) runNotificationJob("Booking reschedule", async () => {
-        const [barber, service, currentLocation] = await Promise.all([
-          storage.getBarber(updated.barberId),
-          updated.serviceId ? storage.getService(updated.serviceId) : Promise.resolve(undefined),
-          getLocation(updated.locationId, true),
-        ]);
-
-        return processRescheduleNotification({
-          eventId: result.notificationEvent.id,
-          appointmentId: updated.id,
-          eventRevision: updated.rescheduleRevision,
-          customerName: updated.customerName,
-          customerEmail: updated.customerEmail,
-          customerPhone: updated.customerPhone,
-          whatsappOptIn: updated.whatsappOptIn,
-          barberName: barber?.name || "Barbeiro indisponível",
-          serviceName: service?.name || "Serviço indisponível",
-          startTime: toDate(updated.startTime),
-          cancelToken: updated.cancelToken,
-          durationMinutes: updated.durationMinutes,
-          locationName: currentLocation?.name || process.env.SHOP_NAME || "Barbearia",
-          locationAddress: currentLocation?.address || process.env.SHOP_ADDRESS || "",
-          locationTimeZone: currentLocation?.timezone || SHOP_TIME_ZONE,
-        });
-      });
-
       res.json({
         ...updated,
         ...(result ? { notificationEventId: result.notificationEvent.id } : {}),
@@ -3670,7 +3703,12 @@ export async function registerRoutes(
 
     const lateCancellation = isLateCancellation(appointment.startTime);
     const status = lateCancellation ? "late_cancelled" : "cancelled";
-    const cancelledAppointment = await storage.updateAppointmentStatusIfCurrent(appointment.id, "booked", status);
+    const cancellationResult = isDevelopmentDeployment
+      ? await storage.cancelAppointment(appointment.id, "booked", status)
+      : null;
+    const cancelledAppointment = isDevelopmentDeployment
+      ? cancellationResult?.appointment
+      : await storage.updateAppointmentStatusIfCurrent(appointment.id, "booked", status);
     if (!cancelledAppointment) {
       const latestAppointment = await storage.getAppointment(appointment.id);
       if (latestAppointment?.status === "cancelled" || latestAppointment?.status === "late_cancelled") {
@@ -3685,7 +3723,7 @@ export async function registerRoutes(
       return res.status(409).json({ message: "Esta marcação já não pode ser cancelada." });
     }
 
-    runNotificationJob("Booking cancellation", async () => {
+    if (!isDevelopmentDeployment) runNotificationJob("Booking cancellation", async () => {
       const [barber, service] = await Promise.all([
         storage.getBarber(appointment.barberId),
         appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
@@ -3709,6 +3747,7 @@ export async function registerRoutes(
       status,
       lateCancellation,
       policyHours: CANCELLATION_POLICY_HOURS,
+      ...(cancellationResult ? { notificationEventId: cancellationResult.notificationEvent.id } : {}),
     });
   });
 
@@ -3992,7 +4031,10 @@ export async function registerRoutes(
 
         if (input.cancelFutureAppointments === true && futureAppointments.length > 0) {
           for (const appointment of futureAppointments) {
-            const updated = await storage.updateAppointment(appointment.id, getStatusPatch("cancelled"));
+            const updated = await storage.updateAppointment(appointment.id, {
+              ...getStatusPatch("cancelled"),
+              ...(isDevelopmentDeployment ? { notificationRevision: appointment.notificationRevision + 1 } : {}),
+            });
             if (updated) cancelledAppointments.push(updated);
           }
         }

@@ -468,7 +468,7 @@ export async function ensureWhatsappMessagesTable() {
   `);
 }
 
-export async function ensureRescheduleNotificationFoundation() {
+export async function ensureAppointmentNotificationFoundation() {
   if (useMemoryStorage) return;
 
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
@@ -478,6 +478,7 @@ export async function ensureRescheduleNotificationFoundation() {
   await pool.query(`
     ALTER TABLE ${qualifiedAppointmentsTable}
       ADD COLUMN IF NOT EXISTS reschedule_revision integer NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS notification_revision integer NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS whatsapp_opt_in boolean NOT NULL DEFAULT false,
       ADD COLUMN IF NOT EXISTS whatsapp_opt_in_at timestamp
   `);
@@ -489,8 +490,9 @@ export async function ensureRescheduleNotificationFoundation() {
       event_type text NOT NULL,
       event_revision integer NOT NULL,
       event_key text NOT NULL,
-      previous_start_time timestamp NOT NULL,
-      new_start_time timestamp NOT NULL,
+      appointment_start_time timestamp,
+      previous_start_time timestamp,
+      new_start_time timestamp,
       provider text,
       template_name text,
       whatsapp_status text NOT NULL DEFAULT 'pending',
@@ -499,8 +501,15 @@ export async function ensureRescheduleNotificationFoundation() {
       response_status integer,
       error_code text,
       processing_started_at timestamp,
+      processing_completed_at timestamp,
       whatsapp_attempted_at timestamp,
       whatsapp_accepted_at timestamp,
+      sent_at timestamp,
+      delivered_at timestamp,
+      read_at timestamp,
+      failed_at timestamp,
+      last_provider_timestamp timestamp,
+      webhook_fallback_claimed_at timestamp,
       email_status text NOT NULL DEFAULT 'not_needed',
       email_provider_message_id text,
       email_error_code text,
@@ -512,6 +521,34 @@ export async function ensureRescheduleNotificationFoundation() {
   `);
 
   await pool.query(`
+    ALTER TABLE ${qualifiedEventsTable}
+      ADD COLUMN IF NOT EXISTS appointment_start_time timestamp,
+      ADD COLUMN IF NOT EXISTS processing_completed_at timestamp,
+      ADD COLUMN IF NOT EXISTS sent_at timestamp,
+      ADD COLUMN IF NOT EXISTS delivered_at timestamp,
+      ADD COLUMN IF NOT EXISTS read_at timestamp,
+      ADD COLUMN IF NOT EXISTS failed_at timestamp,
+      ADD COLUMN IF NOT EXISTS last_provider_timestamp timestamp,
+      ADD COLUMN IF NOT EXISTS webhook_fallback_claimed_at timestamp
+  `);
+  await pool.query(`
+    UPDATE ${qualifiedEventsTable}
+    SET appointment_start_time = COALESCE(appointment_start_time, new_start_time, previous_start_time)
+    WHERE appointment_start_time IS NULL
+  `);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN appointment_start_time SET NOT NULL`);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN previous_start_time DROP NOT NULL`);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN new_start_time DROP NOT NULL`);
+  await pool.query(`
+    UPDATE ${qualifiedAppointmentsTable} a
+    SET notification_revision = GREATEST(
+      a.notification_revision,
+      a.reschedule_revision,
+      COALESCE((SELECT MAX(e.event_revision) FROM ${qualifiedEventsTable} e WHERE e.appointment_id = a.id), 0)
+    )
+  `);
+
+  await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_event_key_idx
     ON ${qualifiedEventsTable} (event_key)
   `);
@@ -519,5 +556,26 @@ export async function ensureRescheduleNotificationFoundation() {
     CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_provider_message_id_idx
     ON ${qualifiedEventsTable} (provider_message_id)
     WHERE provider_message_id IS NOT NULL
+  `);
+
+  const qualifiedReceiptsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("meta_webhook_receipts")}`;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedReceiptsTable} (
+      id serial PRIMARY KEY,
+      receipt_key text NOT NULL,
+      provider_message_id text NOT NULL,
+      status text NOT NULL,
+      provider_timestamp timestamp,
+      error_code text,
+      waba_id text NOT NULL,
+      phone_number_id text NOT NULL,
+      notification_event_id integer REFERENCES ${qualifiedEventsTable}(id) ON DELETE SET NULL,
+      payload_summary text,
+      created_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS meta_webhook_receipts_receipt_key_idx
+    ON ${qualifiedReceiptsTable} (receipt_key)
   `);
 }

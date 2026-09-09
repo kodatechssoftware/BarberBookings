@@ -20,7 +20,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    env: { MULTI_LOCATION_ENABLED: "false", DEMO_MODE: "false", RESEND_API_KEY: "", RESEND_FROM_EMAIL: "", WHATSAPP_NOTIFICATIONS_ENABLED: "false", MESSAGING_PROVIDER: "none" },
+    env: { MULTI_LOCATION_ENABLED: "false", DEMO_MODE: "false", RESEND_API_KEY: "", RESEND_FROM_EMAIL: "", WHATSAPP_NOTIFICATIONS_ENABLED: "false", MESSAGING_PROVIDER: "none", META_WHATSAPP_WEBHOOK_ENABLED: "true", META_WHATSAPP_WEBHOOK_VERIFY_TOKEN: "playwright-verify-token", META_WHATSAPP_APP_SECRET: "playwright-app-secret", META_WHATSAPP_WABA_ID: "playwright-waba", META_WHATSAPP_PHONE_NUMBER_ID: "playwright-phone" },
     command: `npx cross-env TZ=UTC NODE_ENV=development USE_MEMORY_STORAGE=true PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED=false PORT=${port} SESSION_SECRET=playwright-test ADMIN_INITIAL_PASSWORD=Playwright-Test-Admin-2026! tsx server/index.ts`,
     url: `${baseURL}/health`,
     reuseExistingServer: false,

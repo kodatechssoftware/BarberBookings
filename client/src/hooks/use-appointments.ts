@@ -23,6 +23,7 @@ export type AppointmentRecord = {
   depositRequired: boolean;
   depositReason: string | null;
   rescheduleRevision: number;
+  notificationRevision: number;
   whatsappOptIn: boolean;
   whatsappOptInAt: string | null;
   notificationEventId?: number;

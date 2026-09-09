@@ -24,6 +24,7 @@ interface SendConfirmationParams {
   locationName?: string;
   locationAddress?: string;
   locationTimeZone?: string;
+  idempotencyKey?: string;
 }
 
 interface SendCancellationParams {
@@ -33,9 +34,11 @@ interface SendCancellationParams {
   serviceName: string;
   startTime: Date;
   lateCancellation?: boolean;
+  includeLateCancellationNotice?: boolean;
   cancellationPolicyHours?: number;
   locationName?: string;
   locationTimeZone?: string;
+  idempotencyKey?: string;
 }
 
 interface SendRescheduleParams {
@@ -144,10 +147,11 @@ export async function sendBookingConfirmation({
   locationName = shopName,
   locationAddress = shopAddress,
   locationTimeZone = shopTimeZone,
-}: SendConfirmationParams) {
+  idempotencyKey,
+}: SendConfirmationParams): Promise<EmailDeliveryResult> {
   if (!resend) {
     console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking confirmation email was skipped.");
-    return false;
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
   }
 
   const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
@@ -184,21 +188,21 @@ export async function sendBookingConfirmation({
           </p>
         </div>
       `,
-    });
+    }, idempotencyKey ? { idempotencyKey } : undefined);
 
     if (response.error) {
-      console.error("Resend error while sending booking confirmation:", response.error);
-      return false;
+      console.error("Resend error while sending booking confirmation:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
     }
 
     if (!isProduction) {
       console.log("Booking confirmation email sent.");
     }
 
-    return true;
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
   } catch (error) {
-    console.error("Error sending confirmation email:", error);
-    return false;
+    console.error("Error sending confirmation email:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
   }
 }
 
@@ -271,13 +275,15 @@ export async function sendBookingCancellationConfirmation({
   customerEmail,
   startTime,
   lateCancellation = false,
+  includeLateCancellationNotice = true,
   cancellationPolicyHours = 4,
   locationName = shopName,
   locationTimeZone = shopTimeZone,
-}: SendCancellationParams) {
+  idempotencyKey,
+}: SendCancellationParams): Promise<EmailDeliveryResult> {
   if (!resend) {
     console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking cancellation email was skipped.");
-    return false;
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
   }
 
   const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
@@ -297,7 +303,7 @@ export async function sendBookingCancellationConfirmation({
             <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
           </div>
           ${
-            lateCancellation
+            includeLateCancellationNotice && lateCancellation
               ? `<p style="font-size: 0.92em; color: #b45309;">Este cancelamento foi registado como tardio por estar a menos de ${cancellationPolicyHours} horas da marcação.</p>`
               : ""
           }
@@ -305,20 +311,20 @@ export async function sendBookingCancellationConfirmation({
           <p>Obrigado,<br />${escapeHtml(locationName)}</p>
         </div>
       `,
-    });
+    }, idempotencyKey ? { idempotencyKey } : undefined);
 
     if (response.error) {
-      console.error("Resend error while sending booking cancellation:", response.error);
-      return false;
+      console.error("Resend error while sending booking cancellation:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
     }
 
     if (!isProduction) {
       console.log("Booking cancellation email sent.");
     }
 
-    return true;
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
   } catch (error) {
-    console.error("Error sending cancellation email:", error);
-    return false;
+    console.error("Error sending cancellation email:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
   }
 }

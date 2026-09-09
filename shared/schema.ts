@@ -24,6 +24,7 @@ export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compen
 export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
 export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
+export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 
 function idColumn(sequenceName: string) {
@@ -154,6 +155,7 @@ export const appointments = appPgTable("appointments", {
   depositRequired: boolean("deposit_required").default(false).notNull(),
   depositReason: text("deposit_reason"),
   rescheduleRevision: integer("reschedule_revision").default(0).notNull(),
+  notificationRevision: integer("notification_revision").default(0).notNull(),
   whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
   whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -309,8 +311,9 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   eventType: text("event_type").notNull(),
   eventRevision: integer("event_revision").notNull(),
   eventKey: text("event_key").notNull(),
-  previousStartTime: timestamp("previous_start_time").notNull(),
-  newStartTime: timestamp("new_start_time").notNull(),
+  appointmentStartTime: timestamp("appointment_start_time").notNull(),
+  previousStartTime: timestamp("previous_start_time"),
+  newStartTime: timestamp("new_start_time"),
   provider: text("provider"),
   templateName: text("template_name"),
   whatsappStatus: text("whatsapp_status").default("pending").notNull(),
@@ -319,8 +322,15 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   responseStatus: integer("response_status"),
   errorCode: text("error_code"),
   processingStartedAt: timestamp("processing_started_at"),
+  processingCompletedAt: timestamp("processing_completed_at"),
   whatsappAttemptedAt: timestamp("whatsapp_attempted_at"),
   whatsappAcceptedAt: timestamp("whatsapp_accepted_at"),
+  sentAt: timestamp("sent_at"),
+  deliveredAt: timestamp("delivered_at"),
+  readAt: timestamp("read_at"),
+  failedAt: timestamp("failed_at"),
+  lastProviderTimestamp: timestamp("last_provider_timestamp"),
+  webhookFallbackClaimedAt: timestamp("webhook_fallback_claimed_at"),
   emailStatus: text("email_status").default("not_needed").notNull(),
   emailProviderMessageId: text("email_provider_message_id"),
   emailErrorCode: text("email_error_code"),
@@ -331,6 +341,22 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
 }, (table) => ({
   eventKeyIdx: uniqueIndex("appointment_notification_events_event_key_idx").on(table.eventKey),
   providerMessageIdIdx: uniqueIndex("appointment_notification_events_provider_message_id_idx").on(table.providerMessageId),
+}));
+
+export const metaWebhookReceipts = appPgTable("meta_webhook_receipts", {
+  id: idColumn("meta_webhook_receipts_id_seq"),
+  receiptKey: text("receipt_key").notNull(),
+  providerMessageId: text("provider_message_id").notNull(),
+  status: text("status").notNull(),
+  providerTimestamp: timestamp("provider_timestamp"),
+  errorCode: text("error_code"),
+  wabaId: text("waba_id").notNull(),
+  phoneNumberId: text("phone_number_id").notNull(),
+  notificationEventId: integer("notification_event_id").references(() => appointmentNotificationEvents.id, { onDelete: "set null" }),
+  payloadSummary: text("payload_summary"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  receiptKeyIdx: uniqueIndex("meta_webhook_receipts_receipt_key_idx").on(table.receiptKey),
 }));
 
 // === RELATIONS ===
@@ -406,6 +432,7 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   depositRequired: true,
   depositReason: true,
   rescheduleRevision: true,
+  notificationRevision: true,
   whatsappOptInAt: true,
 }).extend({
   customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome não pode ter mais de 80 caracteres."),
@@ -463,6 +490,7 @@ export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect
 export type BusinessExpense = typeof businessExpenses.$inferSelect;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type AppointmentNotificationEvent = typeof appointmentNotificationEvents.$inferSelect;
+export type MetaWebhookReceipt = typeof metaWebhookReceipts.$inferSelect;
 export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
 export type BusinessExpenseCategory = typeof businessExpenseCategories[number];

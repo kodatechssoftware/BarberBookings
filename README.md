@@ -100,8 +100,12 @@ META_WHATSAPP_WABA_ID=
 META_WHATSAPP_ACCESS_TOKEN=
 META_WHATSAPP_TEST_TEMPLATE=hello_world
 META_WHATSAPP_TEST_TEMPLATE_LANGUAGE=en_US
+META_WHATSAPP_CONFIRMATION_TEMPLATE=appointment_confirmation_v1
+META_WHATSAPP_CONFIRMATION_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_RESCHEDULED_TEMPLATE=appointment_rescheduled_v1
 META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE=pt_PT
+META_WHATSAPP_CANCELLED_TEMPLATE=appointment_cancelled_v1
+META_WHATSAPP_CANCELLED_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_DEV_ALLOWLIST=3519XXXXXXXX
 ```
 
@@ -146,22 +150,37 @@ No fim do teste, volta a colocar `WHATSAPP_NOTIFICATIONS_ENABLED=false`. A Evolu
 disponivel no codigo, mas so pode ser selecionada explicitamente com
 `MESSAGING_PROVIDER=evolution`; o email permanece independente.
 
-### Notificacao de reagendamento em Development
+### Notificacoes de marcacao em Development
 
-Em Development, cada reagendamento concluido cria um evento persistente e tenta o template Meta
-`appointment_rescheduled_v1` quando a marcacao tem opt-in WhatsApp. A allowlist continua
-obrigatoria. Se a Meta nao aceitar a mensagem, o backend tenta uma unica vez o email de fallback;
-um `wamid` aceite impede esse email. Falhas de ambos os canais nao revertem o reagendamento.
+Em Development, confirmacoes publicas/manuais, reagendamentos e cancelamentos publicos criam um
+evento transacional persistente. Com opt-in, Meta e o canal principal; sem aceitacao/`wamid`, o
+backend tenta uma unica vez o email. Marcacoes manuais sem opt-in continuam por email. Um worker
+com lease recupera eventos pendentes apos restart sem repetir tentativas WhatsApp ambiguas.
 
 A resposta do reagendamento inclui `notificationEventId`. Depois de autenticar como admin, o
 resultado seguro pode ser consultado em:
 
 ```text
-GET /api/admin/dev/notifications/reschedule/:notificationEventId
+GET /api/admin/dev/notifications/appointment/:appointmentId
 ```
 
-Este endpoint, a criacao do outbox e o envio automatico de reagendamento ficam desativados quando
+Este endpoint, a criacao do outbox e os envios automaticos ficam desativados quando
 o deployment nao for reconhecido como Development.
+
+### Webhook Meta em modo de observacao
+
+O webhook fica desligado por defeito. Para o ativar apenas em DEV, definir no gestor de secrets:
+
+```env
+META_WHATSAPP_WEBHOOK_ENABLED=true
+META_WHATSAPP_WEBHOOK_VERIFY_TOKEN=
+META_WHATSAPP_APP_SECRET=
+NOTIFICATION_OUTBOX_POLL_INTERVAL_MS=5000
+```
+
+Callback: `https://barberbookings-dev.onrender.com/api/webhooks/whatsapp/meta`. O GET valida o
+verify token e o POST valida `X-Hub-Signature-256` sobre o raw body. Estados `sent`, `delivered`,
+`read` e `failed` sao persistidos; nesta fase um `failed` por webhook nao envia email tardio.
 
 ## Mensagens automaticas
 

@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import { isDevelopmentDeployment } from "./runtime-environment";
+import { startAppointmentNotificationWorker } from "./appointment-notifications";
 import {
   ensureAppointmentOverlapProtection,
   ensureAppointmentPaymentMethodColumn,
@@ -13,7 +14,7 @@ import {
   ensureMultiLocationFoundation,
   ensureServiceAgendaLabelColumn,
   ensureWhatsappMessagesTable,
-  ensureRescheduleNotificationFoundation,
+  ensureAppointmentNotificationFoundation,
   pool,
   repairKnownTextEncodingArtifacts,
 } from "./db";
@@ -187,13 +188,14 @@ app.use((req, res, next) => {
   await ensureAppointmentOverlapProtection();
   if (isDevelopmentDeployment) {
     await ensureWhatsappMessagesTable();
-    await ensureRescheduleNotificationFoundation();
+    await ensureAppointmentNotificationFoundation();
   }
   const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
   if (repairedEncodingRows > 0) {
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
   }
   const server = await registerRoutes(app, httpServer);
+  if (isDevelopmentDeployment) startAppointmentNotificationWorker();
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) {

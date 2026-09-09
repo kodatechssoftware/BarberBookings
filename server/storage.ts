@@ -16,6 +16,7 @@ import {
   businessExpenses,
   whatsappMessages,
   appointmentNotificationEvents,
+  metaWebhookReceipts,
   type Barber,
   type Service,
   type Appointment,
@@ -33,6 +34,7 @@ import {
   type BusinessExpense,
   type WhatsappMessage,
   type AppointmentNotificationEvent,
+  type MetaWebhookReceipt,
   type WhatsappMessageStatus,
   type CreateBarberRequest,
   type CreateServiceRequest,
@@ -53,6 +55,11 @@ import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
 
+export type AppointmentNotificationEventType =
+  | "appointment_confirmation"
+  | "appointment_rescheduled"
+  | "appointment_cancelled";
+
 type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappOptIn"> & {
   whatsappOptIn?: boolean;
   locationId?: number;
@@ -63,12 +70,17 @@ type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappO
   depositRequired?: boolean;
   depositReason?: string | null;
   whatsappOptInAt?: Date | null;
+  notificationEventType?: "appointment_confirmation";
 };
 
 export type RescheduleAppointmentResult = {
   appointment: Appointment;
   notificationEvent: AppointmentNotificationEvent;
 };
+
+export type CancelAppointmentResult = RescheduleAppointmentResult;
+
+export type CreateMetaWebhookReceiptRequest = Omit<MetaWebhookReceipt, "id" | "createdAt">;
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const appointmentConflictCode = "APPOINTMENT_CONFLICT";
@@ -199,6 +211,11 @@ export interface IStorage {
     expectedRevision: number,
     startTime: Date,
   ): Promise<RescheduleAppointmentResult | undefined>;
+  cancelAppointment(
+    id: number,
+    expectedStatus: "booked",
+    status: "cancelled" | "late_cancelled",
+  ): Promise<CancelAppointmentResult | undefined>;
   updateAppointmentStatus(
     id: number,
     status: AppointmentStatus,
@@ -275,11 +292,17 @@ export interface IStorage {
 
   // Transactional notification outbox
   getAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
+  getAppointmentNotificationEvents(appointmentId: number): Promise<AppointmentNotificationEvent[]>;
+  getAppointmentNotificationEventByProviderId(providerMessageId: string): Promise<AppointmentNotificationEvent | undefined>;
   claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
+  claimNextAppointmentNotificationEvent(leaseBefore: Date): Promise<AppointmentNotificationEvent | undefined>;
   updateAppointmentNotificationEvent(
     id: number,
     patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
   ): Promise<AppointmentNotificationEvent | undefined>;
+  createMetaWebhookReceipt(receipt: CreateMetaWebhookReceiptRequest): Promise<{ receipt: MetaWebhookReceipt; created: boolean }>;
+  getMetaWebhookReceipts(providerMessageId: string): Promise<MetaWebhookReceipt[]>;
+  reconcileMetaWebhookReceipts(providerMessageId: string, eventId: number): Promise<void>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -526,12 +549,25 @@ export class DatabaseStorage implements IStorage {
         const createdAppointments: Appointment[] = [];
         for (const appointment of appointmentInputs) {
           await this.assertNoAppointmentConflict(tx, appointment);
+          const { notificationEventType, ...appointmentValues } = appointment;
+          const notificationRevision = notificationEventType ? 1 : 0;
           const [newAppointment] = await tx.insert(appointments).values({
-            ...appointment,
+            ...appointmentValues,
+            notificationRevision,
             whatsappOptInAt: appointment.whatsappOptIn
               ? appointment.whatsappOptInAt ?? new Date()
               : null,
           }).returning();
+          if (notificationEventType) {
+            await tx.insert(appointmentNotificationEvents).values({
+              appointmentId: newAppointment.id,
+              eventType: notificationEventType,
+              eventRevision: notificationRevision,
+              eventKey: `appointment:${newAppointment.id}:confirmation:${notificationRevision}`,
+              appointmentStartTime: toAppointmentDate(newAppointment.startTime),
+              newStartTime: toAppointmentDate(newAppointment.startTime),
+            });
+          }
           createdAppointments.push(newAppointment);
         }
 
@@ -607,7 +643,9 @@ export class DatabaseStorage implements IStorage {
     }
     updateData.paymentMethod = status === "completed" ? (paymentMethod || "pending") : "pending";
 
-    return this.updateAppointment(id, updateData);
+    const current = await this.getAppointment(id);
+    if (!current) return undefined;
+    return this.updateAppointment(id, { ...updateData, notificationRevision: current.notificationRevision + 1 });
   }
 
   async updateAppointmentStatusIfCurrent(
@@ -631,7 +669,7 @@ export class DatabaseStorage implements IStorage {
 
     const [updated] = await db
       .update(appointments)
-      .set(updateData)
+      .set({ ...updateData, notificationRevision: sql`${appointments.notificationRevision} + 1` })
       .where(and(eq(appointments.id, id), eq(appointments.status, currentStatus)))
       .returning();
     return updated;
@@ -671,10 +709,11 @@ export class DatabaseStorage implements IStorage {
         await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
         await this.assertNoAppointmentConflict(tx, candidate, id);
 
-        const nextRevision = current.rescheduleRevision + 1;
+        const nextRescheduleRevision = current.rescheduleRevision + 1;
+        const nextRevision = current.notificationRevision + 1;
         const [updated] = await tx
           .update(appointments)
-          .set({ startTime, rescheduleRevision: nextRevision })
+          .set({ startTime, rescheduleRevision: nextRescheduleRevision, notificationRevision: nextRevision })
           .where(and(
             eq(appointments.id, id),
             eq(appointments.status, "booked"),
@@ -691,6 +730,7 @@ export class DatabaseStorage implements IStorage {
             eventType: "appointment_rescheduled",
             eventRevision: nextRevision,
             eventKey,
+            appointmentStartTime: startTime,
             previousStartTime: toAppointmentDate(current.startTime),
             newStartTime: startTime,
           })
@@ -702,6 +742,40 @@ export class DatabaseStorage implements IStorage {
       if (isAppointmentConflictError(error)) throw new AppointmentConflictError();
       throw error;
     }
+  }
+
+  async cancelAppointment(
+    id: number,
+    expectedStatus: "booked",
+    status: "cancelled" | "late_cancelled",
+  ): Promise<CancelAppointmentResult | undefined> {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(-2, ${id})`);
+      const [current] = await tx.select().from(appointments).where(and(
+        eq(appointments.id, id),
+        eq(appointments.status, expectedStatus),
+      )).limit(1);
+      if (!current) return undefined;
+
+      const nextRevision = current.notificationRevision + 1;
+      const [updated] = await tx.update(appointments).set({
+        status,
+        cancelledAt: new Date(),
+        paymentMethod: "pending",
+        notificationRevision: nextRevision,
+      }).where(and(eq(appointments.id, id), eq(appointments.status, expectedStatus))).returning();
+      if (!updated) return undefined;
+
+      const [notificationEvent] = await tx.insert(appointmentNotificationEvents).values({
+        appointmentId: id,
+        eventType: "appointment_cancelled",
+        eventRevision: nextRevision,
+        eventKey: `appointment:${id}:cancelled:${nextRevision}`,
+        appointmentStartTime: toAppointmentDate(current.startTime),
+        previousStartTime: toAppointmentDate(current.startTime),
+      }).returning();
+      return { appointment: updated, notificationEvent };
+    });
   }
 
   async updateAdminPassword(id: number, password: string): Promise<void> {
@@ -1026,6 +1100,18 @@ export class DatabaseStorage implements IStorage {
     return event;
   }
 
+  async getAppointmentNotificationEvents(appointmentId: number): Promise<AppointmentNotificationEvent[]> {
+    return db.select().from(appointmentNotificationEvents)
+      .where(eq(appointmentNotificationEvents.appointmentId, appointmentId))
+      .orderBy(appointmentNotificationEvents.eventRevision, appointmentNotificationEvents.id);
+  }
+
+  async getAppointmentNotificationEventByProviderId(providerMessageId: string): Promise<AppointmentNotificationEvent | undefined> {
+    const [event] = await db.select().from(appointmentNotificationEvents)
+      .where(eq(appointmentNotificationEvents.providerMessageId, providerMessageId)).limit(1);
+    return event;
+  }
+
   async claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
     const [event] = await db
       .update(appointmentNotificationEvents)
@@ -1038,6 +1124,25 @@ export class DatabaseStorage implements IStorage {
     return event;
   }
 
+  async claimNextAppointmentNotificationEvent(leaseBefore: Date): Promise<AppointmentNotificationEvent | undefined> {
+    return db.transaction(async (tx) => {
+      const candidates = await tx.execute(sql`
+        SELECT id FROM ${appointmentNotificationEvents}
+        WHERE processing_completed_at IS NULL
+          AND (processing_started_at IS NULL OR processing_started_at < ${leaseBefore})
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      `);
+      const row = candidates.rows[0] as { id?: number } | undefined;
+      if (!row?.id) return undefined;
+      const [event] = await tx.update(appointmentNotificationEvents)
+        .set({ processingStartedAt: new Date(), updatedAt: new Date() })
+        .where(eq(appointmentNotificationEvents.id, Number(row.id))).returning();
+      return event;
+    });
+  }
+
   async updateAppointmentNotificationEvent(
     id: number,
     patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
@@ -1048,6 +1153,29 @@ export class DatabaseStorage implements IStorage {
       .where(eq(appointmentNotificationEvents.id, id))
       .returning();
     return event;
+  }
+
+  async createMetaWebhookReceipt(receipt: CreateMetaWebhookReceiptRequest): Promise<{ receipt: MetaWebhookReceipt; created: boolean }> {
+    const [created] = await db.insert(metaWebhookReceipts).values(receipt)
+      .onConflictDoNothing({ target: metaWebhookReceipts.receiptKey }).returning();
+    if (created) return { receipt: created, created: true };
+    const [existing] = await db.select().from(metaWebhookReceipts)
+      .where(eq(metaWebhookReceipts.receiptKey, receipt.receiptKey)).limit(1);
+    return { receipt: existing, created: false };
+  }
+
+  async getMetaWebhookReceipts(providerMessageId: string): Promise<MetaWebhookReceipt[]> {
+    return db.select().from(metaWebhookReceipts)
+      .where(eq(metaWebhookReceipts.providerMessageId, providerMessageId))
+      .orderBy(metaWebhookReceipts.providerTimestamp, metaWebhookReceipts.id);
+  }
+
+  async reconcileMetaWebhookReceipts(providerMessageId: string, eventId: number): Promise<void> {
+    await db.update(metaWebhookReceipts).set({ notificationEventId: eventId })
+      .where(and(
+        eq(metaWebhookReceipts.providerMessageId, providerMessageId),
+        isNull(metaWebhookReceipts.notificationEventId),
+      ));
   }
 
   async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {
@@ -1138,6 +1266,7 @@ export class MemoryStorage implements IStorage {
   private businessExpenses: BusinessExpense[] = [];
   private whatsappMessages: WhatsappMessage[] = [];
   private appointmentNotificationEvents: AppointmentNotificationEvent[] = [];
+  private metaWebhookReceipts: MetaWebhookReceipt[] = [];
   private verificationCodes: VerificationCodeRecord[] = [];
 
   private nextIds = {
@@ -1156,6 +1285,7 @@ export class MemoryStorage implements IStorage {
     businessExpense: 1,
     whatsappMessage: 1,
     appointmentNotificationEvent: 1,
+    metaWebhookReceipt: 1,
   };
 
   private assertNoAppointmentConflict(
@@ -1357,10 +1487,13 @@ export class MemoryStorage implements IStorage {
 
     const originalLength = this.appointments.length;
     const originalNextId = this.nextIds.appointment;
+    const originalEventLength = this.appointmentNotificationEvents.length;
+    const originalNextEventId = this.nextIds.appointmentNotificationEvent;
     const createdAppointments: Appointment[] = [];
 
     try {
       for (const appointment of appointmentInputs) {
+        const notificationRevision = appointment.notificationEventType ? 1 : 0;
         const newAppointment: Appointment = {
           id: this.nextIds.appointment++,
           locationId: appointment.locationId ?? 1,
@@ -1378,6 +1511,7 @@ export class MemoryStorage implements IStorage {
           depositRequired: appointment.depositRequired ?? false,
           depositReason: appointment.depositReason ?? null,
           rescheduleRevision: 0,
+          notificationRevision,
           whatsappOptIn: appointment.whatsappOptIn ?? false,
           whatsappOptInAt: appointment.whatsappOptIn
             ? appointment.whatsappOptInAt ?? new Date()
@@ -1386,12 +1520,34 @@ export class MemoryStorage implements IStorage {
         };
         this.assertNoAppointmentConflict(newAppointment);
         this.appointments.push(newAppointment);
+        if (appointment.notificationEventType) {
+          const now = new Date();
+          this.appointmentNotificationEvents.push({
+            id: this.nextIds.appointmentNotificationEvent++,
+            appointmentId: newAppointment.id,
+            eventType: appointment.notificationEventType,
+            eventRevision: notificationRevision,
+            eventKey: `appointment:${newAppointment.id}:confirmation:${notificationRevision}`,
+            appointmentStartTime: toAppointmentDate(newAppointment.startTime),
+            previousStartTime: null,
+            newStartTime: toAppointmentDate(newAppointment.startTime),
+            provider: null, templateName: null, whatsappStatus: "pending",
+            providerMessageId: null, providerStatus: null, responseStatus: null, errorCode: null,
+            processingStartedAt: null, processingCompletedAt: null, whatsappAttemptedAt: null, whatsappAcceptedAt: null,
+            sentAt: null, deliveredAt: null, readAt: null, failedAt: null,
+            lastProviderTimestamp: null, webhookFallbackClaimedAt: null,
+            emailStatus: "not_needed", emailProviderMessageId: null, emailErrorCode: null,
+            emailAttemptedAt: null, emailSentAt: null, createdAt: now, updatedAt: now,
+          });
+        }
         createdAppointments.push(newAppointment);
       }
       return createdAppointments;
     } catch (error) {
       this.appointments.splice(originalLength);
       this.nextIds.appointment = originalNextId;
+      this.appointmentNotificationEvents.splice(originalEventLength);
+      this.nextIds.appointmentNotificationEvent = originalNextEventId;
       throw error;
     }
   }
@@ -1424,6 +1580,7 @@ export class MemoryStorage implements IStorage {
       ...current,
       startTime,
       rescheduleRevision: current.rescheduleRevision + 1,
+      notificationRevision: current.notificationRevision + 1,
     };
     this.assertNoAppointmentConflict(updated, id);
     this.appointments[index] = updated;
@@ -1433,8 +1590,9 @@ export class MemoryStorage implements IStorage {
       id: this.nextIds.appointmentNotificationEvent++,
       appointmentId: id,
       eventType: "appointment_rescheduled",
-      eventRevision: updated.rescheduleRevision,
-      eventKey: `appointment:${id}:rescheduled:${updated.rescheduleRevision}`,
+      eventRevision: updated.notificationRevision,
+      eventKey: `appointment:${id}:rescheduled:${updated.notificationRevision}`,
+      appointmentStartTime: startTime,
       previousStartTime: toAppointmentDate(current.startTime),
       newStartTime: startTime,
       provider: null,
@@ -1445,8 +1603,15 @@ export class MemoryStorage implements IStorage {
       responseStatus: null,
       errorCode: null,
       processingStartedAt: null,
+      processingCompletedAt: null,
       whatsappAttemptedAt: null,
       whatsappAcceptedAt: null,
+      sentAt: null,
+      deliveredAt: null,
+      readAt: null,
+      failedAt: null,
+      lastProviderTimestamp: null,
+      webhookFallbackClaimedAt: null,
       emailStatus: "not_needed",
       emailProviderMessageId: null,
       emailErrorCode: null,
@@ -1454,6 +1619,38 @@ export class MemoryStorage implements IStorage {
       emailSentAt: null,
       createdAt: now,
       updatedAt: now,
+    };
+    this.appointmentNotificationEvents.push(notificationEvent);
+    return { appointment: updated, notificationEvent };
+  }
+
+  async cancelAppointment(
+    id: number,
+    expectedStatus: "booked",
+    status: "cancelled" | "late_cancelled",
+  ): Promise<CancelAppointmentResult | undefined> {
+    const index = this.appointments.findIndex((appointment) => appointment.id === id);
+    if (index === -1 || this.appointments[index].status !== expectedStatus) return undefined;
+    const current = this.appointments[index];
+    const now = new Date();
+    const revision = current.notificationRevision + 1;
+    const updated: Appointment = {
+      ...current, status, cancelledAt: now, paymentMethod: "pending", notificationRevision: revision,
+    };
+    this.appointments[index] = updated;
+    const notificationEvent: AppointmentNotificationEvent = {
+      id: this.nextIds.appointmentNotificationEvent++, appointmentId: id,
+      eventType: "appointment_cancelled", eventRevision: revision,
+      eventKey: `appointment:${id}:cancelled:${revision}`,
+      appointmentStartTime: toAppointmentDate(current.startTime),
+      previousStartTime: toAppointmentDate(current.startTime), newStartTime: null,
+      provider: null, templateName: null, whatsappStatus: "pending",
+      providerMessageId: null, providerStatus: null, responseStatus: null, errorCode: null,
+      processingStartedAt: null, processingCompletedAt: null, whatsappAttemptedAt: null, whatsappAcceptedAt: null,
+      sentAt: null, deliveredAt: null, readAt: null, failedAt: null,
+      lastProviderTimestamp: null, webhookFallbackClaimedAt: null,
+      emailStatus: "not_needed", emailProviderMessageId: null, emailErrorCode: null,
+      emailAttemptedAt: null, emailSentAt: null, createdAt: now, updatedAt: now,
     };
     this.appointmentNotificationEvents.push(notificationEvent);
     return { appointment: updated, notificationEvent };
@@ -1467,6 +1664,7 @@ export class MemoryStorage implements IStorage {
     const patch: Partial<Omit<Appointment, "id">> = {
       status,
       paymentMethod: status === "completed" ? (paymentMethod || "pending") : "pending",
+      notificationRevision: (this.appointments.find((appointment) => appointment.id === id)?.notificationRevision || 0) + 1,
     };
     if (status === "cancelled" || status === "late_cancelled") {
       patch.cancelledAt = new Date();
@@ -1832,6 +2030,15 @@ export class MemoryStorage implements IStorage {
     return this.appointmentNotificationEvents.find((event) => event.id === id);
   }
 
+  async getAppointmentNotificationEvents(appointmentId: number): Promise<AppointmentNotificationEvent[]> {
+    return this.appointmentNotificationEvents.filter((event) => event.appointmentId === appointmentId)
+      .sort((a, b) => a.eventRevision - b.eventRevision || a.id - b.id);
+  }
+
+  async getAppointmentNotificationEventByProviderId(providerMessageId: string): Promise<AppointmentNotificationEvent | undefined> {
+    return this.appointmentNotificationEvents.find((event) => event.providerMessageId === providerMessageId);
+  }
+
   async claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
     const index = this.appointmentNotificationEvents.findIndex((event) => event.id === id);
     if (index === -1 || this.appointmentNotificationEvents[index].processingStartedAt) return undefined;
@@ -1842,6 +2049,16 @@ export class MemoryStorage implements IStorage {
       updatedAt: now,
     };
     return this.appointmentNotificationEvents[index];
+  }
+
+  async claimNextAppointmentNotificationEvent(leaseBefore: Date): Promise<AppointmentNotificationEvent | undefined> {
+    const event = this.appointmentNotificationEvents.find((candidate) =>
+      !candidate.processingCompletedAt
+      && (!candidate.processingStartedAt || candidate.processingStartedAt < leaseBefore));
+    if (!event) return undefined;
+    event.processingStartedAt = new Date();
+    event.updatedAt = new Date();
+    return event;
   }
 
   async updateAppointmentNotificationEvent(
@@ -1856,6 +2073,29 @@ export class MemoryStorage implements IStorage {
       updatedAt: new Date(),
     };
     return this.appointmentNotificationEvents[index];
+  }
+
+  async createMetaWebhookReceipt(receipt: CreateMetaWebhookReceiptRequest): Promise<{ receipt: MetaWebhookReceipt; created: boolean }> {
+    const existing = this.metaWebhookReceipts.find((item) => item.receiptKey === receipt.receiptKey);
+    if (existing) return { receipt: existing, created: false };
+    const created: MetaWebhookReceipt = {
+      ...receipt, id: this.nextIds.metaWebhookReceipt++, notificationEventId: receipt.notificationEventId ?? null, createdAt: new Date(),
+    };
+    this.metaWebhookReceipts.push(created);
+    return { receipt: created, created: true };
+  }
+
+  async getMetaWebhookReceipts(providerMessageId: string): Promise<MetaWebhookReceipt[]> {
+    return this.metaWebhookReceipts.filter((receipt) => receipt.providerMessageId === providerMessageId)
+      .sort((a, b) => (a.providerTimestamp?.getTime() || 0) - (b.providerTimestamp?.getTime() || 0) || a.id - b.id);
+  }
+
+  async reconcileMetaWebhookReceipts(providerMessageId: string, eventId: number): Promise<void> {
+    for (const receipt of this.metaWebhookReceipts) {
+      if (receipt.providerMessageId === providerMessageId && receipt.notificationEventId === null) {
+        receipt.notificationEventId = eventId;
+      }
+    }
   }
 
   async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {

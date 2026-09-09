@@ -324,25 +324,43 @@ export type MetaTemplateDeliveryResult = {
   errorCode: string | null;
 };
 
-export type MetaRescheduleTemplateParams = {
+export type MetaAppointmentTemplateParams = {
   recipient: string;
+  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_cancelled";
   customerName: string;
   locationName: string;
   serviceName: string;
   barberName: string;
   date: string;
   time: string;
-  address: string;
-  managementToken: string;
+  address?: string;
+  managementToken?: string;
 };
 
-export async function sendMetaAppointmentRescheduled(
-  params: MetaRescheduleTemplateParams,
+const metaTemplateConfig = {
+  appointment_confirmation: {
+    nameEnv: "META_WHATSAPP_CONFIRMATION_TEMPLATE",
+    languageEnv: "META_WHATSAPP_CONFIRMATION_TEMPLATE_LANGUAGE",
+    defaultName: "appointment_confirmation_v1",
+  },
+  appointment_rescheduled: {
+    nameEnv: "META_WHATSAPP_RESCHEDULED_TEMPLATE",
+    languageEnv: "META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE",
+    defaultName: "appointment_rescheduled_v1",
+  },
+  appointment_cancelled: {
+    nameEnv: "META_WHATSAPP_CANCELLED_TEMPLATE",
+    languageEnv: "META_WHATSAPP_CANCELLED_TEMPLATE_LANGUAGE",
+    defaultName: "appointment_cancelled_v1",
+  },
+} as const;
+
+export async function sendMetaTemplate(
+  params: MetaAppointmentTemplateParams,
 ): Promise<MetaTemplateDeliveryResult> {
-  const templateName = process.env.META_WHATSAPP_RESCHEDULED_TEMPLATE?.trim()
-    || "appointment_rescheduled_v1";
-  const templateLanguage = process.env.META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE?.trim()
-    || "pt_PT";
+  const template = metaTemplateConfig[params.eventType];
+  const templateName = process.env[template.nameEnv]?.trim() || template.defaultName;
+  const templateLanguage = process.env[template.languageEnv]?.trim() || "pt_PT";
 
   if (!isDevelopmentDeployment) {
     return {
@@ -397,28 +415,33 @@ export async function sendMetaAppointmentRescheduled(
             components: [
               {
                 type: "body",
-                parameters: [
+                parameters: (params.eventType === "appointment_cancelled" ? [
+                  params.customerName,
+                  params.locationName,
+                  params.serviceName,
+                  params.date,
+                  params.time,
+                ] : [
                   params.customerName,
                   params.locationName,
                   params.serviceName,
                   params.barberName,
                   params.date,
                   params.time,
-                  params.address,
-                ].map((text) => ({ type: "text", text })),
+                  params.address || "",
+                ]).map((text) => ({ type: "text", text })),
               },
-              {
+              ...(params.eventType !== "appointment_cancelled" ? [{
                 type: "button",
                 sub_type: "url",
                 index: "0",
-                parameters: [{ type: "text", text: params.managementToken }],
-              },
-              {
+                parameters: [{ type: "text", text: params.managementToken || "" }],
+              }, {
                 type: "button",
                 sub_type: "url",
                 index: "1",
-                parameters: [{ type: "text", text: params.managementToken }],
-              },
+                parameters: [{ type: "text", text: params.managementToken || "" }],
+              }] : []),
             ],
           },
         }),
@@ -467,6 +490,10 @@ export async function sendMetaAppointmentRescheduled(
     responseStatus: response.status,
     errorCode: safeResponse.providerStatus,
   };
+}
+
+export function sendMetaAppointmentRescheduled(params: Omit<MetaAppointmentTemplateParams, "eventType">) {
+  return sendMetaTemplate({ ...params, eventType: "appointment_rescheduled" });
 }
 
 function safeStringify(value: unknown) {
