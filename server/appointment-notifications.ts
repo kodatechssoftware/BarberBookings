@@ -10,7 +10,12 @@ import { getLocation } from "./location-store";
 import { reconcileMetaStatusReceipts } from "./meta-webhook";
 import { isDevelopmentDeployment } from "./runtime-environment";
 import { storage, type IStorage } from "./storage";
-import { sendMetaTemplate, type MetaAppointmentTemplateParams, type MetaTemplateDeliveryResult } from "./whatsapp";
+import {
+  areWhatsappNotificationsEnabled,
+  sendMetaTemplate,
+  type MetaAppointmentTemplateParams,
+  type MetaTemplateDeliveryResult,
+} from "./whatsapp";
 
 type Channel = "whatsapp" | "email" | "none";
 type EventType = MetaAppointmentTemplateParams["eventType"];
@@ -19,7 +24,8 @@ export type AppointmentNotificationDependencies = {
   storage: Pick<IStorage,
     | "getAppointment" | "getBarber" | "getService"
     | "getAppointmentNotificationEvent" | "claimAppointmentNotificationEvent"
-    | "claimNextAppointmentNotificationEvent" | "updateAppointmentNotificationEvent"
+    | "claimNextAppointmentNotificationEvent" | "claimAppointmentNotificationWhatsappAttempt"
+    | "updateAppointmentNotificationEvent"
     | "reconcileMetaWebhookReceipts" | "getAppointmentNotificationEventByProviderId"
     | "createMetaWebhookReceipt" | "getMetaWebhookReceipts"
   >;
@@ -29,6 +35,7 @@ export type AppointmentNotificationDependencies = {
   sendRescheduleEmail: typeof sendBookingRescheduled;
   sendCancellationEmail: typeof sendBookingCancellationConfirmation;
   developmentEnabled: boolean;
+  whatsappEnabled: boolean;
 };
 
 const defaultDependencies: AppointmentNotificationDependencies = {
@@ -39,6 +46,7 @@ const defaultDependencies: AppointmentNotificationDependencies = {
   sendRescheduleEmail: sendBookingRescheduled,
   sendCancellationEmail: sendBookingCancellationConfirmation,
   developmentEnabled: isDevelopmentDeployment,
+  whatsappEnabled: areWhatsappNotificationsEnabled(),
 };
 
 function eventType(value: string): EventType | null {
@@ -115,7 +123,7 @@ async function emailFallback(
 async function processClaimedCore(
   event: AppointmentNotificationEvent,
   deps: AppointmentNotificationDependencies = defaultDependencies,
-): Promise<Channel> {
+): Promise<Channel | "deferred" | "in_progress"> {
   if (!deps.developmentEnabled) return "none";
   const type = eventType(event.eventType);
   const appointment = await deps.storage.getAppointment(event.appointmentId);
@@ -123,6 +131,9 @@ async function processClaimedCore(
     await updateEvent(deps, event.id, { whatsappStatus: "skipped", errorCode: "STALE_EVENT",
       emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
     return "none";
+  }
+  if (appointment!.whatsappOptIn && !deps.whatsappEnabled && !event.whatsappAttemptedAt) {
+    return "deferred";
   }
   const [barber, service, location] = await Promise.all([
     deps.storage.getBarber(appointment!.barberId),
@@ -160,7 +171,9 @@ async function processClaimedCore(
   }
 
   const { date, time } = formatAppointmentForEmail(new Date(event.appointmentStartTime), details.locationTimeZone);
-  await updateEvent(deps, event.id, { whatsappAttemptedAt: new Date(), provider: "meta", templateName: templateName(type) });
+  const attempt = await deps.storage.claimAppointmentNotificationWhatsappAttempt(event.id);
+  if (!attempt) return "in_progress";
+  await updateEvent(deps, event.id, { provider: "meta", templateName: templateName(type) });
   let result: MetaTemplateDeliveryResult;
   try {
     result = await deps.sendWhatsApp({ recipient: appointment!.customerPhone, eventType: type,
@@ -189,6 +202,11 @@ export async function processClaimedAppointmentNotification(
   deps: AppointmentNotificationDependencies = defaultDependencies,
 ): Promise<Channel> {
   const channel = await processClaimedCore(event, deps);
+  if (channel === "deferred") {
+    await updateEvent(deps, event.id, { processingStartedAt: null });
+    return "none";
+  }
+  if (channel === "in_progress") return "none";
   await updateEvent(deps, event.id, { processingCompletedAt: new Date() });
   return channel;
 }
@@ -209,7 +227,7 @@ export async function processPendingAppointmentNotifications(deps = defaultDepen
   if (!deps.developmentEnabled) return 0;
   let processed = 0;
   for (let count = 0; count < 25; count += 1) {
-    const event = await deps.storage.claimNextAppointmentNotificationEvent(new Date(Date.now() - leaseMs));
+    const event = await deps.storage.claimNextAppointmentNotificationEvent(new Date(Date.now() - leaseMs), deps.whatsappEnabled);
     if (!event) break;
     await processClaimedAppointmentNotification(event, deps);
     processed += 1;

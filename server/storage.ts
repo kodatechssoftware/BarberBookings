@@ -295,7 +295,8 @@ export interface IStorage {
   getAppointmentNotificationEvents(appointmentId: number): Promise<AppointmentNotificationEvent[]>;
   getAppointmentNotificationEventByProviderId(providerMessageId: string): Promise<AppointmentNotificationEvent | undefined>;
   claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
-  claimNextAppointmentNotificationEvent(leaseBefore: Date): Promise<AppointmentNotificationEvent | undefined>;
+  claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn?: boolean): Promise<AppointmentNotificationEvent | undefined>;
+  claimAppointmentNotificationWhatsappAttempt(id: number): Promise<AppointmentNotificationEvent | undefined>;
   updateAppointmentNotificationEvent(
     id: number,
     patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
@@ -1124,14 +1125,16 @@ export class DatabaseStorage implements IStorage {
     return event;
   }
 
-  async claimNextAppointmentNotificationEvent(leaseBefore: Date): Promise<AppointmentNotificationEvent | undefined> {
+  async claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn = true): Promise<AppointmentNotificationEvent | undefined> {
     return db.transaction(async (tx) => {
       const candidates = await tx.execute(sql`
-        SELECT id FROM ${appointmentNotificationEvents}
-        WHERE processing_completed_at IS NULL
-          AND (processing_started_at IS NULL OR processing_started_at < ${leaseBefore})
-        ORDER BY id
-        FOR UPDATE SKIP LOCKED
+        SELECT ane.id FROM ${appointmentNotificationEvents} AS ane
+        INNER JOIN ${appointments} AS appt ON appt.id = ane.appointment_id
+        WHERE ane.processing_completed_at IS NULL
+          AND (ane.processing_started_at IS NULL OR ane.processing_started_at < ${leaseBefore})
+          AND (${includeUnattemptedWhatsappOptIn} OR appt.whatsapp_opt_in = false OR ane.whatsapp_attempted_at IS NOT NULL)
+        ORDER BY ane.id
+        FOR UPDATE OF ane SKIP LOCKED
         LIMIT 1
       `);
       const row = candidates.rows[0] as { id?: number } | undefined;
@@ -1141,6 +1144,17 @@ export class DatabaseStorage implements IStorage {
         .where(eq(appointmentNotificationEvents.id, Number(row.id))).returning();
       return event;
     });
+  }
+
+  async claimAppointmentNotificationWhatsappAttempt(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const [event] = await db.update(appointmentNotificationEvents)
+      .set({ whatsappAttemptedAt: new Date(), updatedAt: new Date() })
+      .where(and(
+        eq(appointmentNotificationEvents.id, id),
+        isNull(appointmentNotificationEvents.whatsappAttemptedAt),
+      ))
+      .returning();
+    return event;
   }
 
   async updateAppointmentNotificationEvent(
@@ -2051,12 +2065,23 @@ export class MemoryStorage implements IStorage {
     return this.appointmentNotificationEvents[index];
   }
 
-  async claimNextAppointmentNotificationEvent(leaseBefore: Date): Promise<AppointmentNotificationEvent | undefined> {
+  async claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn = true): Promise<AppointmentNotificationEvent | undefined> {
     const event = this.appointmentNotificationEvents.find((candidate) =>
       !candidate.processingCompletedAt
-      && (!candidate.processingStartedAt || candidate.processingStartedAt < leaseBefore));
+      && (!candidate.processingStartedAt || candidate.processingStartedAt < leaseBefore)
+      && (includeUnattemptedWhatsappOptIn
+        || !this.appointments.find((appointment) => appointment.id === candidate.appointmentId)?.whatsappOptIn
+        || candidate.whatsappAttemptedAt !== null));
     if (!event) return undefined;
     event.processingStartedAt = new Date();
+    event.updatedAt = new Date();
+    return event;
+  }
+
+  async claimAppointmentNotificationWhatsappAttempt(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const event = this.appointmentNotificationEvents.find((candidate) => candidate.id === id);
+    if (!event || event.whatsappAttemptedAt) return undefined;
+    event.whatsappAttemptedAt = new Date();
     event.updatedAt = new Date();
     return event;
   }

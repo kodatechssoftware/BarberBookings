@@ -23,7 +23,7 @@ const isProduction = process.env.NODE_ENV === "production";
 
 let warnedMissingConfig = false;
 
-function areWhatsappNotificationsEnabled() {
+export function areWhatsappNotificationsEnabled() {
   const value = process.env.WHATSAPP_NOTIFICATIONS_ENABLED?.trim().toLowerCase();
   return value === "true" || value === "1";
 }

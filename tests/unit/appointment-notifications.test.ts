@@ -5,6 +5,7 @@ import test from "node:test";
 import type { AppointmentNotificationEvent } from "../../shared/schema";
 import {
   processAppointmentNotification,
+  processClaimedAppointmentNotification,
   processPendingAppointmentNotifications,
   type AppointmentNotificationDependencies,
 } from "../../server/appointment-notifications";
@@ -32,7 +33,7 @@ async function fixture(optIn = true, email: string | null = "client@example.com"
 
 function deps(storage: MemoryStorage, whatsapp: MetaTemplateDeliveryResult, counters = { wa: 0, email: 0 }, emailSent = true): AppointmentNotificationDependencies {
   const sendEmail = async () => { counters.email += 1; return { sent: emailSent, providerMessageId: emailSent ? "email.id" : null, errorCode: emailSent ? null : "EMAIL_FAIL" }; };
-  return { storage, developmentEnabled: true, getLocation: async () => ({ id: 1, name: "Shop", slug: "shop", address: "Street 1",
+  return { storage, developmentEnabled: true, whatsappEnabled: true, getLocation: async () => ({ id: 1, name: "Shop", slug: "shop", address: "Street 1",
     mapUrl: null, mapEmbedUrl: null, phone: null, email: null, timezone: "Europe/Lisbon", isActive: true, isDefault: true,
     sortOrder: 0, createdAt: new Date(), updatedAt: new Date() }),
     sendWhatsApp: async () => { counters.wa += 1; return whatsapp; },
@@ -150,6 +151,18 @@ test("outbox recovers an abandoned pre-send claim and two workers do not duplica
   assert.equal(a + b, 1); assert.deepEqual(counters, { wa: 1, email: 0 });
 });
 
+test("an expired lease cannot let two processors send the same WhatsApp", async () => {
+  const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  const counters = { wa: 0, email: 0 }; const dependencies = deps(storage, accepted(), counters);
+  const [first, second] = await Promise.all([
+    processClaimedAppointmentNotification({ ...event }, dependencies),
+    processClaimedAppointmentNotification({ ...event }, dependencies),
+  ]);
+  assert.deepEqual([first, second].sort(), ["none", "whatsapp"]);
+  assert.deepEqual(counters, { wa: 1, email: 0 });
+  assert.ok((await storage.getAppointmentNotificationEvent(event.id))?.processingCompletedAt);
+});
+
 test("interrupted external attempt becomes unknown and is never retried", async () => {
   const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
   await storage.updateAppointmentNotificationEvent(event.id, { whatsappAttemptedAt: new Date(), processingStartedAt: new Date(0) });
@@ -157,6 +170,51 @@ test("interrupted external attempt becomes unknown and is never retried", async 
   await processPendingAppointmentNotifications(deps(storage, accepted(), counters), 1);
   assert.deepEqual(counters, { wa: 0, email: 1 });
   assert.equal((await storage.getAppointmentNotificationEvent(event.id))?.whatsappStatus, "unknown");
+});
+
+test("disabled WhatsApp defers unattempted opt-in events until activation", async () => {
+  const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  const counters = { wa: 0, email: 0 }; const dependencies = deps(storage, accepted(), counters);
+  dependencies.whatsappEnabled = false;
+  assert.equal(await processPendingAppointmentNotifications(dependencies), 0);
+  let saved = await storage.getAppointmentNotificationEvent(event.id);
+  assert.equal(saved?.processingStartedAt, null); assert.equal(saved?.processingCompletedAt, null);
+  assert.equal(saved?.whatsappAttemptedAt, null); assert.deepEqual(counters, { wa: 0, email: 0 });
+
+  dependencies.whatsappEnabled = true;
+  assert.equal(await processPendingAppointmentNotifications(dependencies), 1);
+  saved = await storage.getAppointmentNotificationEvent(event.id);
+  assert.equal(saved?.whatsappStatus, "accepted"); assert.ok(saved?.processingCompletedAt);
+  assert.deepEqual(counters, { wa: 1, email: 0 });
+});
+
+test("disabled WhatsApp still processes email-only and already-attempted fallback events", async () => {
+  const emailOnly = await fixture(false); const emailCounters = { wa: 0, email: 0 };
+  const emailDeps = deps(emailOnly.storage, accepted(), emailCounters); emailDeps.whatsappEnabled = false;
+  assert.equal(await processPendingAppointmentNotifications(emailDeps), 1);
+  assert.deepEqual(emailCounters, { wa: 0, email: 1 });
+
+  const interrupted = await fixture(); const [event] = await interrupted.storage.getAppointmentNotificationEvents(interrupted.appointment.id);
+  await interrupted.storage.updateAppointmentNotificationEvent(event.id, { whatsappAttemptedAt: new Date(), processingStartedAt: new Date(0) });
+  const interruptedCounters = { wa: 0, email: 0 }; const interruptedDeps = deps(interrupted.storage, accepted(), interruptedCounters);
+  interruptedDeps.whatsappEnabled = false;
+  assert.equal(await processPendingAppointmentNotifications(interruptedDeps, 1), 1);
+  assert.deepEqual(interruptedCounters, { wa: 0, email: 1 });
+  assert.equal((await interrupted.storage.getAppointmentNotificationEvent(event.id))?.whatsappStatus, "unknown");
+});
+
+test("an opt-in event deferred while disabled is discarded if it becomes stale before activation", async () => {
+  const { storage, appointment } = await fixture(); const [confirmation] = await storage.getAppointmentNotificationEvents(appointment.id);
+  const counters = { wa: 0, email: 0 }; const dependencies = deps(storage, accepted("wamid.latest"), counters);
+  dependencies.whatsappEnabled = false;
+  assert.equal(await processPendingAppointmentNotifications(dependencies), 0);
+  const rescheduled = await storage.rescheduleAppointment(appointment.id, 0, starts[1]); assert.ok(rescheduled);
+
+  dependencies.whatsappEnabled = true;
+  assert.equal(await processPendingAppointmentNotifications(dependencies), 2);
+  assert.equal((await storage.getAppointmentNotificationEvent(confirmation.id))?.errorCode, "STALE_EVENT");
+  assert.equal((await storage.getAppointmentNotificationEvent(rescheduled.notificationEvent.id))?.whatsappStatus, "accepted");
+  assert.deepEqual(counters, { wa: 1, email: 0 });
 });
 
 test("all three Meta payloads preserve exact body and button order", async () => {
