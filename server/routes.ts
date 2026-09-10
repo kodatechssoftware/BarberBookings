@@ -3235,7 +3235,7 @@ export async function registerRoutes(
           cancelToken: randomUUID(),
           depositRequired: false,
           depositReason: null,
-          notificationEventType: isDevelopmentDeployment && isManualBooking && !isHistoricalManualBooking && (!isRecurring || appointments.length === 0)
+          notificationEventType: isDevelopmentDeployment && isManualBooking && !isHistoricalManualBooking && (!isRecurring || occurrences === 1)
             ? "appointment_confirmation"
             : undefined,
         });
@@ -3250,7 +3250,61 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Horário indisponível para este barbeiro." });
       }
 
-      const createdAppointments: Appointment[] = await storage.createAppointments(appointments);
+      const shouldCreateSeries = Boolean(
+        isDevelopmentDeployment && isManualBooking && isRecurring && appointments.length > 1,
+      );
+      let createdAppointments: Appointment[];
+      let recurringSeriesId: string | null = null;
+      let recurringNotificationEventId: number | null = null;
+      if (shouldCreateSeries) {
+        const selectedLocation = await getLocation(locationId, true);
+        if (!selectedLocation || !selectedService) {
+          return res.status(400).json({ message: "Localização ou serviço inválido para a recorrência." });
+        }
+        recurringSeriesId = randomUUID();
+        const recurringResult = await storage.createRecurringAppointmentSeries({
+          series: {
+            id: recurringSeriesId,
+            locationId,
+            barberId: barberIdNumber,
+            serviceId: selectedService.id,
+            customerName: normalizedName,
+            customerEmail: normalizedCustomerEmail || null,
+            customerPhone: normalizedCustomerPhone,
+            whatsappOptIn: false,
+            whatsappOptInAt: null,
+            intervalWeeks: recurringWeeksNumber,
+            durationMonths: recurringMonthsNumber,
+            occurrenceCount: appointments.length,
+            firstStartTime: occurrenceStarts[0],
+          },
+          appointments: appointments.map((appointment) => ({ ...appointment, notificationEventType: undefined })),
+          notificationSnapshot: {
+            schemaVersion: 1,
+            customerName: normalizedName,
+            customerEmail: normalizedCustomerEmail || null,
+            customerPhone: normalizedCustomerPhone,
+            whatsappOptIn: false,
+            location: {
+              id: selectedLocation.id,
+              name: selectedLocation.name,
+              address: selectedLocation.address,
+              timezone: selectedLocation.timezone,
+            },
+            service: { id: selectedService.id, name: selectedService.name },
+            barber: { id: selectedBarber.id, name: selectedBarber.name },
+            recurrence: {
+              intervalWeeks: recurringWeeksNumber,
+              durationMonths: recurringMonthsNumber,
+              occurrenceCount: appointments.length,
+            },
+          },
+        });
+        createdAppointments = recurringResult.appointments;
+        recurringNotificationEventId = recurringResult.notificationEvent.id;
+      } else {
+        createdAppointments = await storage.createAppointments(appointments);
+      }
 
       await recordAuditLog(req, {
         action: isManualBooking ? "appointment.created_manual" : "appointment.absence_created",
@@ -3264,6 +3318,7 @@ export async function registerRoutes(
           barberId: barberIdNumber,
           serviceId: serviceIdNumber,
           recurring: Boolean(isRecurring),
+          seriesId: recurringSeriesId,
         },
       });
 
@@ -3288,7 +3343,11 @@ export async function registerRoutes(
         }
       }
 
-      res.status(201).json({ message: `${appointments.length} marcações criadas.` });
+      res.status(201).json({
+        message: `${appointments.length} marcações criadas.`,
+        ...(recurringSeriesId ? { seriesId: recurringSeriesId } : {}),
+        ...(recurringNotificationEventId ? { notificationEventId: recurringNotificationEventId } : {}),
+      });
     } catch (error) {
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Horário indisponível para este barbeiro." });

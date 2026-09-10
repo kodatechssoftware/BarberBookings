@@ -1,7 +1,7 @@
 import "dotenv/config";
+import type { RecurringNotificationSnapshot, WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
 
 import { storage } from "./storage";
-import type { WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
 import { isDevelopmentDeployment } from "./runtime-environment";
 
 type AppointmentMessageParams = {
@@ -326,15 +326,17 @@ export type MetaTemplateDeliveryResult = {
 
 export type MetaAppointmentTemplateParams = {
   recipient: string;
-  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_cancelled";
+  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_cancelled" | "appointment_recurring_confirmation";
   customerName: string;
   locationName: string;
   serviceName: string;
   barberName: string;
-  date: string;
-  time: string;
+  startTime: Date;
+  timeZone?: string;
   address?: string;
   managementToken?: string;
+  periodicity?: string;
+  totalAppointments?: number;
 };
 
 const metaTemplateConfig = {
@@ -353,7 +355,72 @@ const metaTemplateConfig = {
     languageEnv: "META_WHATSAPP_CANCELLED_TEMPLATE_LANGUAGE",
     defaultName: "appointment_cancelled_v1",
   },
+  appointment_recurring_confirmation: {
+    nameEnv: "META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE",
+    languageEnv: "META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE_LANGUAGE",
+    defaultName: "appointment_recurring_confirmation_v1",
+  },
 } as const;
+
+export function buildMetaAppointmentTemplateComponents(params: MetaAppointmentTemplateParams) {
+  const date = formatMetaTemplateDate(params.startTime, params.timeZone);
+  const time = formatMetaTemplateTime(params.startTime, params.timeZone);
+  const bodyValues = params.eventType === "appointment_cancelled"
+    ? [params.customerName, params.locationName, params.serviceName, date, time]
+    : params.eventType === "appointment_recurring_confirmation"
+      ? [params.customerName, params.locationName, params.serviceName, params.barberName,
+        params.periodicity || "", date, time, String(params.totalAppointments ?? ""), params.address || ""]
+      : [params.customerName, params.locationName, params.serviceName, params.barberName,
+        date, time, params.address || ""];
+  return [
+    { type: "body", parameters: bodyValues.map((text) => ({ type: "text", text })) },
+    ...(["appointment_confirmation", "appointment_rescheduled"].includes(params.eventType) ? [{
+      type: "button", sub_type: "url", index: "0",
+      parameters: [{ type: "text", text: params.managementToken || "" }],
+    }, {
+      type: "button", sub_type: "url", index: "1",
+      parameters: [{ type: "text", text: params.managementToken || "" }],
+    }] : []),
+  ];
+}
+
+export function buildMetaRecurringTemplateParams(
+  snapshot: RecurringNotificationSnapshot,
+): MetaAppointmentTemplateParams {
+  if (snapshot.occurrences.length < 2 || snapshot.occurrences.length !== snapshot.recurrence.occurrenceCount) {
+    throw new Error("Recurring Meta payload occurrence count is inconsistent.");
+  }
+  const firstOccurrence = [...snapshot.occurrences]
+    .sort((left, right) => left.occurrenceIndex - right.occurrenceIndex)[0];
+  if (!firstOccurrence) throw new Error("Recurring Meta payload requires at least one occurrence.");
+  return {
+    recipient: snapshot.customerPhone,
+    eventType: "appointment_recurring_confirmation",
+    customerName: snapshot.customerName,
+    locationName: snapshot.location.name,
+    serviceName: snapshot.service.name,
+    barberName: snapshot.barber.name,
+    periodicity: snapshot.recurrence.intervalWeeks === 1
+      ? "Semanal"
+      : `A cada ${snapshot.recurrence.intervalWeeks} semanas`,
+    startTime: new Date(firstOccurrence.startTime),
+    timeZone: snapshot.location.timezone,
+    totalAppointments: snapshot.recurrence.occurrenceCount,
+    address: snapshot.location.address,
+  };
+}
+
+export function formatMetaTemplateDate(date: Date, timeZone = SHOP_TIME_ZONE) {
+  return new Intl.DateTimeFormat("pt-PT", {
+    timeZone, day: "numeric", month: "long", year: "numeric",
+  }).format(date);
+}
+
+export function formatMetaTemplateTime(date: Date, timeZone = SHOP_TIME_ZONE) {
+  return new Intl.DateTimeFormat("pt-PT", {
+    timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(date);
+}
 
 export async function sendMetaTemplate(
   params: MetaAppointmentTemplateParams,
@@ -366,6 +433,16 @@ export async function sendMetaTemplate(
     return {
       outcome: "failed", provider: "meta", templateName, providerMessageId: null,
       providerStatus: "ENVIRONMENT_BLOCKED", responseStatus: null, errorCode: "ENVIRONMENT_BLOCKED",
+    };
+  }
+
+  // The payload is intentionally buildable and testable, but delivery stays disabled
+  // until the recurring template is created and explicitly approved for activation.
+  if (params.eventType === "appointment_recurring_confirmation") {
+    return {
+      outcome: "failed", provider: "meta", templateName, providerMessageId: null,
+      providerStatus: "META_RECURRING_TEMPLATE_DISABLED", responseStatus: null,
+      errorCode: "META_RECURRING_TEMPLATE_DISABLED",
     };
   }
 
@@ -412,37 +489,7 @@ export async function sendMetaTemplate(
           template: {
             name: templateName,
             language: { code: templateLanguage },
-            components: [
-              {
-                type: "body",
-                parameters: (params.eventType === "appointment_cancelled" ? [
-                  params.customerName,
-                  params.locationName,
-                  params.serviceName,
-                  params.date,
-                  params.time,
-                ] : [
-                  params.customerName,
-                  params.locationName,
-                  params.serviceName,
-                  params.barberName,
-                  params.date,
-                  params.time,
-                  params.address || "",
-                ]).map((text) => ({ type: "text", text })),
-              },
-              ...(params.eventType !== "appointment_cancelled" ? [{
-                type: "button",
-                sub_type: "url",
-                index: "0",
-                parameters: [{ type: "text", text: params.managementToken || "" }],
-              }, {
-                type: "button",
-                sub_type: "url",
-                index: "1",
-                parameters: [{ type: "text", text: params.managementToken || "" }],
-              }] : []),
-            ],
+            components: buildMetaAppointmentTemplateComponents(params),
           },
         }),
       },

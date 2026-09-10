@@ -1,4 +1,4 @@
-import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, jsonb, check } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
@@ -99,6 +99,20 @@ export const whatsappMessageTypes = [
   "provider_test",
 ] as const;
 
+export type RecurringNotificationSnapshot = {
+  schemaVersion: 1;
+  seriesId: string;
+  customerName: string;
+  customerEmail: string | null;
+  customerPhone: string;
+  whatsappOptIn: boolean;
+  location: { id: number; name: string; address: string; timezone: string };
+  service: { id: number; name: string };
+  barber: { id: number; name: string };
+  recurrence: { intervalWeeks: number; durationMonths: number; occurrenceCount: number };
+  occurrences: Array<{ appointmentId: number; occurrenceIndex: number; startTime: string }>;
+};
+
 export const locations = appPgTable("locations", {
   id: idColumn("locations_id_seq"),
   name: text("name").notNull(),
@@ -138,6 +152,30 @@ export const services = appPgTable("services", {
   isVisible: boolean("is_visible").default(true),
 });
 
+export const appointmentSeries = appPgTable("appointment_series", {
+  id: text("id").primaryKey(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  serviceId: integer("service_id").references(() => services.id).notNull(),
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone").notNull(),
+  whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
+  whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
+  intervalWeeks: integer("interval_weeks").notNull(),
+  durationMonths: integer("duration_months").notNull(),
+  occurrenceCount: integer("occurrence_count").notNull(),
+  firstStartTime: timestamp("first_start_time").notNull(),
+  notificationRevision: integer("notification_revision").default(1).notNull(),
+  status: text("status").default("active").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  recurrenceValuesCheck: check("appointment_series_recurrence_values_check",
+    sql`${table.intervalWeeks} > 0 AND ${table.durationMonths} > 0 AND ${table.occurrenceCount} > 1`),
+  notificationRevisionCheck: check("appointment_series_notification_revision_check", sql`${table.notificationRevision} > 0`),
+}));
+
 export const appointments = appPgTable("appointments", {
   id: idColumn("appointments_id_seq"),
   locationId: integer("location_id").references(() => locations.id).notNull().default(1),
@@ -158,8 +196,12 @@ export const appointments = appPgTable("appointments", {
   notificationRevision: integer("notification_revision").default(0).notNull(),
   whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
   whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
+  seriesId: text("series_id").references(() => appointmentSeries.id),
+  seriesOccurrenceIndex: integer("series_occurrence_index"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  seriesOccurrenceIdx: uniqueIndex("appointments_series_occurrence_idx").on(table.seriesId, table.seriesOccurrenceIndex),
+}));
 
 export const admins = appPgTable("admins", {
   id: idColumn("admins_id_seq"),
@@ -307,7 +349,8 @@ export const whatsappMessages = appPgTable("whatsapp_messages", {
 
 export const appointmentNotificationEvents = appPgTable("appointment_notification_events", {
   id: idColumn("appointment_notification_events_id_seq"),
-  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }).notNull(),
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }),
+  seriesId: text("series_id").references(() => appointmentSeries.id, { onDelete: "cascade" }),
   eventType: text("event_type").notNull(),
   eventRevision: integer("event_revision").notNull(),
   eventKey: text("event_key").notNull(),
@@ -331,6 +374,7 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   failedAt: timestamp("failed_at"),
   lastProviderTimestamp: timestamp("last_provider_timestamp"),
   webhookFallbackClaimedAt: timestamp("webhook_fallback_claimed_at"),
+  payloadSnapshot: jsonb("payload_snapshot").$type<RecurringNotificationSnapshot>(),
   emailStatus: text("email_status").default("not_needed").notNull(),
   emailProviderMessageId: text("email_provider_message_id"),
   emailErrorCode: text("email_error_code"),
@@ -341,6 +385,7 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
 }, (table) => ({
   eventKeyIdx: uniqueIndex("appointment_notification_events_event_key_idx").on(table.eventKey),
   providerMessageIdIdx: uniqueIndex("appointment_notification_events_provider_message_id_idx").on(table.providerMessageId),
+  subjectCheck: check("appointment_notification_events_subject_check", sql`num_nonnulls(${table.appointmentId}, ${table.seriesId}) = 1`),
 }));
 
 export const metaWebhookReceipts = appPgTable("meta_webhook_receipts", {
@@ -369,6 +414,10 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
   service: one(services, {
     fields: [appointments.serviceId],
     references: [services.id],
+  }),
+  series: one(appointmentSeries, {
+    fields: [appointments.seriesId],
+    references: [appointmentSeries.id],
   }),
 }));
 
@@ -434,6 +483,8 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   rescheduleRevision: true,
   notificationRevision: true,
   whatsappOptInAt: true,
+  seriesId: true,
+  seriesOccurrenceIndex: true,
 }).extend({
   customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome não pode ter mais de 80 caracteres."),
   customerEmail: z.string().trim().email("Indique um email válido.").max(120, "O email não pode ter mais de 120 caracteres.").optional().nullable(),
@@ -476,6 +527,7 @@ export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).
 export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Appointment = typeof appointments.$inferSelect;
+export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
 export type AppointmentStatus = typeof appointmentStatuses[number];
 export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;

@@ -474,19 +474,80 @@ export async function ensureAppointmentNotificationFoundation() {
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
   const qualifiedAppointmentsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
   const qualifiedEventsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointment_notification_events")}`;
+  const qualifiedSeriesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointment_series")}`;
+  const qualifiedLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
+  const qualifiedBarbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
+  const qualifiedServicesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedSeriesTable} (
+      id text PRIMARY KEY,
+      location_id integer NOT NULL REFERENCES ${qualifiedLocationsTable}(id),
+      barber_id integer NOT NULL REFERENCES ${qualifiedBarbersTable}(id),
+      service_id integer NOT NULL REFERENCES ${qualifiedServicesTable}(id),
+      customer_name text NOT NULL,
+      customer_email text,
+      customer_phone text NOT NULL,
+      whatsapp_opt_in boolean NOT NULL DEFAULT false,
+      whatsapp_opt_in_at timestamp,
+      interval_weeks integer NOT NULL,
+      duration_months integer NOT NULL,
+      occurrence_count integer NOT NULL,
+      first_start_time timestamp NOT NULL,
+      notification_revision integer NOT NULL DEFAULT 1,
+      status text NOT NULL DEFAULT 'active',
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now(),
+      CONSTRAINT appointment_series_recurrence_values_check
+        CHECK (interval_weeks > 0 AND duration_months > 0 AND occurrence_count > 1),
+      CONSTRAINT appointment_series_notification_revision_check CHECK (notification_revision > 0)
+    )
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedSeriesTable}
+        ADD CONSTRAINT appointment_series_recurrence_values_check
+        CHECK (interval_weeks > 0 AND duration_months > 0 AND occurrence_count > 1);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedSeriesTable}
+        ADD CONSTRAINT appointment_series_notification_revision_check CHECK (notification_revision > 0);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
 
   await pool.query(`
     ALTER TABLE ${qualifiedAppointmentsTable}
       ADD COLUMN IF NOT EXISTS reschedule_revision integer NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS notification_revision integer NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS whatsapp_opt_in boolean NOT NULL DEFAULT false,
-      ADD COLUMN IF NOT EXISTS whatsapp_opt_in_at timestamp
+      ADD COLUMN IF NOT EXISTS whatsapp_opt_in_at timestamp,
+      ADD COLUMN IF NOT EXISTS series_id text REFERENCES ${qualifiedSeriesTable}(id),
+      ADD COLUMN IF NOT EXISTS series_occurrence_index integer
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS appointments_series_occurrence_idx
+    ON ${qualifiedAppointmentsTable} (series_id, series_occurrence_index)
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedAppointmentsTable}
+        ADD CONSTRAINT appointments_series_membership_check CHECK (
+          (series_id IS NULL AND series_occurrence_index IS NULL)
+          OR (series_id IS NOT NULL AND series_occurrence_index IS NOT NULL AND series_occurrence_index >= 0)
+        );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
   `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${qualifiedEventsTable} (
       id serial PRIMARY KEY,
-      appointment_id integer NOT NULL REFERENCES ${qualifiedAppointmentsTable}(id) ON DELETE CASCADE,
+      appointment_id integer REFERENCES ${qualifiedAppointmentsTable}(id) ON DELETE CASCADE,
+      series_id text REFERENCES ${qualifiedSeriesTable}(id) ON DELETE CASCADE,
       event_type text NOT NULL,
       event_revision integer NOT NULL,
       event_key text NOT NULL,
@@ -510,6 +571,7 @@ export async function ensureAppointmentNotificationFoundation() {
       failed_at timestamp,
       last_provider_timestamp timestamp,
       webhook_fallback_claimed_at timestamp,
+      payload_snapshot jsonb,
       email_status text NOT NULL DEFAULT 'not_needed',
       email_provider_message_id text,
       email_error_code text,
@@ -523,6 +585,8 @@ export async function ensureAppointmentNotificationFoundation() {
   await pool.query(`
     ALTER TABLE ${qualifiedEventsTable}
       ADD COLUMN IF NOT EXISTS appointment_start_time timestamp,
+      ADD COLUMN IF NOT EXISTS series_id text REFERENCES ${qualifiedSeriesTable}(id) ON DELETE CASCADE,
+      ADD COLUMN IF NOT EXISTS payload_snapshot jsonb,
       ADD COLUMN IF NOT EXISTS processing_completed_at timestamp,
       ADD COLUMN IF NOT EXISTS sent_at timestamp,
       ADD COLUMN IF NOT EXISTS delivered_at timestamp,
@@ -537,8 +601,17 @@ export async function ensureAppointmentNotificationFoundation() {
     WHERE appointment_start_time IS NULL
   `);
   await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN appointment_start_time SET NOT NULL`);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN appointment_id DROP NOT NULL`);
   await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN previous_start_time DROP NOT NULL`);
   await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN new_start_time DROP NOT NULL`);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedEventsTable}
+        ADD CONSTRAINT appointment_notification_events_subject_check
+        CHECK (num_nonnulls(appointment_id, series_id) = 1);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
   await pool.query(`
     UPDATE ${qualifiedAppointmentsTable} a
     SET notification_revision = GREATEST(

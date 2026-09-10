@@ -1,9 +1,9 @@
-import type { Appointment, AppointmentNotificationEvent } from "@shared/schema";
+import type { Appointment, AppointmentNotificationEvent, RecurringNotificationSnapshot } from "@shared/schema";
 import {
-  formatAppointmentForEmail,
   sendBookingCancellationConfirmation,
   sendBookingConfirmation,
   sendBookingRescheduled,
+  sendRecurringBookingConfirmation,
   type EmailDeliveryResult,
 } from "./email";
 import { getLocation } from "./location-store";
@@ -18,11 +18,11 @@ import {
 } from "./whatsapp";
 
 type Channel = "whatsapp" | "email" | "none";
-type EventType = MetaAppointmentTemplateParams["eventType"];
+type EventType = Exclude<MetaAppointmentTemplateParams["eventType"], "appointment_recurring_confirmation">;
 
 export type AppointmentNotificationDependencies = {
   storage: Pick<IStorage,
-    | "getAppointment" | "getBarber" | "getService"
+    | "getAppointment" | "getAppointmentSeries" | "getAppointmentSeriesAppointments" | "getBarber" | "getService"
     | "getAppointmentNotificationEvent" | "claimAppointmentNotificationEvent"
     | "claimNextAppointmentNotificationEvent" | "claimAppointmentNotificationWhatsappAttempt"
     | "updateAppointmentNotificationEvent"
@@ -34,6 +34,7 @@ export type AppointmentNotificationDependencies = {
   sendConfirmationEmail: typeof sendBookingConfirmation;
   sendRescheduleEmail: typeof sendBookingRescheduled;
   sendCancellationEmail: typeof sendBookingCancellationConfirmation;
+  sendRecurringConfirmationEmail: typeof sendRecurringBookingConfirmation;
   developmentEnabled: boolean;
   whatsappEnabled: boolean;
 };
@@ -45,6 +46,7 @@ const defaultDependencies: AppointmentNotificationDependencies = {
   sendConfirmationEmail: sendBookingConfirmation,
   sendRescheduleEmail: sendBookingRescheduled,
   sendCancellationEmail: sendBookingCancellationConfirmation,
+  sendRecurringConfirmationEmail: sendRecurringBookingConfirmation,
   developmentEnabled: isDevelopmentDeployment,
   whatsappEnabled: areWhatsappNotificationsEnabled(),
 };
@@ -61,6 +63,35 @@ function isCurrentEvent(appointment: Appointment | undefined, event: Appointment
     return appointment.status === "cancelled" || appointment.status === "late_cancelled";
   }
   return appointment.status === "booked";
+}
+
+function recurringSnapshot(event: AppointmentNotificationEvent): RecurringNotificationSnapshot | null {
+  const snapshot = event.payloadSnapshot;
+  if (!snapshot || snapshot.schemaVersion !== 1 || snapshot.seriesId !== event.seriesId
+    || !Array.isArray(snapshot.occurrences) || snapshot.occurrences.length < 2) return null;
+  return snapshot;
+}
+
+async function isCurrentRecurringEvent(
+  event: AppointmentNotificationEvent,
+  snapshot: RecurringNotificationSnapshot,
+  deps: AppointmentNotificationDependencies,
+) {
+  if (!event.seriesId) return false;
+  const [series, occurrences] = await Promise.all([
+    deps.storage.getAppointmentSeries(event.seriesId),
+    deps.storage.getAppointmentSeriesAppointments(event.seriesId),
+  ]);
+  if (!series || series.status !== "active" || series.notificationRevision !== event.eventRevision
+    || series.occurrenceCount !== snapshot.recurrence.occurrenceCount
+    || occurrences.length !== snapshot.occurrences.length) return false;
+  return occurrences.every((appointment, index) => {
+    const saved = snapshot.occurrences[index];
+    return appointment.id === saved.appointmentId
+      && appointment.seriesOccurrenceIndex === saved.occurrenceIndex
+      && appointment.status === "booked"
+      && new Date(appointment.startTime).getTime() === new Date(saved.startTime).getTime();
+  });
 }
 
 async function updateEvent(deps: AppointmentNotificationDependencies, id: number, patch: Parameters<IStorage["updateAppointmentNotificationEvent"]>[1]) {
@@ -120,13 +151,67 @@ async function emailFallback(
   return result.sent ? "email" : "none";
 }
 
+async function processRecurringConfirmation(
+  event: AppointmentNotificationEvent,
+  deps: AppointmentNotificationDependencies,
+): Promise<Channel> {
+  const snapshot = recurringSnapshot(event);
+  if (!snapshot || !await isCurrentRecurringEvent(event, snapshot, deps)) {
+    await updateEvent(deps, event.id, { whatsappStatus: "skipped", errorCode: "STALE_EVENT",
+      emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
+    return "none";
+  }
+  await updateEvent(deps, event.id, {
+    provider: "meta", templateName: "appointment_recurring_confirmation_v1",
+    whatsappStatus: "skipped", errorCode: "WHATSAPP_RECURRING_TEMPLATE_DISABLED",
+  });
+  if (event.emailStatus === "sent") return "email";
+  if (!snapshot.customerEmail?.trim()) {
+    await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "EMAIL_MISSING" });
+    return "none";
+  }
+  if (!await isCurrentRecurringEvent(event, snapshot, deps)) {
+    await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
+    return "none";
+  }
+  await updateEvent(deps, event.id, { emailStatus: "sending", emailAttemptedAt: new Date() });
+  let result: EmailDeliveryResult;
+  try {
+    result = await deps.sendRecurringConfirmationEmail({
+      customerName: snapshot.customerName,
+      customerEmail: snapshot.customerEmail,
+      locationName: snapshot.location.name,
+      locationAddress: snapshot.location.address,
+      locationTimeZone: snapshot.location.timezone,
+      serviceName: snapshot.service.name,
+      barberName: snapshot.barber.name,
+      intervalWeeks: snapshot.recurrence.intervalWeeks,
+      durationMonths: snapshot.recurrence.durationMonths,
+      occurrences: snapshot.occurrences.map((occurrence) => new Date(occurrence.startTime)),
+      idempotencyKey: `${event.eventKey}:email`,
+    });
+  } catch {
+    result = { sent: false, providerMessageId: null, errorCode: "EMAIL_UNEXPECTED_ERROR" };
+  }
+  await updateEvent(deps, event.id, {
+    emailStatus: result.sent ? "sent" : "failed",
+    emailProviderMessageId: result.providerMessageId,
+    emailErrorCode: result.errorCode,
+    emailSentAt: result.sent ? new Date() : null,
+  });
+  return result.sent ? "email" : "none";
+}
+
 async function processClaimedCore(
   event: AppointmentNotificationEvent,
   deps: AppointmentNotificationDependencies = defaultDependencies,
 ): Promise<Channel | "deferred" | "in_progress"> {
   if (!deps.developmentEnabled) return "none";
+  if (event.eventType === "appointment_recurring_confirmation") {
+    return processRecurringConfirmation(event, deps);
+  }
   const type = eventType(event.eventType);
-  const appointment = await deps.storage.getAppointment(event.appointmentId);
+  const appointment = event.appointmentId === null ? undefined : await deps.storage.getAppointment(event.appointmentId);
   if (!type || !isCurrentEvent(appointment, event)) {
     await updateEvent(deps, event.id, { whatsappStatus: "skipped", errorCode: "STALE_EVENT",
       emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
@@ -170,7 +255,6 @@ async function processClaimedCore(
     return "none";
   }
 
-  const { date, time } = formatAppointmentForEmail(new Date(event.appointmentStartTime), details.locationTimeZone);
   const attempt = await deps.storage.claimAppointmentNotificationWhatsappAttempt(event.id);
   if (!attempt) return "in_progress";
   await updateEvent(deps, event.id, { provider: "meta", templateName: templateName(type) });
@@ -178,7 +262,8 @@ async function processClaimedCore(
   try {
     result = await deps.sendWhatsApp({ recipient: appointment!.customerPhone, eventType: type,
       customerName: appointment!.customerName, locationName: details.locationName,
-      serviceName: details.serviceName, barberName: details.barberName, date, time,
+      serviceName: details.serviceName, barberName: details.barberName,
+      startTime: new Date(event.appointmentStartTime), timeZone: details.locationTimeZone,
       address: details.locationAddress, managementToken: appointment!.cancelToken });
   } catch {
     result = { outcome: "failed", provider: "meta", templateName: templateName(type), providerMessageId: null,

@@ -11,7 +11,14 @@ import {
 } from "../../server/appointment-notifications";
 import { recordMetaWebhookStatuses, verifyMetaWebhookChallenge, verifyMetaWebhookSignature } from "../../server/meta-webhook";
 import { MemoryStorage } from "../../server/storage";
-import { sendMetaTemplate, type MetaTemplateDeliveryResult } from "../../server/whatsapp";
+import { buildRecurringBookingEmail } from "../../server/email";
+import {
+  buildMetaAppointmentTemplateComponents,
+  buildMetaRecurringTemplateParams,
+  formatMetaTemplateDate,
+  sendMetaTemplate,
+  type MetaTemplateDeliveryResult,
+} from "../../server/whatsapp";
 
 const starts = [new Date("2030-06-03T09:00:00Z"), new Date("2030-06-04T10:00:00Z"), new Date("2030-06-05T11:00:00Z")];
 const token = "11111111-2222-4333-8444-555555555555";
@@ -37,7 +44,29 @@ function deps(storage: MemoryStorage, whatsapp: MetaTemplateDeliveryResult, coun
     mapUrl: null, mapEmbedUrl: null, phone: null, email: null, timezone: "Europe/Lisbon", isActive: true, isDefault: true,
     sortOrder: 0, createdAt: new Date(), updatedAt: new Date() }),
     sendWhatsApp: async () => { counters.wa += 1; return whatsapp; },
-    sendConfirmationEmail: sendEmail, sendRescheduleEmail: sendEmail, sendCancellationEmail: sendEmail };
+    sendConfirmationEmail: sendEmail, sendRescheduleEmail: sendEmail, sendCancellationEmail: sendEmail,
+    sendRecurringConfirmationEmail: sendEmail };
+}
+
+async function recurringFixture() {
+  const storage = new MemoryStorage();
+  await storage.createBarber({ name: "Barber", specialty: "Cuts", isVisible: true });
+  await storage.createService({ name: "Cut", price: 1500, duration: 30, isVisible: true });
+  const result = await storage.createRecurringAppointmentSeries({
+    series: { id: "series-test", locationId: 1, barberId: 1, serviceId: 1,
+      customerName: "Client", customerEmail: "client@example.com", customerPhone: "+351910000000",
+      whatsappOptIn: false, whatsappOptInAt: null, intervalWeeks: 1, durationMonths: 1,
+      occurrenceCount: 3, firstStartTime: starts[0] },
+    appointments: starts.map((startTime, index) => ({ locationId: 1, barberId: 1, serviceId: 1, startTime,
+      customerName: "Client", customerEmail: "client@example.com", customerPhone: "+351910000000",
+      whatsappOptIn: false, durationMinutes: 30, cancelToken: `${token}-${index}` })),
+    notificationSnapshot: { schemaVersion: 1, customerName: "Client", customerEmail: "client@example.com",
+      customerPhone: "+351910000000", whatsappOptIn: false,
+      location: { id: 1, name: "Shop", address: "Street 1", timezone: "Europe/Lisbon" },
+      service: { id: 1, name: "Cut" }, barber: { id: 1, name: "Barber" },
+      recurrence: { intervalWeeks: 1, durationMonths: 1, occurrenceCount: 3 } },
+  });
+  return { storage, ...result };
 }
 
 test("confirmation accepted stores wamid, sends no email, and retry is idempotent", async () => {
@@ -69,18 +98,110 @@ test("confirmation becomes stale after reschedule or cancellation", async () => 
   }
 });
 
-test("manual booking without opt-in uses email and recurring batch only creates one confirmation", async () => {
-  const storage = new MemoryStorage(); await storage.createBarber({ name: "B", specialty: "S" }); await storage.createService({ name: "C", price: 1, duration: 30 });
-  const base = { locationId: 1, barberId: 1, serviceId: 1, customerName: "Client", customerEmail: "c@e.pt",
-    customerPhone: "+351910000000", whatsappOptIn: false, durationMinutes: 30 };
-  const appointments = await storage.createAppointments([
-    { ...base, startTime: starts[0], cancelToken: `${token}-1`, notificationEventType: "appointment_confirmation" },
-    { ...base, startTime: starts[1], cancelToken: `${token}-2` },
+test("disabled WhatsApp sends exactly one series email and no individual confirmation", async () => {
+  const { storage, series, appointments, notificationEvent } = await recurringFixture();
+  assert.equal(notificationEvent.eventKey, `series:${series.id}:recurring_confirmation:1`);
+  assert.equal(notificationEvent.appointmentId, null);
+  assert.equal(notificationEvent.seriesId, series.id);
+  assert.equal(new Set(appointments.map((appointment) => appointment.cancelToken)).size, 3);
+  assert.deepEqual(appointments.map((appointment) => appointment.seriesOccurrenceIndex), [0, 1, 2]);
+  for (const appointment of appointments) {
+    assert.equal((await storage.getAppointmentNotificationEvents(appointment.id)).length, 0);
+  }
+  assert.equal(JSON.stringify(notificationEvent.payloadSnapshot).includes("cancelToken"), false);
+
+  const counters = { wa: 0, email: 0 };
+  const dependencies = deps(storage, accepted(), counters);
+  let recurringEmail: any;
+  dependencies.sendRecurringConfirmationEmail = async (params) => {
+    recurringEmail = params; counters.email += 1;
+    return { sent: true, providerMessageId: "email.series", errorCode: null };
+  };
+  dependencies.whatsappEnabled = false;
+  assert.equal(await processPendingAppointmentNotifications(dependencies), 1);
+  assert.deepEqual(counters, { wa: 0, email: 1 });
+  const saved = await storage.getAppointmentNotificationEvent(notificationEvent.id);
+  assert.equal(saved?.whatsappStatus, "skipped");
+  assert.equal(saved?.errorCode, "WHATSAPP_RECURRING_TEMPLATE_DISABLED");
+  assert.equal(saved?.emailStatus, "sent");
+  assert.equal(recurringEmail.locationTimeZone, "Europe/Lisbon");
+  assert.deepEqual(recurringEmail.occurrences.map((date: Date) => date.toISOString()), starts.map((date) => date.toISOString()));
+  assert.equal(recurringEmail.idempotencyKey, `${notificationEvent.eventKey}:email`);
+});
+
+test("series creation is atomic and rejects one occurrence", async () => {
+  const { storage } = await recurringFixture();
+  await assert.rejects(storage.createRecurringAppointmentSeries({
+    series: { id: "series-one", locationId: 1, barberId: 1, serviceId: 1, customerName: "One",
+      customerEmail: null, customerPhone: "+351910000001", whatsappOptIn: false, whatsappOptInAt: null,
+      intervalWeeks: 52, durationMonths: 1, occurrenceCount: 1, firstStartTime: new Date("2031-01-01T10:00:00Z") },
+    appointments: [{ locationId: 1, barberId: 1, serviceId: 1, startTime: new Date("2031-01-01T10:00:00Z"),
+      customerName: "One", customerEmail: null, customerPhone: "+351910000001", durationMinutes: 30, cancelToken: "one" }],
+    notificationSnapshot: { schemaVersion: 1, customerName: "One", customerEmail: null,
+      customerPhone: "+351910000001", whatsappOptIn: false,
+      location: { id: 1, name: "Shop", address: "Street", timezone: "Europe/Lisbon" },
+      service: { id: 1, name: "Cut" }, barber: { id: 1, name: "Barber" },
+      recurrence: { intervalWeeks: 52, durationMonths: 1, occurrenceCount: 1 } },
+  }), /at least two/);
+  assert.equal(await storage.getAppointmentSeries("series-one"), undefined);
+
+  const base = { locationId: 1, barberId: 1, serviceId: 1, customerName: "Rollback",
+    customerEmail: "rollback@example.com", customerPhone: "+351910000002", durationMinutes: 30 };
+  await assert.rejects(storage.createRecurringAppointmentSeries({
+    series: { id: "series-rollback", locationId: 1, barberId: 1, serviceId: 1, customerName: "Rollback",
+      customerEmail: "rollback@example.com", customerPhone: "+351910000002", whatsappOptIn: false,
+      whatsappOptInAt: null, intervalWeeks: 1, durationMonths: 1, occurrenceCount: 2,
+      firstStartTime: new Date("2030-06-02T10:00:00Z") },
+    appointments: [
+      { ...base, startTime: new Date("2030-06-02T10:00:00Z"), cancelToken: "rollback-1" },
+      { ...base, startTime: starts[0], cancelToken: "rollback-2" },
+    ],
+    notificationSnapshot: { schemaVersion: 1, customerName: "Rollback", customerEmail: "rollback@example.com",
+      customerPhone: "+351910000002", whatsappOptIn: false,
+      location: { id: 1, name: "Shop", address: "Street", timezone: "Europe/Lisbon" },
+      service: { id: 1, name: "Cut" }, barber: { id: 1, name: "Barber" },
+      recurrence: { intervalWeeks: 1, durationMonths: 1, occurrenceCount: 2 } },
+  }));
+  assert.equal(await storage.getAppointmentSeries("series-rollback"), undefined);
+  assert.equal((await storage.getAppointments()).some((appointment) => appointment.customerName === "Rollback"), false);
+});
+
+test("a relevant occurrence change makes the pending series confirmation stale", async () => {
+  const { storage, series, appointments, notificationEvent } = await recurringFixture();
+  await storage.updateAppointment(appointments[1].id, { startTime: new Date("2030-06-04T12:00:00Z") });
+  assert.equal((await storage.getAppointmentSeries(series.id))?.notificationRevision, 2);
+  const counters = { wa: 0, email: 0 };
+  assert.equal(await processAppointmentNotification(notificationEvent.id, deps(storage, accepted(), counters)), "none");
+  assert.deepEqual(counters, { wa: 0, email: 0 });
+  assert.equal((await storage.getAppointmentNotificationEvent(notificationEvent.id))?.emailErrorCode, "STALE_EVENT");
+});
+
+test("legacy and ordinary appointments remain ungrouped", async () => {
+  const { storage, appointment } = await fixture(false);
+  assert.equal(appointment.seriesId, null);
+  assert.equal(appointment.seriesOccurrenceIndex, null);
+  assert.equal((await storage.getAppointments()).filter((item) => item.seriesId !== null).length, 0);
+});
+
+test("two outbox workers send a recurring confirmation once", async () => {
+  const { storage } = await recurringFixture();
+  const counters = { wa: 0, email: 0 };
+  const dependencies = deps(storage, accepted(), counters); dependencies.whatsappEnabled = false;
+  const [first, second] = await Promise.all([
+    processPendingAppointmentNotifications(dependencies), processPendingAppointmentNotifications(dependencies),
   ]);
-  assert.equal((await storage.getAppointmentNotificationEvents(appointments[0].id)).length, 1);
-  assert.equal((await storage.getAppointmentNotificationEvents(appointments[1].id)).length, 0);
-  const [event] = await storage.getAppointmentNotificationEvents(appointments[0].id); const counters = { wa: 0, email: 0 };
-  assert.equal(await processAppointmentNotification(event.id, deps(storage, accepted(), counters)), "email");
+  assert.equal(first + second, 1);
+  assert.deepEqual(counters, { wa: 0, email: 1 });
+});
+
+test("recurring confirmation recovers an abandoned outbox lease without duplication", async () => {
+  const { storage, notificationEvent } = await recurringFixture();
+  assert.ok(await storage.claimAppointmentNotificationEvent(notificationEvent.id));
+  await storage.updateAppointmentNotificationEvent(notificationEvent.id, { processingStartedAt: new Date(0) });
+  const counters = { wa: 0, email: 0 };
+  const dependencies = deps(storage, accepted(), counters); dependencies.whatsappEnabled = false;
+  assert.equal(await processPendingAppointmentNotifications(dependencies, 1), 1);
+  assert.equal(await processPendingAppointmentNotifications(dependencies, 1), 0);
   assert.deepEqual(counters, { wa: 0, email: 1 });
 });
 
@@ -225,13 +346,46 @@ test("all three Meta payloads preserve exact body and button order", async () =>
   try {
     for (const eventType of ["appointment_confirmation", "appointment_rescheduled", "appointment_cancelled"] as const) await sendMetaTemplate({
       recipient: "+351910000000", eventType, customerName: "1", locationName: "2", serviceName: "3", barberName: "4",
-      date: "5", time: "6", address: "7", managementToken: token });
+      startTime: new Date("2026-09-15T13:30:00.000Z"), timeZone: "Europe/Lisbon", address: "7", managementToken: token });
   } finally { globalThis.fetch = previousFetch; }
   assert.deepEqual(bodies.map((body) => body.template.name), ["appointment_confirmation_v1", "appointment_rescheduled_v1", "appointment_cancelled_v1"]);
-  assert.deepEqual(bodies[0].template.components[0].parameters.map((p: any) => p.text), ["1", "2", "3", "4", "5", "6", "7"]);
+  assert.deepEqual(bodies[0].template.components[0].parameters.map((p: any) => p.text),
+    ["1", "2", "3", "4", "15 de setembro de 2026", "14:30", "7"]);
   assert.deepEqual(bodies[1].template.components.slice(1).map((c: any) => [c.index, c.parameters[0].text]), [["0", token], ["1", token]]);
-  assert.deepEqual(bodies[2].template.components[0].parameters.map((p: any) => p.text), ["1", "2", "3", "5", "6"]);
+  assert.deepEqual(bodies[2].template.components[0].parameters.map((p: any) => p.text),
+    ["1", "2", "3", "15 de setembro de 2026", "14:30"]);
   assert.equal(bodies[2].template.components.length, 1);
+});
+
+test("future recurring Meta payload uses PT-PT long date, nine parameters, and no buttons", async () => {
+  const params = buildMetaRecurringTemplateParams({ schemaVersion: 1, seriesId: "series-meta",
+    customerName: "Cliente", customerEmail: "c@example.com", customerPhone: "+351910000000", whatsappOptIn: false,
+    location: { id: 1, name: "Lisboa", address: "Rua 1", timezone: "Europe/Lisbon" },
+    service: { id: 1, name: "Corte" }, barber: { id: 1, name: "João" },
+    recurrence: { intervalWeeks: 1, durationMonths: 1, occurrenceCount: 4 },
+    occurrences: [0, 1, 2, 3].map((occurrenceIndex) => ({ appointmentId: occurrenceIndex + 1, occurrenceIndex,
+      startTime: new Date(Date.UTC(2026, 8, 15 + occurrenceIndex * 7, 13, 30)).toISOString() })) });
+  const components = buildMetaAppointmentTemplateComponents(params);
+  assert.deepEqual(components[0].parameters.map((parameter) => parameter.text), [
+    "Cliente", "Lisboa", "Corte", "João", "Semanal", "15 de setembro de 2026", "14:30", "4", "Rua 1",
+  ]);
+  assert.equal(components.length, 1);
+  assert.equal(formatMetaTemplateDate(params.startTime, params.timeZone), "15 de setembro de 2026");
+  const delivery = await sendMetaTemplate(params);
+  assert.equal(delivery.errorCode, "META_RECURRING_TEMPLATE_DISABLED");
+});
+
+test("recurring email keeps the established layout and complete ordered occurrence list", () => {
+  const content = buildRecurringBookingEmail({ customerName: "Cliente", customerEmail: "c@example.com",
+    locationName: "Loja", locationAddress: "Rua 1", locationTimeZone: "Europe/Lisbon",
+    serviceName: "Corte", barberName: "João", intervalWeeks: 2, durationMonths: 3,
+    occurrences: [starts[2], starts[0], starts[1]] });
+  assert.match(content.subject, /Confirmação de marcações recorrentes - Loja/);
+  for (const label of ["Cliente:", "Localização:", "Serviço:", "Barbeiro:", "Periodicidade:",
+    "Duração configurada:", "Primeira marcação:", "Total:", "Morada:", "Datas da série"]) assert.match(content.html, new RegExp(label));
+  assert.match(content.html, /Cada marcação desta série é gerida individualmente/);
+  assert.ok(content.html.indexOf("segunda-feira") < content.html.indexOf("terça-feira"));
+  assert.doesNotMatch(content.html, /Reagendar|Cancelar/);
 });
 
 test("webhook challenge and signatures validate without exposing secrets", () => {

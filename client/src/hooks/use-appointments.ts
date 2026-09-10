@@ -26,6 +26,8 @@ export type AppointmentRecord = {
   notificationRevision: number;
   whatsappOptIn: boolean;
   whatsappOptInAt: string | null;
+  seriesId: string | null;
+  seriesOccurrenceIndex: number | null;
   notificationEventId?: number;
   createdAt: string | null;
   notificationChannel?: "email" | "none";

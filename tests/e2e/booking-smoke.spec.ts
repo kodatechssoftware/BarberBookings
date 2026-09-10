@@ -2997,6 +2997,9 @@ test.describe("booking rules", () => {
         },
       });
       expect(response.status(), await response.text()).toBe(201);
+      const creation = await response.json();
+      expect(creation.seriesId).toEqual(expect.any(String));
+      expect(creation.notificationEventId).toEqual(expect.any(Number));
 
       const appointmentsResponse = await request.get("/api/appointments");
       expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
@@ -3006,8 +3009,41 @@ test.describe("booking rules", () => {
       expect(createdAppointments.length).toBeGreaterThan(1);
       expect(createdAppointments.every((appointment: any) => appointment.customerEmail === customerEmail)).toBe(true);
       expect(createdAppointments.every((appointment: any) => appointment.cancelToken)).toBe(true);
+      expect(createdAppointments.every((appointment: any) => appointment.seriesId === creation.seriesId)).toBe(true);
+      expect(createdAppointments.map((appointment: any) => appointment.seriesOccurrenceIndex)).toEqual([0, 1]);
     } finally {
       await Promise.all(createdAppointments.map((appointment: any) =>
+        request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),
+      ));
+    }
+  });
+
+  test("keeps a calculated single recurrence as a normal appointment without a series", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"), request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(), await servicesResponse.json(),
+    );
+    const customerName = `Recorrência Única QA ${Date.now()}`;
+    let created: any[] = [];
+    try {
+      const response = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id, serviceId: service.id, startTime: futureThursdayIso(18, 17, 0),
+        name: customerName, phone: "+351912695786", customerEmail: "recorrencia-unica@example.com",
+        isManualBooking: true, isRecurring: true, recurringWeeks: 52, recurringMonths: 1,
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+      const body = await response.json();
+      expect(body.seriesId).toBeUndefined();
+      const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}`);
+      created = (await appointmentsResponse.json()).filter((appointment: any) => appointment.customerName === customerName);
+      expect(created).toHaveLength(1);
+      expect(created[0].seriesId).toBeNull();
+      expect(created[0].seriesOccurrenceIndex).toBeNull();
+    } finally {
+      await Promise.all(created.map((appointment: any) =>
         request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),
       ));
     }
