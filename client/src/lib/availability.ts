@@ -1,4 +1,4 @@
-import { isSameDay } from "date-fns";
+import { addDays, isAfter } from "date-fns";
 import type { PublicAppointment } from "@/hooks/use-appointments";
 
 export type AvailabilityRow = {
@@ -31,6 +31,35 @@ export type TimeSlot = {
   time: string;
   available: boolean;
 };
+
+function calendarDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function dateKeyInTimeZone(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(date);
+  const number = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value);
+  return Date.UTC(number("year"), number("month") - 1, number("day"), number("hour"), number("minute"), number("second")) - date.getTime();
+}
+
+export function calendarTimeInTimeZone(date: Date, time: string, timeZone: string) {
+  const [hours, minutes] = time.split(":").map(Number);
+  const utcGuess = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes);
+  let result = new Date(utcGuess - timeZoneOffsetMs(new Date(utcGuess), timeZone));
+  result = new Date(utcGuess - timeZoneOffsetMs(result, timeZone));
+  return result;
+}
 
 export function canBarberPerformService(barber: BarberOption | undefined | null, serviceId?: number | null) {
   if (!barber || !serviceId) return true;
@@ -122,6 +151,7 @@ export function getAvailableTimeSlots({
   shopAvailabilityRows,
   existingAppointments,
   now = new Date(),
+  timeZone,
 }: {
   selectedService?: ServiceOption | null;
   selectedDate?: Date | null;
@@ -131,6 +161,7 @@ export function getAvailableTimeSlots({
   shopAvailabilityRows?: ShopAvailabilityRow[] | null;
   existingAppointments?: PublicAppointment[] | null;
   now?: Date;
+  timeZone?: string;
 }): TimeSlot[] {
   if (!selectedService || !existingAppointments || !selectedDate) return [];
 
@@ -165,10 +196,13 @@ export function getAvailableTimeSlots({
     const hours = Math.floor(minutesFromDayStart / 60);
     const minutes = minutesFromDayStart % 60;
     const timeString = `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
-    const slotDateTime = new Date(selectedDate);
-    slotDateTime.setHours(hours, minutes, 0, 0);
+    const slotDateTime = timeZone
+      ? calendarTimeInTimeZone(selectedDate, timeString, timeZone)
+      : new Date(selectedDate);
+    if (!timeZone) slotDateTime.setHours(hours, minutes, 0, 0);
     const endDateTime = new Date(slotDateTime.getTime() + selectedService.duration * 60000);
-    const isPast = isSameDay(selectedDate, now) && slotDateTime <= now;
+    const isPast = (timeZone ? calendarDateKey(selectedDate) === dateKeyInTimeZone(now, timeZone) : calendarDateKey(selectedDate) === calendarDateKey(now))
+      && slotDateTime <= now;
 
     const busyBarberIds = new Set(
       existingAppointments
@@ -202,4 +236,19 @@ export function getAvailableTimeSlots({
   });
 
   return Array.from(slotsByTime.values());
+}
+
+export function findFirstAvailableDate({
+  startDate,
+  endDate,
+  ...availabilityInput
+}: Omit<Parameters<typeof getAvailableTimeSlots>[0], "selectedDate"> & {
+  startDate: Date;
+  endDate: Date;
+}) {
+  for (let date = new Date(startDate); !isAfter(date, endDate); date = addDays(date, 1)) {
+    const slots = getAvailableTimeSlots({ ...availabilityInput, selectedDate: date });
+    if (slots.some((slot) => slot.available)) return date;
+  }
+  return null;
 }

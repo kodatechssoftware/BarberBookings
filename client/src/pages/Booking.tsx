@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
+import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -300,8 +300,16 @@ export default function Booking() {
 
   const { data: barbers, isLoading: loadingBarbers } = useBarbers();
   const { data: services, isLoading: loadingServices } = useServices();
-  const { data: availabilityRows } = useBarberAvailability();
-  const { data: shopAvailabilityRows } = useShopAvailability();
+  const {
+    data: availabilityRows,
+    isLoading: loadingAvailability,
+    isError: availabilityError,
+  } = useBarberAvailability();
+  const {
+    data: shopAvailabilityRows,
+    isLoading: loadingShopAvailability,
+    isError: shopAvailabilityError,
+  } = useShopAvailability();
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const createAppointment = useCreateAppointment();
   const maxPublicBookingDate = useMemo(
@@ -313,6 +321,7 @@ export default function Booking() {
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
+  const locationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
   const availableServices = useMemo(() => {
     if (selectedBarberId && selectedBarberId !== 0) {
       return visibleServices.filter((service) => canBarberPerformService(selectedBarber, service.id));
@@ -328,6 +337,21 @@ export default function Booking() {
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
     date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, 'yyyy-MM-dd') : undefined,
     enabled: Boolean(selectedDate && isPublicDateAllowed(selectedDate)),
+  });
+
+  const bookingWindowStart = useMemo(
+    () => parseDateParam(publicBookingWindow?.today ?? null),
+    [publicBookingWindow?.today],
+  );
+  const {
+    data: bookingWindowAppointments,
+    isLoading: loadingBookingWindowAppointments,
+    isError: bookingWindowAppointmentsError,
+  } = usePublicAppointments({
+    barberId: selectedBarberId === 0 ? undefined : selectedBarberId?.toString(),
+    startDate: publicBookingWindow?.today,
+    endDate: publicBookingWindow?.maxDate,
+    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId && publicBookingWindow),
   });
 
   useEffect(() => {
@@ -422,8 +446,9 @@ export default function Booking() {
       availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
       shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
       existingAppointments,
+      timeZone: locationTimeZone,
     });
-  }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
+  }, [availabilityRows, existingAppointments, locationTimeZone, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
   const shopAvailabilityForCalendar = useMemo(
     () => (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
     [shopAvailabilityRows],
@@ -455,6 +480,7 @@ export default function Booking() {
         availabilityRows: availability,
         shopAvailabilityRows: shopAvailabilityForCalendar,
         existingAppointments: appointments,
+        timeZone: locationTimeZone,
       });
 
       if (slots.some((slot) => slot.available)) {
@@ -474,7 +500,66 @@ export default function Booking() {
     selectedService,
     shopAvailabilityForCalendar,
     visibleBarbers,
+    locationTimeZone,
   ]);
+
+  const initialAvailabilitySelectionKey = [
+    activeLocationId,
+    selectedBarberId,
+    selectedServiceId,
+    publicBookingWindow?.today,
+    publicBookingWindow?.maxDate,
+  ].join(":");
+  const completedInitialAvailabilityKey = useRef<string | null>(null);
+  const failedInitialAvailabilityKey = useRef<string | null>(null);
+  const loadingInitialAvailability = loadingBarbers || loadingServices || loadingAvailability
+    || loadingShopAvailability || loadingPublicBookingWindow || loadingBookingWindowAppointments;
+  const initialAvailabilityHasError = availabilityError || shopAvailabilityError
+    || bookingWindowAppointmentsError;
+  const firstAvailableDate = useMemo(() => {
+    if (!bookingWindowStart || !maxPublicBookingDate || !selectedService || selectedBarberId === null
+      || !bookingWindowAppointments || initialAvailabilityHasError) return undefined;
+    return findFirstAvailableDate({
+      startDate: bookingWindowStart,
+      endDate: maxPublicBookingDate,
+      selectedService,
+      selectedBarberId,
+      visibleBarbers,
+      availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
+      shopAvailabilityRows: shopAvailabilityForCalendar,
+      existingAppointments: bookingWindowAppointments,
+      timeZone: locationTimeZone,
+    });
+  }, [availabilityRows, bookingWindowAppointments, bookingWindowStart, initialAvailabilityHasError,
+    locationTimeZone, maxPublicBookingDate, selectedBarberId, selectedService, shopAvailabilityForCalendar, visibleBarbers]);
+
+  useEffect(() => {
+    if (step !== 3 || loadingInitialAvailability
+      || completedInitialAvailabilityKey.current === initialAvailabilitySelectionKey) return;
+    if (initialAvailabilityHasError) {
+      completedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
+      failedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
+      setSelectedDate(undefined);
+      setSelectedTime(null);
+      return;
+    }
+    if (firstAvailableDate === undefined) return;
+    completedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
+    failedInitialAvailabilityKey.current = null;
+    setSelectedDate(firstAvailableDate ?? undefined);
+    if (firstAvailableDate) setVisibleCalendarMonth(firstAvailableDate);
+    else if (bookingWindowStart) setVisibleCalendarMonth(bookingWindowStart);
+    setSelectedTime(null);
+    setShowTimeError(false);
+  }, [bookingWindowStart, firstAvailableDate, initialAvailabilityHasError, initialAvailabilitySelectionKey,
+    loadingInitialAvailability, step]);
+  const preparingInitialAvailability = step === 3
+    && completedInitialAvailabilityKey.current !== initialAvailabilitySelectionKey;
+  const initialAvailabilityError = step === 3
+    && failedInitialAvailabilityKey.current === initialAvailabilitySelectionKey;
+  const noAvailabilityInBookingWindow = step === 3
+    && completedInitialAvailabilityKey.current === initialAvailabilitySelectionKey
+    && firstAvailableDate === null;
 
   const handleNext = () => {
     if (step === 3 && !selectedTime) {
@@ -522,9 +607,7 @@ export default function Booking() {
     const customerName = customerDetails.name.trim();
     const normalizedPhone = toStoredPhone(customerDetails.phone, selectedPhoneCountry);
 
-    const [hours, minutes] = selectedTime.split(':').map(Number);
-    const appointmentDate = new Date(selectedDate);
-    appointmentDate.setHours(hours, minutes, 0, 0);
+    const appointmentDate = calendarTimeInTimeZone(selectedDate, selectedTime, locationTimeZone);
     const customerEmail = customerDetails.email.trim();
 
     try {
@@ -618,7 +701,7 @@ export default function Booking() {
           </motion.div>
           <h2 className="text-3xl font-display font-bold mb-4 text-white">Marcação Confirmada!</h2>
           <p className="text-gray-400 mb-3">
-            Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
+            Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}h.
           </p>
           {customerDetails.email.trim() ? (
             <>
@@ -858,7 +941,7 @@ export default function Booking() {
                   <div className="bg-card border border-white/5 rounded-xl p-2 md:p-4 overflow-x-auto">
                     <Calendar
                       mode="single"
-                      selected={selectedDate}
+                      selected={preparingInitialAvailability ? undefined : selectedDate}
                       month={visibleCalendarMonth}
                       onMonthChange={setVisibleCalendarMonth}
                       onSelect={(date) => {
@@ -913,7 +996,19 @@ export default function Booking() {
                     "bg-card border rounded-xl p-4 md:p-6 min-h-[200px] transition-all duration-300",
                     showTimeError ? "border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]" : "border-white/5"
                   )}>
-                    {!selectedDate ? (
+                    {preparingInitialAvailability || loadingInitialAvailability ? (
+                      <div className="flex justify-center mt-10">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : initialAvailabilityError ? (
+                      <p className="text-red-400 text-center mt-10">
+                        Não foi possível carregar os horários disponíveis. Tente novamente dentro de instantes.
+                      </p>
+                    ) : noAvailabilityInBookingWindow ? (
+                      <p className="text-gray-500 text-center mt-10">
+                        Não existem horários disponíveis dentro do período de marcações atual.
+                      </p>
+                    ) : !selectedDate ? (
                       <p className="text-gray-500 text-center mt-10">Selecione uma data primeiro.</p>
                     ) : loadingAppointments ? (
                       <div className="flex justify-center mt-10">
@@ -951,7 +1046,7 @@ export default function Booking() {
                                     : "bg-transparent text-gray-300 border-white/10 hover:border-primary/50 hover:bg-white/5"
                               )}
                             >
-                              {time}
+                              {time}h
                             </button>
                           ))}
                         </div>
@@ -987,7 +1082,7 @@ export default function Booking() {
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-400">Data e hora:</span>
                     <span className="font-medium">
-                      {selectedDate && format(selectedDate, "dd/MM/yyyy")} às {selectedTime}
+                      {selectedDate && format(selectedDate, "dd/MM/yyyy")} às {selectedTime}h
                     </span>
                   </div>
                   <div className="flex justify-between text-lg font-bold text-primary pt-2 border-t border-white/10">
@@ -1102,7 +1197,7 @@ export default function Booking() {
                       </p>
                     ) : (
                       <p id="email-help" className="text-[11px] leading-relaxed text-gray-500">
-                        Indique o email para receber a confirmação da marcação e o link de cancelamento.
+                        Indique o email para receber as comunicações da marcação caso não opte pelo WhatsApp ou não seja possível enviar por esse canal.
                       </p>
                     )}
                   </div>

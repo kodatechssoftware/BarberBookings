@@ -15,6 +15,8 @@ import { buildRecurringBookingEmail } from "../../server/email";
 import {
   buildMetaAppointmentTemplateComponents,
   buildMetaRecurringTemplateParams,
+  buildBookingCancellationMessage,
+  buildBookingConfirmationMessage,
   formatMetaTemplateDate,
   sendMetaTemplate,
   type MetaTemplateDeliveryResult,
@@ -85,6 +87,20 @@ for (const result of [failed, unknown]) test(`confirmation ${result.outcome} use
   assert.equal(await processAppointmentNotification(event.id, dependencies), "email");
   assert.equal(await processAppointmentNotification(event.id, dependencies), "none");
   assert.deepEqual(counters, { wa: 1, email: 1 });
+});
+
+test("WhatsApp failure without fallback email never reverts the booked appointment", async () => {
+  const { storage, appointment } = await fixture(true, null);
+  const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  const counters = { wa: 0, email: 0 };
+  assert.equal(await processAppointmentNotification(event.id, deps(storage, failed, counters)), "none");
+  assert.deepEqual(counters, { wa: 1, email: 0 });
+  assert.equal((await storage.getAppointment(appointment.id))?.status, "booked");
+  const saved = await storage.getAppointmentNotificationEvent(event.id);
+  assert.equal(saved?.whatsappStatus, "failed");
+  assert.equal(saved?.emailStatus, "skipped");
+  assert.equal(saved?.emailErrorCode, "EMAIL_MISSING");
+  assert.ok(saved?.processingCompletedAt);
 });
 
 test("confirmation becomes stale after reschedule or cancellation", async () => {
@@ -350,10 +366,10 @@ test("all three Meta payloads preserve exact body and button order", async () =>
   } finally { globalThis.fetch = previousFetch; }
   assert.deepEqual(bodies.map((body) => body.template.name), ["appointment_confirmation_v1", "appointment_rescheduled_v1", "appointment_cancelled_v1"]);
   assert.deepEqual(bodies[0].template.components[0].parameters.map((p: any) => p.text),
-    ["1", "2", "3", "4", "15 de setembro de 2026", "14:30", "7"]);
+    ["1", "2", "3", "4", "15 de setembro de 2026", "14:30h", "7"]);
   assert.deepEqual(bodies[1].template.components.slice(1).map((c: any) => [c.index, c.parameters[0].text]), [["0", token], ["1", token]]);
   assert.deepEqual(bodies[2].template.components[0].parameters.map((p: any) => p.text),
-    ["1", "2", "3", "15 de setembro de 2026", "14:30"]);
+    ["1", "2", "3", "15 de setembro de 2026", "14:30h"]);
   assert.equal(bodies[2].template.components.length, 1);
 });
 
@@ -367,12 +383,19 @@ test("future recurring Meta payload uses PT-PT long date, nine parameters, and n
       startTime: new Date(Date.UTC(2026, 8, 15 + occurrenceIndex * 7, 13, 30)).toISOString() })) });
   const components = buildMetaAppointmentTemplateComponents(params);
   assert.deepEqual(components[0].parameters.map((parameter) => parameter.text), [
-    "Cliente", "Lisboa", "Corte", "João", "Semanal", "15 de setembro de 2026", "14:30", "4", "Rua 1",
+    "Cliente", "Lisboa", "Corte", "João", "Semanal", "15 de setembro de 2026", "14:30h", "4", "Rua 1",
   ]);
   assert.equal(components.length, 1);
   assert.equal(formatMetaTemplateDate(params.startTime, params.timeZone), "15 de setembro de 2026");
   const delivery = await sendMetaTemplate(params);
   assert.equal(delivery.errorCode, "META_RECURRING_TEMPLATE_DISABLED");
+});
+
+test("legacy WhatsApp messages also append h to PT-PT times", () => {
+  const common = { customerName: "Cliente", barberName: "João", serviceName: "Corte",
+    startTime: new Date("2026-09-15T08:30:00.000Z"), cancelUrl: "https://example.com/cancel" };
+  assert.match(buildBookingConfirmationMessage(common), /09:30h/);
+  assert.match(buildBookingCancellationMessage(common), /09:30h/);
 });
 
 test("recurring email keeps the established layout and complete ordered occurrence list", () => {
@@ -384,6 +407,7 @@ test("recurring email keeps the established layout and complete ordered occurren
   for (const label of ["Cliente:", "Localização:", "Serviço:", "Barbeiro:", "Periodicidade:",
     "Duração configurada:", "Primeira marcação:", "Total:", "Morada:", "Datas da série"]) assert.match(content.html, new RegExp(label));
   assert.match(content.html, /Cada marcação desta série é gerida individualmente/);
+  assert.match(content.html, /10:00h/);
   assert.ok(content.html.indexOf("segunda-feira") < content.html.indexOf("terça-feira"));
   assert.doesNotMatch(content.html, /Reagendar|Cancelar/);
 });

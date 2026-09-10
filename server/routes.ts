@@ -3641,6 +3641,7 @@ export async function registerRoutes(
       locationId: appointment.locationId,
       locationName: location?.name || "",
       locationAddress: location?.address || "",
+      locationTimeZone: location?.timezone || SHOP_TIME_ZONE,
       barberId: appointment.barberId,
       serviceId: appointment.serviceId,
       startTime: appointment.startTime,

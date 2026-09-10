@@ -95,11 +95,11 @@ export function formatAppointmentForEmail(startTime: Date, timeZone = shopTimeZo
       month: "long",
       day: "numeric",
     }),
-    time: startTime.toLocaleTimeString("pt-PT", {
+    time: `${startTime.toLocaleTimeString("pt-PT", {
       timeZone,
       hour: "2-digit",
       minute: "2-digit",
-    }),
+    })}h`,
   };
 }
 

@@ -417,9 +417,9 @@ export function formatMetaTemplateDate(date: Date, timeZone = SHOP_TIME_ZONE) {
 }
 
 export function formatMetaTemplateTime(date: Date, timeZone = SHOP_TIME_ZONE) {
-  return new Intl.DateTimeFormat("pt-PT", {
+  return `${new Intl.DateTimeFormat("pt-PT", {
     timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).format(date);
+  }).format(date)}h`;
 }
 
 export async function sendMetaTemplate(
@@ -642,12 +642,12 @@ function formatAppointmentDate(date: Date) {
 }
 
 function formatAppointmentTime(date: Date) {
-  return new Intl.DateTimeFormat("pt-PT", {
+  return `${new Intl.DateTimeFormat("pt-PT", {
     timeZone: SHOP_TIME_ZONE,
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  }).format(date);
+  }).format(date)}h`;
 }
 
 export function buildBookingConfirmationMessage({

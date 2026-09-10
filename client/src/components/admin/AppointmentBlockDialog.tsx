@@ -466,9 +466,12 @@ export function AppointmentBlockDialog({
                   </p>
                 ) : (
                   <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-500">
-                    Indique o email para receber a confirmação da marcação e o link de cancelamento.
+                    Indique o email do cliente para enviar a confirmação e os dados da marcação.
                   </p>
                 )}
+                <p className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs leading-relaxed text-gray-500">
+                  As marcações criadas manualmente são confirmadas por email. O WhatsApp só é utilizado quando existe consentimento do cliente.
+                </p>
               </div>
             )}
           </div>

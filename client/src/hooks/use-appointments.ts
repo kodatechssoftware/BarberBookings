@@ -48,6 +48,7 @@ export type AppointmentByToken = {
   locationId: number;
   locationName: string;
   locationAddress: string;
+  locationTimeZone: string;
   barberId: number;
   serviceId: number | null;
   startTime: string;
