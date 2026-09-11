@@ -705,16 +705,21 @@ export default function Booking() {
           {customerDetails.email.trim() ? (
             <>
               <p className="mb-3 text-sm text-gray-500">
-                Enviámos para o seu email a confirmação com os detalhes da marcação e o link de cancelamento.
+                A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
               </p>
               <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
-                Se não encontrar o email em poucos minutos, verifique a pasta de spam. Se ainda assim não o receber, contacte diretamente a barbearia.
+                Se não receber a confirmação nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.
               </p>
             </>
           ) : (
-            <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-gray-400">
-              Como não indicou um email, não receberá o link de cancelamento. Se precisar de alterar ou cancelar a marcação, contacte diretamente a barbearia.
-            </p>
+            <>
+              <p className="mb-3 text-sm text-gray-500">
+                A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
+              </p>
+              <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-gray-400">
+                Se não receber a confirmação nos próximos minutos, contacte diretamente a barbearia.
+              </p>
+            </>
           )}
           
           <div className="space-y-4">

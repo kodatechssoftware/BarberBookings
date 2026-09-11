@@ -453,8 +453,8 @@ test.describe("public booking flow", () => {
     expect(appointment.whatsappOptIn).toBe(true);
     expect(appointment.whatsappOptInAt).toBeTruthy();
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
-    await expect(page.getByText(/Enviámos para o seu email a confirmação/)).toBeVisible();
-    await expect(page.getByText(/verifique a pasta de spam/)).toBeVisible();
+    await expect(page.getByText("A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.")).toBeVisible();
+    await expect(page.getByText("Se não receber a confirmação nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.")).toBeVisible();
 
     await page.goto(`/reschedule/${appointment.cancelToken}`);
     await expect(page.getByText(/Atual: .*16:00h/)).toBeVisible();
@@ -506,8 +506,8 @@ test.describe("public booking flow", () => {
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
     expect(submittedBooking).toMatchObject({ whatsappOptIn: true, customerPhone: "+351912695761" });
     expect(submittedBooking).not.toHaveProperty("customerEmail");
-    await expect(page.getByText(/Como não indicou um email, não receberá o link de cancelamento/)).toBeVisible();
-    await expect(page.getByText(/contacte diretamente a barbearia/)).toBeVisible();
+    await expect(page.getByText("A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.")).toBeVisible();
+    await expect(page.getByText("Se não receber a confirmação nos próximos minutos, contacte diretamente a barbearia.")).toBeVisible();
   });
 
   test("automatically persists public WhatsApp opt-in without requiring email", async ({ request }) => {
