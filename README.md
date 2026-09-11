@@ -157,6 +157,22 @@ evento transacional persistente. Com opt-in, Meta e o canal principal; sem aceit
 backend tenta uma unica vez o email. Marcacoes manuais sem opt-in continuam por email. Um worker
 com lease recupera eventos pendentes apos restart sem repetir tentativas WhatsApp ambiguas.
 
+#### Decisão funcional sobre consentimento WhatsApp
+
+O booking publico exige um numero de telemovel e informa junto ao campo que esse numero pode ser
+utilizado para confirmacoes e atualizacoes da marcacao via WhatsApp. Nao existe uma checkbox
+separada: ao confirmar, a marcacao guarda `whatsappOptIn=true`, a data do registo e a origem
+`public_booking`.
+
+Na marcacao manual, o telemovel e opcional. Um numero valido guarda automaticamente o mesmo opt-in
+com origem `admin_manual`; sem numero, o opt-in fica falso e o WhatsApp nao e tentado. O email
+continua opcional e serve de fallback quando disponivel. Esta preferencia pertence apenas a cada
+marcacao ou serie, nao ao cliente de forma global.
+
+Uma evolucao futura podera introduzir consentimento persistente por cliente, tenant/barbearia,
+canal e finalidade transacional, incluindo estado, origem, data de concessao, possibilidade de
+desativacao/revogacao e respetiva auditoria.
+
 A resposta do reagendamento inclui `notificationEventId`. Depois de autenticar como admin, o
 resultado seguro pode ser consultado em:
 

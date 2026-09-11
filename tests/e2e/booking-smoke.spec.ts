@@ -440,16 +440,17 @@ test.describe("public booking flow", () => {
     await page.getByPlaceholder("O seu nome").fill("Fluxo UI QA");
     await page.getByPlaceholder("912 345 678").fill("912695760");
     await page.getByPlaceholder("exemplo@email.com").fill("fluxo-ui@example.com");
-    await expect(page.getByRole("checkbox", {
-      name: "Quero receber a confirmação e atualizações da minha marcação por WhatsApp.",
-    })).not.toBeChecked();
+    await expect(page.getByText(
+      "A Baptista Barber Shop pode utilizar este número para enviar, via WhatsApp, confirmações e atualizações relacionadas com a sua marcação.",
+    )).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
     await page.getByRole("button", { name: "Confirmar" }).click();
 
     const createResponse = await createResponsePromise;
     expect(createResponse.status(), await createResponse.text()).toBe(201);
     const appointment = await createResponse.json();
-    expect(appointment.whatsappOptIn).toBe(false);
-    expect(appointment.whatsappOptInAt).toBeNull();
+    expect(appointment.whatsappOptIn).toBe(true);
+    expect(appointment.whatsappOptInAt).toBeTruthy();
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
     await expect(page.getByText(/Enviámos para o seu email a confirmação/)).toBeVisible();
     await expect(page.getByText(/verifique a pasta de spam/)).toBeVisible();
@@ -473,20 +474,17 @@ test.describe("public booking flow", () => {
     await expect(page.getByText(/já se encontra cancelada/i)).toBeVisible();
   });
 
-  test("keeps WhatsApp optional and allows opt-in without email", async ({ page }) => {
+  test("shows the WhatsApp notice without a checkbox and keeps email optional", async ({ page }) => {
     const bookingDate = dateKeyFromIso(futureThursdayIso(39, 15, 30));
     await page.goto(`/book?barberId=1&serviceId=1&date=${bookingDate}&time=15:30`);
 
     await expect(page.getByText(
-      "Indique o email para receber as comunicações da marcação caso não opte pelo WhatsApp ou não seja possível enviar por esse canal.",
+      "Indique o email como alternativa caso não seja possível enviar a comunicação por WhatsApp.",
     )).toBeVisible();
-
-    const whatsappConsent = page.getByRole("checkbox", {
-      name: "Quero receber a confirmação e atualizações da minha marcação por WhatsApp.",
-    });
-    await expect(whatsappConsent).not.toBeChecked();
-    await expect(page.getByText("Posso retirar este consentimento a qualquer momento.")).toHaveCount(0);
-    await whatsappConsent.check();
+    await expect(page.getByText(
+      "A Baptista Barber Shop pode utilizar este número para enviar, via WhatsApp, confirmações e atualizações relacionadas com a sua marcação.",
+    )).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
 
     let submittedBooking: Record<string, unknown> | undefined;
     await page.route("**/api/appointments", async (route) => {
@@ -510,7 +508,7 @@ test.describe("public booking flow", () => {
     await expect(page.getByText(/contacte diretamente a barbearia/)).toBeVisible();
   });
 
-  test("persists a real public WhatsApp opt-in without requiring email", async ({ request }) => {
+  test("automatically persists public WhatsApp opt-in without requiring email", async ({ request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
       request.get("/api/services"),
@@ -519,6 +517,19 @@ test.describe("public booking flow", () => {
       await barbersResponse.json(),
       await servicesResponse.json(),
     );
+    const missingPhoneResponse = await request.post("/api/appointments", {
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: futureThursdayIso(40, 15, 0),
+        customerName: "Sem Telemóvel QA",
+        customerPhone: "",
+        customerEmail: "sem-telemovel@example.com",
+      },
+    });
+    expect(missingPhoneResponse.status()).toBe(400);
+    expect(await missingPhoneResponse.json()).toMatchObject({ field: "customerPhone" });
+
     const createResponse = await request.post("/api/appointments", {
       data: {
         barberId: barber.id,
@@ -526,7 +537,7 @@ test.describe("public booking flow", () => {
         startTime: futureThursdayIso(40, 15, 30),
         customerName: "WhatsApp Sem Email QA",
         customerPhone: "+351912695762",
-        whatsappOptIn: true,
+        whatsappOptIn: false,
       },
     });
     expect(createResponse.status(), await createResponse.text()).toBe(201);
@@ -2959,11 +2970,8 @@ test.describe("booking rules", () => {
       await expect(dialog).toBeVisible();
       await expect(dialog.getByText("Indique o email do cliente para enviar a confirmação e os dados da marcação.")).toBeVisible();
       await expect(dialog.getByText("As marcações criadas manualmente são confirmadas por email. O WhatsApp só é utilizado quando existe consentimento do cliente.")).toHaveCount(0);
-      const manualWhatsapp = dialog.getByRole("checkbox", { name: "Enviar confirmação por WhatsApp" });
-      await expect(manualWhatsapp).not.toBeChecked();
-      await manualWhatsapp.check();
-      await expect(manualWhatsapp).toBeChecked();
-      await manualWhatsapp.uncheck();
+      await expect(dialog.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
+      await expect(dialog.getByText("Telemóvel (opcional)")).toBeVisible();
       await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("placeholder", "exemplo@email.com");
       await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("aria-invalid", "false");
       await selectDialogOption(page, dialog, 0, barber.name);
@@ -2983,8 +2991,8 @@ test.describe("booking rules", () => {
       );
       expect(appointment).toBeTruthy();
       expect(appointment.customerEmail).toBe(customerEmail);
-      expect(appointment.whatsappOptIn).toBe(false);
-      expect(appointment.whatsappOptInAt).toBeNull();
+      expect(appointment.whatsappOptIn).toBe(true);
+      expect(appointment.whatsappOptInAt).toBeTruthy();
       expect(appointment.cancelToken).toBeTruthy();
       appointmentId = appointment.id;
 
@@ -2993,7 +3001,7 @@ test.describe("booking rules", () => {
 
       await page.getByRole("button", { name: "Marcação manual" }).click();
       await expect(page.locator("#manual-booking-email")).toHaveValue("");
-      await expect(page.getByRole("checkbox", { name: "Enviar confirmação por WhatsApp" })).not.toBeChecked();
+      await expect(page.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
     } finally {
       if (appointmentId) {
         await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
@@ -3001,7 +3009,7 @@ test.describe("booking rules", () => {
     }
   });
 
-  test("stores manual WhatsApp authorization and allows omitting email", async ({ request }) => {
+  test("automatically stores manual WhatsApp authorization and allows omitting email", async ({ request }) => {
     await loginAdminRequest(request);
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"), request.get("/api/services"),
@@ -3015,7 +3023,7 @@ test.describe("booking rules", () => {
       const response = await request.post("/api/appointments/block", { data: {
         barberId: barber.id, serviceId: service.id, startTime: futureThursdayIso(41, 16, 30),
         name: customerName, phone: "+351912695788", customerEmail: "",
-        whatsappOptIn: true, isManualBooking: true,
+        whatsappOptIn: false, isManualBooking: true,
       } });
       expect(response.status(), await response.text()).toBe(201);
 
@@ -3034,6 +3042,46 @@ test.describe("booking rules", () => {
         );
         return entry ? JSON.parse(entry.metadata || "{}").whatsappOptInSource : undefined;
       }).toBe("admin_manual");
+    } finally {
+      if (appointment?.id) {
+        await request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } });
+      }
+    }
+  });
+
+  test("allows a manual booking without phone and does not opt it into WhatsApp", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"), request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(), await servicesResponse.json(),
+    );
+    const customerName = `Manual Sem Telemóvel QA ${Date.now()}`;
+    let appointment: any;
+    try {
+      const response = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id, serviceId: service.id, startTime: futureThursdayIso(42, 16, 30),
+        name: customerName, phone: "", customerEmail: "manual-sem-telefone@example.com",
+        isManualBooking: true,
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+
+      const appointmentsResponse = await request.get("/api/appointments");
+      appointment = (await appointmentsResponse.json()).find((candidate: any) => candidate.customerName === customerName);
+      expect(appointment).toBeTruthy();
+      expect(appointment.customerPhone).toBe("");
+      expect(appointment.whatsappOptIn).toBe(false);
+      expect(appointment.whatsappOptInAt).toBeNull();
+      expect(appointment.status).toBe("booked");
+
+      await expect.poll(async () => {
+        const auditResponse = await request.get("/api/admin/audit-logs?limit=100");
+        const entry = (await auditResponse.json()).find((log: any) =>
+          log.action === "appointment.created_manual" && log.entityId === appointment.id,
+        );
+        return entry ? JSON.parse(entry.metadata || "{}").whatsappOptInSource : undefined;
+      }).toBeNull();
     } finally {
       if (appointment?.id) {
         await request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } });
@@ -3098,7 +3146,7 @@ test.describe("booking rules", () => {
     await expect(dialog).toBeVisible();
   });
 
-  test("stores email and WhatsApp authorization across every recurring manual appointment", async ({ request }) => {
+  test("automatically stores email and WhatsApp authorization across every recurring manual appointment", async ({ request }) => {
     await loginAdminRequest(request);
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
@@ -3121,7 +3169,7 @@ test.describe("booking rules", () => {
           name: customerName,
           phone: "+351912695787",
           customerEmail,
-          whatsappOptIn: true,
+          whatsappOptIn: false,
           isManualBooking: true,
           isRecurring: true,
           recurringWeeks: 2,
@@ -3142,9 +3190,17 @@ test.describe("booking rules", () => {
       expect(createdAppointments.every((appointment: any) => appointment.customerEmail === customerEmail)).toBe(true);
       expect(createdAppointments.every((appointment: any) => appointment.whatsappOptIn === true)).toBe(true);
       expect(createdAppointments.every((appointment: any) => appointment.whatsappOptInAt)).toBe(true);
+      expect(new Set(createdAppointments.map((appointment: any) => appointment.whatsappOptInAt)).size).toBe(1);
       expect(createdAppointments.every((appointment: any) => appointment.cancelToken)).toBe(true);
       expect(createdAppointments.every((appointment: any) => appointment.seriesId === creation.seriesId)).toBe(true);
       expect(createdAppointments.map((appointment: any) => appointment.seriesOccurrenceIndex)).toEqual([0, 1]);
+      await expect.poll(async () => {
+        const auditResponse = await request.get("/api/admin/audit-logs?limit=100");
+        const entry = (await auditResponse.json()).find((log: any) =>
+          log.action === "appointment.created_manual" && log.entityId === createdAppointments[0]?.id,
+        );
+        return entry ? JSON.parse(entry.metadata || "{}").whatsappOptInSource : undefined;
+      }).toBe("admin_manual");
     } finally {
       await Promise.all(createdAppointments.map((appointment: any) =>
         request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),

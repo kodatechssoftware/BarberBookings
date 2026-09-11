@@ -20,7 +20,6 @@ export type AppointmentBlockData = {
   name: string;
   phone: string;
   email: string;
-  whatsappOptIn: boolean;
   date: Date;
   endDate: Date;
   isMultiDay: boolean;

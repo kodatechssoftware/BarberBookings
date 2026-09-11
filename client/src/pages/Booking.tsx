@@ -275,7 +275,6 @@ export default function Booking() {
     email: false,
   });
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
-  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const { data: locations = [], isLoading: loadingLocations, isError: locationsError } = useLocations({ purpose: "booking" });
@@ -618,7 +617,7 @@ export default function Booking() {
         customerName,
         customerEmail: customerEmail || undefined,
         customerPhone: normalizedPhone,
-        whatsappOptIn,
+        whatsappOptIn: true,
       });
       saveLastBookingPreference({
         barberId: selectedBarberId,
@@ -1154,7 +1153,7 @@ export default function Booking() {
                         placeholder={selectedPhoneCountryData.placeholder}
                         className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                         aria-invalid={showCustomerError("phone")}
-                        aria-describedby={showCustomerError("phone") ? "phone-error" : "phone-help"}
+                        aria-describedby={`${showCustomerError("phone") ? "phone-error" : "phone-help"} phone-whatsapp-notice`}
                         value={customerDetails.phone}
                         onBeforeInput={handleCustomerPhoneBeforeInput}
                         onPaste={handleCustomerPhonePaste}
@@ -1162,6 +1161,9 @@ export default function Booking() {
                         onBlur={() => markCustomerTouched("phone")}
                       />
                     </div>
+                    <p id="phone-whatsapp-notice" className="text-[11px] leading-relaxed text-gray-500">
+                      A {shopBranding.name} pode utilizar este número para enviar, via WhatsApp, confirmações e atualizações relacionadas com a sua marcação.
+                    </p>
                     {showCustomerError("phone") ? (
                       <p id="phone-error" className="text-xs font-medium text-red-400">
                         {customerFieldErrors.phone}
@@ -1197,21 +1199,10 @@ export default function Booking() {
                       </p>
                     ) : (
                       <p id="email-help" className="text-[11px] leading-relaxed text-gray-500">
-                        Indique o email para receber as comunicações da marcação caso não opte pelo WhatsApp ou não seja possível enviar por esse canal.
+                        Indique o email como alternativa caso não seja possível enviar a comunicação por WhatsApp.
                       </p>
                     )}
                   </div>
-                  <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-white/10 bg-background/40 p-4 text-sm leading-relaxed text-gray-300">
-                    <input
-                      type="checkbox"
-                      className="mt-1 h-4 w-4 shrink-0 accent-[#d4af37]"
-                      checked={whatsappOptIn}
-                      onChange={(event) => setWhatsappOptIn(event.target.checked)}
-                    />
-                    <span>
-                      Quero receber a confirmação e atualizações da minha marcação por WhatsApp.
-                    </span>
-                  </label>
                 </div>
               </div>
             )}

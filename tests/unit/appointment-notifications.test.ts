@@ -89,6 +89,14 @@ for (const result of [failed, unknown]) test(`confirmation ${result.outcome} use
   assert.deepEqual(counters, { wa: 1, email: 1 });
 });
 
+test("confirmation without phone opt-in never attempts WhatsApp and uses email", async () => {
+  const { storage, appointment } = await fixture(false);
+  const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  const counters = { wa: 0, email: 0 };
+  assert.equal(await processAppointmentNotification(event.id, deps(storage, accepted(), counters)), "email");
+  assert.deepEqual(counters, { wa: 0, email: 1 });
+});
+
 test("WhatsApp failure without fallback email never reverts the booked appointment", async () => {
   const { storage, appointment } = await fixture(true, null);
   const [event] = await storage.getAppointmentNotificationEvents(appointment.id);

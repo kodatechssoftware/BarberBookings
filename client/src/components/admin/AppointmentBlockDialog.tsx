@@ -392,7 +392,7 @@ export function AppointmentBlockDialog({
 
               {blockData.isManualBooking && (
                 <div className="space-y-3">
-                  <Label className="text-sm font-medium text-gray-300">Telemóvel</Label>
+                  <Label className="text-sm font-medium text-gray-300">Telemóvel (opcional)</Label>
                   <div className="flex h-12 overflow-hidden rounded-xl border border-white/10 bg-background/50 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40">
                     <div className="relative shrink-0 border-r border-white/10">
                       <select
@@ -431,8 +431,7 @@ export function AppointmentBlockDialog({
                     />
                   </div>
                   <p className="text-xs text-gray-500">
-                    Escolha o país e escreva apenas o número. O indicativo{" "}
-                    {manualPhoneCountry.dialCode} é adicionado automaticamente.
+                    Com um número válido, a confirmação e as atualizações podem ser enviadas por WhatsApp.
                   </p>
                 </div>
               )}
@@ -469,15 +468,6 @@ export function AppointmentBlockDialog({
                     Indique o email do cliente para enviar a confirmação e os dados da marcação.
                   </p>
                 )}
-                <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-400">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 shrink-0 accent-[#d4af37]"
-                    checked={blockData.whatsappOptIn}
-                    onChange={(event) => onBlockDataChange({ ...blockData, whatsappOptIn: event.target.checked })}
-                  />
-                  <span>Enviar confirmação por WhatsApp</span>
-                </label>
               </div>
             )}
           </div>

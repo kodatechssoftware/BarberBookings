@@ -96,7 +96,8 @@ type AdminAppointment = {
 };
 
 function normalizeManualBookingPhoneForSubmit(phone: string) {
-  return normalizeSupportedPhone(phone) || phone.trim() || "900000000";
+  const { localPhone } = splitStoredPhone(phone);
+  return localPhone ? normalizeSupportedPhone(phone) || phone.trim() : "";
 }
 
 type FutureBlacklistAppointment = {
@@ -1600,7 +1601,6 @@ export default function Admin() {
     name: "",
     phone: "900000000",
     email: "",
-    whatsappOptIn: false,
     date: startOfToday(),
     endDate: startOfToday(),
     isMultiDay: false,
@@ -2008,7 +2008,6 @@ export default function Admin() {
       name: "",
       phone: mode === "manual" ? "" : "900000000",
       email: "",
-      whatsappOptIn: false,
       date: date || current.date,
       endDate: date || current.endDate,
       isMultiDay: false,
@@ -2755,7 +2754,6 @@ export default function Admin() {
           name: blockData.name.trim(),
           phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
           customerEmail: normalizeEmail(blockData.email),
-          whatsappOptIn: blockData.whatsappOptIn,
           isManualBooking: true,
           isRecurring: true,
           recurringWeeks: Number(blockData.recurringWeeks),
@@ -2789,7 +2787,6 @@ export default function Admin() {
           name: blockData.isManualBooking ? blockData.name.trim() : (blockData.name.trim() || "BLOQUEIO MANUAL"),
           phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
-          whatsappOptIn: blockData.isManualBooking ? blockData.whatsappOptIn : false,
           isManualBooking: blockData.isManualBooking,
           allowOutsideHours: blockData.allowOutsideHours,
         });
@@ -2797,7 +2794,7 @@ export default function Admin() {
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
       setIsBlocking(false);
-      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", email: "", whatsappOptIn: false, serviceId: "", isMultiDay: false, isManualBooking: false, allowOutsideHours: false, isRecurring: false });
+      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", email: "", serviceId: "", isMultiDay: false, isManualBooking: false, allowOutsideHours: false, isRecurring: false });
       refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
