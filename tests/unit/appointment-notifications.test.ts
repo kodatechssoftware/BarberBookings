@@ -353,6 +353,15 @@ test("Production policy sends email immediately when WhatsApp is disabled", asyn
 });
 
 test("recurring WhatsApp remains separately gated and can use Meta only after explicit activation", async () => {
+  const gated = await recurringFixture(true);
+  const gatedCounters = { wa: 0, email: 0 };
+  const gatedDependencies = deps(gated.storage, accepted("wamid.must-not-send"), gatedCounters);
+  gatedDependencies.recurringWhatsappEnabled = false;
+  assert.equal(await processAppointmentNotification(gated.notificationEvent.id, gatedDependencies), "email");
+  assert.deepEqual(gatedCounters, { wa: 0, email: 1 });
+  assert.equal((await gated.storage.getAppointmentNotificationEvent(gated.notificationEvent.id))?.errorCode,
+    "WHATSAPP_RECURRING_TEMPLATE_DISABLED");
+
   const { storage, notificationEvent } = await recurringFixture(true);
   const counters = { wa: 0, email: 0 };
   const dependencies = deps(storage, { ...accepted("wamid.recurring"), templateName: "appointment_recurring_confirmation_v1" }, counters);

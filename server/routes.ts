@@ -2964,6 +2964,7 @@ export async function registerRoutes(
           barberId: finalBarberId,
           serviceId: input.serviceId,
           startTime: appointment.startTime,
+          whatsappOptInSource: input.whatsappOptIn ? "public_booking" : null,
         },
       });
 
@@ -3007,9 +3008,10 @@ export async function registerRoutes(
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
-      const { barberId, startTime, startTimes, name, phone, customerEmail, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
+      const { barberId, startTime, startTimes, name, phone, customerEmail, whatsappOptIn, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
+        (whatsappOptIn !== undefined && typeof whatsappOptIn !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
         (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
@@ -3080,6 +3082,9 @@ export async function registerRoutes(
       if (!isManualBooking && customerEmail !== undefined && normalizeEmail(customerEmail)) {
         return res.status(400).json({ message: "Uma ausência não pode ter um email de cliente associado." });
       }
+      if (!isManualBooking && whatsappOptIn === true) {
+        return res.status(400).json({ message: "Uma ausência não pode ter autorização WhatsApp associada." });
+      }
       if (isRecurring && !isManualBooking) {
         return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
       }
@@ -3089,6 +3094,7 @@ export async function registerRoutes(
 
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(phone);
       const normalizedCustomerEmail = isManualBooking ? normalizeEmail(customerEmail) : "";
+      const manualWhatsappOptIn = Boolean(isManualBooking && whatsappOptIn);
       const appointments: Array<Parameters<typeof storage.createAppointment>[0]> = [];
       const conflicts = [];
       const locationServiceIds = await getServiceIdsForLocation(locationId);
@@ -3228,6 +3234,7 @@ export async function registerRoutes(
           customerName: isManualBooking ? normalizedName : (occurrences > 1 ? `RECORRENTE: ${normalizedName}` : (normalizedName || "BLOQUEIO MANUAL")),
           customerPhone: isManualBooking ? normalizedCustomerPhone : "",
           customerEmail: normalizedCustomerEmail || null,
+          whatsappOptIn: manualWhatsappOptIn,
           durationMinutes: duration,
           status: isHistoricalManualBooking ? "completed" : "booked",
           cancelToken: randomUUID(),
@@ -3269,8 +3276,8 @@ export async function registerRoutes(
             customerName: normalizedName,
             customerEmail: normalizedCustomerEmail || null,
             customerPhone: normalizedCustomerPhone,
-            whatsappOptIn: false,
-            whatsappOptInAt: null,
+            whatsappOptIn: manualWhatsappOptIn,
+            whatsappOptInAt: manualWhatsappOptIn ? new Date() : null,
             intervalWeeks: recurringWeeksNumber,
             durationMonths: recurringMonthsNumber,
             occurrenceCount: appointments.length,
@@ -3282,7 +3289,7 @@ export async function registerRoutes(
             customerName: normalizedName,
             customerEmail: normalizedCustomerEmail || null,
             customerPhone: normalizedCustomerPhone,
-            whatsappOptIn: false,
+            whatsappOptIn: manualWhatsappOptIn,
             location: {
               id: selectedLocation.id,
               name: selectedLocation.name,
@@ -3317,6 +3324,7 @@ export async function registerRoutes(
           serviceId: serviceIdNumber,
           recurring: Boolean(isRecurring),
           seriesId: recurringSeriesId,
+          whatsappOptInSource: manualWhatsappOptIn ? "admin_manual" : null,
         },
       });
 

@@ -1209,7 +1209,7 @@ export default function Booking() {
                       onChange={(event) => setWhatsappOptIn(event.target.checked)}
                     />
                     <span>
-                      Quero receber pelo WhatsApp confirmações e atualizações relacionadas com as minhas marcações. Posso retirar este consentimento a qualquer momento.
+                      Quero receber a confirmação e atualizações da minha marcação por WhatsApp.
                     </span>
                   </label>
                 </div>

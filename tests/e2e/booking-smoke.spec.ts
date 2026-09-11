@@ -440,11 +440,16 @@ test.describe("public booking flow", () => {
     await page.getByPlaceholder("O seu nome").fill("Fluxo UI QA");
     await page.getByPlaceholder("912 345 678").fill("912695760");
     await page.getByPlaceholder("exemplo@email.com").fill("fluxo-ui@example.com");
+    await expect(page.getByRole("checkbox", {
+      name: "Quero receber a confirmação e atualizações da minha marcação por WhatsApp.",
+    })).not.toBeChecked();
     await page.getByRole("button", { name: "Confirmar" }).click();
 
     const createResponse = await createResponsePromise;
     expect(createResponse.status(), await createResponse.text()).toBe(201);
     const appointment = await createResponse.json();
+    expect(appointment.whatsappOptIn).toBe(false);
+    expect(appointment.whatsappOptInAt).toBeNull();
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
     await expect(page.getByText(/Enviámos para o seu email a confirmação/)).toBeVisible();
     await expect(page.getByText(/verifique a pasta de spam/)).toBeVisible();
@@ -476,8 +481,11 @@ test.describe("public booking flow", () => {
       "Indique o email para receber as comunicações da marcação caso não opte pelo WhatsApp ou não seja possível enviar por esse canal.",
     )).toBeVisible();
 
-    const whatsappConsent = page.getByRole("checkbox", { name: /Quero receber pelo WhatsApp/ });
+    const whatsappConsent = page.getByRole("checkbox", {
+      name: "Quero receber a confirmação e atualizações da minha marcação por WhatsApp.",
+    });
     await expect(whatsappConsent).not.toBeChecked();
+    await expect(page.getByText("Posso retirar este consentimento a qualquer momento.")).toHaveCount(0);
     await whatsappConsent.check();
 
     let submittedBooking: Record<string, unknown> | undefined;
@@ -524,8 +532,18 @@ test.describe("public booking flow", () => {
     expect(createResponse.status(), await createResponse.text()).toBe(201);
     const appointment = await createResponse.json();
     expect(appointment.whatsappOptIn).toBe(true);
+    expect(appointment.whatsappOptInAt).toBeTruthy();
     expect(appointment.customerEmail).toBeNull();
     expect(appointment.status).toBe("booked");
+
+    await loginAdminRequest(request);
+    await expect.poll(async () => {
+      const response = await request.get("/api/admin/audit-logs?limit=100");
+      const entry = (await response.json()).find((log: any) =>
+        log.action === "appointment.created_online" && log.entityId === appointment.id,
+      );
+      return entry ? JSON.parse(entry.metadata || "{}").whatsappOptInSource : undefined;
+    }).toBe("public_booking");
 
     const cleanupResponse = await request.post(`/api/appointments/cancel/${appointment.cancelToken}`);
     expect(cleanupResponse.ok(), await cleanupResponse.text()).toBe(true);
@@ -2940,7 +2958,12 @@ test.describe("booking rules", () => {
       const dialog = page.getByRole("dialog", { name: "Marcação manual" });
       await expect(dialog).toBeVisible();
       await expect(dialog.getByText("Indique o email do cliente para enviar a confirmação e os dados da marcação.")).toBeVisible();
-      await expect(dialog.getByText("As marcações criadas manualmente são confirmadas por email. O WhatsApp só é utilizado quando existe consentimento do cliente.")).toBeVisible();
+      await expect(dialog.getByText("As marcações criadas manualmente são confirmadas por email. O WhatsApp só é utilizado quando existe consentimento do cliente.")).toHaveCount(0);
+      const manualWhatsapp = dialog.getByRole("checkbox", { name: "Enviar confirmação por WhatsApp" });
+      await expect(manualWhatsapp).not.toBeChecked();
+      await manualWhatsapp.check();
+      await expect(manualWhatsapp).toBeChecked();
+      await manualWhatsapp.uncheck();
       await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("placeholder", "exemplo@email.com");
       await expect(dialog.locator("#manual-booking-email")).toHaveAttribute("aria-invalid", "false");
       await selectDialogOption(page, dialog, 0, barber.name);
@@ -2960,6 +2983,8 @@ test.describe("booking rules", () => {
       );
       expect(appointment).toBeTruthy();
       expect(appointment.customerEmail).toBe(customerEmail);
+      expect(appointment.whatsappOptIn).toBe(false);
+      expect(appointment.whatsappOptInAt).toBeNull();
       expect(appointment.cancelToken).toBeTruthy();
       appointmentId = appointment.id;
 
@@ -2968,9 +2993,50 @@ test.describe("booking rules", () => {
 
       await page.getByRole("button", { name: "Marcação manual" }).click();
       await expect(page.locator("#manual-booking-email")).toHaveValue("");
+      await expect(page.getByRole("checkbox", { name: "Enviar confirmação por WhatsApp" })).not.toBeChecked();
     } finally {
       if (appointmentId) {
         await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
+      }
+    }
+  });
+
+  test("stores manual WhatsApp authorization and allows omitting email", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"), request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(), await servicesResponse.json(),
+    );
+    const customerName = `Manual WhatsApp Sem Email QA ${Date.now()}`;
+    let appointment: any;
+    try {
+      const response = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id, serviceId: service.id, startTime: futureThursdayIso(41, 16, 30),
+        name: customerName, phone: "+351912695788", customerEmail: "",
+        whatsappOptIn: true, isManualBooking: true,
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+
+      const appointmentsResponse = await request.get("/api/appointments");
+      appointment = (await appointmentsResponse.json()).find((candidate: any) => candidate.customerName === customerName);
+      expect(appointment).toBeTruthy();
+      expect(appointment.customerEmail).toBeNull();
+      expect(appointment.whatsappOptIn).toBe(true);
+      expect(appointment.whatsappOptInAt).toBeTruthy();
+      expect(appointment.status).toBe("booked");
+
+      await expect.poll(async () => {
+        const auditResponse = await request.get("/api/admin/audit-logs?limit=100");
+        const entry = (await auditResponse.json()).find((log: any) =>
+          log.action === "appointment.created_manual" && log.entityId === appointment.id,
+        );
+        return entry ? JSON.parse(entry.metadata || "{}").whatsappOptInSource : undefined;
+      }).toBe("admin_manual");
+    } finally {
+      if (appointment?.id) {
+        await request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } });
       }
     }
   });
@@ -3032,7 +3098,7 @@ test.describe("booking rules", () => {
     await expect(dialog).toBeVisible();
   });
 
-  test("stores the optional email across every recurring manual appointment", async ({ request }) => {
+  test("stores email and WhatsApp authorization across every recurring manual appointment", async ({ request }) => {
     await loginAdminRequest(request);
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),
@@ -3055,6 +3121,7 @@ test.describe("booking rules", () => {
           name: customerName,
           phone: "+351912695787",
           customerEmail,
+          whatsappOptIn: true,
           isManualBooking: true,
           isRecurring: true,
           recurringWeeks: 2,
@@ -3073,6 +3140,8 @@ test.describe("booking rules", () => {
       );
       expect(createdAppointments.length).toBeGreaterThan(1);
       expect(createdAppointments.every((appointment: any) => appointment.customerEmail === customerEmail)).toBe(true);
+      expect(createdAppointments.every((appointment: any) => appointment.whatsappOptIn === true)).toBe(true);
+      expect(createdAppointments.every((appointment: any) => appointment.whatsappOptInAt)).toBe(true);
       expect(createdAppointments.every((appointment: any) => appointment.cancelToken)).toBe(true);
       expect(createdAppointments.every((appointment: any) => appointment.seriesId === creation.seriesId)).toBe(true);
       expect(createdAppointments.map((appointment: any) => appointment.seriesOccurrenceIndex)).toEqual([0, 1]);

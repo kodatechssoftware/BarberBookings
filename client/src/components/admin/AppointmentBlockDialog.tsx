@@ -469,9 +469,15 @@ export function AppointmentBlockDialog({
                     Indique o email do cliente para enviar a confirmação e os dados da marcação.
                   </p>
                 )}
-                <p className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs leading-relaxed text-gray-500">
-                  As marcações criadas manualmente são confirmadas por email. O WhatsApp só é utilizado quando existe consentimento do cliente.
-                </p>
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-400">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0 accent-[#d4af37]"
+                    checked={blockData.whatsappOptIn}
+                    onChange={(event) => onBlockDataChange({ ...blockData, whatsappOptIn: event.target.checked })}
+                  />
+                  <span>Enviar confirmação por WhatsApp</span>
+                </label>
               </div>
             )}
           </div>
