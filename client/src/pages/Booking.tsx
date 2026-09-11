@@ -1153,7 +1153,7 @@ export default function Booking() {
                         placeholder={selectedPhoneCountryData.placeholder}
                         className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                         aria-invalid={showCustomerError("phone")}
-                        aria-describedby={`${showCustomerError("phone") ? "phone-error" : "phone-help"} phone-whatsapp-notice`}
+                        aria-describedby={`${showCustomerError("phone") ? "phone-error " : ""}phone-whatsapp-notice`}
                         value={customerDetails.phone}
                         onBeforeInput={handleCustomerPhoneBeforeInput}
                         onPaste={handleCustomerPhonePaste}
@@ -1161,16 +1161,12 @@ export default function Booking() {
                         onBlur={() => markCustomerTouched("phone")}
                       />
                     </div>
-                    <p id="phone-whatsapp-notice" className="text-[11px] leading-relaxed text-gray-500">
-                      A {shopBranding.name} pode utilizar este número para enviar, via WhatsApp, confirmações e atualizações relacionadas com a sua marcação.
+                    <p id="phone-whatsapp-notice" className="text-xs leading-relaxed text-gray-400">
+                      Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.
                     </p>
-                    {showCustomerError("phone") ? (
+                    {showCustomerError("phone") && (
                       <p id="phone-error" className="text-xs font-medium text-red-400">
                         {customerFieldErrors.phone}
-                      </p>
-                    ) : (
-                      <p id="phone-help" className="text-[11px] text-gray-500">
-                        Escolha o país e escreva apenas o número. O indicativo é adicionado automaticamente.
                       </p>
                     )}
                   </div>
@@ -1198,8 +1194,8 @@ export default function Booking() {
                         {customerFieldErrors.email}
                       </p>
                     ) : (
-                      <p id="email-help" className="text-[11px] leading-relaxed text-gray-500">
-                        Indique o email como alternativa caso não seja possível enviar a comunicação por WhatsApp.
+                      <p id="email-help" className="text-xs leading-relaxed text-gray-400">
+                        Usado como alternativa caso não seja possível enviar por WhatsApp.
                       </p>
                     )}
                   </div>

@@ -430,8 +430,8 @@ export function AppointmentBlockDialog({
                       placeholder={manualPhoneCountry.placeholder}
                     />
                   </div>
-                  <p className="text-xs text-gray-500">
-                    Com um número válido, a confirmação e as atualizações podem ser enviadas por WhatsApp.
+                  <p className="text-xs leading-relaxed text-gray-400">
+                    Com um número válido, a confirmação e as atualizações serão enviadas por WhatsApp.
                   </p>
                 </div>
               )}
@@ -464,8 +464,8 @@ export function AppointmentBlockDialog({
                     {emailValidationMessage}
                   </p>
                 ) : (
-                  <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-500">
-                    Indique o email do cliente para enviar a confirmação e os dados da marcação.
+                  <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-400">
+                    Usado como alternativa caso não seja possível enviar por WhatsApp.
                   </p>
                 )}
               </div>
