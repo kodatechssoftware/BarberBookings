@@ -11,8 +11,10 @@ test.describe("configuração multi-localização", () => {
       MULTI_LOCATION_ENABLED: "true",
       MAX_LOCATIONS: "3",
     })).toEqual({ enabled: true, maxLocations: 3 });
-    expect(() => parseMultiLocationConfig({ MAX_LOCATIONS: "0" })).toThrow(/entre 1 e 50/);
-    expect(() => parseMultiLocationConfig({ MAX_LOCATIONS: "3.5" })).toThrow(/entre 1 e 50/);
+    expect(parseMultiLocationConfig({ MULTI_LOCATION_ENABLED: "false", MAX_LOCATIONS: "invalid" }))
+      .toEqual({ enabled: false, maxLocations: 1 });
+    expect(() => parseMultiLocationConfig({ MULTI_LOCATION_ENABLED: "true", MAX_LOCATIONS: "0" })).toThrow(/entre 1 e 50/);
+    expect(() => parseMultiLocationConfig({ MULTI_LOCATION_ENABLED: "true", MAX_LOCATIONS: "3.5" })).toThrow(/entre 1 e 50/);
 
     const response = await request.get("/api/multi-location/config");
     expect(response.ok(), await response.text()).toBe(true);

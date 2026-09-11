@@ -13,8 +13,12 @@
     "check:deploy": "node script/check-deploy.mjs",
     "test:e2e": "playwright test --grep-invert \"janela mensal de marcações públicas|\\[multi-location\\]\" && playwright test --config=playwright.booking-window.config.ts && playwright test --config=playwright.multilocation.config.ts",
     "test:e2e:ui": "playwright test --ui",
+    "test:e2e:production": "playwright test --config=playwright.production-runtime.config.ts",
     "test:appointment-notifications": "cross-env NODE_ENV=test APP_ENV=development USE_MEMORY_STORAGE=true tsx --test tests/unit/appointment-notifications.test.ts",
+    "test:production-runtime": "tsx --test tests/unit/production-runtime.test.ts",
+    "test:migrations": "tsx script/test-migrations.ts",
     "test:availability": "cross-env TZ=UTC NODE_ENV=test tsx --test tests/unit/availability.test.ts",
+    "db:migrate": "tsx script/migrate.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
@@ -108,6 +112,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.31.10",
+    "embedded-postgres": "^18.4.0-beta.17",
     "esbuild": "^0.25.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.17",

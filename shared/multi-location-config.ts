@@ -10,6 +10,9 @@ export function parseMultiLocationConfig(
   environment: Record<string, string | undefined>,
 ): MultiLocationConfig {
   const enabled = environment.MULTI_LOCATION_ENABLED?.trim().toLowerCase() === "true";
+  if (!enabled) {
+    return { enabled: false, maxLocations: DEFAULT_MAX_LOCATIONS };
+  }
   const rawMaxLocations = environment.MAX_LOCATIONS?.trim();
   const parsedMaxLocations = rawMaxLocations
     ? Number.parseInt(rawMaxLocations, 10)

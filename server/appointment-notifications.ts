@@ -8,10 +8,15 @@ import {
 } from "./email";
 import { getLocation } from "./location-store";
 import { reconcileMetaStatusReceipts } from "./meta-webhook";
-import { isDevelopmentDeployment } from "./runtime-environment";
+import {
+  appointmentNotificationWorkerEnabled,
+  isDevelopmentDeployment,
+  recurringWhatsappNotificationsEnabled,
+} from "./runtime-environment";
 import { storage, type IStorage } from "./storage";
 import {
   areWhatsappNotificationsEnabled,
+  buildMetaRecurringTemplateParams,
   sendMetaTemplate,
   type MetaAppointmentTemplateParams,
   type MetaTemplateDeliveryResult,
@@ -35,8 +40,10 @@ export type AppointmentNotificationDependencies = {
   sendRescheduleEmail: typeof sendBookingRescheduled;
   sendCancellationEmail: typeof sendBookingCancellationConfirmation;
   sendRecurringConfirmationEmail: typeof sendRecurringBookingConfirmation;
-  developmentEnabled: boolean;
+  processingEnabled: boolean;
   whatsappEnabled: boolean;
+  recurringWhatsappEnabled?: boolean;
+  deferWhatsappWhenDisabled?: boolean;
 };
 
 const defaultDependencies: AppointmentNotificationDependencies = {
@@ -47,8 +54,10 @@ const defaultDependencies: AppointmentNotificationDependencies = {
   sendRescheduleEmail: sendBookingRescheduled,
   sendCancellationEmail: sendBookingCancellationConfirmation,
   sendRecurringConfirmationEmail: sendRecurringBookingConfirmation,
-  developmentEnabled: isDevelopmentDeployment,
+  processingEnabled: appointmentNotificationWorkerEnabled,
   whatsappEnabled: areWhatsappNotificationsEnabled(),
+  recurringWhatsappEnabled: recurringWhatsappNotificationsEnabled,
+  deferWhatsappWhenDisabled: isDevelopmentDeployment,
 };
 
 function eventType(value: string): EventType | null {
@@ -161,9 +170,51 @@ async function processRecurringConfirmation(
       emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
     return "none";
   }
+  if (snapshot.whatsappOptIn && !deps.whatsappEnabled && !event.whatsappAttemptedAt
+    && deps.deferWhatsappWhenDisabled !== false) {
+    return "none";
+  }
+  if (snapshot.whatsappOptIn && deps.whatsappEnabled && deps.recurringWhatsappEnabled) {
+    if (["accepted", "sent", "delivered", "read"].includes(event.whatsappStatus)) return "whatsapp";
+    if (!event.whatsappAttemptedAt && await isCurrentRecurringEvent(event, snapshot, deps)) {
+      const attempt = await deps.storage.claimAppointmentNotificationWhatsappAttempt(event.id);
+      if (!attempt) return "none";
+      const params = buildMetaRecurringTemplateParams(snapshot);
+      let whatsappResult: MetaTemplateDeliveryResult;
+      try {
+        whatsappResult = await deps.sendWhatsApp(params);
+      } catch {
+        whatsappResult = {
+          outcome: "failed", provider: "meta", templateName: "appointment_recurring_confirmation_v1",
+          providerMessageId: null, providerStatus: "META_UNEXPECTED_ERROR", responseStatus: null,
+          errorCode: "META_UNEXPECTED_ERROR",
+        };
+      }
+      await updateEvent(deps, event.id, {
+        provider: whatsappResult.provider,
+        templateName: whatsappResult.templateName,
+        whatsappStatus: whatsappResult.outcome,
+        providerMessageId: whatsappResult.providerMessageId,
+        providerStatus: whatsappResult.providerStatus,
+        responseStatus: whatsappResult.responseStatus,
+        errorCode: whatsappResult.errorCode,
+        whatsappAcceptedAt: whatsappResult.outcome === "accepted" ? new Date() : null,
+      });
+      if (whatsappResult.outcome === "accepted" && whatsappResult.providerMessageId) {
+        await deps.storage.reconcileMetaWebhookReceipts(whatsappResult.providerMessageId, event.id);
+        await reconcileMetaStatusReceipts(whatsappResult.providerMessageId, deps.storage);
+        return "whatsapp";
+      }
+    }
+  }
   await updateEvent(deps, event.id, {
     provider: "meta", templateName: "appointment_recurring_confirmation_v1",
-    whatsappStatus: "skipped", errorCode: "WHATSAPP_RECURRING_TEMPLATE_DISABLED",
+    whatsappStatus: "skipped",
+    errorCode: snapshot.whatsappOptIn && !deps.whatsappEnabled
+      ? "WHATSAPP_DISABLED"
+      : !deps.recurringWhatsappEnabled
+      ? "WHATSAPP_RECURRING_TEMPLATE_DISABLED"
+      : "WHATSAPP_OPT_IN_MISSING",
   });
   if (event.emailStatus === "sent") return "email";
   if (!snapshot.customerEmail?.trim()) {
@@ -206,7 +257,7 @@ async function processClaimedCore(
   event: AppointmentNotificationEvent,
   deps: AppointmentNotificationDependencies = defaultDependencies,
 ): Promise<Channel | "deferred" | "in_progress"> {
-  if (!deps.developmentEnabled) return "none";
+  if (!deps.processingEnabled) return "none";
   if (event.eventType === "appointment_recurring_confirmation") {
     return processRecurringConfirmation(event, deps);
   }
@@ -217,7 +268,8 @@ async function processClaimedCore(
       emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
     return "none";
   }
-  if (appointment!.whatsappOptIn && !deps.whatsappEnabled && !event.whatsappAttemptedAt) {
+  if (appointment!.whatsappOptIn && !deps.whatsappEnabled && !event.whatsappAttemptedAt
+    && deps.deferWhatsappWhenDisabled !== false) {
     return "deferred";
   }
   const [barber, service, location] = await Promise.all([
@@ -240,6 +292,13 @@ async function processClaimedCore(
       await updateEvent(deps, event.id, { whatsappStatus: "unknown", providerStatus: "META_ATTEMPT_INTERRUPTED",
         errorCode: "META_ATTEMPT_INTERRUPTED" });
     }
+    return emailFallback(appointment!, event, details, deps);
+  }
+  if (appointment!.whatsappOptIn && !deps.whatsappEnabled) {
+    await updateEvent(deps, event.id, {
+      provider: "meta", templateName: templateName(type),
+      whatsappStatus: "skipped", errorCode: "WHATSAPP_DISABLED",
+    });
     return emailFallback(appointment!, event, details, deps);
   }
   if (!appointment!.whatsappOptIn) {
@@ -303,16 +362,19 @@ function templateName(type: EventType) {
 }
 
 export async function processAppointmentNotification(id: number, deps = defaultDependencies): Promise<Channel> {
-  if (!deps.developmentEnabled) return "none";
+  if (!deps.processingEnabled) return "none";
   const event = await deps.storage.claimAppointmentNotificationEvent(id);
   return event ? processClaimedAppointmentNotification(event, deps) : "none";
 }
 
 export async function processPendingAppointmentNotifications(deps = defaultDependencies, leaseMs = 60_000) {
-  if (!deps.developmentEnabled) return 0;
+  if (!deps.processingEnabled) return 0;
   let processed = 0;
   for (let count = 0; count < 25; count += 1) {
-    const event = await deps.storage.claimNextAppointmentNotificationEvent(new Date(Date.now() - leaseMs), deps.whatsappEnabled);
+    const event = await deps.storage.claimNextAppointmentNotificationEvent(
+      new Date(Date.now() - leaseMs),
+      deps.whatsappEnabled || deps.deferWhatsappWhenDisabled === false,
+    );
     if (!event) break;
     await processClaimedAppointmentNotification(event, deps);
     processed += 1;
@@ -321,7 +383,7 @@ export async function processPendingAppointmentNotifications(deps = defaultDepen
 }
 
 export function startAppointmentNotificationWorker(intervalMs = Number(process.env.NOTIFICATION_OUTBOX_POLL_INTERVAL_MS || 5000)) {
-  if (!isDevelopmentDeployment) return () => undefined;
+  if (!appointmentNotificationWorkerEnabled) return () => undefined;
   let running = false;
   const tick = async () => {
     if (running) return;

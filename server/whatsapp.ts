@@ -2,7 +2,10 @@ import "dotenv/config";
 import type { RecurringNotificationSnapshot, WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
 
 import { storage } from "./storage";
-import { isDevelopmentDeployment } from "./runtime-environment";
+import {
+  isDevelopmentDeployment,
+  recurringWhatsappNotificationsEnabled,
+} from "./runtime-environment";
 
 type AppointmentMessageParams = {
   appointmentId?: number;
@@ -147,7 +150,7 @@ export class MetaWhatsAppTestError extends Error {
   }
 }
 
-function getMetaConfig(): MetaConfig {
+function getMetaConfig(requireDevelopmentAllowlist = isDevelopmentDeployment): MetaConfig {
   if (!areWhatsappNotificationsEnabled()) {
     throw new MetaWhatsAppTestError("As notificacoes WhatsApp estao desativadas em Development.", 400);
   }
@@ -173,7 +176,7 @@ function getMetaConfig(): MetaConfig {
   const allowedRecipients = new Set(
     allowlist.split(",").map(normalizeWhatsAppNumber).filter(Boolean),
   );
-  if (allowedRecipients.size === 0) {
+  if (requireDevelopmentAllowlist && allowedRecipients.size === 0) {
     throw new MetaWhatsAppTestError("META_WHATSAPP_DEV_ALLOWLIST e obrigatoria em Development.", 400);
   }
 
@@ -429,16 +432,7 @@ export async function sendMetaTemplate(
   const templateName = process.env[template.nameEnv]?.trim() || template.defaultName;
   const templateLanguage = process.env[template.languageEnv]?.trim() || "pt_PT";
 
-  if (!isDevelopmentDeployment) {
-    return {
-      outcome: "failed", provider: "meta", templateName, providerMessageId: null,
-      providerStatus: "ENVIRONMENT_BLOCKED", responseStatus: null, errorCode: "ENVIRONMENT_BLOCKED",
-    };
-  }
-
-  // The payload is intentionally buildable and testable, but delivery stays disabled
-  // until the recurring template is created and explicitly approved for activation.
-  if (params.eventType === "appointment_recurring_confirmation") {
+  if (params.eventType === "appointment_recurring_confirmation" && !recurringWhatsappNotificationsEnabled) {
     return {
       outcome: "failed", provider: "meta", templateName, providerMessageId: null,
       providerStatus: "META_RECURRING_TEMPLATE_DISABLED", responseStatus: null,
@@ -463,7 +457,7 @@ export async function sendMetaTemplate(
       providerStatus: "INVALID_RECIPIENT", responseStatus: null, errorCode: "INVALID_RECIPIENT",
     };
   }
-  if (!config.allowedRecipients.has(number)) {
+  if (isDevelopmentDeployment && !config.allowedRecipients.has(number)) {
     return {
       outcome: "failed", provider: "meta", templateName, providerMessageId: null,
       providerStatus: "DEV_ALLOWLIST_BLOCKED", responseStatus: null, errorCode: "DEV_ALLOWLIST_BLOCKED",

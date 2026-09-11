@@ -10,7 +10,10 @@ import {
   sendBookingConfirmation,
 } from "./email";
 import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
-import { isDevelopmentDeployment } from "./runtime-environment";
+import {
+  appointmentNotificationEventsEnabled,
+  isDevelopmentDeployment,
+} from "./runtime-environment";
 import {
   isMetaWebhookEnabled,
   recordMetaWebhookStatuses,
@@ -68,6 +71,7 @@ import {
   removeBarberFromLocation,
   updateLocation,
 } from "./location-store";
+import { getPublicBaseUrl } from "./public-url";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -1024,14 +1028,7 @@ function getDepositRecommendation(params: {
 }
 
 function buildPublicUrl(path: string) {
-  const configuredUrl =
-    process.env.PUBLIC_URL ||
-    process.env.APP_BASE_URL ||
-    (process.env.REPL_SLUG && process.env.REPL_OWNER
-      ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-      : "http://localhost:5000");
-
-  return `${configuredUrl.replace(/\/$/, "")}${path}`;
+  return `${getPublicBaseUrl()}${path}`;
 }
 
 type BookingCreatedNotificationParams = {
@@ -1688,27 +1685,28 @@ export async function registerRoutes(
     });
   };
 
-  if (isDevelopmentDeployment) {
-    if (isMetaWebhookEnabled()) {
-      app.get("/api/webhooks/whatsapp/meta", (req, res) => {
-        const challenge = verifyMetaWebhookChallenge(req.query as Record<string, unknown>);
-        return challenge ? res.type("text/plain").status(200).send(challenge) : res.sendStatus(403);
-      });
+  if (isMetaWebhookEnabled()) {
+    app.get("/api/webhooks/whatsapp/meta", (req, res) => {
+      const challenge = verifyMetaWebhookChallenge(req.query as Record<string, unknown>);
+      return challenge ? res.type("text/plain").status(200).send(challenge) : res.sendStatus(403);
+    });
 
-      app.post("/api/webhooks/whatsapp/meta", async (req, res) => {
-        const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from("");
-        if (!verifyMetaWebhookSignature(rawBody, req.header("x-hub-signature-256"))) return res.sendStatus(401);
-        try {
-          const result = await recordMetaWebhookStatuses(req.body);
-          return res.status(200).json({ received: true, ...result });
-        } catch (error) {
-          const code = error instanceof Error ? error.message : "META_WEBHOOK_INVALID";
-          if (["META_WEBHOOK_ACCOUNT_MISMATCH", "META_WEBHOOK_PHONE_MISMATCH"].includes(code)) return res.sendStatus(403);
-          if (code === "META_WEBHOOK_PAYLOAD_INVALID") return res.sendStatus(400);
-          throw error;
-        }
-      });
-    }
+    app.post("/api/webhooks/whatsapp/meta", async (req, res) => {
+      const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from("");
+      if (!verifyMetaWebhookSignature(rawBody, req.header("x-hub-signature-256"))) return res.sendStatus(401);
+      try {
+        const result = await recordMetaWebhookStatuses(req.body);
+        return res.status(200).json({ received: true, ...result });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "META_WEBHOOK_INVALID";
+        if (["META_WEBHOOK_ACCOUNT_MISMATCH", "META_WEBHOOK_PHONE_MISMATCH"].includes(code)) return res.sendStatus(403);
+        if (code === "META_WEBHOOK_PAYLOAD_INVALID") return res.sendStatus(400);
+        throw error;
+      }
+    });
+  }
+
+  if (isDevelopmentDeployment) {
 
     app.post("/api/admin/dev/whatsapp/meta/test", requireAdmin, async (req, res) => {
       const parsed = metaWhatsappTestInputSchema.safeParse(req.body);
@@ -2952,7 +2950,7 @@ export async function registerRoutes(
         durationMinutes: requestedDuration,
         depositRequired: false,
         depositReason: null,
-        notificationEventType: isDevelopmentDeployment ? "appointment_confirmation" : undefined,
+        notificationEventType: appointmentNotificationEventsEnabled ? "appointment_confirmation" : undefined,
       });
       await recordAuditLog(req, {
         actorType: "client",
@@ -2971,7 +2969,7 @@ export async function registerRoutes(
 
       const service = services.find(s => s.id === input.serviceId);
 
-      if (!isDevelopmentDeployment) runNotificationJob("Booking confirmation", async () => {
+      if (!appointmentNotificationEventsEnabled) runNotificationJob("Booking confirmation", async () => {
         const barber = await storage.getBarber(finalBarberId);
 
         return sendBookingCreatedNotification({
@@ -3235,7 +3233,7 @@ export async function registerRoutes(
           cancelToken: randomUUID(),
           depositRequired: false,
           depositReason: null,
-          notificationEventType: isDevelopmentDeployment && isManualBooking && !isHistoricalManualBooking && (!isRecurring || occurrences === 1)
+          notificationEventType: appointmentNotificationEventsEnabled && isManualBooking && !isHistoricalManualBooking && (!isRecurring || occurrences === 1)
             ? "appointment_confirmation"
             : undefined,
         });
@@ -3251,7 +3249,7 @@ export async function registerRoutes(
       }
 
       const shouldCreateSeries = Boolean(
-        isDevelopmentDeployment && isManualBooking && isRecurring && appointments.length > 1,
+        appointmentNotificationEventsEnabled && isManualBooking && isRecurring && appointments.length > 1,
       );
       let createdAppointments: Appointment[];
       let recurringSeriesId: string | null = null;
@@ -3322,7 +3320,7 @@ export async function registerRoutes(
         },
       });
 
-      if (!isDevelopmentDeployment && isManualBooking && normalizedCustomerEmail && selectedService) {
+      if (!appointmentNotificationEventsEnabled && isManualBooking && normalizedCustomerEmail && selectedService) {
         const appointmentsToNotify = isRecurring
           ? createdAppointments.slice(0, 1)
           : createdAppointments;
@@ -3515,7 +3513,7 @@ export async function registerRoutes(
         }
         Object.assign(updateData, getStatusPatch(status));
       }
-      if (isDevelopmentDeployment && Object.keys(updateData).length > 0) {
+      if (Object.keys(updateData).length > 0) {
         updateData.notificationRevision = currentApp.notificationRevision + 1;
       }
 
@@ -3719,10 +3717,10 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Este horário já está reservado." });
       }
 
-      const result = isDevelopmentDeployment
+      const result = appointmentNotificationEventsEnabled
         ? await storage.rescheduleAppointment(appointment.id, appointment.rescheduleRevision, startTime)
         : null;
-      const updated = isDevelopmentDeployment
+      const updated = appointmentNotificationEventsEnabled
         ? result?.appointment
         : await storage.updateAppointment(appointment.id, { startTime }, "booked");
       if (!updated) {
@@ -3763,10 +3761,10 @@ export async function registerRoutes(
 
     const lateCancellation = isLateCancellation(appointment.startTime);
     const status = lateCancellation ? "late_cancelled" : "cancelled";
-    const cancellationResult = isDevelopmentDeployment
+    const cancellationResult = appointmentNotificationEventsEnabled
       ? await storage.cancelAppointment(appointment.id, "booked", status)
       : null;
-    const cancelledAppointment = isDevelopmentDeployment
+    const cancelledAppointment = appointmentNotificationEventsEnabled
       ? cancellationResult?.appointment
       : await storage.updateAppointmentStatusIfCurrent(appointment.id, "booked", status);
     if (!cancelledAppointment) {
@@ -3783,7 +3781,7 @@ export async function registerRoutes(
       return res.status(409).json({ message: "Esta marcação já não pode ser cancelada." });
     }
 
-    if (!isDevelopmentDeployment) runNotificationJob("Booking cancellation", async () => {
+    if (!appointmentNotificationEventsEnabled) runNotificationJob("Booking cancellation", async () => {
       const [barber, service] = await Promise.all([
         storage.getBarber(appointment.barberId),
         appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
@@ -4093,7 +4091,7 @@ export async function registerRoutes(
           for (const appointment of futureAppointments) {
             const updated = await storage.updateAppointment(appointment.id, {
               ...getStatusPatch("cancelled"),
-              ...(isDevelopmentDeployment ? { notificationRevision: appointment.notificationRevision + 1 } : {}),
+              notificationRevision: appointment.notificationRevision + 1,
             });
             if (updated) cancelledAppointments.push(updated);
           }

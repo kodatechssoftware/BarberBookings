@@ -42,7 +42,7 @@ async function fixture(optIn = true, email: string | null = "client@example.com"
 
 function deps(storage: MemoryStorage, whatsapp: MetaTemplateDeliveryResult, counters = { wa: 0, email: 0 }, emailSent = true): AppointmentNotificationDependencies {
   const sendEmail = async () => { counters.email += 1; return { sent: emailSent, providerMessageId: emailSent ? "email.id" : null, errorCode: emailSent ? null : "EMAIL_FAIL" }; };
-  return { storage, developmentEnabled: true, whatsappEnabled: true, getLocation: async () => ({ id: 1, name: "Shop", slug: "shop", address: "Street 1",
+  return { storage, processingEnabled: true, whatsappEnabled: true, getLocation: async () => ({ id: 1, name: "Shop", slug: "shop", address: "Street 1",
     mapUrl: null, mapEmbedUrl: null, phone: null, email: null, timezone: "Europe/Lisbon", isActive: true, isDefault: true,
     sortOrder: 0, createdAt: new Date(), updatedAt: new Date() }),
     sendWhatsApp: async () => { counters.wa += 1; return whatsapp; },
@@ -50,20 +50,20 @@ function deps(storage: MemoryStorage, whatsapp: MetaTemplateDeliveryResult, coun
     sendRecurringConfirmationEmail: sendEmail };
 }
 
-async function recurringFixture() {
+async function recurringFixture(optIn = false) {
   const storage = new MemoryStorage();
   await storage.createBarber({ name: "Barber", specialty: "Cuts", isVisible: true });
   await storage.createService({ name: "Cut", price: 1500, duration: 30, isVisible: true });
   const result = await storage.createRecurringAppointmentSeries({
     series: { id: "series-test", locationId: 1, barberId: 1, serviceId: 1,
       customerName: "Client", customerEmail: "client@example.com", customerPhone: "+351910000000",
-      whatsappOptIn: false, whatsappOptInAt: null, intervalWeeks: 1, durationMonths: 1,
+      whatsappOptIn: optIn, whatsappOptInAt: optIn ? new Date() : null, intervalWeeks: 1, durationMonths: 1,
       occurrenceCount: 3, firstStartTime: starts[0] },
     appointments: starts.map((startTime, index) => ({ locationId: 1, barberId: 1, serviceId: 1, startTime,
       customerName: "Client", customerEmail: "client@example.com", customerPhone: "+351910000000",
-      whatsappOptIn: false, durationMinutes: 30, cancelToken: `${token}-${index}` })),
+      whatsappOptIn: optIn, durationMinutes: 30, cancelToken: `${token}-${index}` })),
     notificationSnapshot: { schemaVersion: 1, customerName: "Client", customerEmail: "client@example.com",
-      customerPhone: "+351910000000", whatsappOptIn: false,
+      customerPhone: "+351910000000", whatsappOptIn: optIn,
       location: { id: 1, name: "Shop", address: "Street 1", timezone: "Europe/Lisbon" },
       service: { id: 1, name: "Cut" }, barber: { id: 1, name: "Barber" },
       recurrence: { intervalWeeks: 1, durationMonths: 1, occurrenceCount: 3 } },
@@ -338,6 +338,30 @@ test("disabled WhatsApp still processes email-only and already-attempted fallbac
   assert.equal(await processPendingAppointmentNotifications(interruptedDeps, 1), 1);
   assert.deepEqual(interruptedCounters, { wa: 0, email: 1 });
   assert.equal((await interrupted.storage.getAppointmentNotificationEvent(event.id))?.whatsappStatus, "unknown");
+});
+
+test("Production policy sends email immediately when WhatsApp is disabled", async () => {
+  const { storage, appointment } = await fixture(true);
+  const counters = { wa: 0, email: 0 };
+  const dependencies = deps(storage, accepted(), counters);
+  dependencies.whatsappEnabled = false;
+  dependencies.deferWhatsappWhenDisabled = false;
+  assert.equal(await processPendingAppointmentNotifications(dependencies), 1);
+  assert.deepEqual(counters, { wa: 0, email: 1 });
+  const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  assert.equal(event.emailStatus, "sent");
+});
+
+test("recurring WhatsApp remains separately gated and can use Meta only after explicit activation", async () => {
+  const { storage, notificationEvent } = await recurringFixture(true);
+  const counters = { wa: 0, email: 0 };
+  const dependencies = deps(storage, { ...accepted("wamid.recurring"), templateName: "appointment_recurring_confirmation_v1" }, counters);
+  dependencies.recurringWhatsappEnabled = true;
+  assert.equal(await processAppointmentNotification(notificationEvent.id, dependencies), "whatsapp");
+  assert.deepEqual(counters, { wa: 1, email: 0 });
+  const saved = await storage.getAppointmentNotificationEvent(notificationEvent.id);
+  assert.equal(saved?.providerMessageId, "wamid.recurring");
+  assert.equal(saved?.emailStatus, "not_needed");
 });
 
 test("an opt-in event deferred while disabled is discarded if it becomes stale before activation", async () => {

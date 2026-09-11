@@ -1,5 +1,6 @@
 ﻿import { Resend } from "resend";
 import "dotenv/config";
+import { getPublicBaseUrl } from "./public-url";
 
 const resendApiKey = process.env.RESEND_API_KEY?.trim();
 const fromEmail = process.env.RESEND_FROM_EMAIL?.trim();
@@ -171,13 +172,7 @@ export async function sendRecurringBookingConfirmation(
 }
 
 function getPublicUrl() {
-  return (
-    process.env.PUBLIC_URL ||
-    process.env.APP_BASE_URL ||
-    (process.env.REPL_SLUG && process.env.REPL_OWNER
-      ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-      : "http://localhost:5000")
-  ).replace(/\/$/, "");
+  return getPublicBaseUrl();
 }
 
 export function buildAppointmentManagementLinks(cancelToken: string) {

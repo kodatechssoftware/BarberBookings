@@ -3,7 +3,10 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
-import { isDevelopmentDeployment } from "./runtime-environment";
+import {
+  appointmentNotificationWorkerEnabled,
+  validateRuntimeConfiguration,
+} from "./runtime-environment";
 import { startAppointmentNotificationWorker } from "./appointment-notifications";
 import {
   ensureAppointmentOverlapProtection,
@@ -11,10 +14,7 @@ import {
   ensureBarberCompensationRulesTable,
   ensureBarberServicesTable,
   ensureBusinessExpensesTable,
-  ensureMultiLocationFoundation,
   ensureServiceAgendaLabelColumn,
-  ensureWhatsappMessagesTable,
-  ensureAppointmentNotificationFoundation,
   pool,
   repairKnownTextEncodingArtifacts,
 } from "./db";
@@ -177,6 +177,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  validateRuntimeConfiguration();
   log(`starting BarberBookings API (${getSafeDatabaseTarget()} appPoolMax=${pool.options.max})`);
 
   await ensureServiceAgendaLabelColumn();
@@ -184,18 +185,17 @@ app.use((req, res, next) => {
   await ensureBarberServicesTable();
   await ensureBarberCompensationRulesTable();
   await ensureBusinessExpensesTable();
-  await ensureMultiLocationFoundation();
   await ensureAppointmentOverlapProtection();
-  if (isDevelopmentDeployment) {
-    await ensureWhatsappMessagesTable();
-    await ensureAppointmentNotificationFoundation();
-  }
   const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
   if (repairedEncodingRows > 0) {
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
   }
   const server = await registerRoutes(app, httpServer);
-  if (isDevelopmentDeployment) startAppointmentNotificationWorker();
+  if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
+
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ message: "Endpoint não encontrado." });
+  });
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) {
