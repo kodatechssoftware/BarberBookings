@@ -106,8 +106,26 @@ META_WHATSAPP_RESCHEDULED_TEMPLATE=appointment_rescheduled_v1
 META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_CANCELLED_TEMPLATE=appointment_cancelled_v1
 META_WHATSAPP_CANCELLED_TEMPLATE_LANGUAGE=pt_PT
+META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE=appointment_recurring_confirmation_v1
+META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_DEV_ALLOWLIST=3519XXXXXXXX
 ```
+
+Os quatro nomes acima sao os defaults de Development. Num deployment identificado por
+`NODE_ENV=production` e `APP_ENV=production`, nao existe fallback para estes nomes: antes de uma
+ativacao futura do WhatsApp, os quatro templates de Production terao de ser definidos
+explicitamente:
+
+```env
+META_WHATSAPP_CONFIRMATION_TEMPLATE=appointment_confirmation_prod_v1
+META_WHATSAPP_RESCHEDULED_TEMPLATE=appointment_rescheduled_prod_v2
+META_WHATSAPP_CANCELLED_TEMPLATE=appointment_cancelled_prod_v2
+META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE=appointment_recurring_confirmation_prod_v1
+```
+
+Esta configuracao nao ativa o canal por si so. As flags Production-safe e
+`MESSAGING_PROVIDER=meta` continuam a ser requisitos separados. Os codigos de idioma permanecem
+`pt_PT`; tokens, Phone Number ID, WABA ID e access token nunca devem ser copiados de Development.
 
 `META_WHATSAPP_DEV_ALLOWLIST` aceita varios numeros E.164 separados por virgula. Com o numero de
 teste da Meta, cada destinatario tambem tem de estar adicionado e verificado no painel da Meta.

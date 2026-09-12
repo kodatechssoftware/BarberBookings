@@ -18,6 +18,7 @@ import {
   buildBookingCancellationMessage,
   buildBookingConfirmationMessage,
   formatMetaTemplateDate,
+  getMetaAppointmentTemplateName,
   sendMetaTemplate,
   type MetaTemplateDeliveryResult,
 } from "../../server/whatsapp";
@@ -412,6 +413,57 @@ test("all three Meta payloads preserve exact body and button order", async () =>
   assert.deepEqual(bodies[2].template.components[0].parameters.map((p: any) => p.text),
     ["1", "2", "3", "15 de setembro de 2026", "14:30h"]);
   assert.equal(bodies[2].template.components.length, 1);
+});
+
+test("Development defaults and Production configuration select the four exact Meta templates", () => {
+  const eventTypes = ["appointment_confirmation", "appointment_rescheduled", "appointment_cancelled",
+    "appointment_recurring_confirmation"] as const;
+  assert.deepEqual(eventTypes.map((eventType) => getMetaAppointmentTemplateName(eventType, {
+    NODE_ENV: "production", APP_ENV: "development",
+  })), ["appointment_confirmation_v1", "appointment_rescheduled_v1", "appointment_cancelled_v1",
+    "appointment_recurring_confirmation_v1"]);
+
+  const productionEnvironment = {
+    NODE_ENV: "production", APP_ENV: "production",
+    META_WHATSAPP_CONFIRMATION_TEMPLATE: "appointment_confirmation_prod_v1",
+    META_WHATSAPP_RESCHEDULED_TEMPLATE: "appointment_rescheduled_prod_v2",
+    META_WHATSAPP_CANCELLED_TEMPLATE: "appointment_cancelled_prod_v2",
+    META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE: "appointment_recurring_confirmation_prod_v1",
+  };
+  assert.deepEqual(eventTypes.map((eventType) => getMetaAppointmentTemplateName(eventType, productionEnvironment)),
+    ["appointment_confirmation_prod_v1", "appointment_rescheduled_prod_v2", "appointment_cancelled_prod_v2",
+      "appointment_recurring_confirmation_prod_v1"]);
+  assert.equal(getMetaAppointmentTemplateName("appointment_confirmation", {
+    NODE_ENV: "production", APP_ENV: "production",
+  }), null);
+});
+
+test("disabled WhatsApp or messaging provider none never calls Meta with configured template names", async () => {
+  const environmentNames = ["WHATSAPP_NOTIFICATIONS_ENABLED", "MESSAGING_PROVIDER",
+    "META_WHATSAPP_CONFIRMATION_TEMPLATE"] as const;
+  const previousEnvironment = Object.fromEntries(environmentNames.map((name) => [name, process.env[name]]));
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return new Response(null, { status: 500 }); };
+  const params = { recipient: "+351910000000", eventType: "appointment_confirmation" as const,
+    customerName: "Cliente", locationName: "Loja", serviceName: "Corte", barberName: "Barbeiro",
+    startTime: new Date("2026-09-15T13:30:00.000Z"), timeZone: "Europe/Lisbon", managementToken: token };
+  try {
+    process.env.META_WHATSAPP_CONFIRMATION_TEMPLATE = "configured_template";
+    process.env.WHATSAPP_NOTIFICATIONS_ENABLED = "false";
+    process.env.MESSAGING_PROVIDER = "meta";
+    assert.equal((await sendMetaTemplate(params)).errorCode, "META_NOT_CONFIGURED");
+    process.env.WHATSAPP_NOTIFICATIONS_ENABLED = "true";
+    process.env.MESSAGING_PROVIDER = "none";
+    assert.equal((await sendMetaTemplate(params)).errorCode, "META_NOT_CONFIGURED");
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const name of environmentNames) {
+      const value = previousEnvironment[name];
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
 });
 
 test("future recurring Meta payload uses PT-PT long date, nine parameters, and no buttons", async () => {

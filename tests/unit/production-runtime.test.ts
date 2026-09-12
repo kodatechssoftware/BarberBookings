@@ -17,6 +17,13 @@ const baseEnvironment = {
   META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED: "false",
 };
 
+const productionTemplateEnvironment = {
+  META_WHATSAPP_CONFIRMATION_TEMPLATE: "appointment_confirmation_prod_v1",
+  META_WHATSAPP_RESCHEDULED_TEMPLATE: "appointment_rescheduled_prod_v2",
+  META_WHATSAPP_CANCELLED_TEMPLATE: "appointment_cancelled_prod_v2",
+  META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE: "appointment_recurring_confirmation_prod_v1",
+};
+
 function evaluate(environment: NodeJS.ProcessEnv, expression: string) {
   return execFileSync(process.execPath, ["--import", "tsx", "--eval",
     `import('./server/runtime-environment.ts').then(m=>{${expression}})`], {
@@ -61,6 +68,27 @@ test("Production refuses partially activated outbox, Meta and webhook capabiliti
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_WEBHOOK_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
 });
 
+test("Production requires all four appointment template names before WhatsApp activation", () => {
+  const completeEnvironment = {
+    ...baseEnvironment,
+    ...productionTemplateEnvironment,
+    WHATSAPP_NOTIFICATIONS_ENABLED: "true",
+    MESSAGING_PROVIDER: "meta",
+    APPOINTMENT_NOTIFICATION_EVENTS_ENABLED: "true",
+    NOTIFICATION_OUTBOX_WORKER_ENABLED: "true",
+    META_WHATSAPP_GRAPH_API_VERSION: "v25.0",
+    META_WHATSAPP_PHONE_NUMBER_ID: "production-test-phone-id",
+    META_WHATSAPP_WABA_ID: "production-test-waba-id",
+    META_WHATSAPP_ACCESS_TOKEN: "production-test-token",
+  };
+  evaluate(completeEnvironment, "m.validateRuntimeConfiguration()");
+  for (const name of Object.keys(productionTemplateEnvironment)) {
+    const incompleteEnvironment: NodeJS.ProcessEnv = { ...completeEnvironment };
+    delete incompleteEnvironment[name];
+    assert.throws(() => evaluate(incompleteEnvironment, "m.validateRuntimeConfiguration()"));
+  }
+});
+
 test("disabled multi-location ignores an invalid limit and remains single-location", async () => {
   const { parseMultiLocationConfig } = await import("../../shared/multi-location-config");
   assert.deepEqual(parseMultiLocationConfig({ MULTI_LOCATION_ENABLED: "false", MAX_LOCATIONS: "not-a-number" }), {
@@ -79,6 +107,7 @@ test("Production Meta delivery does not depend on the Development allowlist", ()
     META_WHATSAPP_WABA_ID: "production-test-waba-id",
     META_WHATSAPP_ACCESS_TOKEN: "production-test-token",
     META_WHATSAPP_DEV_ALLOWLIST: "",
+    ...productionTemplateEnvironment,
   }, `return import('./server/whatsapp.ts').then(async w => {
     globalThis.fetch = async () => new Response(JSON.stringify({messages:[{id:'wamid.production-test'}]}), {status:200});
     const result = await w.sendMetaTemplate({recipient:'+351912000009', eventType:'appointment_cancelled',

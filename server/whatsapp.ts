@@ -365,6 +365,19 @@ const metaTemplateConfig = {
   },
 } as const;
 
+export function getMetaAppointmentTemplateName(
+  eventType: MetaAppointmentTemplateParams["eventType"],
+  environment: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const template = metaTemplateConfig[eventType];
+  const configuredName = environment[template.nameEnv]?.trim();
+  if (configuredName) return configuredName;
+
+  const productionDeployment = environment.NODE_ENV?.trim().toLowerCase() === "production"
+    && environment.APP_ENV?.trim().toLowerCase() === "production";
+  return productionDeployment ? null : template.defaultName;
+}
+
 export function buildMetaAppointmentTemplateComponents(params: MetaAppointmentTemplateParams) {
   const date = formatMetaTemplateDate(params.startTime, params.timeZone);
   const time = formatMetaTemplateTime(params.startTime, params.timeZone);
@@ -429,8 +442,16 @@ export async function sendMetaTemplate(
   params: MetaAppointmentTemplateParams,
 ): Promise<MetaTemplateDeliveryResult> {
   const template = metaTemplateConfig[params.eventType];
-  const templateName = process.env[template.nameEnv]?.trim() || template.defaultName;
+  const templateName = getMetaAppointmentTemplateName(params.eventType);
   const templateLanguage = process.env[template.languageEnv]?.trim() || "pt_PT";
+
+  if (!templateName) {
+    return {
+      outcome: "failed", provider: "meta", templateName: "", providerMessageId: null,
+      providerStatus: "META_TEMPLATE_NOT_CONFIGURED", responseStatus: null,
+      errorCode: "META_TEMPLATE_NOT_CONFIGURED",
+    };
+  }
 
   if (params.eventType === "appointment_recurring_confirmation" && !recurringWhatsappNotificationsEnabled) {
     return {

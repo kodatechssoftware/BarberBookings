@@ -72,6 +72,15 @@ export function validateRuntimeConfiguration() {
       || !process.env.META_WHATSAPP_ACCESS_TOKEN?.trim()) {
       throw new Error("Meta WhatsApp configuration is incomplete while Production WhatsApp is enabled.");
     }
+    const templateEnvironmentNames = [
+      "META_WHATSAPP_CONFIRMATION_TEMPLATE",
+      "META_WHATSAPP_RESCHEDULED_TEMPLATE",
+      "META_WHATSAPP_CANCELLED_TEMPLATE",
+      "META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE",
+    ];
+    if (templateEnvironmentNames.some((name) => !process.env[name]?.trim())) {
+      throw new Error("All Meta WhatsApp appointment templates must be explicitly configured when Production WhatsApp is enabled.");
+    }
   }
 
   const webhookEnabled = ["true", "1"].includes(

@@ -17,6 +17,7 @@ import { storage, type IStorage } from "./storage";
 import {
   areWhatsappNotificationsEnabled,
   buildMetaRecurringTemplateParams,
+  getMetaAppointmentTemplateName,
   sendMetaTemplate,
   type MetaAppointmentTemplateParams,
   type MetaTemplateDeliveryResult,
@@ -185,7 +186,7 @@ async function processRecurringConfirmation(
         whatsappResult = await deps.sendWhatsApp(params);
       } catch {
         whatsappResult = {
-          outcome: "failed", provider: "meta", templateName: "appointment_recurring_confirmation_v1",
+          outcome: "failed", provider: "meta", templateName: templateName("appointment_recurring_confirmation") || "",
           providerMessageId: null, providerStatus: "META_UNEXPECTED_ERROR", responseStatus: null,
           errorCode: "META_UNEXPECTED_ERROR",
         };
@@ -208,7 +209,7 @@ async function processRecurringConfirmation(
     }
   }
   await updateEvent(deps, event.id, {
-    provider: "meta", templateName: "appointment_recurring_confirmation_v1",
+    provider: "meta", templateName: templateName("appointment_recurring_confirmation"),
     whatsappStatus: "skipped",
     errorCode: snapshot.whatsappOptIn && !deps.whatsappEnabled
       ? "WHATSAPP_DISABLED"
@@ -325,7 +326,7 @@ async function processClaimedCore(
       startTime: new Date(event.appointmentStartTime), timeZone: details.locationTimeZone,
       address: details.locationAddress, managementToken: appointment!.cancelToken });
   } catch {
-    result = { outcome: "failed", provider: "meta", templateName: templateName(type), providerMessageId: null,
+    result = { outcome: "failed", provider: "meta", templateName: templateName(type) || "", providerMessageId: null,
       providerStatus: "META_UNEXPECTED_ERROR", responseStatus: null, errorCode: "META_UNEXPECTED_ERROR" };
   }
   await updateEvent(deps, event.id, { provider: result.provider, templateName: result.templateName,
@@ -355,10 +356,8 @@ export async function processClaimedAppointmentNotification(
   return channel;
 }
 
-function templateName(type: EventType) {
-  if (type === "appointment_confirmation") return "appointment_confirmation_v1";
-  if (type === "appointment_cancelled") return "appointment_cancelled_v1";
-  return "appointment_rescheduled_v1";
+function templateName(type: MetaAppointmentTemplateParams["eventType"]) {
+  return getMetaAppointmentTemplateName(type);
 }
 
 export async function processAppointmentNotification(id: number, deps = defaultDependencies): Promise<Channel> {
