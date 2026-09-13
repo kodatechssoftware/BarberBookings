@@ -392,7 +392,7 @@ export function AppointmentBlockDialog({
 
               {blockData.isManualBooking && (
                 <div className="space-y-3">
-                  <Label className="text-sm font-medium text-gray-300">Telemóvel</Label>
+                  <Label className="text-sm font-medium text-gray-300">Telemóvel (opcional)</Label>
                   <div className="flex h-12 overflow-hidden rounded-xl border border-white/10 bg-background/50 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40">
                     <div className="relative shrink-0 border-r border-white/10">
                       <select
@@ -430,9 +430,8 @@ export function AppointmentBlockDialog({
                       placeholder={manualPhoneCountry.placeholder}
                     />
                   </div>
-                  <p className="text-xs text-gray-500">
-                    Escolha o país e escreva apenas o número. O indicativo{" "}
-                    {manualPhoneCountry.dialCode} é adicionado automaticamente.
+                  <p className="text-xs leading-relaxed text-gray-400">
+                    Com um número válido, a confirmação e as atualizações serão enviadas por WhatsApp.
                   </p>
                 </div>
               )}
@@ -465,8 +464,8 @@ export function AppointmentBlockDialog({
                     {emailValidationMessage}
                   </p>
                 ) : (
-                  <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-500">
-                    Indique o email para receber a confirmação da marcação e o link de cancelamento.
+                  <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-400">
+                    Usado como alternativa caso não seja possível enviar por WhatsApp.
                   </p>
                 )}
               </div>

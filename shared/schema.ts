@@ -1,4 +1,4 @@
-import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, jsonb, check } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
@@ -23,6 +23,9 @@ export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
 export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
+export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
+export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
+export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -93,7 +96,39 @@ export const whatsappMessageStatuses = [
 export const whatsappMessageTypes = [
   "booking_confirmation",
   "booking_cancellation",
+  "provider_test",
 ] as const;
+
+export type RecurringNotificationSnapshot = {
+  schemaVersion: 1;
+  seriesId: string;
+  customerName: string;
+  customerEmail: string | null;
+  customerPhone: string;
+  whatsappOptIn: boolean;
+  location: { id: number; name: string; address: string; timezone: string };
+  service: { id: number; name: string };
+  barber: { id: number; name: string };
+  recurrence: { intervalWeeks: number; durationMonths: number; occurrenceCount: number };
+  occurrences: Array<{ appointmentId: number; occurrenceIndex: number; startTime: string }>;
+};
+
+export const locations = appPgTable("locations", {
+  id: idColumn("locations_id_seq"),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  address: text("address").notNull().default(""),
+  mapUrl: text("map_url"),
+  mapEmbedUrl: text("map_embed_url"),
+  phone: text("phone"),
+  email: text("email"),
+  timezone: text("timezone").notNull().default("Europe/Lisbon"),
+  isActive: boolean("is_active").notNull().default(true),
+  isDefault: boolean("is_default").notNull().default(false),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 export const barbers = appPgTable("barbers", {
   id: idColumn("barbers_id_seq"),
@@ -117,8 +152,33 @@ export const services = appPgTable("services", {
   isVisible: boolean("is_visible").default(true),
 });
 
+export const appointmentSeries = appPgTable("appointment_series", {
+  id: text("id").primaryKey(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  serviceId: integer("service_id").references(() => services.id).notNull(),
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone").notNull(),
+  whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
+  whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
+  intervalWeeks: integer("interval_weeks").notNull(),
+  durationMonths: integer("duration_months").notNull(),
+  occurrenceCount: integer("occurrence_count").notNull(),
+  firstStartTime: timestamp("first_start_time").notNull(),
+  notificationRevision: integer("notification_revision").default(1).notNull(),
+  status: text("status").default("active").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  recurrenceValuesCheck: check("appointment_series_recurrence_values_check",
+    sql`${table.intervalWeeks} > 0 AND ${table.durationMonths} > 0 AND ${table.occurrenceCount} > 1`),
+  notificationRevisionCheck: check("appointment_series_notification_revision_check", sql`${table.notificationRevision} > 0`),
+}));
+
 export const appointments = appPgTable("appointments", {
   id: idColumn("appointments_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
   serviceId: integer("service_id").references(() => services.id),
   startTime: timestamp("start_time").notNull(),
@@ -132,8 +192,16 @@ export const appointments = appPgTable("appointments", {
   paymentMethod: text("payment_method", { enum: appointmentPaymentMethods }).default("pending").notNull(),
   depositRequired: boolean("deposit_required").default(false).notNull(),
   depositReason: text("deposit_reason"),
+  rescheduleRevision: integer("reschedule_revision").default(0).notNull(),
+  notificationRevision: integer("notification_revision").default(0).notNull(),
+  whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
+  whatsappOptInAt: timestamp("whatsapp_opt_in_at"),
+  seriesId: text("series_id").references(() => appointmentSeries.id),
+  seriesOccurrenceIndex: integer("series_occurrence_index"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  seriesOccurrenceIdx: uniqueIndex("appointments_series_occurrence_idx").on(table.seriesId, table.seriesOccurrenceIndex),
+}));
 
 export const admins = appPgTable("admins", {
   id: idColumn("admins_id_seq"),
@@ -160,6 +228,7 @@ export const verificationCodes = appPgTable("verification_codes", {
 
 export const shopAvailability = appPgTable("shop_availability", {
   id: idColumn("shop_availability_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   dayOfWeek: integer("day_of_week").notNull(),
   startTime: text("start_time").notNull(),
   endTime: text("end_time").notNull(),
@@ -168,6 +237,7 @@ export const shopAvailability = appPgTable("shop_availability", {
 
 export const barberAvailability = appPgTable("barber_availability", {
   id: idColumn("barber_availability_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
   dayOfWeek: integer("day_of_week").notNull(),
   startTime: text("start_time").notNull(),
@@ -180,6 +250,26 @@ export const barberServices = appPgTable("barber_services", {
   serviceId: integer("service_id").references(() => services.id).notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.barberId, table.serviceId] }),
+}));
+
+export const barberLocations = appPgTable("barber_locations", {
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.barberId, table.locationId] }),
+}));
+
+export const serviceLocations = appPgTable("service_locations", {
+  serviceId: integer("service_id").references(() => services.id).notNull(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  priceOverride: integer("price_override"),
+  durationOverride: integer("duration_override"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.serviceId, table.locationId] }),
 }));
 
 export const barberInvites = appPgTable("barber_invites", {
@@ -229,6 +319,7 @@ export const barberCompensationRules = appPgTable("barber_compensation_rules", {
 
 export const businessExpenses = appPgTable("business_expenses", {
   id: idColumn("business_expenses_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull().default(1),
   category: text("category", { enum: businessExpenseCategories }).notNull(),
   description: text("description").notNull(),
   amountCents: integer("amount_cents").notNull(),
@@ -256,6 +347,63 @@ export const whatsappMessages = appPgTable("whatsapp_messages", {
   providerMessageIdIdx: uniqueIndex("whatsapp_messages_provider_message_id_idx").on(table.providerMessageId),
 }));
 
+export const appointmentNotificationEvents = appPgTable("appointment_notification_events", {
+  id: idColumn("appointment_notification_events_id_seq"),
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }),
+  seriesId: text("series_id").references(() => appointmentSeries.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(),
+  eventRevision: integer("event_revision").notNull(),
+  eventKey: text("event_key").notNull(),
+  appointmentStartTime: timestamp("appointment_start_time").notNull(),
+  previousStartTime: timestamp("previous_start_time"),
+  newStartTime: timestamp("new_start_time"),
+  provider: text("provider"),
+  templateName: text("template_name"),
+  whatsappStatus: text("whatsapp_status").default("pending").notNull(),
+  providerMessageId: text("provider_message_id"),
+  providerStatus: text("provider_status"),
+  responseStatus: integer("response_status"),
+  errorCode: text("error_code"),
+  processingStartedAt: timestamp("processing_started_at"),
+  processingCompletedAt: timestamp("processing_completed_at"),
+  whatsappAttemptedAt: timestamp("whatsapp_attempted_at"),
+  whatsappAcceptedAt: timestamp("whatsapp_accepted_at"),
+  sentAt: timestamp("sent_at"),
+  deliveredAt: timestamp("delivered_at"),
+  readAt: timestamp("read_at"),
+  failedAt: timestamp("failed_at"),
+  lastProviderTimestamp: timestamp("last_provider_timestamp"),
+  webhookFallbackClaimedAt: timestamp("webhook_fallback_claimed_at"),
+  payloadSnapshot: jsonb("payload_snapshot").$type<RecurringNotificationSnapshot>(),
+  emailStatus: text("email_status").default("not_needed").notNull(),
+  emailProviderMessageId: text("email_provider_message_id"),
+  emailErrorCode: text("email_error_code"),
+  emailAttemptedAt: timestamp("email_attempted_at"),
+  emailSentAt: timestamp("email_sent_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  eventKeyIdx: uniqueIndex("appointment_notification_events_event_key_idx").on(table.eventKey),
+  providerMessageIdIdx: uniqueIndex("appointment_notification_events_provider_message_id_idx").on(table.providerMessageId),
+  subjectCheck: check("appointment_notification_events_subject_check", sql`num_nonnulls(${table.appointmentId}, ${table.seriesId}) = 1`),
+}));
+
+export const metaWebhookReceipts = appPgTable("meta_webhook_receipts", {
+  id: idColumn("meta_webhook_receipts_id_seq"),
+  receiptKey: text("receipt_key").notNull(),
+  providerMessageId: text("provider_message_id").notNull(),
+  status: text("status").notNull(),
+  providerTimestamp: timestamp("provider_timestamp"),
+  errorCode: text("error_code"),
+  wabaId: text("waba_id").notNull(),
+  phoneNumberId: text("phone_number_id").notNull(),
+  notificationEventId: integer("notification_event_id").references(() => appointmentNotificationEvents.id, { onDelete: "set null" }),
+  payloadSummary: text("payload_summary"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  receiptKeyIdx: uniqueIndex("meta_webhook_receipts_receipt_key_idx").on(table.receiptKey),
+}));
+
 // === RELATIONS ===
 
 export const appointmentsRelations = relations(appointments, ({ one }) => ({
@@ -266,6 +414,10 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
   service: one(services, {
     fields: [appointments.serviceId],
     references: [services.id],
+  }),
+  series: one(appointmentSeries, {
+    fields: [appointments.seriesId],
+    references: [appointmentSeries.id],
   }),
 }));
 
@@ -319,6 +471,7 @@ const bookingPhoneSchema = z.string().trim().refine((value) => {
 }, "Indique um telemovel valido.");
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   id: true,
+  locationId: true,
   createdAt: true,
   status: true,
   cancelToken: true,
@@ -327,10 +480,16 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   durationMinutes: true,
   depositRequired: true,
   depositReason: true,
+  rescheduleRevision: true,
+  notificationRevision: true,
+  whatsappOptInAt: true,
+  seriesId: true,
+  seriesOccurrenceIndex: true,
 }).extend({
   customerName: z.string().trim().min(1, "Indique o nome.").max(80, "O nome não pode ter mais de 80 caracteres."),
   customerEmail: z.string().trim().email("Indique um email válido.").max(120, "O email não pode ter mais de 120 caracteres.").optional().nullable(),
   customerPhone: bookingPhoneSchema,
+  whatsappOptIn: z.boolean().optional().default(false),
 });
 export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });
 export const insertBlacklistSchema = createInsertSchema(blacklist).omit({ id: true, createdAt: true });
@@ -368,6 +527,7 @@ export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).
 export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type Appointment = typeof appointments.$inferSelect;
+export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
 export type AppointmentStatus = typeof appointmentStatuses[number];
 export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;
@@ -381,6 +541,8 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect;
 export type BusinessExpense = typeof businessExpenses.$inferSelect;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
+export type AppointmentNotificationEvent = typeof appointmentNotificationEvents.$inferSelect;
+export type MetaWebhookReceipt = typeof metaWebhookReceipts.$inferSelect;
 export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
 export type BusinessExpenseCategory = typeof businessExpenseCategories[number];
@@ -390,6 +552,8 @@ export type WhatsappMessageType = typeof whatsappMessageTypes[number];
 
 export type BarberWithServices = Barber & {
   serviceIds: number[];
+  allServicesAllowed?: boolean;
+  locationCount?: number;
   compensationModel?: BarberCompensationModel;
   commissionPercent?: number | null;
   chairRentCents?: number | null;

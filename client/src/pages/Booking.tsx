@@ -1,10 +1,10 @@
-import { useEffect, useState, useMemo, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
+import { useEffect, useState, useMemo, useRef, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { type AppointmentRecord, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
-import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2 } from "lucide-react";
+import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2, MapPin } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { eachDayOfInterval, endOfMonth, endOfWeek, format, parseISO, startOfMonth, startOfToday, startOfWeek } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
+import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -29,6 +29,8 @@ import {
   type PhoneCountryCode,
 } from "@shared/phone-countries";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
+import { useLocations } from "@/hooks/use-locations";
+import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 
 type BookingPreference = {
   step: number;
@@ -275,11 +277,38 @@ export default function Booking() {
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { data: locations = [], isLoading: loadingLocations, isError: locationsError } = useLocations({ purpose: "booking" });
+  const activeLocationId = useActiveLocationId();
+  const activeLocation = locations.find((location) => location.id === activeLocationId);
+
+  useEffect(() => {
+    if (locations.length === 1 && !activeLocation) setActiveLocationId(locations[0].id);
+  }, [locations, activeLocation]);
+
+  const previousLocationId = useRef(activeLocationId);
+  useEffect(() => {
+    const previous = previousLocationId.current;
+    previousLocationId.current = activeLocationId;
+    // Initial selection must preserve valid direct booking links and repeat-booking preferences.
+    if (previous === null || previous === activeLocationId) return;
+    setSelectedBarberId(null);
+    setSelectedServiceId(null);
+    setSelectedTime(null);
+    setStep(1);
+  }, [activeLocationId]);
 
   const { data: barbers, isLoading: loadingBarbers } = useBarbers();
   const { data: services, isLoading: loadingServices } = useServices();
-  const { data: availabilityRows } = useBarberAvailability();
-  const { data: shopAvailabilityRows } = useShopAvailability();
+  const {
+    data: availabilityRows,
+    isLoading: loadingAvailability,
+    isError: availabilityError,
+  } = useBarberAvailability();
+  const {
+    data: shopAvailabilityRows,
+    isLoading: loadingShopAvailability,
+    isError: shopAvailabilityError,
+  } = useShopAvailability();
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const createAppointment = useCreateAppointment();
   const maxPublicBookingDate = useMemo(
@@ -291,6 +320,7 @@ export default function Booking() {
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
+  const locationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
   const availableServices = useMemo(() => {
     if (selectedBarberId && selectedBarberId !== 0) {
       return visibleServices.filter((service) => canBarberPerformService(selectedBarber, service.id));
@@ -306,6 +336,21 @@ export default function Booking() {
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
     date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, 'yyyy-MM-dd') : undefined,
     enabled: Boolean(selectedDate && isPublicDateAllowed(selectedDate)),
+  });
+
+  const bookingWindowStart = useMemo(
+    () => parseDateParam(publicBookingWindow?.today ?? null),
+    [publicBookingWindow?.today],
+  );
+  const {
+    data: bookingWindowAppointments,
+    isLoading: loadingBookingWindowAppointments,
+    isError: bookingWindowAppointmentsError,
+  } = usePublicAppointments({
+    barberId: selectedBarberId === 0 ? undefined : selectedBarberId?.toString(),
+    startDate: publicBookingWindow?.today,
+    endDate: publicBookingWindow?.maxDate,
+    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId && publicBookingWindow),
   });
 
   useEffect(() => {
@@ -400,8 +445,9 @@ export default function Booking() {
       availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
       shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
       existingAppointments,
+      timeZone: locationTimeZone,
     });
-  }, [availabilityRows, existingAppointments, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
+  }, [availabilityRows, existingAppointments, locationTimeZone, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
   const shopAvailabilityForCalendar = useMemo(
     () => (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
     [shopAvailabilityRows],
@@ -433,6 +479,7 @@ export default function Booking() {
         availabilityRows: availability,
         shopAvailabilityRows: shopAvailabilityForCalendar,
         existingAppointments: appointments,
+        timeZone: locationTimeZone,
       });
 
       if (slots.some((slot) => slot.available)) {
@@ -452,7 +499,66 @@ export default function Booking() {
     selectedService,
     shopAvailabilityForCalendar,
     visibleBarbers,
+    locationTimeZone,
   ]);
+
+  const initialAvailabilitySelectionKey = [
+    activeLocationId,
+    selectedBarberId,
+    selectedServiceId,
+    publicBookingWindow?.today,
+    publicBookingWindow?.maxDate,
+  ].join(":");
+  const completedInitialAvailabilityKey = useRef<string | null>(null);
+  const failedInitialAvailabilityKey = useRef<string | null>(null);
+  const loadingInitialAvailability = loadingBarbers || loadingServices || loadingAvailability
+    || loadingShopAvailability || loadingPublicBookingWindow || loadingBookingWindowAppointments;
+  const initialAvailabilityHasError = availabilityError || shopAvailabilityError
+    || bookingWindowAppointmentsError;
+  const firstAvailableDate = useMemo(() => {
+    if (!bookingWindowStart || !maxPublicBookingDate || !selectedService || selectedBarberId === null
+      || !bookingWindowAppointments || initialAvailabilityHasError) return undefined;
+    return findFirstAvailableDate({
+      startDate: bookingWindowStart,
+      endDate: maxPublicBookingDate,
+      selectedService,
+      selectedBarberId,
+      visibleBarbers,
+      availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
+      shopAvailabilityRows: shopAvailabilityForCalendar,
+      existingAppointments: bookingWindowAppointments,
+      timeZone: locationTimeZone,
+    });
+  }, [availabilityRows, bookingWindowAppointments, bookingWindowStart, initialAvailabilityHasError,
+    locationTimeZone, maxPublicBookingDate, selectedBarberId, selectedService, shopAvailabilityForCalendar, visibleBarbers]);
+
+  useEffect(() => {
+    if (step !== 3 || loadingInitialAvailability
+      || completedInitialAvailabilityKey.current === initialAvailabilitySelectionKey) return;
+    if (initialAvailabilityHasError) {
+      completedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
+      failedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
+      setSelectedDate(undefined);
+      setSelectedTime(null);
+      return;
+    }
+    if (firstAvailableDate === undefined) return;
+    completedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
+    failedInitialAvailabilityKey.current = null;
+    setSelectedDate(firstAvailableDate ?? undefined);
+    if (firstAvailableDate) setVisibleCalendarMonth(firstAvailableDate);
+    else if (bookingWindowStart) setVisibleCalendarMonth(bookingWindowStart);
+    setSelectedTime(null);
+    setShowTimeError(false);
+  }, [bookingWindowStart, firstAvailableDate, initialAvailabilityHasError, initialAvailabilitySelectionKey,
+    loadingInitialAvailability, step]);
+  const preparingInitialAvailability = step === 3
+    && completedInitialAvailabilityKey.current !== initialAvailabilitySelectionKey;
+  const initialAvailabilityError = step === 3
+    && failedInitialAvailabilityKey.current === initialAvailabilitySelectionKey;
+  const noAvailabilityInBookingWindow = step === 3
+    && completedInitialAvailabilityKey.current === initialAvailabilitySelectionKey
+    && firstAvailableDate === null;
 
   const handleNext = () => {
     if (step === 3 && !selectedTime) {
@@ -500,9 +606,7 @@ export default function Booking() {
     const customerName = customerDetails.name.trim();
     const normalizedPhone = toStoredPhone(customerDetails.phone, selectedPhoneCountry);
 
-    const [hours, minutes] = selectedTime.split(':').map(Number);
-    const appointmentDate = new Date(selectedDate);
-    appointmentDate.setHours(hours, minutes, 0, 0);
+    const appointmentDate = calendarTimeInTimeZone(selectedDate, selectedTime, locationTimeZone);
     const customerEmail = customerDetails.email.trim();
 
     try {
@@ -513,6 +617,7 @@ export default function Booking() {
         customerName,
         customerEmail: customerEmail || undefined,
         customerPhone: normalizedPhone,
+        whatsappOptIn: true,
       });
       saveLastBookingPreference({
         barberId: selectedBarberId,
@@ -533,6 +638,55 @@ export default function Booking() {
   };
 
 
+  if (loadingLocations || (locations.length === 1 && !activeLocation)) {
+    return <div className="flex min-h-screen items-center justify-center bg-background"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
+
+  if (locationsError || locations.length === 0) {
+    return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6 text-center text-white">
+      <h1 className="text-2xl font-display">Marcações indisponíveis</h1>
+      <p>{locationsError ? "Não foi possível carregar as lojas. Tente novamente dentro de instantes." : "Ainda não existem lojas disponíveis para marcação online."}</p>
+      <Button variant="outline" onClick={() => navigate("/")}>Voltar ao início</Button>
+    </div>;
+  }
+
+  if (locations.length > 1 && !activeLocation) {
+    return (
+      <div className="min-h-screen bg-background px-4 py-10 text-white">
+        <div className="mx-auto max-w-5xl">
+          <Button variant="ghost" className="mb-8" onClick={() => navigate("/")}>
+            <ChevronLeft className="mr-2 h-4 w-4" /> Voltar
+          </Button>
+          <div className="mb-8 text-center">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Nova marcação</p>
+            <h1 className="mt-2 text-3xl font-display font-bold md:text-5xl">Escolhe a localização</h1>
+            <p className="mt-3 text-gray-400">Os barbeiros, serviços e horários dependem da loja escolhida.</p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {locations.map((location) => (
+              <button
+                key={location.id}
+                type="button"
+                className="min-h-40 rounded-xl border border-white/10 bg-card p-5 text-left transition hover:border-primary hover:bg-primary/5"
+                onClick={() => {
+                  setActiveLocationId(location.id);
+                  setSelectedBarberId(null);
+                  setSelectedServiceId(null);
+                  setSelectedTime(null);
+                  setStep(1);
+                }}
+              >
+                <MapPin className="mb-4 h-6 w-6 text-primary" />
+                <span className="block text-lg font-bold">{location.name}</span>
+                <span className="mt-2 block text-sm leading-relaxed text-gray-400">{location.address}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (step === 5) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -546,21 +700,26 @@ export default function Booking() {
           </motion.div>
           <h2 className="text-3xl font-display font-bold mb-4 text-white">Marcação Confirmada!</h2>
           <p className="text-gray-400 mb-3">
-            Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}.
+            Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}h.
           </p>
           {customerDetails.email.trim() ? (
             <>
               <p className="mb-3 text-sm text-gray-500">
-                Enviámos para o seu email a confirmação com os detalhes da marcação e o link de cancelamento.
+                A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
               </p>
               <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
-                Se não encontrar o email em poucos minutos, verifique a pasta de spam. Se ainda assim não o receber, contacte diretamente a barbearia.
+                Se não receber a confirmação nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.
               </p>
             </>
           ) : (
-            <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-gray-400">
-              Como não indicou um email, não receberá o link de cancelamento. Se precisar de alterar ou cancelar a marcação, contacte diretamente a barbearia.
-            </p>
+            <>
+              <p className="mb-3 text-sm text-gray-500">
+                A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
+              </p>
+              <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-gray-400">
+                Se não receber a confirmação nos próximos minutos, contacte diretamente a barbearia.
+              </p>
+            </>
           )}
           
           <div className="space-y-4">
@@ -581,7 +740,7 @@ export default function Booking() {
           <Button 
             variant="ghost" 
             size="icon" 
-            className="hover:bg-white/10"
+            className="shrink-0 hover:bg-white/10"
             onClick={() => {
               if (step > 1) setStep(prev => prev - 1);
               else navigate("/");
@@ -589,7 +748,13 @@ export default function Booking() {
           >
             <ChevronLeft className="w-5 h-5" />
           </Button>
-          <span className="font-display font-bold text-lg">Nova Marcação</span>
+          <div className="min-w-0 flex-1">
+            <span className="font-display font-bold text-lg">Nova Marcação</span>
+            {locations.length > 1 && activeLocation && <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>{activeLocation.name}</span>}
+          </div>
+          {locations.length > 1 && (
+            <Button className="shrink-0" variant="ghost" size="sm" onClick={() => setActiveLocationId(null)}>Mudar loja</Button>
+          )}
         </div>
       </nav>
 
@@ -780,7 +945,7 @@ export default function Booking() {
                   <div className="bg-card border border-white/5 rounded-xl p-2 md:p-4 overflow-x-auto">
                     <Calendar
                       mode="single"
-                      selected={selectedDate}
+                      selected={preparingInitialAvailability ? undefined : selectedDate}
                       month={visibleCalendarMonth}
                       onMonthChange={setVisibleCalendarMonth}
                       onSelect={(date) => {
@@ -835,7 +1000,19 @@ export default function Booking() {
                     "bg-card border rounded-xl p-4 md:p-6 min-h-[200px] transition-all duration-300",
                     showTimeError ? "border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]" : "border-white/5"
                   )}>
-                    {!selectedDate ? (
+                    {preparingInitialAvailability || loadingInitialAvailability ? (
+                      <div className="flex justify-center mt-10">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : initialAvailabilityError ? (
+                      <p className="text-red-400 text-center mt-10">
+                        Não foi possível carregar os horários disponíveis. Tente novamente dentro de instantes.
+                      </p>
+                    ) : noAvailabilityInBookingWindow ? (
+                      <p className="text-gray-500 text-center mt-10">
+                        Não existem horários disponíveis dentro do período de marcações atual.
+                      </p>
+                    ) : !selectedDate ? (
                       <p className="text-gray-500 text-center mt-10">Selecione uma data primeiro.</p>
                     ) : loadingAppointments ? (
                       <div className="flex justify-center mt-10">
@@ -873,7 +1050,7 @@ export default function Booking() {
                                     : "bg-transparent text-gray-300 border-white/10 hover:border-primary/50 hover:bg-white/5"
                               )}
                             >
-                              {time}
+                              {time}h
                             </button>
                           ))}
                         </div>
@@ -909,7 +1086,7 @@ export default function Booking() {
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-400">Data e hora:</span>
                     <span className="font-medium">
-                      {selectedDate && format(selectedDate, "dd/MM/yyyy")} às {selectedTime}
+                      {selectedDate && format(selectedDate, "dd/MM/yyyy")} às {selectedTime}h
                     </span>
                   </div>
                   <div className="flex justify-between text-lg font-bold text-primary pt-2 border-t border-white/10">
@@ -981,7 +1158,7 @@ export default function Booking() {
                         placeholder={selectedPhoneCountryData.placeholder}
                         className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                         aria-invalid={showCustomerError("phone")}
-                        aria-describedby={showCustomerError("phone") ? "phone-error" : "phone-help"}
+                        aria-describedby={`${showCustomerError("phone") ? "phone-error " : ""}phone-whatsapp-notice`}
                         value={customerDetails.phone}
                         onBeforeInput={handleCustomerPhoneBeforeInput}
                         onPaste={handleCustomerPhonePaste}
@@ -989,13 +1166,12 @@ export default function Booking() {
                         onBlur={() => markCustomerTouched("phone")}
                       />
                     </div>
-                    {showCustomerError("phone") ? (
+                    <p id="phone-whatsapp-notice" className="text-xs leading-relaxed text-gray-400">
+                      Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.
+                    </p>
+                    {showCustomerError("phone") && (
                       <p id="phone-error" className="text-xs font-medium text-red-400">
                         {customerFieldErrors.phone}
-                      </p>
-                    ) : (
-                      <p id="phone-help" className="text-[11px] text-gray-500">
-                        Escolha o país e escreva apenas o número. O indicativo é adicionado automaticamente.
                       </p>
                     )}
                   </div>
@@ -1023,8 +1199,8 @@ export default function Booking() {
                         {customerFieldErrors.email}
                       </p>
                     ) : (
-                      <p id="email-help" className="text-[11px] leading-relaxed text-gray-500">
-                        Indique o email para receber a confirmação da marcação e o link de cancelamento.
+                      <p id="email-help" className="text-xs leading-relaxed text-gray-400">
+                        Usado como alternativa caso não seja possível enviar por WhatsApp.
                       </p>
                     )}
                   </div>

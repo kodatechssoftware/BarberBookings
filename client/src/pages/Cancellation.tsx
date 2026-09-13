@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useAppointmentByToken, useCancelAppointment } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
-import { preloadReschedulePage } from "@/lib/page-preloads";
 import {
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
   Home,
   Loader2,
-  RotateCcw,
   Scissors,
   UserRound,
   XCircle,
@@ -17,7 +15,7 @@ import {
 import { motion } from "framer-motion";
 import { shopBranding } from "@/lib/branding";
 
-function formatAppointmentDate(value?: string) {
+function formatAppointmentDate(value?: string, timeZone = "Europe/Lisbon") {
   if (!value) return "";
 
   return new Intl.DateTimeFormat("pt-PT", {
@@ -27,7 +25,8 @@ function formatAppointmentDate(value?: string) {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  }).format(new Date(value));
+    timeZone,
+  }).format(new Date(value)) + "h";
 }
 
 function StatusScreen({
@@ -74,17 +73,11 @@ export default function Cancellation() {
   const [cancelMessage, setCancelMessage] = useState("");
 
   const appointmentDate = useMemo(
-    () => formatAppointmentDate(appointment?.startTime),
-    [appointment?.startTime],
+    () => formatAppointmentDate(appointment?.startTime, appointment?.locationTimeZone),
+    [appointment?.locationTimeZone, appointment?.startTime],
   );
   const isCancelled = appointment?.status === "cancelled" || appointment?.status === "late_cancelled";
   const isUnavailable = appointment && appointment.status !== "booked" && !isCancelled;
-
-  useEffect(() => {
-    if (appointment?.status === "booked") {
-      void preloadReschedulePage();
-    }
-  }, [appointment?.status]);
 
   const handleCancel = async () => {
     if (!token) return;
@@ -142,7 +135,7 @@ export default function Cancellation() {
           <p className="text-xs font-semibold uppercase text-primary">{shopBranding.name}</p>
           <h1 className="mt-2 font-display text-3xl font-bold leading-tight">Cancelar marcação</h1>
           <p className="mt-3 text-sm leading-6 text-gray-300">
-            Confirme os dados antes de libertar este horário.
+            Confirme os dados da marcação antes de cancelar.
           </p>
         </div>
 
@@ -182,17 +175,6 @@ export default function Cancellation() {
           )}
 
           <div className="mt-6 space-y-3">
-            <Link
-              href={`/reschedule/${token}`}
-              onFocus={() => void preloadReschedulePage()}
-              onMouseEnter={() => void preloadReschedulePage()}
-              onTouchStart={() => void preloadReschedulePage()}
-            >
-              <Button variant="gold" className="flex h-12 w-full items-center justify-center gap-2 text-base">
-                <RotateCcw className="h-4 w-4" /> Reagendar
-              </Button>
-            </Link>
-
             <Button
               variant="destructive"
               className="h-12 w-full text-base"

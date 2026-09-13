@@ -4,6 +4,11 @@ import { registerRoutes } from "./routes";
 import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import {
+  appointmentNotificationWorkerEnabled,
+  validateRuntimeConfiguration,
+} from "./runtime-environment";
+import { startAppointmentNotificationWorker } from "./appointment-notifications";
+import {
   ensureAppointmentOverlapProtection,
   ensureAppointmentPaymentMethodColumn,
   ensureBarberCompensationRulesTable,
@@ -172,6 +177,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  validateRuntimeConfiguration();
   log(`starting BarberBookings API (${getSafeDatabaseTarget()} appPoolMax=${pool.options.max})`);
 
   await ensureServiceAgendaLabelColumn();
@@ -185,6 +191,11 @@ app.use((req, res, next) => {
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
   }
   const server = await registerRoutes(app, httpServer);
+  if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
+
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ message: "Endpoint não encontrado." });
+  });
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) {

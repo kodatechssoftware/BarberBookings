@@ -11,8 +11,19 @@ import { preloadCancellationPage } from "@/lib/page-preloads";
 import { useToast } from "@/hooks/use-toast";
 import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
-import { type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
+import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
+
+function formatPublicDateTime(value: Date | string, timeZone: string, dateStyle: "short" | "long") {
+  const date = new Date(value);
+  const formattedDate = new Intl.DateTimeFormat("pt-PT", dateStyle === "long"
+    ? { timeZone, day: "2-digit", month: "long", year: "numeric" }
+    : { timeZone, day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+  const time = new Intl.DateTimeFormat("pt-PT", {
+    timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(date);
+  return `${formattedDate} às ${time}h`;
+}
 
 export default function Reschedule() {
   const [, params] = useRoute("/reschedule/:token");
@@ -24,8 +35,8 @@ export default function Reschedule() {
   const [rescheduledStart, setRescheduledStart] = useState<Date | null>(null);
 
   const { data: appointment, isLoading: loadingAppointment } = useAppointmentByToken(token);
-  const { data: availabilityRows } = useBarberAvailability();
-  const { data: shopAvailabilityRows } = useShopAvailability();
+  const { data: availabilityRows, isLoading: loadingAvailability } = useBarberAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
+  const { data: shopAvailabilityRows, isLoading: loadingShopAvailability } = useShopAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const rescheduleAppointment = useRescheduleAppointment();
   const maxPublicBookingDate = useMemo(
@@ -53,13 +64,14 @@ export default function Reschedule() {
   }, [appointment?.status]);
 
   const { data: existingAppointments, isLoading: loadingAppointments } = usePublicAppointments({
+    locationId: appointment?.locationId,
     barberId: appointment?.barberId ? String(appointment.barberId) : undefined,
     date: selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined,
     enabled: Boolean(appointment?.barberId && selectedDate && isPublicDateAllowed(selectedDate)),
   });
 
   const timeSlots = useMemo(() => {
-    if (!appointment || !existingAppointments || !selectedDate) return [];
+    if (!appointment || !existingAppointments || !selectedDate || !availabilityRows || !shopAvailabilityRows) return [];
 
     const duration = appointment.duration || 30;
     return getAvailableTimeSlots({
@@ -70,6 +82,7 @@ export default function Reschedule() {
       availabilityRows: (availabilityRows as AvailabilityRow[] | undefined) ?? [],
       shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
       existingAppointments: existingAppointments.filter((existing) => existing.id !== appointment.id),
+      timeZone: appointment.locationTimeZone,
     });
   }, [appointment, availabilityRows, existingAppointments, selectedDate, shopAvailabilityRows]);
 
@@ -86,9 +99,7 @@ export default function Reschedule() {
       return;
     }
 
-    const [hours, minutes] = selectedTime.split(":").map(Number);
-    const startTime = new Date(selectedDate);
-    startTime.setHours(hours, minutes, 0, 0);
+    const startTime = calendarTimeInTimeZone(selectedDate, selectedTime, appointment?.locationTimeZone || "Europe/Lisbon");
 
     try {
       await rescheduleAppointment.mutateAsync({ token, startTime });
@@ -133,7 +144,7 @@ export default function Reschedule() {
           </p>
           {success && rescheduledStart && (
             <p className="mb-6 rounded-xl border border-white/10 bg-card px-4 py-3 text-sm text-gray-300">
-              {format(rescheduledStart, "dd 'de' MMMM", { locale: pt })} às {format(rescheduledStart, "HH:mm")}
+              {formatPublicDateTime(rescheduledStart, appointment.locationTimeZone, "long")}
             </p>
           )}
           <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
@@ -150,8 +161,9 @@ export default function Reschedule() {
           <p className="text-gray-400">
             {appointment.serviceName} com {appointment.barberName}
           </p>
+          <p className="mt-2 text-sm text-gray-400">{appointment.locationName} · {appointment.locationAddress}</p>
           <p className="text-sm text-gray-500 mt-2">
-            Atual: {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")}
+            Atual: {formatPublicDateTime(appointment.startTime, appointment.locationTimeZone, "short")}
           </p>
         </div>
 
@@ -179,7 +191,7 @@ export default function Reschedule() {
 
           <div className="bg-card border border-white/10 rounded-xl p-4">
             <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" /> Nova hora</h2>
-            {loadingAppointments ? (
+            {loadingAppointments || loadingAvailability || loadingShopAvailability ? (
               <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
             ) : timeSlots.length === 0 ? (
               <p className="text-gray-500 text-sm text-center py-10">Não existem horários disponíveis para esta data.</p>
@@ -197,7 +209,7 @@ export default function Reschedule() {
                           "border-white/10 text-gray-300 hover:border-primary/50",
                     )}
                   >
-                    {time}
+                    {time}h
                   </button>
                 ))}
               </div>

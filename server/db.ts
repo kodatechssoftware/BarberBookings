@@ -47,6 +47,181 @@ function quoteIdentifier(identifier: string) {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
 
+export async function ensureMultiLocationFoundation() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const locationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
+  const barbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
+  const servicesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+  const barberLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_locations")}`;
+  const serviceLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("service_locations")}`;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(424242, 1101)");
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${locationsTable} (
+        id serial PRIMARY KEY,
+        name text NOT NULL,
+        slug text NOT NULL,
+        address text NOT NULL DEFAULT '',
+        map_url text,
+        map_embed_url text,
+        phone text,
+        email text,
+        timezone text NOT NULL DEFAULT 'Europe/Lisbon',
+        is_active boolean NOT NULL DEFAULT true,
+        is_default boolean NOT NULL DEFAULT false,
+        sort_order integer NOT NULL DEFAULT 0,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`ALTER TABLE ${locationsTable} ADD COLUMN IF NOT EXISTS phone text`);
+    await client.query(`ALTER TABLE ${locationsTable} ADD COLUMN IF NOT EXISTS email text`);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS locations_slug_idx
+      ON ${locationsTable} (slug)
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS locations_single_default_idx
+      ON ${locationsTable} (is_default)
+      WHERE is_default = true
+    `);
+
+    const existingLocations = await client.query<{ id: number; is_default: boolean }>(`
+      SELECT id, is_default
+      FROM ${locationsTable}
+      ORDER BY is_default DESC, sort_order ASC, id ASC
+    `);
+
+    let defaultLocationId: number;
+    if (existingLocations.rows.length === 0) {
+      const insertedLocation = await client.query<{ id: number }>(`
+        INSERT INTO ${locationsTable} (
+          name,
+          slug,
+          address,
+          map_url,
+          map_embed_url,
+          timezone,
+          is_default
+        )
+        VALUES ($1, 'principal', $2, $3, $4, $5, true)
+        RETURNING id
+      `, [
+        process.env.SHOP_NAME?.trim() || "Barbearia",
+        process.env.SHOP_ADDRESS?.trim() || "",
+        process.env.SHOP_MAP_URL?.trim() || process.env.VITE_SHOP_MAP_URL?.trim() || null,
+        process.env.SHOP_MAP_EMBED_URL?.trim() || process.env.VITE_SHOP_MAP_EMBED_URL?.trim() || null,
+        process.env.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon",
+      ]);
+      defaultLocationId = insertedLocation.rows[0].id;
+    } else {
+      const defaultLocation = existingLocations.rows.find((location) => location.is_default);
+      defaultLocationId = defaultLocation?.id ?? existingLocations.rows[0].id;
+      if (!defaultLocation) {
+        await client.query(`
+          UPDATE ${locationsTable}
+          SET is_default = true, updated_at = now()
+          WHERE id = $1
+        `, [defaultLocationId]);
+      }
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${barberLocationsTable} (
+        barber_id integer NOT NULL REFERENCES ${barbersTable}(id) ON DELETE CASCADE,
+        location_id integer NOT NULL REFERENCES ${locationsTable}(id) ON DELETE RESTRICT,
+        is_active boolean NOT NULL DEFAULT true,
+        created_at timestamp NOT NULL DEFAULT now(),
+        PRIMARY KEY (barber_id, location_id)
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS barber_locations_location_idx
+      ON ${barberLocationsTable} (location_id, barber_id)
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${serviceLocationsTable} (
+        service_id integer NOT NULL REFERENCES ${servicesTable}(id) ON DELETE CASCADE,
+        location_id integer NOT NULL REFERENCES ${locationsTable}(id) ON DELETE RESTRICT,
+        is_active boolean NOT NULL DEFAULT true,
+        price_override integer,
+        duration_override integer,
+        created_at timestamp NOT NULL DEFAULT now(),
+        PRIMARY KEY (service_id, location_id),
+        CONSTRAINT service_locations_price_override_check
+          CHECK (price_override IS NULL OR price_override >= 0),
+        CONSTRAINT service_locations_duration_override_check
+          CHECK (duration_override IS NULL OR duration_override > 0)
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS service_locations_location_idx
+      ON ${serviceLocationsTable} (location_id, service_id)
+    `);
+
+    for (const tableName of [
+      "appointments",
+      "shop_availability",
+      "barber_availability",
+      "business_expenses",
+    ]) {
+      const qualifiedTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
+      const constraintName = `${tableName}_location_id_fkey`;
+      const indexName = `${tableName}_location_id_idx`;
+
+      await client.query(`ALTER TABLE ${qualifiedTable} ADD COLUMN IF NOT EXISTS location_id integer`);
+      await client.query(`UPDATE ${qualifiedTable} SET location_id = $1 WHERE location_id IS NULL`, [defaultLocationId]);
+      await client.query(`ALTER TABLE ${qualifiedTable} ALTER COLUMN location_id SET DEFAULT ${defaultLocationId}`);
+      await client.query(`ALTER TABLE ${qualifiedTable} ALTER COLUMN location_id SET NOT NULL`);
+      await client.query(`
+        DO $$
+        BEGIN
+          ALTER TABLE ${qualifiedTable}
+          ADD CONSTRAINT ${quoteIdentifier(constraintName)}
+          FOREIGN KEY (location_id) REFERENCES ${locationsTable}(id) ON DELETE RESTRICT;
+        EXCEPTION
+          WHEN duplicate_object THEN NULL;
+        END $$
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)}
+        ON ${qualifiedTable} (location_id)
+      `);
+    }
+
+    await client.query(`
+      INSERT INTO ${barberLocationsTable} (barber_id, location_id)
+      SELECT barber.id, $1 FROM ${barbersTable} barber
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${barberLocationsTable} assignment WHERE assignment.barber_id = barber.id
+      )
+      ON CONFLICT (barber_id, location_id) DO NOTHING
+    `, [defaultLocationId]);
+    await client.query(`
+      INSERT INTO ${serviceLocationsTable} (service_id, location_id)
+      SELECT service.id, $1 FROM ${servicesTable} service
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${serviceLocationsTable} assignment WHERE assignment.service_id = service.id
+      )
+      ON CONFLICT (service_id, location_id) DO NOTHING
+    `, [defaultLocationId]);
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function ensureAppointmentOverlapProtection() {
   if (useMemoryStorage) return;
 
@@ -290,5 +465,190 @@ export async function ensureWhatsappMessagesTable() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS whatsapp_messages_status_idx
     ON ${qualifiedTableName} (status, updated_at DESC)
+  `);
+}
+
+export async function ensureAppointmentNotificationFoundation() {
+  if (useMemoryStorage) return;
+
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const qualifiedAppointmentsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
+  const qualifiedEventsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointment_notification_events")}`;
+  const qualifiedSeriesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointment_series")}`;
+  const qualifiedLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
+  const qualifiedBarbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
+  const qualifiedServicesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedSeriesTable} (
+      id text PRIMARY KEY,
+      location_id integer NOT NULL REFERENCES ${qualifiedLocationsTable}(id),
+      barber_id integer NOT NULL REFERENCES ${qualifiedBarbersTable}(id),
+      service_id integer NOT NULL REFERENCES ${qualifiedServicesTable}(id),
+      customer_name text NOT NULL,
+      customer_email text,
+      customer_phone text NOT NULL,
+      whatsapp_opt_in boolean NOT NULL DEFAULT false,
+      whatsapp_opt_in_at timestamp,
+      interval_weeks integer NOT NULL,
+      duration_months integer NOT NULL,
+      occurrence_count integer NOT NULL,
+      first_start_time timestamp NOT NULL,
+      notification_revision integer NOT NULL DEFAULT 1,
+      status text NOT NULL DEFAULT 'active',
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now(),
+      CONSTRAINT appointment_series_recurrence_values_check
+        CHECK (interval_weeks > 0 AND duration_months > 0 AND occurrence_count > 1),
+      CONSTRAINT appointment_series_notification_revision_check CHECK (notification_revision > 0)
+    )
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedSeriesTable}
+        ADD CONSTRAINT appointment_series_recurrence_values_check
+        CHECK (interval_weeks > 0 AND duration_months > 0 AND occurrence_count > 1);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedSeriesTable}
+        ADD CONSTRAINT appointment_series_notification_revision_check CHECK (notification_revision > 0);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedAppointmentsTable}
+      ADD COLUMN IF NOT EXISTS reschedule_revision integer NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS notification_revision integer NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS whatsapp_opt_in boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS whatsapp_opt_in_at timestamp,
+      ADD COLUMN IF NOT EXISTS series_id text REFERENCES ${qualifiedSeriesTable}(id),
+      ADD COLUMN IF NOT EXISTS series_occurrence_index integer
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS appointments_series_occurrence_idx
+    ON ${qualifiedAppointmentsTable} (series_id, series_occurrence_index)
+  `);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedAppointmentsTable}
+        ADD CONSTRAINT appointments_series_membership_check CHECK (
+          (series_id IS NULL AND series_occurrence_index IS NULL)
+          OR (series_id IS NOT NULL AND series_occurrence_index IS NOT NULL AND series_occurrence_index >= 0)
+        );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedEventsTable} (
+      id serial PRIMARY KEY,
+      appointment_id integer REFERENCES ${qualifiedAppointmentsTable}(id) ON DELETE CASCADE,
+      series_id text REFERENCES ${qualifiedSeriesTable}(id) ON DELETE CASCADE,
+      event_type text NOT NULL,
+      event_revision integer NOT NULL,
+      event_key text NOT NULL,
+      appointment_start_time timestamp,
+      previous_start_time timestamp,
+      new_start_time timestamp,
+      provider text,
+      template_name text,
+      whatsapp_status text NOT NULL DEFAULT 'pending',
+      provider_message_id text,
+      provider_status text,
+      response_status integer,
+      error_code text,
+      processing_started_at timestamp,
+      processing_completed_at timestamp,
+      whatsapp_attempted_at timestamp,
+      whatsapp_accepted_at timestamp,
+      sent_at timestamp,
+      delivered_at timestamp,
+      read_at timestamp,
+      failed_at timestamp,
+      last_provider_timestamp timestamp,
+      webhook_fallback_claimed_at timestamp,
+      payload_snapshot jsonb,
+      email_status text NOT NULL DEFAULT 'not_needed',
+      email_provider_message_id text,
+      email_error_code text,
+      email_attempted_at timestamp,
+      email_sent_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now(),
+      updated_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE ${qualifiedEventsTable}
+      ADD COLUMN IF NOT EXISTS appointment_start_time timestamp,
+      ADD COLUMN IF NOT EXISTS series_id text REFERENCES ${qualifiedSeriesTable}(id) ON DELETE CASCADE,
+      ADD COLUMN IF NOT EXISTS payload_snapshot jsonb,
+      ADD COLUMN IF NOT EXISTS processing_completed_at timestamp,
+      ADD COLUMN IF NOT EXISTS sent_at timestamp,
+      ADD COLUMN IF NOT EXISTS delivered_at timestamp,
+      ADD COLUMN IF NOT EXISTS read_at timestamp,
+      ADD COLUMN IF NOT EXISTS failed_at timestamp,
+      ADD COLUMN IF NOT EXISTS last_provider_timestamp timestamp,
+      ADD COLUMN IF NOT EXISTS webhook_fallback_claimed_at timestamp
+  `);
+  await pool.query(`
+    UPDATE ${qualifiedEventsTable}
+    SET appointment_start_time = COALESCE(appointment_start_time, new_start_time, previous_start_time)
+    WHERE appointment_start_time IS NULL
+  `);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN appointment_start_time SET NOT NULL`);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN appointment_id DROP NOT NULL`);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN previous_start_time DROP NOT NULL`);
+  await pool.query(`ALTER TABLE ${qualifiedEventsTable} ALTER COLUMN new_start_time DROP NOT NULL`);
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE ${qualifiedEventsTable}
+        ADD CONSTRAINT appointment_notification_events_subject_check
+        CHECK (num_nonnulls(appointment_id, series_id) = 1);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
+  await pool.query(`
+    UPDATE ${qualifiedAppointmentsTable} a
+    SET notification_revision = GREATEST(
+      a.notification_revision,
+      a.reschedule_revision,
+      COALESCE((SELECT MAX(e.event_revision) FROM ${qualifiedEventsTable} e WHERE e.appointment_id = a.id), 0)
+    )
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_event_key_idx
+    ON ${qualifiedEventsTable} (event_key)
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_provider_message_id_idx
+    ON ${qualifiedEventsTable} (provider_message_id)
+    WHERE provider_message_id IS NOT NULL
+  `);
+
+  const qualifiedReceiptsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("meta_webhook_receipts")}`;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${qualifiedReceiptsTable} (
+      id serial PRIMARY KEY,
+      receipt_key text NOT NULL,
+      provider_message_id text NOT NULL,
+      status text NOT NULL,
+      provider_timestamp timestamp,
+      error_code text,
+      waba_id text NOT NULL,
+      phone_number_id text NOT NULL,
+      notification_event_id integer REFERENCES ${qualifiedEventsTable}(id) ON DELETE SET NULL,
+      payload_summary text,
+      created_at timestamp NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS meta_webhook_receipts_receipt_key_idx
+    ON ${qualifiedReceiptsTable} (receipt_key)
   `);
 }
