@@ -1167,7 +1167,7 @@ export default function Booking() {
                       />
                     </div>
                     <p id="phone-whatsapp-notice" className="text-xs leading-relaxed text-gray-400">
-                      Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.
+                      Este número será utilizado para comunicações relacionadas com a sua marcação.
                     </p>
                     {showCustomerError("phone") && (
                       <p id="phone-error" className="text-xs font-medium text-red-400">
@@ -1200,7 +1200,7 @@ export default function Booking() {
                       </p>
                     ) : (
                       <p id="email-help" className="text-xs leading-relaxed text-gray-400">
-                        Usado como alternativa caso não seja possível enviar por WhatsApp.
+                        Utilizado para enviar confirmações e atualizações da marcação quando necessário.
                       </p>
                     )}
                   </div>
