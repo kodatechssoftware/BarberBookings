@@ -467,20 +467,22 @@ test("disabled WhatsApp or messaging provider none never calls Meta with configu
   }
 });
 
-test("future recurring Meta payload uses PT-PT long date, nine parameters, and no buttons", async () => {
+test("future recurring Meta payload uses ordered first/last PT-PT dates, eleven parameters, and no buttons", async () => {
   const params = buildMetaRecurringTemplateParams({ schemaVersion: 1, seriesId: "series-meta",
     customerName: "Cliente", customerEmail: "c@example.com", customerPhone: "+351910000000", whatsappOptIn: false,
     location: { id: 1, name: "Lisboa", address: "Rua 1", timezone: "Europe/Lisbon" },
     service: { id: 1, name: "Corte" }, barber: { id: 1, name: "João" },
     recurrence: { intervalWeeks: 1, durationMonths: 1, occurrenceCount: 4 },
-    occurrences: [0, 1, 2, 3].map((occurrenceIndex) => ({ appointmentId: occurrenceIndex + 1, occurrenceIndex,
+    occurrences: [3, 1, 0, 2].map((occurrenceIndex) => ({ appointmentId: occurrenceIndex + 1, occurrenceIndex,
       startTime: new Date(Date.UTC(2026, 8, 15 + occurrenceIndex * 7, 13, 30)).toISOString() })) });
   const components = buildMetaAppointmentTemplateComponents(params);
   assert.deepEqual(components[0].parameters.map((parameter) => parameter.text), [
-    "Cliente", "Lisboa", "Corte", "João", "Semanal", "15 de setembro de 2026", "14:30h", "4", "Rua 1",
+    "Cliente", "Lisboa", "Corte", "João", "Semanal",
+    "15 de setembro de 2026", "14:30h", "6 de outubro de 2026", "14:30h", "4", "Rua 1",
   ]);
   assert.equal(components.length, 1);
   assert.equal(formatMetaTemplateDate(params.startTime, params.timeZone), "15 de setembro de 2026");
+  assert.equal(formatMetaTemplateDate(params.lastStartTime!, params.timeZone), "6 de outubro de 2026");
   const delivery = await sendMetaTemplate(params);
   assert.equal(delivery.errorCode, "META_RECURRING_TEMPLATE_DISABLED");
 });

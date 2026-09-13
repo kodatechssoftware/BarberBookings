@@ -335,6 +335,7 @@ export type MetaAppointmentTemplateParams = {
   serviceName: string;
   barberName: string;
   startTime: Date;
+  lastStartTime?: Date;
   timeZone?: string;
   address?: string;
   managementToken?: string;
@@ -381,11 +382,18 @@ export function getMetaAppointmentTemplateName(
 export function buildMetaAppointmentTemplateComponents(params: MetaAppointmentTemplateParams) {
   const date = formatMetaTemplateDate(params.startTime, params.timeZone);
   const time = formatMetaTemplateTime(params.startTime, params.timeZone);
+  const lastDate = params.lastStartTime
+    ? formatMetaTemplateDate(params.lastStartTime, params.timeZone)
+    : date;
+  const lastTime = params.lastStartTime
+    ? formatMetaTemplateTime(params.lastStartTime, params.timeZone)
+    : time;
   const bodyValues = params.eventType === "appointment_cancelled"
     ? [params.customerName, params.locationName, params.serviceName, date, time]
     : params.eventType === "appointment_recurring_confirmation"
       ? [params.customerName, params.locationName, params.serviceName, params.barberName,
-        params.periodicity || "", date, time, String(params.totalAppointments ?? ""), params.address || ""]
+        params.periodicity || "", date, time, lastDate, lastTime,
+        String(params.totalAppointments ?? ""), params.address || ""]
       : [params.customerName, params.locationName, params.serviceName, params.barberName,
         date, time, params.address || ""];
   return [
@@ -406,9 +414,11 @@ export function buildMetaRecurringTemplateParams(
   if (snapshot.occurrences.length < 2 || snapshot.occurrences.length !== snapshot.recurrence.occurrenceCount) {
     throw new Error("Recurring Meta payload occurrence count is inconsistent.");
   }
-  const firstOccurrence = [...snapshot.occurrences]
-    .sort((left, right) => left.occurrenceIndex - right.occurrenceIndex)[0];
-  if (!firstOccurrence) throw new Error("Recurring Meta payload requires at least one occurrence.");
+  const orderedOccurrences = [...snapshot.occurrences]
+    .sort((left, right) => left.occurrenceIndex - right.occurrenceIndex);
+  const firstOccurrence = orderedOccurrences[0];
+  const lastOccurrence = orderedOccurrences[orderedOccurrences.length - 1];
+  if (!firstOccurrence || !lastOccurrence) throw new Error("Recurring Meta payload requires occurrences.");
   return {
     recipient: snapshot.customerPhone,
     eventType: "appointment_recurring_confirmation",
@@ -420,6 +430,7 @@ export function buildMetaRecurringTemplateParams(
       ? "Semanal"
       : `A cada ${snapshot.recurrence.intervalWeeks} semanas`,
     startTime: new Date(firstOccurrence.startTime),
+    lastStartTime: new Date(lastOccurrence.startTime),
     timeZone: snapshot.location.timezone,
     totalAppointments: snapshot.recurrence.occurrenceCount,
     address: snapshot.location.address,
