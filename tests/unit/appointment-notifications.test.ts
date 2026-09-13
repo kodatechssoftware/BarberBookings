@@ -6,6 +6,7 @@ import type { AppointmentNotificationEvent } from "../../shared/schema";
 import {
   processAppointmentNotification,
   processClaimedAppointmentNotification,
+  processMetaLateFailureEmailFallback,
   processPendingAppointmentNotifications,
   type AppointmentNotificationDependencies,
 } from "../../server/appointment-notifications";
@@ -519,7 +520,85 @@ function webhook(wamid: string, statuses: Array<{ status: string; timestamp: str
     metadata: { phone_number_id: phone }, statuses: statuses.map((status) => ({ id: wamid, recipient_id: "351", ...status })) } }] }] };
 }
 
-test("webhook observes batches, duplicates, out-of-order states and failed without email fallback", async () => {
+function lateFallbackHandler(dependencies: AppointmentNotificationDependencies) {
+  return (eventId: number) => processMetaLateFailureEmailFallback(eventId, dependencies);
+}
+
+test("accepted Meta message followed by failed webhook sends exactly one late fallback email", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  await storage.updateAppointmentNotificationEvent(event.id, { providerMessageId: "wamid.late", whatsappStatus: "accepted" });
+  const counters = { wa: 0, email: 0 }; const dependencies = deps(storage, accepted(), counters);
+  const payload = webhook("wamid.late", [{ status: "failed", timestamp: "400", errors: [{ code: 131000 }] }]);
+  await recordMetaWebhookStatuses(payload, storage, lateFallbackHandler(dependencies));
+  await recordMetaWebhookStatuses(webhook("wamid.late", [{ status: "read", timestamp: "500" }]), storage,
+    lateFallbackHandler(dependencies));
+  const saved = await storage.getAppointmentNotificationEvent(event.id);
+  assert.equal(counters.email, 1); assert.equal(saved?.emailStatus, "sent"); assert.equal(saved?.whatsappStatus, "failed");
+  assert.ok(saved?.webhookFallbackClaimedAt);
+  assert.equal((await storage.getAppointment(appointment.id))?.status, "booked");
+});
+
+test("duplicate and concurrent failed webhooks claim and send only one late fallback email", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  for (const concurrent of [false, true]) {
+    const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+    const wamid = `wamid.duplicate.${concurrent}`;
+    await storage.updateAppointmentNotificationEvent(event.id, { providerMessageId: wamid, whatsappStatus: "accepted" });
+    const counters = { wa: 0, email: 0 }; const handler = lateFallbackHandler(deps(storage, accepted(), counters));
+    const payload = webhook(wamid, [{ status: "failed", timestamp: "400" }]);
+    if (concurrent) await Promise.all([recordMetaWebhookStatuses(payload, storage, handler), recordMetaWebhookStatuses(payload, storage, handler)]);
+    else { await recordMetaWebhookStatuses(payload, storage, handler); await recordMetaWebhookStatuses(payload, storage, handler); }
+    assert.equal(counters.email, 1);
+  }
+});
+
+test("delivered and read webhooks never send late fallback email", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  for (const status of ["delivered", "read"] as const) {
+    const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+    const wamid = `wamid.${status}`;
+    await storage.updateAppointmentNotificationEvent(event.id, { providerMessageId: wamid, whatsappStatus: "accepted" });
+    const counters = { wa: 0, email: 0 };
+    await recordMetaWebhookStatuses(webhook(wamid, [{ status, timestamp: "400" }]), storage,
+      lateFallbackHandler(deps(storage, accepted(), counters)));
+    assert.equal(counters.email, 0); assert.equal((await storage.getAppointmentNotificationEvent(event.id))?.whatsappStatus, status);
+  }
+});
+
+test("late failed webhook safely skips missing, already-sent and stale email fallbacks", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  for (const scenario of ["missing", "sent", "stale"] as const) {
+    const { storage, appointment } = await fixture(true, scenario === "missing" ? null : "client@example.com");
+    const [event] = await storage.getAppointmentNotificationEvents(appointment.id); const wamid = `wamid.skip.${scenario}`;
+    await storage.updateAppointmentNotificationEvent(event.id, {
+      providerMessageId: wamid, whatsappStatus: "accepted", ...(scenario === "sent" ? { emailStatus: "sent", emailSentAt: new Date() } : {}),
+    });
+    if (scenario === "stale") await storage.rescheduleAppointment(appointment.id, 0, starts[1]);
+    const counters = { wa: 0, email: 0 };
+    const payload = webhook(wamid, [{ status: "failed", timestamp: "400" }]);
+    const handler = lateFallbackHandler(deps(storage, accepted(), counters));
+    await recordMetaWebhookStatuses(payload, storage, handler); await recordMetaWebhookStatuses(payload, storage, handler);
+    assert.equal(counters.email, 0);
+    const saved = await storage.getAppointmentNotificationEvent(event.id);
+    assert.equal(saved?.emailStatus, scenario === "sent" ? "sent" : "skipped");
+    if (scenario === "missing") assert.equal(saved?.emailErrorCode, "EMAIL_MISSING");
+    if (scenario === "stale") assert.equal(saved?.emailErrorCode, "STALE_EVENT");
+  }
+});
+
+test("accepted recurring Meta message uses one late fallback email and remains idempotent", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  const { storage, notificationEvent } = await recurringFixture(true);
+  await storage.updateAppointmentNotificationEvent(notificationEvent.id, { providerMessageId: "wamid.recurring.late", whatsappStatus: "accepted" });
+  const counters = { wa: 0, email: 0 }; const dependencies = deps(storage, accepted(), counters);
+  const payload = webhook("wamid.recurring.late", [{ status: "failed", timestamp: "400" }]);
+  await recordMetaWebhookStatuses(payload, storage, lateFallbackHandler(dependencies));
+  await recordMetaWebhookStatuses(payload, storage, lateFallbackHandler(dependencies));
+  assert.equal(counters.email, 1); assert.equal((await storage.getAppointmentNotificationEvent(notificationEvent.id))?.emailStatus, "sent");
+});
+
+test("webhook preserves read when an out-of-order failed receipt arrives", async () => {
   process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
   const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
   await storage.updateAppointmentNotificationEvent(event.id, { providerMessageId: "wamid.webhook", whatsappStatus: "accepted" });

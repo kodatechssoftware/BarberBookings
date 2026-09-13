@@ -31,6 +31,7 @@ export type AppointmentNotificationDependencies = {
     | "getAppointment" | "getAppointmentSeries" | "getAppointmentSeriesAppointments" | "getBarber" | "getService"
     | "getAppointmentNotificationEvent" | "claimAppointmentNotificationEvent"
     | "claimNextAppointmentNotificationEvent" | "claimAppointmentNotificationWhatsappAttempt"
+    | "claimAppointmentNotificationWebhookFallback"
     | "updateAppointmentNotificationEvent"
     | "reconcileMetaWebhookReceipts" | "getAppointmentNotificationEventByProviderId"
     | "createMetaWebhookReceipt" | "getMetaWebhookReceipts"
@@ -47,7 +48,7 @@ export type AppointmentNotificationDependencies = {
   deferWhatsappWhenDisabled?: boolean;
 };
 
-const defaultDependencies: AppointmentNotificationDependencies = {
+export const defaultDependencies: AppointmentNotificationDependencies = {
   storage,
   getLocation,
   sendWhatsApp: sendMetaTemplate,
@@ -161,6 +162,48 @@ async function emailFallback(
   return result.sent ? "email" : "none";
 }
 
+async function recurringEmailFallback(
+  event: AppointmentNotificationEvent,
+  snapshot: RecurringNotificationSnapshot,
+  deps: AppointmentNotificationDependencies,
+): Promise<Channel> {
+  if (event.emailStatus === "sent") return "email";
+  if (!snapshot.customerEmail?.trim()) {
+    await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "EMAIL_MISSING" });
+    return "none";
+  }
+  if (!await isCurrentRecurringEvent(event, snapshot, deps)) {
+    await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
+    return "none";
+  }
+  await updateEvent(deps, event.id, { emailStatus: "sending", emailAttemptedAt: new Date() });
+  let result: EmailDeliveryResult;
+  try {
+    result = await deps.sendRecurringConfirmationEmail({
+      customerName: snapshot.customerName,
+      customerEmail: snapshot.customerEmail,
+      locationName: snapshot.location.name,
+      locationAddress: snapshot.location.address,
+      locationTimeZone: snapshot.location.timezone,
+      serviceName: snapshot.service.name,
+      barberName: snapshot.barber.name,
+      intervalWeeks: snapshot.recurrence.intervalWeeks,
+      durationMonths: snapshot.recurrence.durationMonths,
+      occurrences: snapshot.occurrences.map((occurrence) => new Date(occurrence.startTime)),
+      idempotencyKey: `${event.eventKey}:email`,
+    });
+  } catch {
+    result = { sent: false, providerMessageId: null, errorCode: "EMAIL_UNEXPECTED_ERROR" };
+  }
+  await updateEvent(deps, event.id, {
+    emailStatus: result.sent ? "sent" : "failed",
+    emailProviderMessageId: result.providerMessageId,
+    emailErrorCode: result.errorCode,
+    emailSentAt: result.sent ? new Date() : null,
+  });
+  return result.sent ? "email" : "none";
+}
+
 async function processRecurringConfirmation(
   event: AppointmentNotificationEvent,
   deps: AppointmentNotificationDependencies,
@@ -203,7 +246,8 @@ async function processRecurringConfirmation(
       });
       if (whatsappResult.outcome === "accepted" && whatsappResult.providerMessageId) {
         await deps.storage.reconcileMetaWebhookReceipts(whatsappResult.providerMessageId, event.id);
-        await reconcileMetaStatusReceipts(whatsappResult.providerMessageId, deps.storage);
+        await reconcileMetaStatusReceipts(whatsappResult.providerMessageId, deps.storage,
+          (eventId) => processMetaLateFailureEmailFallback(eventId, deps));
         return "whatsapp";
       }
     }
@@ -217,41 +261,60 @@ async function processRecurringConfirmation(
       ? "WHATSAPP_RECURRING_TEMPLATE_DISABLED"
       : "WHATSAPP_OPT_IN_MISSING",
   });
-  if (event.emailStatus === "sent") return "email";
-  if (!snapshot.customerEmail?.trim()) {
-    await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "EMAIL_MISSING" });
-    return "none";
+  return recurringEmailFallback(event, snapshot, deps);
+}
+
+export async function processMetaLateFailureEmailFallback(
+  eventId: number,
+  deps: AppointmentNotificationDependencies = defaultDependencies,
+): Promise<Channel> {
+  const claimed = await deps.storage.claimAppointmentNotificationWebhookFallback(eventId);
+  if (!claimed) {
+    const existing = await deps.storage.getAppointmentNotificationEvent(eventId);
+    if (existing?.emailStatus === "sent") {
+      console.log(`Meta late fallback skipped; event=${eventId}; reason=email_already_sent.`);
+    } else {
+      console.log(`Meta late fallback skipped; event=${eventId}; reason=already_claimed_or_ineligible.`);
+    }
+    return existing?.emailStatus === "sent" ? "email" : "none";
   }
-  if (!await isCurrentRecurringEvent(event, snapshot, deps)) {
-    await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
-    return "none";
+
+  console.log(`Meta late fallback email claimed; event=${eventId}; type=${claimed.eventType}.`);
+  let channel: Channel = "none";
+  if (claimed.eventType === "appointment_recurring_confirmation") {
+    const snapshot = recurringSnapshot(claimed);
+    if (snapshot) channel = await recurringEmailFallback(claimed, snapshot, deps);
+    else await updateEvent(deps, claimed.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
+  } else {
+    const type = eventType(claimed.eventType);
+    const appointment = claimed.appointmentId === null ? undefined : await deps.storage.getAppointment(claimed.appointmentId);
+    if (type && appointment) {
+      const [barber, service, location] = await Promise.all([
+        deps.storage.getBarber(appointment.barberId),
+        appointment.serviceId ? deps.storage.getService(appointment.serviceId) : Promise.resolve(undefined),
+        deps.getLocation(appointment.locationId, true),
+      ]);
+      channel = await emailFallback(appointment, claimed, {
+        barberName: barber?.name || "Barbeiro indisponível",
+        serviceName: service?.name || "Serviço indisponível",
+        locationName: location?.name || process.env.SHOP_NAME || "Barbearia",
+        locationAddress: location?.address || process.env.SHOP_ADDRESS || "",
+        locationTimeZone: location?.timezone || process.env.SHOP_TIME_ZONE || "Europe/Lisbon",
+      }, deps);
+    } else {
+      await updateEvent(deps, claimed.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
+    }
   }
-  await updateEvent(deps, event.id, { emailStatus: "sending", emailAttemptedAt: new Date() });
-  let result: EmailDeliveryResult;
-  try {
-    result = await deps.sendRecurringConfirmationEmail({
-      customerName: snapshot.customerName,
-      customerEmail: snapshot.customerEmail,
-      locationName: snapshot.location.name,
-      locationAddress: snapshot.location.address,
-      locationTimeZone: snapshot.location.timezone,
-      serviceName: snapshot.service.name,
-      barberName: snapshot.barber.name,
-      intervalWeeks: snapshot.recurrence.intervalWeeks,
-      durationMonths: snapshot.recurrence.durationMonths,
-      occurrences: snapshot.occurrences.map((occurrence) => new Date(occurrence.startTime)),
-      idempotencyKey: `${event.eventKey}:email`,
-    });
-  } catch {
-    result = { sent: false, providerMessageId: null, errorCode: "EMAIL_UNEXPECTED_ERROR" };
+
+  const saved = await deps.storage.getAppointmentNotificationEvent(eventId);
+  if (channel === "email") {
+    console.log(`Meta late fallback email sent; event=${eventId}; type=${claimed.eventType}.`);
+  } else if (saved?.emailErrorCode === "EMAIL_MISSING") {
+    console.log(`Meta late fallback skipped; event=${eventId}; reason=email_missing.`);
+  } else {
+    console.log(`Meta late fallback email not sent; event=${eventId}; reason=${saved?.emailErrorCode || "ineligible"}.`);
   }
-  await updateEvent(deps, event.id, {
-    emailStatus: result.sent ? "sent" : "failed",
-    emailProviderMessageId: result.providerMessageId,
-    emailErrorCode: result.errorCode,
-    emailSentAt: result.sent ? new Date() : null,
-  });
-  return result.sent ? "email" : "none";
+  return channel;
 }
 
 async function processClaimedCore(
@@ -335,7 +398,8 @@ async function processClaimedCore(
     whatsappAcceptedAt: result.outcome === "accepted" ? new Date() : null });
   if (result.outcome === "accepted" && result.providerMessageId) {
     await deps.storage.reconcileMetaWebhookReceipts(result.providerMessageId, event.id);
-    await reconcileMetaStatusReceipts(result.providerMessageId, deps.storage);
+    await reconcileMetaStatusReceipts(result.providerMessageId, deps.storage,
+      (eventId) => processMetaLateFailureEmailFallback(eventId, deps));
     console.log(`Appointment WhatsApp accepted; event=${event.id}; type=${type}; wamid=${result.providerMessageId}.`);
     return "whatsapp";
   }

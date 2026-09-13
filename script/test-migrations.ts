@@ -174,6 +174,28 @@ try {
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointments")} WHERE series_id IS NULL`)).rows[0].count), 2,
     "legacy appointments must not be retroactively grouped");
 
+  const lateFallbackEvent = (await pool.query(`
+    INSERT INTO ${table("appointment_notification_events")} (
+      appointment_id, event_type, event_revision, event_key, appointment_start_time,
+      whatsapp_status, provider_message_id
+    ) VALUES (1, 'appointment_confirmation', 1, 'appointment:1:confirmation:1',
+      '2030-06-03 09:00:00', 'failed', 'wamid.concurrent-claim')
+    RETURNING id
+  `)).rows[0];
+  const claimSql = `
+    UPDATE ${table("appointment_notification_events")}
+    SET webhook_fallback_claimed_at = now(), updated_at = now()
+    WHERE id = $1 AND whatsapp_status = 'failed'
+      AND webhook_fallback_claimed_at IS NULL AND email_status <> 'sent'
+    RETURNING id
+  `;
+  const claims = await Promise.all([
+    pool.query(claimSql, [lateFallbackEvent.id]),
+    pool.query(claimSql, [lateFallbackEvent.id]),
+  ]);
+  assert.equal(claims.reduce((total, claim) => total + claim.rowCount!, 0), 1,
+    "concurrent late-email fallback claims must have exactly one winner");
+
   console.log("PASS: representative main data was preserved/backfilled; revisions, opt-in, outbox, series, constraints, indexes and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (pool) await pool.end();

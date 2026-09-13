@@ -1,11 +1,16 @@
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import type { AppointmentNotificationEvent, MetaWebhookReceipt } from "@shared/schema";
-import { storage, type IStorage } from "./storage";
+import type { AppointmentNotificationDependencies } from "./appointment-notifications";
+import { storage } from "./storage";
 
-type WebhookStorage = Pick<IStorage,
-  | "getAppointmentNotificationEventByProviderId" | "updateAppointmentNotificationEvent"
-  | "createMetaWebhookReceipt" | "getMetaWebhookReceipts" | "reconcileMetaWebhookReceipts"
->;
+type WebhookStorage = AppointmentNotificationDependencies["storage"];
+
+type LateFallbackHandler = (eventId: number, store: WebhookStorage) => Promise<unknown>;
+
+const defaultLateFallbackHandler: LateFallbackHandler = async (eventId, store) => {
+  const { defaultDependencies, processMetaLateFailureEmailFallback } = await import("./appointment-notifications");
+  return processMetaLateFailureEmailFallback(eventId, { ...defaultDependencies, storage: store });
+};
 
 export function isMetaWebhookEnabled() {
   return ["true", "1"].includes(process.env.META_WHATSAPP_WEBHOOK_ENABLED?.trim().toLowerCase() || "");
@@ -41,7 +46,12 @@ function safeErrorCode(status: Record<string, unknown>) {
 
 const progression: Record<string, number> = { accepted: 0, sent: 1, delivered: 2, read: 3 };
 
-async function applyReceipt(event: AppointmentNotificationEvent, receipt: MetaWebhookReceipt, store: WebhookStorage) {
+async function applyReceipt(
+  event: AppointmentNotificationEvent,
+  receipt: MetaWebhookReceipt,
+  store: WebhookStorage,
+  lateFallback: LateFallbackHandler,
+) {
   const currentRank = progression[event.whatsappStatus] ?? -1;
   const nextRank = progression[receipt.status] ?? -1;
   if (receipt.status === "failed") {
@@ -50,12 +60,16 @@ async function applyReceipt(event: AppointmentNotificationEvent, receipt: MetaWe
       whatsappStatus: "failed", providerStatus: receipt.errorCode ? `META_ERROR_${receipt.errorCode}` : "META_FAILED",
       errorCode: receipt.errorCode ? `META_ERROR_${receipt.errorCode}` : "META_FAILED",
       failedAt: receipt.providerTimestamp || new Date(), lastProviderTimestamp: receipt.providerTimestamp,
-      // Observation mode: deliberately do not claim or send late email fallback.
-      webhookFallbackClaimedAt: null,
     });
+    console.warn(`Meta late failed; event=${event.id}; error=${receipt.errorCode ? `META_ERROR_${receipt.errorCode}` : "META_FAILED"}.`);
+    try {
+      await lateFallback(event.id, store);
+    } catch {
+      console.error(`Meta late fallback processing failed; event=${event.id}.`);
+    }
     return;
   }
-  if (event.whatsappStatus === "failed" && receipt.status === "sent") return;
+  if (event.whatsappStatus === "failed" && ["sent", "delivered", "read"].includes(receipt.status)) return;
   if (nextRank < 1 || nextRank <= currentRank) return;
   await store.updateAppointmentNotificationEvent(event.id, {
     whatsappStatus: receipt.status,
@@ -67,16 +81,26 @@ async function applyReceipt(event: AppointmentNotificationEvent, receipt: MetaWe
   });
 }
 
-export async function reconcileMetaStatusReceipts(providerMessageId: string, store: WebhookStorage = storage) {
+export async function reconcileMetaStatusReceipts(
+  providerMessageId: string,
+  store: WebhookStorage = storage,
+  lateFallback: LateFallbackHandler = defaultLateFallbackHandler,
+) {
   const event = await store.getAppointmentNotificationEventByProviderId(providerMessageId);
   if (!event) return 0;
   await store.reconcileMetaWebhookReceipts(providerMessageId, event.id);
   const receipts = await store.getMetaWebhookReceipts(providerMessageId);
-  for (const receipt of receipts) await applyReceipt((await store.getAppointmentNotificationEventByProviderId(providerMessageId))!, receipt, store);
+  for (const receipt of receipts) {
+    await applyReceipt((await store.getAppointmentNotificationEventByProviderId(providerMessageId))!, receipt, store, lateFallback);
+  }
   return receipts.length;
 }
 
-export async function recordMetaWebhookStatuses(payload: unknown, store: WebhookStorage = storage) {
+export async function recordMetaWebhookStatuses(
+  payload: unknown,
+  store: WebhookStorage = storage,
+  lateFallback: LateFallbackHandler = defaultLateFallbackHandler,
+) {
   const expectedWabaId = process.env.META_WHATSAPP_WABA_ID?.trim();
   const expectedPhoneNumberId = process.env.META_WHATSAPP_PHONE_NUMBER_ID?.trim();
   if (!expectedWabaId || !expectedPhoneNumberId) throw new Error("META_WEBHOOK_CONFIG_INCOMPLETE");
@@ -111,7 +135,7 @@ export async function recordMetaWebhookStatuses(payload: unknown, store: Webhook
           notificationEventId: event?.id || null,
           payloadSummary: JSON.stringify({ status: statusName, errorCode }), });
         if (result.created) recorded += 1; else duplicates += 1;
-        if (event) await reconcileMetaStatusReceipts(wamid, store); else orphans += 1;
+        if (event) await reconcileMetaStatusReceipts(wamid, store, lateFallback); else orphans += 1;
       }
     }
   }

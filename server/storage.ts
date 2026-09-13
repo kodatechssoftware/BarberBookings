@@ -388,6 +388,7 @@ export interface IStorage {
   claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
   claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn?: boolean): Promise<AppointmentNotificationEvent | undefined>;
   claimAppointmentNotificationWhatsappAttempt(id: number): Promise<AppointmentNotificationEvent | undefined>;
+  claimAppointmentNotificationWebhookFallback(id: number): Promise<AppointmentNotificationEvent | undefined>;
   updateAppointmentNotificationEvent(
     id: number,
     patch: Partial<Omit<AppointmentNotificationEvent, "id" | "appointmentId" | "seriesId" | "eventKey" | "eventType" | "eventRevision" | "createdAt">>,
@@ -1334,6 +1335,19 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         eq(appointmentNotificationEvents.id, id),
         isNull(appointmentNotificationEvents.whatsappAttemptedAt),
+      ))
+      .returning();
+    return event;
+  }
+
+  async claimAppointmentNotificationWebhookFallback(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const [event] = await db.update(appointmentNotificationEvents)
+      .set({ webhookFallbackClaimedAt: new Date(), updatedAt: new Date() })
+      .where(and(
+        eq(appointmentNotificationEvents.id, id),
+        eq(appointmentNotificationEvents.whatsappStatus, "failed"),
+        isNull(appointmentNotificationEvents.webhookFallbackClaimedAt),
+        sql`${appointmentNotificationEvents.emailStatus} <> 'sent'`,
       ))
       .returning();
     return event;
@@ -2368,6 +2382,20 @@ export class MemoryStorage implements IStorage {
     this.appointmentNotificationEvents[index] = {
       ...this.appointmentNotificationEvents[index],
       ...patch,
+      updatedAt: new Date(),
+    };
+    return this.appointmentNotificationEvents[index];
+  }
+
+  async claimAppointmentNotificationWebhookFallback(id: number): Promise<AppointmentNotificationEvent | undefined> {
+    const index = this.appointmentNotificationEvents.findIndex((event) => event.id === id
+      && event.whatsappStatus === "failed"
+      && event.webhookFallbackClaimedAt === null
+      && event.emailStatus !== "sent");
+    if (index < 0) return undefined;
+    this.appointmentNotificationEvents[index] = {
+      ...this.appointmentNotificationEvents[index],
+      webhookFallbackClaimedAt: new Date(),
       updatedAt: new Date(),
     };
     return this.appointmentNotificationEvents[index];
