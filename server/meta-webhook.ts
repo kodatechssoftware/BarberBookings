@@ -1,11 +1,22 @@
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import type { AppointmentNotificationEvent, MetaWebhookReceipt } from "@shared/schema";
 import type { AppointmentNotificationDependencies } from "./appointment-notifications";
-import { storage } from "./storage";
+import { storage, type IStorage } from "./storage";
+import { sendMetaInboundAutoReply, type MetaTextDeliveryResult } from "./whatsapp";
 
-type WebhookStorage = AppointmentNotificationDependencies["storage"];
+type StatusWebhookStorage = AppointmentNotificationDependencies["storage"];
+type WebhookStorage = StatusWebhookStorage & Pick<
+  IStorage,
+  "claimMetaInboundAutoReply" | "completeMetaInboundAutoReply"
+>;
 
-type LateFallbackHandler = (eventId: number, store: WebhookStorage) => Promise<unknown>;
+type LateFallbackHandler = (eventId: number, store: StatusWebhookStorage) => Promise<unknown>;
+type InboundAutoReplySender = (recipient: string) => Promise<MetaTextDeliveryResult>;
+
+const INBOUND_AUTO_REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const inboundUserMessageTypes = new Set([
+  "text", "image", "audio", "video", "document", "sticker", "contacts", "location", "interactive", "button", "order",
+]);
 
 const defaultLateFallbackHandler: LateFallbackHandler = async (eventId, store) => {
   const { defaultDependencies, processMetaLateFailureEmailFallback } = await import("./appointment-notifications");
@@ -14,6 +25,12 @@ const defaultLateFallbackHandler: LateFallbackHandler = async (eventId, store) =
 
 export function isMetaWebhookEnabled() {
   return ["true", "1"].includes(process.env.META_WHATSAPP_WEBHOOK_ENABLED?.trim().toLowerCase() || "");
+}
+
+export function isMetaInboundAutoReplyEnabled() {
+  return ["true", "1"].includes(
+    process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED?.trim().toLowerCase() || "",
+  );
 }
 
 export function verifyMetaWebhookChallenge(query: Record<string, unknown>) {
@@ -44,12 +61,94 @@ function safeErrorCode(status: Record<string, unknown>) {
   return code === null || code === undefined ? null : String(code).slice(0, 80);
 }
 
+function normalizedDigits(value: unknown) {
+  return typeof value === "string" ? value.replace(/\D/g, "") : "";
+}
+
+function senderKey(wabaId: string, phoneNumberId: string, number: string) {
+  return createHash("sha256").update(`${wabaId}|${phoneNumberId}|${number}`).digest("hex");
+}
+
+async function processInboundMessages(
+  messages: unknown[],
+  metadata: Record<string, unknown>,
+  expectedWabaId: string,
+  expectedPhoneNumberId: string,
+  store: WebhookStorage,
+  sendAutoReply: InboundAutoReplySender,
+  now: Date,
+) {
+  let inboundEligible = 0;
+  let autoReplies = 0;
+  let inboundDuplicates = 0;
+  let inboundRateLimited = 0;
+  let inboundIgnored = 0;
+  const businessNumber = normalizedDigits(metadata.display_phone_number);
+
+  for (const rawMessage of messages) {
+    const message = rawMessage && typeof rawMessage === "object" ? rawMessage as Record<string, unknown> : {};
+    const inboundMessageId = typeof message.id === "string" ? message.id.trim() : "";
+    const from = normalizedDigits(message.from);
+    const messageType = typeof message.type === "string" ? message.type.trim().toLowerCase() : "";
+    if (!inboundMessageId || !from || !inboundUserMessageTypes.has(messageType)
+      || messageType === "reaction" || (businessNumber && from === businessNumber)) {
+      inboundIgnored += 1;
+      continue;
+    }
+    inboundEligible += 1;
+
+    const receiptKey = createHash("sha256").update(`inbound|${inboundMessageId}`).digest("hex");
+    const claim = await store.claimMetaInboundAutoReply({
+      receiptKey,
+      inboundMessageId,
+      senderKey: senderKey(expectedWabaId, expectedPhoneNumberId, from),
+      messageType,
+      providerTimestamp: providerDate(message.timestamp),
+      wabaId: expectedWabaId,
+      phoneNumberId: expectedPhoneNumberId,
+      windowStart: new Date(now.getTime() - INBOUND_AUTO_REPLY_WINDOW_MS),
+    });
+    if (!claim.claimed || !claim.receipt) {
+      if (claim.reason === "duplicate") inboundDuplicates += 1;
+      else inboundRateLimited += 1;
+      continue;
+    }
+
+    try {
+      const result = await sendAutoReply(from);
+      if (result.outcome === "accepted") {
+        autoReplies += 1;
+        await store.completeMetaInboundAutoReply(claim.receipt.id, `inbound_auto_reply_sent:${messageType}`);
+        console.log(`Meta inbound auto-reply accepted; receipt=${claim.receipt.id}; type=${messageType}.`);
+      } else if (result.outcome === "unknown") {
+        await store.completeMetaInboundAutoReply(
+          claim.receipt.id,
+          `inbound_auto_reply_unknown:${messageType}`,
+          result.errorCode,
+        );
+        console.warn(`Meta inbound auto-reply outcome unknown; receipt=${claim.receipt.id}; type=${messageType}; error=${result.errorCode || "META_UNKNOWN"}.`);
+      } else {
+        await store.completeMetaInboundAutoReply(
+          claim.receipt.id,
+          `inbound_auto_reply_failed:${messageType}`,
+          result.errorCode,
+        );
+        console.warn(`Meta inbound auto-reply failed; receipt=${claim.receipt.id}; type=${messageType}; error=${result.errorCode || "META_UNKNOWN"}.`);
+      }
+    } catch {
+      await store.completeMetaInboundAutoReply(claim.receipt.id, `inbound_auto_reply_failed:${messageType}`, "META_UNEXPECTED_ERROR");
+      console.error(`Meta inbound auto-reply failed unexpectedly; receipt=${claim.receipt.id}; type=${messageType}.`);
+    }
+  }
+  return { inboundEligible, autoReplies, inboundDuplicates, inboundRateLimited, inboundIgnored };
+}
+
 const progression: Record<string, number> = { accepted: 0, sent: 1, delivered: 2, read: 3 };
 
 async function applyReceipt(
   event: AppointmentNotificationEvent,
   receipt: MetaWebhookReceipt,
-  store: WebhookStorage,
+  store: StatusWebhookStorage,
   lateFallback: LateFallbackHandler,
 ) {
   const currentRank = progression[event.whatsappStatus] ?? -1;
@@ -83,7 +182,7 @@ async function applyReceipt(
 
 export async function reconcileMetaStatusReceipts(
   providerMessageId: string,
-  store: WebhookStorage = storage,
+  store: StatusWebhookStorage = storage,
   lateFallback: LateFallbackHandler = defaultLateFallbackHandler,
 ) {
   const event = await store.getAppointmentNotificationEventByProviderId(providerMessageId);
@@ -100,6 +199,8 @@ export async function recordMetaWebhookStatuses(
   payload: unknown,
   store: WebhookStorage = storage,
   lateFallback: LateFallbackHandler = defaultLateFallbackHandler,
+  sendAutoReply: InboundAutoReplySender = sendMetaInboundAutoReply,
+  now: Date = new Date(),
 ) {
   const expectedWabaId = process.env.META_WHATSAPP_WABA_ID?.trim();
   const expectedPhoneNumberId = process.env.META_WHATSAPP_PHONE_NUMBER_ID?.trim();
@@ -109,6 +210,11 @@ export async function recordMetaWebhookStatuses(
   let recorded = 0;
   let duplicates = 0;
   let orphans = 0;
+  let inboundEligible = 0;
+  let autoReplies = 0;
+  let inboundDuplicates = 0;
+  let inboundRateLimited = 0;
+  let inboundIgnored = 0;
   for (const rawEntry of body.entry) {
     const entry = rawEntry && typeof rawEntry === "object" ? rawEntry as Record<string, unknown> : {};
     if (String(entry.id || "") !== expectedWabaId) throw new Error("META_WEBHOOK_ACCOUNT_MISMATCH");
@@ -137,7 +243,30 @@ export async function recordMetaWebhookStatuses(
         if (result.created) recorded += 1; else duplicates += 1;
         if (event) await reconcileMetaStatusReceipts(wamid, store, lateFallback); else orphans += 1;
       }
+      if (isMetaInboundAutoReplyEnabled()) {
+        try {
+          const inbound = await processInboundMessages(
+            Array.isArray(value.messages) ? value.messages : [],
+            metadata,
+            expectedWabaId,
+            expectedPhoneNumberId,
+            store,
+            sendAutoReply,
+            now,
+          );
+          inboundEligible += inbound.inboundEligible;
+          autoReplies += inbound.autoReplies;
+          inboundDuplicates += inbound.inboundDuplicates;
+          inboundRateLimited += inbound.inboundRateLimited;
+          inboundIgnored += inbound.inboundIgnored;
+        } catch {
+          console.error("Meta inbound auto-reply processing failed; status webhook processing remains acknowledged.");
+        }
+      }
     }
   }
-  return { recorded, duplicates, orphans };
+  const statusResult = { recorded, duplicates, orphans };
+  return inboundEligible || autoReplies || inboundDuplicates || inboundRateLimited || inboundIgnored
+    ? { ...statusResult, inboundEligible, autoReplies, inboundDuplicates, inboundRateLimited, inboundIgnored }
+    : statusResult;
 }

@@ -327,6 +327,87 @@ export type MetaTemplateDeliveryResult = {
   errorCode: string | null;
 };
 
+export type MetaTextDeliveryResult = Omit<MetaTemplateDeliveryResult, "templateName">;
+
+export function buildMetaInboundAutoReplyMessage() {
+  return `Olá 👋 Esta é uma mensagem automática da ${SHOP_NAME}.
+
+Este número é utilizado para notificações relacionadas com marcações e não é acompanhado para atendimento por mensagem.
+
+Para reagendar ou cancelar uma marcação, utilize os botões disponíveis na mensagem de confirmação.
+Para outras questões, contacte diretamente a barbearia pelos canais habituais.
+
+Obrigado!`;
+}
+
+export async function sendMetaInboundAutoReply(recipient: string): Promise<MetaTextDeliveryResult> {
+  const autoReplyEnabled = ["true", "1"].includes(
+    process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED?.trim().toLowerCase() || "",
+  );
+  if (!autoReplyEnabled) {
+    return { outcome: "failed", provider: "meta", providerMessageId: null,
+      providerStatus: "META_INBOUND_AUTO_REPLY_DISABLED", responseStatus: null,
+      errorCode: "META_INBOUND_AUTO_REPLY_DISABLED" };
+  }
+  let config: MetaConfig;
+  try {
+    config = getMetaConfig();
+  } catch (error) {
+    const code = error instanceof MetaWhatsAppTestError && error.message.includes("allowlist")
+      ? "DEV_ALLOWLIST_REQUIRED"
+      : "META_NOT_CONFIGURED";
+    return { outcome: "failed", provider: "meta", providerMessageId: null,
+      providerStatus: code, responseStatus: null, errorCode: code };
+  }
+
+  const number = normalizeWhatsAppNumber(recipient);
+  if (!number) {
+    return { outcome: "failed", provider: "meta", providerMessageId: null,
+      providerStatus: "INVALID_RECIPIENT", responseStatus: null, errorCode: "INVALID_RECIPIENT" };
+  }
+  if (isDevelopmentDeployment && !config.allowedRecipients.has(number)) {
+    return { outcome: "failed", provider: "meta", providerMessageId: null,
+      providerStatus: "DEV_ALLOWLIST_BLOCKED", responseStatus: null, errorCode: "DEV_ALLOWLIST_BLOCKED" };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://graph.facebook.com/${encodeURIComponent(config.graphApiVersion)}/${encodeURIComponent(config.phoneNumberId)}/messages`,
+      {
+        method: "POST",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: { Authorization: `Bearer ${config.accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: number,
+          type: "text",
+          text: { preview_url: false, body: buildMetaInboundAutoReplyMessage() },
+        }),
+      },
+    );
+  } catch (error) {
+    const isTimeout = error instanceof DOMException
+      && (error.name === "TimeoutError" || error.name === "AbortError");
+    const code = isTimeout ? "META_TIMEOUT" : "META_NETWORK_ERROR";
+    return { outcome: isTimeout ? "unknown" : "failed", provider: "meta", providerMessageId: null,
+      providerStatus: code, responseStatus: null, errorCode: code };
+  }
+
+  const responseText = await response.text();
+  let responseJson: unknown = null;
+  try { responseJson = responseText ? JSON.parse(responseText) : null; } catch { responseJson = null; }
+  const safeResponse = getSafeMetaResponse(responseJson);
+  if (response.ok && safeResponse.wamid) {
+    return { outcome: "accepted", provider: "meta", providerMessageId: safeResponse.wamid,
+      providerStatus: safeResponse.providerStatus, responseStatus: response.status, errorCode: null };
+  }
+  return { outcome: "failed", provider: "meta", providerMessageId: null,
+    providerStatus: safeResponse.providerStatus, responseStatus: response.status,
+    errorCode: safeResponse.providerStatus };
+}
+
 export type MetaAppointmentTemplateParams = {
   recipient: string;
   eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_cancelled" | "appointment_recurring_confirmation";

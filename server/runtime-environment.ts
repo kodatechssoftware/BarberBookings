@@ -95,6 +95,11 @@ export function validateRuntimeConfiguration() {
     throw new Error("Meta webhook configuration is incomplete while the Production webhook is enabled.");
   }
 
+  const inboundAutoReplyEnabled = explicitBoolean("META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED") ?? false;
+  if (inboundAutoReplyEnabled && (!webhookEnabled || !whatsappEnabled)) {
+    throw new Error("Meta inbound auto-reply requires both the Meta webhook and WhatsApp notifications to be enabled.");
+  }
+
   if (recurringWhatsappNotificationsEnabled && !whatsappEnabled) {
     throw new Error("Recurring WhatsApp notifications require WhatsApp notifications to be enabled.");
   }

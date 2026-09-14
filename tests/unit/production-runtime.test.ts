@@ -14,6 +14,7 @@ const baseEnvironment = {
   NOTIFICATION_OUTBOX_WORKER_ENABLED: "false",
   WHATSAPP_NOTIFICATIONS_ENABLED: "false",
   META_WHATSAPP_WEBHOOK_ENABLED: "false",
+  META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "false",
   META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED: "false",
 };
 
@@ -66,6 +67,7 @@ test("Production refuses partially activated outbox, Meta and webhook capabiliti
     APPOINTMENT_NOTIFICATION_EVENTS_ENABLED: "true", NOTIFICATION_OUTBOX_WORKER_ENABLED: "true",
   }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_WEBHOOK_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
+  assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
 });
 
 test("Production requires all four appointment template names before WhatsApp activation", () => {

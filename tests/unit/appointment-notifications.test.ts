@@ -10,7 +10,7 @@ import {
   processPendingAppointmentNotifications,
   type AppointmentNotificationDependencies,
 } from "../../server/appointment-notifications";
-import { recordMetaWebhookStatuses, verifyMetaWebhookChallenge, verifyMetaWebhookSignature } from "../../server/meta-webhook";
+import { isMetaInboundAutoReplyEnabled, recordMetaWebhookStatuses, verifyMetaWebhookChallenge, verifyMetaWebhookSignature } from "../../server/meta-webhook";
 import { MemoryStorage } from "../../server/storage";
 import { buildRecurringBookingEmail } from "../../server/email";
 import {
@@ -20,6 +20,8 @@ import {
   buildBookingConfirmationMessage,
   formatMetaTemplateDate,
   getMetaAppointmentTemplateName,
+  buildMetaInboundAutoReplyMessage,
+  sendMetaInboundAutoReply,
   sendMetaTemplate,
   type MetaTemplateDeliveryResult,
 } from "../../server/whatsapp";
@@ -521,6 +523,153 @@ function webhook(wamid: string, statuses: Array<{ status: string; timestamp: str
   return { object: "whatsapp_business_account", entry: [{ id: waba, changes: [{ field: "messages", value: {
     metadata: { phone_number_id: phone }, statuses: statuses.map((status) => ({ id: wamid, recipient_id: "351", ...status })) } }] }] };
 }
+
+function inboundWebhook(
+  id: string,
+  type: string,
+  from = "351910000000",
+  waba = "waba",
+  phone = "phone",
+  displayPhone = "+351 210 000 000",
+) {
+  return { object: "whatsapp_business_account", entry: [{ id: waba, changes: [{ field: "messages", value: {
+    metadata: { phone_number_id: phone, display_phone_number: displayPhone },
+    messages: [{ id, from, timestamp: "1893456000", type, text: { body: "conteudo que nao deve ser guardado" } }],
+  } }] }] };
+}
+
+const acceptedTextReply = async () => ({ outcome: "accepted" as const, provider: "meta" as const,
+  providerMessageId: "wamid.auto.reply", providerStatus: "META_ACCEPTED", responseStatus: 200, errorCode: null });
+
+test("inbound user message types trigger one auto-reply while reactions and technical events are ignored", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "true";
+  for (const type of ["text", "image", "audio", "video", "document", "sticker", "contacts", "location"] as const) {
+    const storage = new MemoryStorage(); let replies = 0;
+    await recordMetaWebhookStatuses(inboundWebhook(`wamid.inbound.${type}`, type), storage, undefined,
+      async () => { replies += 1; return acceptedTextReply(); });
+    assert.equal(replies, 1, type);
+    const [receipt] = await storage.getMetaWebhookReceipts(`wamid.inbound.${type}`);
+    assert.equal(receipt.status, `inbound_auto_reply_sent:${type}`);
+    assert.doesNotMatch(receipt.payloadSummary || "", /conteudo/);
+    assert.doesNotMatch(receipt.payloadSummary || "", /351910000000/);
+  }
+
+  for (const type of ["reaction", "system", "unsupported"] as const) {
+    const storage = new MemoryStorage(); let replies = 0;
+    await recordMetaWebhookStatuses(inboundWebhook(`wamid.ignored.${type}`, type), storage, undefined,
+      async () => { replies += 1; return acceptedTextReply(); });
+    assert.equal(replies, 0, type);
+  }
+});
+
+test("duplicate, concurrent and repeated inbound messages are limited to one auto-reply per number in 24 hours", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "true";
+  const storage = new MemoryStorage(); let replies = 0;
+  const sender = async () => { replies += 1; return acceptedTextReply(); };
+  const now = new Date();
+  const first = inboundWebhook("wamid.inbound.first", "text");
+  await Promise.all([
+    recordMetaWebhookStatuses(first, storage, undefined, sender, now),
+    recordMetaWebhookStatuses(first, storage, undefined, sender, now),
+  ]);
+  await recordMetaWebhookStatuses(inboundWebhook("wamid.inbound.second", "image"), storage, undefined, sender, now);
+  assert.equal(replies, 1);
+
+  await recordMetaWebhookStatuses(inboundWebhook("wamid.inbound.after-window", "audio"), storage, undefined,
+    sender, new Date(now.getTime() + 24 * 60 * 60 * 1000 + 1));
+  assert.equal(replies, 2);
+
+  const concurrentStorage = new MemoryStorage(); let concurrentReplies = 0;
+  const concurrentSender = async () => { concurrentReplies += 1; return acceptedTextReply(); };
+  await Promise.all([
+    recordMetaWebhookStatuses(inboundWebhook("wamid.concurrent.one", "text"), concurrentStorage, undefined, concurrentSender, now),
+    recordMetaWebhookStatuses(inboundWebhook("wamid.concurrent.two", "image"), concurrentStorage, undefined, concurrentSender, now),
+  ]);
+  assert.equal(concurrentReplies, 1);
+});
+
+test("an unknown Meta outcome is not retried by a later inbound message inside the 24-hour window", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "true";
+  const storage = new MemoryStorage(); let replies = 0;
+  const unknownReply = async () => { replies += 1; return { outcome: "unknown" as const, provider: "meta" as const,
+    providerMessageId: null, providerStatus: "META_TIMEOUT", responseStatus: null, errorCode: "META_TIMEOUT" }; };
+  await recordMetaWebhookStatuses(inboundWebhook("wamid.unknown.first", "text"), storage, undefined, unknownReply);
+  await recordMetaWebhookStatuses(inboundWebhook("wamid.unknown.second", "text"), storage, undefined, unknownReply);
+  assert.equal(replies, 1);
+  assert.equal((await storage.getMetaWebhookReceipts("wamid.unknown.first"))[0].status,
+    "inbound_auto_reply_unknown:text");
+});
+
+test("status webhooks, own-number messages and a disabled inbound flag never auto-reply", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  let replies = 0; const storage = new MemoryStorage();
+  const sender = async () => { replies += 1; return acceptedTextReply(); };
+  process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "true";
+  for (const status of ["sent", "delivered", "read", "failed"] as const) {
+    await recordMetaWebhookStatuses(webhook(`wamid.status.${status}`, [{ status, timestamp: "400" }]), storage,
+      async () => undefined, sender);
+  }
+  await recordMetaWebhookStatuses(inboundWebhook("wamid.own", "text", "351210000000"), storage, undefined, sender);
+  process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "false";
+  assert.equal(isMetaInboundAutoReplyEnabled(), false);
+  await recordMetaWebhookStatuses(inboundWebhook("wamid.disabled", "text"), storage, undefined, sender);
+  assert.equal(replies, 0);
+});
+
+test("inbound account/phone mismatches are rejected and send failure never breaks webhook handling", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "true";
+  await assert.rejects(recordMetaWebhookStatuses(inboundWebhook("x", "text", undefined, "wrong"), new MemoryStorage()), /ACCOUNT_MISMATCH/);
+  await assert.rejects(recordMetaWebhookStatuses(inboundWebhook("x", "text", undefined, "waba", "wrong"), new MemoryStorage()), /PHONE_MISMATCH/);
+  const storage = new MemoryStorage();
+  await assert.doesNotReject(recordMetaWebhookStatuses(inboundWebhook("wamid.send.failure", "document"), storage,
+    undefined, async () => { throw new Error("simulated provider failure"); }));
+  const [receipt] = await storage.getMetaWebhookReceipts("wamid.send.failure");
+  assert.equal(receipt.status, "inbound_auto_reply_failed:document");
+  assert.equal(receipt.errorCode, "META_UNEXPECTED_ERROR");
+});
+
+test("Meta inbound sender uses a free-form text payload, obeys DEV allowlist and stores no inbound content", async () => {
+  const names = ["WHATSAPP_NOTIFICATIONS_ENABLED", "MESSAGING_PROVIDER", "META_WHATSAPP_GRAPH_API_VERSION",
+    "META_WHATSAPP_PHONE_NUMBER_ID", "META_WHATSAPP_WABA_ID", "META_WHATSAPP_ACCESS_TOKEN",
+    "META_WHATSAPP_DEV_ALLOWLIST", "META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED"] as const;
+  const previousEnvironment = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  const previousFetch = globalThis.fetch; const bodies: any[] = [];
+  Object.assign(process.env, { WHATSAPP_NOTIFICATIONS_ENABLED: "true", MESSAGING_PROVIDER: "meta",
+    META_WHATSAPP_GRAPH_API_VERSION: "v25.0", META_WHATSAPP_PHONE_NUMBER_ID: "phone",
+    META_WHATSAPP_WABA_ID: "waba", META_WHATSAPP_ACCESS_TOKEN: "fake",
+    META_WHATSAPP_DEV_ALLOWLIST: "+351910000000", META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "true" });
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ messages: [{ id: "wamid.freeform" }] }), { status: 200 });
+  };
+  try {
+    assert.equal((await sendMetaInboundAutoReply("+351910000000")).outcome, "accepted");
+    assert.equal((await sendMetaInboundAutoReply("+351919999999")).errorCode, "DEV_ALLOWLIST_BLOCKED");
+    process.env.WHATSAPP_NOTIFICATIONS_ENABLED = "false";
+    assert.equal((await sendMetaInboundAutoReply("+351910000000")).errorCode, "META_NOT_CONFIGURED");
+    process.env.WHATSAPP_NOTIFICATIONS_ENABLED = "true";
+    process.env.MESSAGING_PROVIDER = "none";
+    assert.equal((await sendMetaInboundAutoReply("+351910000000")).errorCode, "META_NOT_CONFIGURED");
+    process.env.MESSAGING_PROVIDER = "meta";
+    process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "false";
+    assert.equal((await sendMetaInboundAutoReply("+351910000000")).errorCode, "META_INBOUND_AUTO_REPLY_DISABLED");
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const name of names) {
+      const value = previousEnvironment[name];
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].type, "text");
+  assert.equal(bodies[0].text.preview_url, false);
+  assert.equal(bodies[0].text.body, buildMetaInboundAutoReplyMessage());
+  assert.equal(bodies[0].template, undefined);
+});
 
 function lateFallbackHandler(dependencies: AppointmentNotificationDependencies) {
   return (eventId: number) => processMetaLateFailureEmailFallback(eventId, dependencies);

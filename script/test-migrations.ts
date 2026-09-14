@@ -196,6 +196,46 @@ try {
   assert.equal(claims.reduce((total, claim) => total + claim.rowCount!, 0), 1,
     "concurrent late-email fallback claims must have exactly one winner");
 
+  const inboundSenderKey = "test-sender-key";
+  const inboundSummary = JSON.stringify({ senderKey: inboundSenderKey });
+  async function claimInbound(receiptKey: string, inboundMessageId: string) {
+    const client = await pool!.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('meta_inbound_auto_reply'), hashtext($1))", [inboundSenderKey]);
+      const recent = await client.query(`
+        SELECT id FROM ${table("meta_webhook_receipts")}
+        WHERE payload_summary = $1 AND created_at >= $2
+          AND (status LIKE 'inbound_auto_reply_claimed:%' OR status LIKE 'inbound_auto_reply_sent:%'
+            OR status LIKE 'inbound_auto_reply_unknown:%')
+        LIMIT 1
+      `, [inboundSummary, new Date(Date.now() - 24 * 60 * 60 * 1000)]);
+      if (recent.rowCount) {
+        await client.query("COMMIT");
+        return false;
+      }
+      const inserted = await client.query(`
+        INSERT INTO ${table("meta_webhook_receipts")} (
+          receipt_key, provider_message_id, status, waba_id, phone_number_id, payload_summary
+        ) VALUES ($1, $2, 'inbound_auto_reply_claimed:text', 'waba', 'phone', $3)
+        ON CONFLICT (receipt_key) DO NOTHING RETURNING id
+      `, [receiptKey, inboundMessageId, inboundSummary]);
+      await client.query("COMMIT");
+      return inserted.rowCount === 1;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  const inboundClaims = await Promise.all([
+    claimInbound("inbound-receipt-one", "wamid.inbound-one"),
+    claimInbound("inbound-receipt-two", "wamid.inbound-two"),
+  ]);
+  assert.equal(inboundClaims.filter(Boolean).length, 1,
+    "concurrent inbound messages from one sender must have exactly one auto-reply claim");
+
   console.log("PASS: representative main data was preserved/backfilled; revisions, opt-in, outbox, series, constraints, indexes and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (pool) await pool.end();
