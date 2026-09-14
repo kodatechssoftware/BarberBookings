@@ -39,7 +39,15 @@ test("applies environment-specific branding without leaking production identity"
     await expect(page.locator('iframe[src*="google.com/maps"]')).toHaveCount(0);
   } else {
     await expect(page.getByRole("button", { name: "Abrir no Google Maps" })).toBeVisible();
+    await expect(page.getByTestId("location-map-placeholder")).toHaveCount(1);
+    await page.getByTestId("location-map-container").scrollIntoViewIfNeeded();
     await expect(page.locator('iframe[src*="google.com/maps"]')).toBeVisible();
+  }
+
+  const barberImages = page.locator("#team img");
+  if (await barberImages.count()) {
+    await expect(barberImages.first()).toHaveAttribute("loading", "lazy");
+    await expect(barberImages.first()).toHaveAttribute("decoding", "async");
   }
 
   if (shopName !== "Baptista Barber Shop") {

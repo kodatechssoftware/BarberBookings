@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Clock, ExternalLink, MapPin, Scissors } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
 import { periodsForShop } from "@/lib/availability";
-import { apiFetch } from "@/lib/api";
 import { preloadAdminPage, preloadBookingPage } from "@/lib/page-preloads";
-import { queryClient } from "@/lib/queryClient";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { shopBranding } from "@/lib/branding";
@@ -93,26 +91,10 @@ function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
   return shopBranding.logoUrl;
 }
 
-function getLocalDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function prefetchJsonQuery(queryKey: unknown[], path: string) {
-  void queryClient.prefetchQuery({
-    queryKey,
-    queryFn: async () => {
-      const response = await apiFetch(path);
-      if (!response.ok) throw new Error(`Failed to prefetch ${path}`);
-      return response.json();
-    },
-  });
-}
-
 export default function Home() {
   const [activeSection, setActiveSection] = useState("");
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const [mapFrame, setMapFrame] = useState({ key: "", src: "", loaded: false });
   const { data: services, isLoading: isLoadingServices } = useServices();
   const { data: barbers, isLoading: isLoadingBarbers } = useBarbers();
   const { data: locations } = useLocations();
@@ -151,6 +133,28 @@ export default function Home() {
     ?? publicLocations.find((location) => location.isDefault)
     ?? publicLocations[0];
   const selectedMapLinks = resolveLocationMapLinks(selectedLocation);
+  const selectedMapKey = `${selectedLocation.id}:${selectedMapLinks.mapEmbedUrl}`;
+
+  useEffect(() => {
+    const container = mapContainerRef.current;
+    const mapSrc = selectedMapLinks.mapEmbedUrl;
+    setMapFrame({ key: selectedMapKey, src: "", loaded: false });
+    if (!container || !mapSrc) return;
+
+    if (!("IntersectionObserver" in window)) {
+      setMapFrame({ key: selectedMapKey, src: mapSrc, loaded: false });
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setMapFrame({ key: selectedMapKey, src: mapSrc, loaded: false });
+      observer.disconnect();
+    }, { rootMargin: "400px 0px" });
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [selectedMapKey, selectedMapLinks.mapEmbedUrl]);
 
   useEffect(() => {
     if (!locations?.length || selectedLocationId === null) return;
@@ -165,14 +169,6 @@ export default function Home() {
   const openingStatus = getTodayOpeningStatus(shopHours, selectedLocation.timezone);
   const warmBookingFlow = useCallback(() => {
     void preloadBookingPage();
-
-    const today = getLocalDateKey();
-    prefetchJsonQuery(["/api/shop/availability"], "/api/shop/availability");
-    prefetchJsonQuery(["/api/barbers/availability"], "/api/barbers/availability");
-    prefetchJsonQuery(
-      ["/api/appointments/public", { barberId: undefined, date: today }],
-      `/api/appointments/public?date=${today}`,
-    );
   }, []);
 
   useEffect(() => {
@@ -357,6 +353,8 @@ export default function Home() {
                     <img
                       src={getBarberAvatar(barber)}
                       alt={barber.name}
+                      loading="lazy"
+                      decoding="async"
                       className="h-full min-h-44 w-full bg-background object-cover object-top"
                     />
                     <div className="flex min-w-0 flex-col justify-center p-4 sm:p-5">
@@ -433,19 +431,35 @@ export default function Home() {
             </a>}
           </div>
 
-          {shopBranding.showMap && selectedMapLinks.mapEmbedUrl && <div className="mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]">
-            <iframe
-              key={selectedLocation.id}
-              title={`Mapa de ${selectedLocation.name}`}
-              src={selectedMapLinks.mapEmbedUrl}
-              width="100%"
-              height="100%"
-              style={{ border: 0 }}
-              allowFullScreen
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-              className="grayscale contrast-[1.1]"
-            />
+          {shopBranding.showMap && selectedMapLinks.mapEmbedUrl && <div
+            ref={mapContainerRef}
+            data-testid="location-map-container"
+            className="relative mx-auto aspect-[4/3] max-w-5xl overflow-hidden rounded-lg border border-white/10 bg-card md:aspect-[21/9]"
+          >
+            {(!mapFrame.loaded || mapFrame.key !== selectedMapKey) && (
+              <div
+                data-testid="location-map-placeholder"
+                aria-hidden="true"
+                className="absolute inset-0 animate-pulse bg-white/[0.04]"
+              />
+            )}
+            {mapFrame.key === selectedMapKey && mapFrame.src && (
+              <iframe
+                key={selectedMapKey}
+                title={`Mapa de ${selectedLocation.name}`}
+                src={mapFrame.src}
+                width="100%"
+                height="100%"
+                style={{ border: 0 }}
+                allowFullScreen
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+                onLoad={() => setMapFrame((current) => current.key === selectedMapKey
+                  ? { ...current, loaded: true }
+                  : current)}
+                className="relative h-full w-full grayscale contrast-[1.1]"
+              />
+            )}
           </div>}
         </div>
       </section>

@@ -335,7 +335,7 @@ export default function Booking() {
   const { data: existingAppointments, isLoading: loadingAppointments, isError: appointmentsError } = usePublicAppointments({
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
     date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, 'yyyy-MM-dd') : undefined,
-    enabled: Boolean(selectedDate && isPublicDateAllowed(selectedDate)),
+    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId && selectedDate && isPublicDateAllowed(selectedDate)),
   });
 
   const bookingWindowStart = useMemo(
@@ -552,8 +552,8 @@ export default function Booking() {
     setShowTimeError(false);
   }, [bookingWindowStart, firstAvailableDate, initialAvailabilityHasError, initialAvailabilitySelectionKey,
     loadingInitialAvailability, step]);
-  const preparingInitialAvailability = step === 3
-    && completedInitialAvailabilityKey.current !== initialAvailabilitySelectionKey;
+  const loadingSelectedDateAvailability = loadingBarbers || loadingServices || loadingAvailability
+    || loadingShopAvailability || loadingPublicBookingWindow || loadingAppointments;
   const initialAvailabilityError = step === 3
     && failedInitialAvailabilityKey.current === initialAvailabilitySelectionKey;
   const noAvailabilityInBookingWindow = step === 3
@@ -945,7 +945,7 @@ export default function Booking() {
                   <div className="bg-card border border-white/5 rounded-xl p-2 md:p-4 overflow-x-auto">
                     <Calendar
                       mode="single"
-                      selected={preparingInitialAvailability ? undefined : selectedDate}
+                      selected={selectedDate}
                       month={visibleCalendarMonth}
                       onMonthChange={setVisibleCalendarMonth}
                       onSelect={(date) => {
@@ -1000,7 +1000,7 @@ export default function Booking() {
                     "bg-card border rounded-xl p-4 md:p-6 min-h-[200px] transition-all duration-300",
                     showTimeError ? "border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)]" : "border-white/5"
                   )}>
-                    {preparingInitialAvailability || loadingInitialAvailability ? (
+                    {loadingSelectedDateAvailability ? (
                       <div className="flex justify-center mt-10">
                         <Loader2 className="w-6 h-6 animate-spin text-primary" />
                       </div>

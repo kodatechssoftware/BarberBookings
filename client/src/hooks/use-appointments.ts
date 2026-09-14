@@ -105,9 +105,9 @@ export function useAppointments(params?: AppointmentQueryParams) {
     queryKey: [api.appointments.list.path, params, { locationId }],
     enabled: params?.enabled ?? true,
     refetchInterval: params?.refetchInterval,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const url = appendAppointmentQuery(api.appointments.list.path, params);
-      const res = await apiFetch(url, { headers: locationHeaders(locationId) });
+      const res = await apiFetch(url, { headers: locationHeaders(locationId), signal });
       if (!res.ok) throw new Error("Failed to fetch appointments");
       return await res.json() as AppointmentRecord[];
     },
@@ -121,9 +121,9 @@ export function usePublicAppointments(params?: AppointmentQueryParams) {
     queryKey: [PUBLIC_APPOINTMENTS_PATH, params, { locationId }],
     enabled: params?.enabled ?? true,
     refetchInterval: params?.refetchInterval,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const url = appendAppointmentQuery(PUBLIC_APPOINTMENTS_PATH, params);
-      const res = await apiFetch(url, { headers: locationHeaders(locationId) });
+      const res = await apiFetch(url, { headers: locationHeaders(locationId), signal });
       if (!res.ok) throw new Error("Failed to fetch public appointments");
       return await res.json() as PublicAppointment[];
     },
