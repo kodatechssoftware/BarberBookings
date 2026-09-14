@@ -3632,6 +3632,19 @@ export default function Admin() {
                             <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>
                             <div className="space-y-2">
+                              <Label htmlFor={`edit-barber-email-${barber.id}`}>Email de acesso</Label>
+                              <Input
+                                type="email"
+                                defaultValue={barber.email || ""}
+                                id={`edit-barber-email-${barber.id}`}
+                                className="bg-background border-white/10"
+                                autoComplete="off"
+                              />
+                              <p className="text-xs leading-relaxed text-gray-400">
+                                Ao alterar o email, o acesso e os convites anteriores são revogados. Crie depois um novo convite.
+                              </p>
+                            </div>
+                            <div className="space-y-2">
                               <Label>Cor na agenda</Label>
                               <Input type="color" defaultValue={normalizeBarberColor(barber.color)} id={`edit-barber-color-${barber.id}`} className="h-10 w-20 bg-background border-white/10 p-1" />
                             </div>
@@ -3677,6 +3690,7 @@ export default function Admin() {
                                   const formRoot = event.currentTarget.closest("[data-edit-barber-form]");
                                   const name = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-name-${barber.id}`)?.value || "";
                                   const specialty = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-spec-${barber.id}`)?.value || "";
+                                  const email = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-email-${barber.id}`)?.value.trim() || "";
                                   const color = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-color-${barber.id}`)?.value || defaultBarberColor;
                                   const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
                                   const hasServiceDraft = Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id);
@@ -3690,6 +3704,7 @@ export default function Admin() {
                                   const payload: Record<string, unknown> = {
                                     name,
                                     specialty,
+                                    email,
                                     color: normalizeBarberColor(color),
                                     avatar: avatar || null,
                                     ...getBarberCompensationPayload(compensationDraft),
@@ -3718,7 +3733,12 @@ export default function Admin() {
                                     return next;
                                   });
                                   setEditingBarberId(null);
-                                  toast({ title: "Sucesso", description: "Barbeiro atualizado." });
+                                  toast({
+                                    title: "Sucesso",
+                                    description: updatedBarber.accessReset
+                                      ? "Email atualizado. O acesso anterior foi revogado; crie um novo convite para o barbeiro."
+                                      : "Barbeiro atualizado.",
+                                  });
                                 } catch (err: any) {
                                   toast({
                                     title: "Erro",
