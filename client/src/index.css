@@ -54,27 +54,27 @@
 }
 
 :root[data-brand-theme="barber-pole"] {
-  --background: 218 27% 8%;
-  --foreground: 210 25% 97%;
-  --primary: 207 82% 53%;
+  --background: 0 0% 6%;
+  --foreground: 0 0% 97%;
+  --primary: 350 56% 54%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 216 22% 15%;
-  --secondary-foreground: 210 25% 97%;
-  --muted: 216 18% 20%;
-  --muted-foreground: 215 15% 66%;
-  --accent: 209 70% 45%;
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 0 0% 97%;
+  --muted: 0 0% 20%;
+  --muted-foreground: 0 0% 66%;
+  --accent: 350 52% 45%;
   --accent-foreground: 0 0% 100%;
-  --destructive: 354 72% 52%;
+  --destructive: 350 56% 54%;
   --destructive-foreground: 0 0% 100%;
-  --border: 215 18% 22%;
-  --input: 215 18% 22%;
-  --ring: 207 82% 53%;
-  --card: 218 23% 12%;
-  --card-foreground: 210 25% 97%;
-  --brand-gradient-from: 207 88% 58%;
-  --brand-gradient-to: 216 82% 46%;
-  --brand-highlight: 210 100% 82%;
-  --brand-red: 354 72% 52%;
+  --border: 0 0% 22%;
+  --input: 0 0% 22%;
+  --ring: 350 56% 54%;
+  --card: 0 0% 11%;
+  --card-foreground: 0 0% 97%;
+  --brand-gradient-from: 350 58% 44%;
+  --brand-gradient-to: 350 66% 31%;
+  --brand-highlight: 350 56% 62%;
+  --brand-red: 350 58% 40%;
 }
 
 @layer base {
@@ -92,11 +92,11 @@
     pointer-events: none;
     background: repeating-linear-gradient(
       135deg,
-      hsl(207 82% 53%) 0 22px,
+      hsl(350 58% 40%) 0 22px,
       hsl(0 0% 100%) 22px 44px,
-      hsl(354 72% 52%) 44px 66px
+      hsl(0 0% 10%) 44px 66px
     );
-    box-shadow: 0 1px 12px hsl(207 82% 53% / 0.35);
+    box-shadow: 0 1px 12px hsl(350 58% 40% / 0.35);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -182,7 +182,7 @@
   }
 }
 
-/* Brand utilities: classic gold in production, barber-pole blue in demo. */
+/* Brand utilities: classic gold in production, Powerhouse red in demo. */
 .gold-gradient-text {
   color: transparent;
   background-image: linear-gradient(to right, hsl(var(--brand-gradient-from)), hsl(var(--brand-highlight)), hsl(var(--brand-gradient-from)));

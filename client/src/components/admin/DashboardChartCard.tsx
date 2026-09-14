@@ -47,8 +47,8 @@ export default function DashboardChartCard(props: DashboardChartCardProps) {
               <AreaChart data={props.daily} margin={{ left: -18, right: 8, top: 8, bottom: 0 }}>
                 <defs>
                   <linearGradient id="dashboardRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#d4af37" stopOpacity={0.45} />
-                    <stop offset="95%" stopColor="#d4af37" stopOpacity={0} />
+                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.45} />
+                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
@@ -62,7 +62,7 @@ export default function DashboardChartCard(props: DashboardChartCardProps) {
                     name === "revenueCents" ? "Receita" : name === "appointments" ? "Marcações" : "Concluídas",
                   ]}
                 />
-                <Area type="monotone" dataKey="revenueCents" stroke="#d4af37" fill="url(#dashboardRevenue)" strokeWidth={2} />
+                <Area type="monotone" dataKey="revenueCents" stroke="hsl(var(--primary))" fill="url(#dashboardRevenue)" strokeWidth={2} />
                 <Area type="monotone" dataKey="appointments" stroke="#60a5fa" fill="transparent" strokeWidth={2} />
                 <Area type="monotone" dataKey="completed" stroke="#86efac" fill="transparent" strokeWidth={2} />
               </AreaChart>
@@ -95,7 +95,7 @@ export default function DashboardChartCard(props: DashboardChartCardProps) {
                     name === "revenueCents" ? "Receita" : "Marcações",
                   ]}
                 />
-                <Bar dataKey="revenueCents" fill="#d4af37" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="revenueCents" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
                 <Bar dataKey="appointments" fill="#3b82f6" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>

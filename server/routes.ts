@@ -5235,6 +5235,173 @@ export async function registerRoutes(
   return httpServer;
 }
 
+const POWERHOUSE_DEMO_NAME = "Powerhouse barbershop";
+const POWERHOUSE_DEMO_ADDRESS = "Rua Adelino de Oliveira 85, 4470-025 Maia";
+const POWERHOUSE_DEMO_MAP_URL =
+  "https://www.google.com/maps/search/?api=1&query=Rua%20Adelino%20de%20Oliveira%2085%2C%204470-025%20Maia";
+const POWERHOUSE_DEMO_SERVICES = [
+  {
+    name: "Corte + Barba (Barboterapia)",
+    description: "Corte personalizado com ritual completo de barboterapia.",
+    price: 2200,
+    duration: 60,
+  },
+  {
+    name: "Corte",
+    description: "Corte masculino personalizado com acabamento cuidado.",
+    price: 1500,
+    duration: 45,
+  },
+  {
+    name: "Corte 1 pente por todo + Barba (Barboterapia)",
+    description: "Corte uniforme à máquina com ritual completo de barboterapia.",
+    price: 1900,
+    duration: 45,
+  },
+  {
+    name: "Corte 1 pente por todo",
+    description: "Corte uniforme à máquina, prático e preciso.",
+    price: 1200,
+    duration: 30,
+  },
+  {
+    name: "Barba (Barboterapia)",
+    description: "Ritual de barboterapia, desenho e acabamento da barba.",
+    price: 1200,
+    duration: 30,
+  },
+  {
+    name: "Design Sobrancelha (pinça, linha)",
+    description: "Design e definição de sobrancelha com pinça e linha.",
+    price: 1000,
+    duration: 20,
+  },
+  {
+    name: "Sobrancelhas cera ou navalhado",
+    description: "Definição de sobrancelhas com cera ou navalha.",
+    price: 400,
+    duration: 15,
+  },
+  {
+    name: "Corte, barba (barboterapia) e sobrancelhas",
+    description: "Experiência completa de corte, barboterapia e sobrancelhas.",
+    price: 2600,
+    duration: 75,
+  },
+  {
+    name: "Platinar cabelo curto",
+    description: "Tratamento para cabelo curto com acabamento platinado.",
+    price: 3500,
+    duration: 120,
+  },
+  {
+    name: "Madeixas/Luzes cabelo curto",
+    description: "Madeixas ou luzes em cabelo curto.",
+    price: 2500,
+    duration: 90,
+  },
+  {
+    name: "Alisamento",
+    description: "Tratamento de alisamento para um acabamento uniforme.",
+    price: 1000,
+    duration: 45,
+  },
+  {
+    name: "Corte estudante",
+    description: "Preço especial para estudantes, disponível apenas à quarta-feira.",
+    price: 1200,
+    duration: 45,
+  },
+] as const;
+
+const LEGACY_DEMO_SERVICE_NAMES = [
+  "Corte de Cabelo (Degradê)",
+  "Corte simples",
+  "Barba",
+  "Corte Degradê + Barba",
+  "Corte Simples + Barba",
+];
+
+async function synchronizePowerhouseDemoData() {
+  const defaultLocation = await getDefaultLocation();
+  if (!defaultLocation) throw new Error("Localização principal indisponível durante a sincronização demo.");
+
+  await updateLocation(defaultLocation.id, {
+    name: POWERHOUSE_DEMO_NAME,
+    address: POWERHOUSE_DEMO_ADDRESS,
+    mapUrl: POWERHOUSE_DEMO_MAP_URL,
+    mapEmbedUrl: "",
+    timezone: "Europe/Lisbon",
+    isActive: true,
+  });
+
+  const existingBarbers = await storage.getBarbers();
+  const legacyPrimaryBarber = existingBarbers.find((barber) => barber.name === "Tiago Martins");
+  const currentPrimaryBarber = existingBarbers.find((barber) => barber.name === "André");
+  const primaryBarber = currentPrimaryBarber
+    ? await storage.updateBarber(currentPrimaryBarber.id, {
+        specialty: "Corte, barba e estilo masculino",
+        bio: "Barbeiro da Powerhouse, focado em precisão, detalhe e atendimento personalizado.",
+        avatar: "/images/demo-barbers/tiago-martins.jpg",
+        color: "#9F2638",
+        isVisible: true,
+      })
+    : legacyPrimaryBarber
+      ? await storage.updateBarber(legacyPrimaryBarber.id, {
+          name: "André",
+          specialty: "Corte, barba e estilo masculino",
+          bio: "Barbeiro da Powerhouse, focado em precisão, detalhe e atendimento personalizado.",
+          avatar: "/images/demo-barbers/tiago-martins.jpg",
+          color: "#9F2638",
+          isVisible: true,
+        })
+      : await storage.createBarber({
+          name: "André",
+          specialty: "Corte, barba e estilo masculino",
+          bio: "Barbeiro da Powerhouse, focado em precisão, detalhe e atendimento personalizado.",
+          avatar: "/images/demo-barbers/tiago-martins.jpg",
+          color: "#9F2638",
+          isVisible: true,
+        });
+  if (!primaryBarber) throw new Error("Não foi possível sincronizar o barbeiro principal da demo.");
+  await assignBarberToLocation(primaryBarber.id, defaultLocation.id);
+
+  await Promise.all(
+    existingBarbers
+      .filter((barber) => ["Miguel Rocha", "Luís Carvalho", "Rafael Mendes"].includes(barber.name))
+      .map((barber) => storage.updateBarber(barber.id, { isVisible: false })),
+  );
+
+  const existingServices = await storage.getServices();
+  const claimedServiceIds = new Set<number>();
+  const desiredServiceIds: number[] = [];
+  for (let index = 0; index < POWERHOUSE_DEMO_SERVICES.length; index += 1) {
+    const desired = POWERHOUSE_DEMO_SERVICES[index];
+    const exact = existingServices.find(
+      (service) => service.name === desired.name && !claimedServiceIds.has(service.id),
+    );
+    const legacy = existingServices.find(
+      (service) => service.name === LEGACY_DEMO_SERVICE_NAMES[index] && !claimedServiceIds.has(service.id),
+    );
+    const synchronized = exact
+      ? await storage.updateService(exact.id, { ...desired, isVisible: true })
+      : legacy
+        ? await storage.updateService(legacy.id, { ...desired, isVisible: true })
+        : await storage.createService({ ...desired, isVisible: true });
+    if (!synchronized) throw new Error(`Não foi possível sincronizar o serviço demo: ${desired.name}`);
+    claimedServiceIds.add(synchronized.id);
+    desiredServiceIds.push(synchronized.id);
+    await assignServiceToLocation(synchronized.id, defaultLocation.id);
+  }
+
+  await Promise.all(
+    existingServices
+      .filter((service) => LEGACY_DEMO_SERVICE_NAMES.includes(service.name) && !claimedServiceIds.has(service.id))
+      .map((service) => storage.updateService(service.id, { isVisible: false })),
+  );
+  await replaceBarberServicesForLocation(primaryBarber.id, desiredServiceIds, defaultLocation.id);
+}
+
 async function seedDatabase() {
   const isDemoEnvironment = process.env.DEMO_MODE === "true";
   const configuredAdminPassword = (
@@ -5260,6 +5427,7 @@ async function seedDatabase() {
         console.log("Demo administrator password synchronized from DEMO_ADMIN_PASSWORD.");
       }
     }
+    if (isDemoEnvironment) await synchronizePowerhouseDemoData();
     await ensureDefaultShopAvailability();
     return;
   }
@@ -5267,36 +5435,25 @@ async function seedDatabase() {
   console.log("Seeding database...");
   const defaultLocation = await getDefaultLocation();
   if (!defaultLocation) throw new Error("Localização principal indisponível durante a inicialização.");
+  if (isDemoEnvironment) {
+    await updateLocation(defaultLocation.id, {
+      name: POWERHOUSE_DEMO_NAME,
+      address: POWERHOUSE_DEMO_ADDRESS,
+      mapUrl: POWERHOUSE_DEMO_MAP_URL,
+      mapEmbedUrl: "",
+      timezone: "Europe/Lisbon",
+      isActive: true,
+    });
+  }
 
   const seedBarbers = isDemoEnvironment
     ? [
         {
-          name: "Tiago Martins",
-          specialty: "Cortes clássicos e barba",
-          bio: "Especialista em cortes clássicos, acabamento à tesoura e cuidado de barba.",
+          name: "André",
+          specialty: "Corte, barba e estilo masculino",
+          bio: "Barbeiro da Powerhouse, focado em precisão, detalhe e atendimento personalizado.",
           avatar: "/images/demo-barbers/tiago-martins.jpg",
-          color: "#38BDF8",
-        },
-        {
-          name: "Miguel Rocha",
-          specialty: "Degradê e freestyle",
-          bio: "Focado em degradês, cortes urbanos e estilos personalizados.",
-          avatar: "/images/demo-barbers/miguel-rocha.jpg",
-          color: "#22C55E",
-        },
-        {
-          name: "Luís Carvalho",
-          specialty: "Corte tradicional",
-          bio: "Experiência em cortes tradicionais, cabelo grisalho e barba clássica.",
-          avatar: "/images/demo-barbers/luis-carvalho.jpg",
-          color: "#A78BFA",
-        },
-        {
-          name: "Rafael Mendes",
-          specialty: "Cortes modernos",
-          bio: "Especialista em cortes modernos, cabelo texturizado e contornos precisos.",
-          avatar: "/images/demo-barbers/rafael-mendes.jpg",
-          color: "#F97316",
+          color: "#9F2638",
         },
       ]
     : [
@@ -5319,46 +5476,44 @@ async function seedDatabase() {
     await assignBarberToLocation(createdBarber.id, defaultLocation.id);
   }
 
+  const serviceSeeds = isDemoEnvironment
+    ? POWERHOUSE_DEMO_SERVICES
+    : [
+        {
+          name: "Corte de Cabelo (Degradê)",
+          description: "Corte moderno com acabamento preciso e estilo personalizado.",
+          price: 1200,
+          duration: 60,
+        },
+        {
+          name: "Corte simples",
+          description: "Corte clássico e prático para o dia a dia.",
+          price: 1000,
+          duration: 60,
+        },
+        {
+          name: "Barba",
+          description: "Desenho, alinhamento e acabamento profissional da barba.",
+          price: 500,
+          duration: 30,
+        },
+        {
+          name: "Corte Degradê + Barba",
+          description: "Corte degradê com desenho e acabamento profissional da barba.",
+          price: 1500,
+          duration: 60,
+        },
+        {
+          name: "Corte Simples + Barba",
+          description: "Corte simples com desenho e acabamento profissional da barba.",
+          price: 1200,
+          duration: 60,
+        },
+      ];
   const seededServices = [];
-  seededServices.push(await storage.createService({
-    name: "Corte de Cabelo (Degradê)",
-    description: "Corte moderno com acabamento preciso e estilo personalizado.",
-    price: 1200,
-    duration: 60,
-    isVisible: true
-  }));
-
-  seededServices.push(await storage.createService({
-    name: "Corte simples",
-    description: "Corte clássico e prático para o dia a dia.",
-    price: 1000,
-    duration: 60,
-    isVisible: true
-  }));
-
-  seededServices.push(await storage.createService({
-    name: "Barba",
-    description: "Desenho, alinhamento e acabamento profissional da barba.",
-    price: 500,
-    duration: 30,
-    isVisible: true
-  }));
-
-  seededServices.push(await storage.createService({
-    name: "Corte Degradê + Barba",
-    description: "Corte degradê com desenho e acabamento profissional da barba.",
-    price: 1500,
-    duration: 60,
-    isVisible: true
-  }));
-
-  seededServices.push(await storage.createService({
-    name: "Corte Simples + Barba",
-    description: "Corte simples com desenho e acabamento profissional da barba.",
-    price: 1200,
-    duration: 60,
-    isVisible: true
-  }));
+  for (const service of serviceSeeds) {
+    seededServices.push(await storage.createService({ ...service, isVisible: true }));
+  }
   for (const service of seededServices) {
     await assignServiceToLocation(service.id, defaultLocation.id);
   }

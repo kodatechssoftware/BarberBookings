@@ -919,8 +919,10 @@ type BarberListCacheItem = {
   [key: string]: unknown;
 };
 
-const barberColorPalette = ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
-const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#2F91E8" : "#D4AF37";
+const barberColorPalette = shopBranding.theme === "barber-pole"
+  ? ["#9F2638", "#6B7280", "#374151", "#7F1D1D", "#52525B", "#A85555", "#475569", "#78716C"]
+  : ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
+const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#9F2638" : "#D4AF37";
 const defaultBarberCompensationFormData: BarberCompensationFormData = {
   compensationModel: "none",
   commissionPercent: "40",
@@ -2853,6 +2855,12 @@ export default function Admin() {
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <Card className="max-w-md w-full bg-card border-white/10">
           <CardHeader>
+            <img
+              src={shopBranding.logoUrl}
+              alt=""
+              aria-hidden="true"
+              className="mx-auto mb-2 h-20 w-20 rounded-full object-contain"
+            />
             <CardTitle className="text-2xl font-display font-bold text-center text-white">{shopBranding.name}</CardTitle>
             <p className="text-center text-gray-400 text-sm mt-2">Acesso para Administradores e Barbeiros</p>
           </CardHeader>
@@ -2881,6 +2889,12 @@ export default function Admin() {
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8 text-white">
           <div className="flex-1">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-2">
+              <img
+                src={shopBranding.logoUrl}
+                alt=""
+                aria-hidden="true"
+                className="h-12 w-12 shrink-0 rounded-full object-contain"
+              />
               <h1 className="text-2xl md:text-3xl font-display font-bold">Painel Administrativo</h1>
               <div className="flex items-center gap-2">
                 <Link href="/"><Button variant="outline" size="sm" className="text-primary border-primary/20 hover:bg-primary/10 h-8">Ver Site</Button></Link>

@@ -164,6 +164,30 @@ export default function Home() {
   }, [locations, publicLocations, selectedLocationId]);
 
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
+  const serviceGroups = useMemo(() => {
+    if (shopBranding.theme !== "barber-pole") {
+      return [{ label: "", services: visibleServices }];
+    }
+    const treatmentNames = new Set([
+      "Platinar cabelo curto",
+      "Madeixas/Luzes cabelo curto",
+      "Alisamento",
+    ]);
+    return [
+      {
+        label: "Serviços",
+        services: visibleServices.filter((service) => !treatmentNames.has(service.name) && service.name !== "Corte estudante"),
+      },
+      {
+        label: "Tratamentos",
+        services: visibleServices.filter((service) => treatmentNames.has(service.name)),
+      },
+      {
+        label: "Só à quarta-feira · Estudantes",
+        services: visibleServices.filter((service) => service.name === "Corte estudante"),
+      },
+    ].filter((group) => group.services.length > 0);
+  }, [visibleServices]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const { data: shopHours } = useShopAvailability({ locationId: selectedLocation.id || undefined });
   const openingStatus = getTodayOpeningStatus(shopHours, selectedLocation.timezone);
@@ -235,23 +259,31 @@ export default function Home() {
       <section id="top" className="relative min-h-[68vh] overflow-hidden pt-20 md:min-h-[72vh]">
         <div className="absolute inset-0">
           <img
-            src="https://images.unsplash.com/photo-1585747860715-2ba37e788b70?q=80&w=2074&auto=format&fit=crop"
-            alt="Interior de barbearia"
+            src={shopBranding.heroImageUrl}
+            alt={shopBranding.theme === "barber-pole" ? "Barbeiro da Powerhouse a executar um corte" : "Interior de barbearia"}
             loading="eager"
             className="h-full w-full object-cover"
           />
-          <div className="absolute inset-0 bg-black/55" />
+          <div className="absolute inset-0 bg-black/65" />
           <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-background to-transparent" />
         </div>
 
         <div className="container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center px-4 pb-10 md:min-h-[calc(72vh-5rem)] md:pb-12">
           <div className="w-full min-w-0 sm:max-w-xl md:max-w-3xl">
+            {shopBranding.theme === "barber-pole" && (
+              <img
+                src={shopBranding.logoUrl}
+                alt=""
+                aria-hidden="true"
+                className="mb-5 h-20 w-20 rounded-full object-contain drop-shadow-[0_10px_24px_rgba(0,0,0,0.55)] md:h-24 md:w-24"
+              />
+            )}
             <p className="mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">{shopBranding.name}</p>
             <h1 className="font-display text-3xl font-bold leading-[0.98] text-white sm:text-5xl md:text-7xl">
-              Corte e barba com hora marcada
+              {shopBranding.heroTitle}
             </h1>
             <p className="mt-6 max-w-xl text-base leading-relaxed text-gray-300 md:text-lg">
-              Cortes, barba e acabamentos cuidados, com atenção ao detalhe.
+              {shopBranding.heroDescription}
             </p>
 
             <div className="mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
@@ -300,25 +332,36 @@ export default function Home() {
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              {visibleServices.map((service) => (
-                <article key={service.id} className="flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
-                  <div className="flex flex-1 items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                        <Scissors className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-bold text-white">{service.name}</h3>
-                        <p className="mt-2 text-sm leading-relaxed text-gray-400">{service.description}</p>
-                      </div>
-                    </div>
-                    <p className="shrink-0 font-display text-2xl font-bold text-primary">
-                      {(service.price / 100).toFixed(0)}€
-                    </p>
+            <div className="space-y-9">
+              {serviceGroups.map((group) => (
+                <div key={group.label || "all-services"}>
+                  {group.label && (
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-[0.22em] text-gray-300">
+                      {group.label}
+                    </h3>
+                  )}
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    {group.services.map((service) => (
+                      <article key={service.id} className="flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
+                        <div className="flex flex-1 items-start justify-between gap-4">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                              <Scissors className="h-5 w-5" />
+                            </span>
+                            <div className="min-w-0">
+                              <h4 className="text-lg font-bold text-white">{service.name}</h4>
+                              <p className="mt-2 text-sm leading-relaxed text-gray-400">{service.description}</p>
+                            </div>
+                          </div>
+                          <p className="shrink-0 font-display text-2xl font-bold text-primary">
+                            {(service.price / 100).toFixed(0)}€
+                          </p>
+                        </div>
+                        <p className="mt-auto pt-5 text-xs font-semibold uppercase tracking-widest text-gray-500">{service.duration} min</p>
+                      </article>
+                    ))}
                   </div>
-                  <p className="mt-auto pt-5 text-xs font-semibold uppercase tracking-widest text-gray-500">{service.duration} min</p>
-                </article>
+                </div>
               ))}
             </div>
           )}

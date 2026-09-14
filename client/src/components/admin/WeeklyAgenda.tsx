@@ -43,7 +43,7 @@ const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; la
   { value: "no_show", label: "Faltas" },
 ];
 
-const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#2F91E8" : "#D4AF37";
+const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#9F2638" : "#D4AF37";
 
 function normalizeBarberColor(color?: string | null) {
   return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : defaultBarberColor;

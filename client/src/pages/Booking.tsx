@@ -754,6 +754,12 @@ export default function Booking() {
           >
             <ChevronLeft className="w-5 h-5" />
           </Button>
+          <img
+            src={shopBranding.logoUrl}
+            alt=""
+            aria-hidden="true"
+            className="h-9 w-9 shrink-0 rounded-full object-contain"
+          />
           <div className="min-w-0 flex-1">
             <span className="font-display font-bold text-lg">Nova Marcação</span>
             {locations.length > 1 && activeLocation && <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>{activeLocation.name}</span>}

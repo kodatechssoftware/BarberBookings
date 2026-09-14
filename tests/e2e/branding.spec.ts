@@ -1,12 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 test("applies environment-specific branding without leaking production identity", async ({ page }) => {
-  const shopName = process.env.VITE_SHOP_NAME || "Baptista Barber Shop";
-  const shortName = process.env.VITE_SHOP_SHORT_NAME || "Baptista";
-  const address = process.env.VITE_SHOP_ADDRESS || "Rua Comandante Agatão Lança Nº28";
-  const logoUrl = process.env.VITE_SHOP_LOGO_URL || "/images/logo.jpg";
+  const requestedTheme = process.env.VITE_BRAND_THEME || "classic-gold";
+  const isPowerhouseDemo = process.env.DEMO_MODE === "true";
+  const brandTheme = isPowerhouseDemo
+    ? "barber-pole"
+    : requestedTheme === "barber-pole"
+      ? "classic-gold"
+      : requestedTheme;
+  const shopName = isPowerhouseDemo ? "Powerhouse barbershop" : process.env.VITE_SHOP_NAME || "Baptista Barber Shop";
+  const shortName = isPowerhouseDemo ? "Powerhouse" : process.env.VITE_SHOP_SHORT_NAME || "Baptista";
+  const address = isPowerhouseDemo
+    ? "Rua Adelino de Oliveira 85, 4470-025 Maia"
+    : process.env.VITE_SHOP_ADDRESS || "Rua Comandante Agatão Lança Nº28";
+  const logoUrl = isPowerhouseDemo ? "/images/demo-logo.svg" : process.env.VITE_SHOP_LOGO_URL || "/images/logo.jpg";
   const hideMap = process.env.VITE_HIDE_SHOP_MAP === "true";
-  const brandTheme = process.env.VITE_BRAND_THEME || "classic-gold";
 
   await page.goto("/");
 
@@ -28,8 +36,8 @@ test("applies environment-specific branding without leaking production identity"
         stripeBackground: stripe.backgroundImage,
       };
     });
-    expect(themeStyles.primary).toBe("207 82% 53%");
-    expect(themeStyles.destructive).toBe("354 72% 52%");
+    expect(themeStyles.primary).toBe("350 56% 54%");
+    expect(themeStyles.destructive).toBe("350 56% 54%");
     expect(themeStyles.stripeHeight).toBe("4px");
     expect(themeStyles.stripeBackground).toContain("repeating-linear-gradient");
   }
@@ -59,11 +67,45 @@ test("applies environment-specific branding without leaking production identity"
     const response = await page.request.get("/api/barbers");
     expect(response.ok(), await response.text()).toBe(true);
     const barbers = await response.json();
-    for (const name of ["Tiago Martins", "Miguel Rocha", "Luís Carvalho", "Rafael Mendes"]) {
-      const barber = barbers.find((candidate: any) => candidate.name === name);
-      expect(barber, `Perfil de demonstração em falta: ${name}`).toBeTruthy();
-      expect(barber.avatar).toMatch(/^\/images\/demo-barbers\/.+\.jpg$/);
+    const andre = barbers.find((candidate: any) => candidate.name === "André");
+    expect(andre, "Perfil de demonstração em falta: André").toBeTruthy();
+    expect(andre.avatar).toBe("/images/demo-barbers/tiago-martins.jpg");
+    expect(andre.color).toBe("#9F2638");
+
+    const servicesResponse = await page.request.get("/api/services");
+    expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+    const services = await servicesResponse.json();
+    const expectedServices = [
+      ["Corte + Barba (Barboterapia)", 2200],
+      ["Corte", 1500],
+      ["Corte 1 pente por todo + Barba (Barboterapia)", 1900],
+      ["Corte 1 pente por todo", 1200],
+      ["Barba (Barboterapia)", 1200],
+      ["Design Sobrancelha (pinça, linha)", 1000],
+      ["Sobrancelhas cera ou navalhado", 400],
+      ["Corte, barba (barboterapia) e sobrancelhas", 2600],
+      ["Platinar cabelo curto", 3500],
+      ["Madeixas/Luzes cabelo curto", 2500],
+      ["Alisamento", 1000],
+      ["Corte estudante", 1200],
+    ];
+    for (const [name, price] of expectedServices) {
+      const service = services.find((candidate: any) => candidate.name === name);
+      expect(service, `Serviço de demonstração em falta: ${name}`).toBeTruthy();
+      expect(service.price).toBe(price);
     }
+
+    await expect(page.locator('img[src="/images/powerhouse-hero.jpg"]')).toBeVisible();
+    await expect(page.getByText("Tratamentos", { exact: true })).toBeVisible();
+    await expect(page.getByText("Só à quarta-feira · Estudantes", { exact: true })).toBeVisible();
+
+    await page.goto("/book");
+    await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+    await expect(page.getByText("André", { exact: true })).toBeVisible();
+    await page.getByText("André", { exact: true }).click();
+    await page.getByRole("button", { name: "Seguinte" }).click();
+    await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
+    await expect(page.getByText("Corte + Barba (Barboterapia)", { exact: true })).toBeVisible();
 
     const demoPassword = process.env.DEMO_ADMIN_PASSWORD;
     expect(demoPassword).toBeTruthy();
