@@ -714,7 +714,7 @@ export default function Booking() {
                 A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
               </p>
               <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
-                Se não receber a confirmação nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.
+                Se não receber a confirmação por WhatsApp nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.
               </p>
             </>
           ) : (
@@ -1179,7 +1179,7 @@ export default function Booking() {
                       />
                     </div>
                     <p id="phone-whatsapp-notice" className="text-xs leading-relaxed text-gray-400">
-                      Este número será utilizado para comunicações relacionadas com a sua marcação.
+                      Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.
                     </p>
                     {showCustomerError("phone") && (
                       <p id="phone-error" className="text-xs font-medium text-red-400">
@@ -1212,7 +1212,7 @@ export default function Booking() {
                       </p>
                     ) : (
                       <p id="email-help" className="text-xs leading-relaxed text-gray-400">
-                        Utilizado para enviar confirmações e atualizações da marcação quando necessário.
+                        Este email será utilizado como alternativa para receber confirmações e atualizações da marcação caso o envio por WhatsApp não seja possível.
                       </p>
                     )}
                   </div>

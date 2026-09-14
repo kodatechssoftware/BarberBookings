@@ -431,7 +431,7 @@ export function AppointmentBlockDialog({
                     />
                   </div>
                   <p className="text-xs leading-relaxed text-gray-400">
-                    Com um número válido, o cliente poderá receber comunicações relacionadas com a marcação.
+                    Com um número válido, a confirmação e as atualizações serão enviadas por WhatsApp.
                   </p>
                 </div>
               )}
@@ -465,7 +465,7 @@ export function AppointmentBlockDialog({
                   </p>
                 ) : (
                   <p id="manual-booking-email-help" className="text-xs leading-relaxed text-gray-400">
-                    Utilizado para enviar confirmações e atualizações da marcação quando necessário.
+                    Este email será utilizado como alternativa para receber confirmações e atualizações da marcação caso o envio por WhatsApp não seja possível.
                   </p>
                 )}
               </div>
