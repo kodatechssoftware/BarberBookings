@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
+import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, dateKeyInTimeZone, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -331,13 +331,6 @@ export default function Booking() {
     );
   }, [selectedBarber, selectedBarberId, visibleBarbers, visibleServices]);
 
-  // Fetch appointments for selected date/barber to block slots
-  const { data: existingAppointments, isLoading: loadingAppointments, isError: appointmentsError } = usePublicAppointments({
-    barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
-    date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, 'yyyy-MM-dd') : undefined,
-    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId && selectedDate && isPublicDateAllowed(selectedDate)),
-  });
-
   const bookingWindowStart = useMemo(
     () => parseDateParam(publicBookingWindow?.today ?? null),
     [publicBookingWindow?.today],
@@ -353,6 +346,30 @@ export default function Booking() {
     enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId && publicBookingWindow),
   });
 
+  // Keep the small daily request as the fast path until the complete booking
+  // window is available. Afterwards, every selected day is derived locally.
+  const {
+    data: selectedDateAppointments,
+    isLoading: loadingSelectedDateAppointments,
+    isError: selectedDateAppointmentsError,
+  } = usePublicAppointments({
+    barberId: selectedBarberId === 0 ? undefined : selectedBarberId?.toString(),
+    date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, "yyyy-MM-dd") : undefined,
+    enabled: step === 3
+      && bookingWindowAppointments === undefined
+      && selectedBarberId !== null
+      && Boolean(selectedServiceId && selectedDate && isPublicDateAllowed(selectedDate)),
+  });
+  const existingAppointments = useMemo(() => {
+    if (bookingWindowAppointments === undefined || !selectedDate) return selectedDateAppointments;
+    const selectedDateKey = format(selectedDate, "yyyy-MM-dd");
+    return bookingWindowAppointments.filter((appointment) =>
+      dateKeyInTimeZone(new Date(appointment.startTime), locationTimeZone) === selectedDateKey,
+    );
+  }, [bookingWindowAppointments, locationTimeZone, selectedDate, selectedDateAppointments]);
+  const loadingAppointments = bookingWindowAppointments === undefined && loadingSelectedDateAppointments;
+  const appointmentsError = bookingWindowAppointments === undefined && selectedDateAppointmentsError;
+
   useEffect(() => {
     if (!publicBookingWindow || !selectedDate || isPublicDateAllowed(selectedDate)) return;
     const today = parseDateParam(publicBookingWindow.today) ?? startOfToday();
@@ -366,17 +383,6 @@ export default function Booking() {
   const monthEnd = endOfMonth(visibleCalendarMonth);
   const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
   const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
-  const {
-    data: calendarAppointments,
-    isLoading: loadingCalendarAppointments,
-    isError: calendarAppointmentsError,
-  } = usePublicAppointments({
-    barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()),
-    startDate: format(calendarStart, "yyyy-MM-dd"),
-    endDate: format(calendarEnd, "yyyy-MM-dd"),
-    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId),
-  });
-
   const selectedService = availableServices.find((service) => service.id === selectedServiceId);
   const selectedBarberLabel = selectedBarberId === 0 ? "Sem preferência" : selectedBarber?.name;
   const selectedPhoneCountryData = getPhoneCountry(selectedPhoneCountry);
@@ -460,10 +466,10 @@ export default function Booking() {
 
   const availableDateKeys = useMemo(() => {
     if (!selectedService || selectedBarberId === null) return new Set<string>();
-    if (loadingCalendarAppointments || calendarAppointmentsError || !calendarAppointments) return new Set<string>();
+    if (loadingBookingWindowAppointments || bookingWindowAppointmentsError || !bookingWindowAppointments) return new Set<string>();
 
     const today = startOfToday();
-    const appointments = calendarAppointments;
+    const appointments = bookingWindowAppointments;
     const availability = (availabilityRows as AvailabilityRow[] | undefined) ?? [];
     const availableKeys = new Set<string>();
 
@@ -490,11 +496,11 @@ export default function Booking() {
     return availableKeys;
   }, [
     availabilityRows,
-    calendarAppointments,
-    calendarAppointmentsError,
+    bookingWindowAppointments,
+    bookingWindowAppointmentsError,
     calendarEnd,
     calendarStart,
-    loadingCalendarAppointments,
+    loadingBookingWindowAppointments,
     selectedBarberId,
     selectedService,
     shopAvailabilityForCalendar,

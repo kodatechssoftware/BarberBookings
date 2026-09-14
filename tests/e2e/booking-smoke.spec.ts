@@ -631,7 +631,7 @@ test.describe("public booking flow", () => {
     await expectNoBrokenImages(page);
   });
 
-  test("only requests public appointments after reaching the date and time step", async ({ page }) => {
+  test("reuses the booking window for date changes, month changes and revisited dates", async ({ page }) => {
     const appointmentRequests: string[] = [];
     page.on("request", (request) => {
       if (new URL(request.url()).pathname === "/api/appointments/public") {
@@ -646,8 +646,34 @@ test.describe("public booking flow", () => {
 
     await page.goto("/book?barberId=1&serviceId=1");
     await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
-    await expect.poll(() => appointmentRequests.length).toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
+    await page.waitForLoadState("networkidle");
+
+    const requestsOnEntry = appointmentRequests.map((requestUrl) => new URL(requestUrl));
+    expect(requestsOnEntry).toHaveLength(2);
+    expect(requestsOnEntry.filter((url) => url.searchParams.has("date"))).toHaveLength(1);
+    expect(requestsOnEntry.filter((url) => url.searchParams.has("startDate"))).toHaveLength(1);
+
+    const selectedDay = page.locator("button[aria-selected='true']");
+    const initiallySelectedLabel = (await selectedDay.textContent())?.trim();
+    const otherAvailableDay = page.locator("button.booking-day-available:not([aria-selected='true'])").first();
+    await expect(otherAvailableDay).toBeVisible();
+    await otherAvailableDay.click();
+    await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
+    expect(appointmentRequests).toHaveLength(2);
+
+    const nextMonth = page.getByRole("button", { name: "Go to next month" });
+    if (await nextMonth.isEnabled()) {
+      await nextMonth.click();
+      expect(appointmentRequests).toHaveLength(2);
+      await page.getByRole("button", { name: "Go to previous month" }).click();
+    }
+
+    if (initiallySelectedLabel) {
+      await page.getByRole("gridcell", { name: initiallySelectedLabel, exact: true }).click();
+      await expect(selectedDay).toHaveText(initiallySelectedLabel);
+      expect(appointmentRequests).toHaveLength(2);
+    }
   });
 
   test("shows selected-day slots without waiting for range requests", async ({ page }) => {
@@ -677,16 +703,11 @@ test.describe("public booking flow", () => {
   });
 
   test("keeps the latest date when daily appointment responses finish out of order", async ({ page }) => {
-    await page.goto("/book?barberId=1&serviceId=1");
-    await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
-
-    const candidateDays = page.locator("button.booking-day-available:not([aria-selected='true'])");
-    await expect.poll(() => candidateDays.count()).toBeGreaterThanOrEqual(2);
-    const dayLabels = (await candidateDays.allTextContents()).map((label) => label.trim());
-    const firstLabel = dayLabels[0];
-    const secondLabel = dayLabels.find((label) => label !== firstLabel);
-    expect(secondLabel).toBeTruthy();
-
+    const initialDate = dateKeyFromIso(futureThursdayIso(3, 15, 0));
+    let releaseRangeRequest!: () => void;
+    const rangeRequestGate = new Promise<void>((resolve) => {
+      releaseRangeRequest = resolve;
+    });
     let releaseFirstRequest!: () => void;
     const firstRequestGate = new Promise<void>((resolve) => {
       releaseFirstRequest = resolve;
@@ -696,8 +717,13 @@ test.describe("public booking flow", () => {
 
     await page.route("**/api/appointments/public?*", async (route) => {
       const url = new URL(route.request().url());
+      if (url.searchParams.has("startDate")) {
+        await rangeRequestGate;
+        await route.continue().catch(() => undefined);
+        return;
+      }
       const date = url.searchParams.get("date");
-      if (!date) return route.continue();
+      if (!date || date === initialDate) return route.continue();
       if (!blockedDate) {
         blockedDate = date;
         await firstRequestGate;
@@ -708,26 +734,39 @@ test.describe("public booking flow", () => {
       await route.continue();
     });
 
+    await page.goto(`/book?barberId=1&serviceId=1&date=${initialDate}`);
+    await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
+
+    const candidateDays = page.locator("[role='gridcell']:not([disabled]):not([aria-selected='true']):not(.day-outside)");
+    await expect.poll(() => candidateDays.count()).toBeGreaterThanOrEqual(2);
+    const dayLabels = (await candidateDays.allTextContents()).map((label) => label.trim());
+    const firstLabel = dayLabels[0];
+    const secondLabel = dayLabels.find((label) => label !== firstLabel);
+    expect(secondLabel).toBeTruthy();
+
     try {
       await candidateDays.filter({ hasText: new RegExp(`^${firstLabel}$`) }).first().click();
       await expect.poll(() => blockedDate).not.toBe("");
-      await page.locator("button.booking-day-available", { hasText: secondLabel }).first().click();
+      await page.locator("[role='gridcell']:not([disabled]):not(.day-outside)", {
+        hasText: new RegExp(`^${secondLabel}$`),
+      }).first().click();
       await expect.poll(() => latestDate).not.toBe("");
       await expect(page.locator("button[aria-selected='true']")).toHaveText(secondLabel!);
-      await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
     } finally {
       releaseFirstRequest();
+      releaseRangeRequest();
     }
 
     await expect(page.locator("button[aria-selected='true']")).toHaveText(secondLabel!);
   });
 
-  test("discards an obsolete daily request after rapidly changing the barber", async ({ page }) => {
+  test("discards an obsolete range request after rapidly changing the barber", async ({ page }) => {
     await page.goto("/book?barberId=1&serviceId=1");
     await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
 
-    const candidateDay = page.locator("button.booking-day-available:not([aria-selected='true'])").first();
-    await expect(candidateDay).toBeVisible();
+    const barbersResponse = await page.request.get("/api/barbers");
+    const alternativeBarber = (await barbersResponse.json()).find((barber: any) => barber.id !== 1 && barber.isVisible);
+    expect(alternativeBarber).toBeTruthy();
     let releaseObsoleteRequest!: () => void;
     const obsoleteRequestGate = new Promise<void>((resolve) => {
       releaseObsoleteRequest = resolve;
@@ -737,7 +776,7 @@ test.describe("public booking flow", () => {
 
     await page.route("**/api/appointments/public?*", async (route) => {
       const url = new URL(route.request().url());
-      if (!url.searchParams.has("date")) return route.continue();
+      if (!url.searchParams.has("startDate")) return route.continue();
       if (blockedBarber === undefined) {
         blockedBarber = url.searchParams.get("barberId");
         await obsoleteRequestGate;
@@ -749,8 +788,6 @@ test.describe("public booking flow", () => {
     });
 
     try {
-      await candidateDay.click();
-      await expect.poll(() => blockedBarber).toBe("1");
       await page.locator("nav button").first().click();
       await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
       await page.locator("nav button").first().click();
@@ -759,7 +796,14 @@ test.describe("public booking flow", () => {
       await page.getByRole("button", { name: "Seguinte" }).click();
       await page.getByRole("button", { name: "Seguinte" }).click();
       await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
-      await expect.poll(() => latestBarber).toBeNull();
+      await expect.poll(() => blockedBarber).toBeNull();
+
+      await page.locator("nav button").first().click();
+      await page.locator("nav button").first().click();
+      await page.getByText(alternativeBarber.name, { exact: true }).click();
+      await page.getByRole("button", { name: "Seguinte" }).click();
+      await page.getByRole("button", { name: "Seguinte" }).click();
+      await expect.poll(() => latestBarber).toBe(String(alternativeBarber.id));
       await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
     } finally {
       releaseObsoleteRequest();
@@ -4295,6 +4339,17 @@ test.describe("booking rules", () => {
 
     const statuses = responses.map((response) => response.status()).sort();
     expect(statuses).toEqual([201, 409]);
+
+    await loginAdminRequest(request);
+    const dateKey = dateKeyFromIso(startTime);
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
+    expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+    const matchingAppointments = (await appointmentsResponse.json()).filter((appointment: any) =>
+      appointment.startTime === startTime
+      && appointment.status === "booked"
+      && ["Concorrente A", "Concorrente B"].includes(appointment.customerName),
+    );
+    expect(matchingAppointments).toHaveLength(1);
   });
 
   test("allows only one of five simultaneous final confirmations for the same slot", async ({ request }) => {
