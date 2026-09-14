@@ -118,7 +118,14 @@ export function usePublicAppointments(params?: AppointmentQueryParams) {
   const activeLocationId = useActiveLocationId();
   const locationId = params?.locationId ?? activeLocationId;
   return useQuery<PublicAppointment[]>({
-    queryKey: [PUBLIC_APPOINTMENTS_PATH, params, { locationId }],
+    queryKey: [PUBLIC_APPOINTMENTS_PATH, {
+      locationId,
+      barberId: params?.barberId,
+      date: params?.date,
+      startDate: params?.startDate,
+      endDate: params?.endDate,
+      scope: params?.scope,
+    }],
     enabled: params?.enabled ?? true,
     refetchInterval: params?.refetchInterval,
     queryFn: async ({ signal }) => {
