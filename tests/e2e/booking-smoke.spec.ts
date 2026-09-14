@@ -5605,6 +5605,135 @@ test.describe("booking rules", () => {
     }
   });
 
+  test("revokes previous barber access and invites when the login email changes", async ({ request, playwright }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const originalEmail = `barber-email-old-${suffix}@example.com`;
+    const newEmail = `barber-email-new-${suffix}@example.com`;
+    const originalPassword = `Original-${suffix}`;
+    const newPassword = `Replacement-${suffix}`;
+    const createResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Email Access QA ${suffix}`,
+        specialty: "QA",
+        email: originalEmail,
+        color: "#8B5CF6",
+        isVisible: true,
+        serviceIds: [],
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const barber = await createResponse.json();
+
+    const baseURL = `http://127.0.0.1:${Number(process.env.E2E_PORT || 5015)}`;
+    const barberContext = await playwright.request.newContext({ baseURL });
+    const loginContext = await playwright.request.newContext({ baseURL });
+    try {
+      const initialInviteResponse = await request.post(`/api/barbers/${barber.id}/invite`, { data: {} });
+      expect(initialInviteResponse.status(), await initialInviteResponse.text()).toBe(201);
+      const initialToken = new URL((await initialInviteResponse.json()).inviteUrl).pathname.split("/").pop();
+      expect(initialToken).toBeTruthy();
+      const acceptResponse = await barberContext.post(`/api/barber-invites/${initialToken}/accept`, {
+        data: { password: originalPassword },
+      });
+      expect(acceptResponse.status(), await acceptResponse.text()).toBe(200);
+
+      const pendingInviteResponse = await request.post(`/api/barbers/${barber.id}/invite`, { data: {} });
+      expect(pendingInviteResponse.status(), await pendingInviteResponse.text()).toBe(201);
+      const pendingToken = new URL((await pendingInviteResponse.json()).inviteUrl).pathname.split("/").pop();
+      expect(pendingToken).toBeTruthy();
+
+      const updateResponse = await request.patch(`/api/barbers/${barber.id}`, {
+        data: { email: newEmail },
+      });
+      expect(updateResponse.status(), await updateResponse.text()).toBe(200);
+      const updatedBarber = await updateResponse.json();
+      expect(updatedBarber.email).toBe(newEmail);
+      expect(updatedBarber.accessReset).toBe(true);
+      expect(updatedBarber).not.toHaveProperty("password");
+
+      const invalidatedInviteResponse = await request.get(`/api/barber-invites/${pendingToken}`);
+      expect(invalidatedInviteResponse.status(), await invalidatedInviteResponse.text()).toBe(404);
+
+      const revokedSessionResponse = await barberContext.get("/api/admin/me");
+      expect(revokedSessionResponse.status(), await revokedSessionResponse.text()).toBe(200);
+      expect(await revokedSessionResponse.json()).toEqual({ authorized: false, role: "" });
+
+      const oldEmailLogin = await loginContext.post("/api/admin/login", {
+        data: { username: originalEmail, password: originalPassword },
+      });
+      expect(oldEmailLogin.status(), await oldEmailLogin.text()).toBe(401);
+      const inheritedPasswordLogin = await loginContext.post("/api/admin/login", {
+        data: { username: newEmail, password: originalPassword },
+      });
+      expect(inheritedPasswordLogin.status(), await inheritedPasswordLogin.text()).toBe(403);
+
+      const replacementInviteResponse = await request.post(`/api/barbers/${barber.id}/invite`, { data: {} });
+      expect(replacementInviteResponse.status(), await replacementInviteResponse.text()).toBe(201);
+      const replacementToken = new URL((await replacementInviteResponse.json()).inviteUrl).pathname.split("/").pop();
+      expect(replacementToken).toBeTruthy();
+      const replacementInviteDetails = await request.get(`/api/barber-invites/${replacementToken}`);
+      expect(replacementInviteDetails.status(), await replacementInviteDetails.text()).toBe(200);
+      expect((await replacementInviteDetails.json()).barberEmail).toBe(newEmail);
+
+      const replacementAcceptResponse = await loginContext.post(`/api/barber-invites/${replacementToken}/accept`, {
+        data: { password: newPassword },
+      });
+      expect(replacementAcceptResponse.status(), await replacementAcceptResponse.text()).toBe(200);
+      const authorizedWithReplacementResponse = await loginContext.get("/api/admin/me");
+      expect((await authorizedWithReplacementResponse.json()).authorized).toBe(true);
+    } finally {
+      await barberContext.dispose();
+      await loginContext.dispose();
+      await request.delete(`/api/barbers/${barber.id}`);
+    }
+  });
+
+  test("allows an administrator to add a barber login email from the edit dialog", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const name = `Edit Email QA ${suffix}`;
+    const email = `edit-email-${suffix}@example.com`;
+    const createResponse = await request.post("/api/barbers", {
+      data: {
+        name,
+        specialty: "QA",
+        color: "#8B5CF6",
+        isVisible: true,
+        serviceIds: [],
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const barber = await createResponse.json();
+
+    try {
+      await loginAdmin(page);
+      await page.getByRole("tab", { name: "Equipa" }).click();
+      const card = page.getByTestId("team-barber-card").filter({ hasText: name });
+      await expect(card).toBeVisible();
+      await card.getByRole("button", { name: "Editar" }).click();
+
+      const dialog = page.getByRole("dialog", { name: "Editar Barbeiro" });
+      const emailInput = dialog.getByLabel("Email de acesso");
+      await expect(emailInput).toBeVisible();
+      await emailInput.fill(email);
+      await dialog.getByRole("button", { name: "Guardar" }).click();
+      await expect(dialog).not.toBeVisible();
+      await expect(
+        page.getByLabel("Notifications (F8)").getByText(
+          "Email atualizado. O acesso anterior foi revogado; crie um novo convite para o barbeiro.",
+        ),
+      ).toBeVisible();
+
+      const barbersResponse = await request.get("/api/barbers?includeHidden=true");
+      expect(barbersResponse.status(), await barbersResponse.text()).toBe(200);
+      const savedBarber = (await barbersResponse.json()).find((candidate: any) => candidate.id === barber.id);
+      expect(savedBarber.email).toBe(email);
+    } finally {
+      await request.delete(`/api/barbers/${barber.id}`);
+    }
+  });
+
   test("revokes an open barber session when that barber is removed", async ({ request, playwright }) => {
     await loginAdminRequest(request);
     const suffix = Date.now();

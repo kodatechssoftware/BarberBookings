@@ -1648,7 +1648,7 @@ export async function registerRoutes(
     let userDetails = {};
     if (role === "barber") {
       const barber = appSession.barberId ? await storage.getBarber(appSession.barberId) : undefined;
-      if (!barber || barber.isVisible === false) {
+      if (!barber || barber.isVisible === false || !barber.password) {
         return req.session.destroy((error) => {
           if (error) console.warn("Could not clear invalid barber session:", error);
           return res.json({ authorized: false, role: "" });
@@ -1677,7 +1677,7 @@ export async function registerRoutes(
     }
 
     const barber = await storage.getBarber(appSession.barberId);
-    if (barber && barber.isVisible !== false) return next();
+    if (barber && barber.isVisible !== false && barber.password) return next();
 
     return req.session.destroy((error) => {
       if (error) console.warn("Could not clear invalid barber session:", error);
@@ -2126,6 +2126,12 @@ export async function registerRoutes(
       if (!existing || (locationBarberIds !== undefined && !locationBarberIds.includes(barberId))) return res.status(404).json({ message: "Barbeiro não encontrado" });
 
       const normalizedBarberPatch = normalizeBarberEmail(barberPatch);
+      const emailWasProvided = Object.prototype.hasOwnProperty.call(normalizedBarberPatch, "email");
+      const currentEmail = existing.email?.trim().toLowerCase() || null;
+      const nextEmail = emailWasProvided
+        ? (normalizedBarberPatch.email?.trim().toLowerCase() || null)
+        : currentEmail;
+      const emailChanged = emailWasProvided && nextEmail !== currentEmail;
       if (MULTI_LOCATION_CONFIG.enabled && compensationModel === "chair_rent"
         && (await getLocationIdsForBarber(barberId)).length > 1) {
         return res.status(400).json({ message: "O aluguer de cadeira ainda não está disponível para barbeiros partilhados entre lojas." });
@@ -2157,7 +2163,9 @@ export async function registerRoutes(
       }
       const hasBarberPatch = Object.keys(normalizedBarberPatch).length > 0;
       const barber = hasBarberPatch
-        ? await storage.updateBarber(barberId, normalizedBarberPatch)
+        ? emailChanged
+          ? await storage.updateBarberAndRevokeAccess(barberId, normalizedBarberPatch)
+          : await storage.updateBarber(barberId, normalizedBarberPatch)
         : existing;
       const hasCompensationPatch = [
         compensationModel,
@@ -2199,10 +2207,16 @@ export async function registerRoutes(
           newColor: updatedBarber.color,
           serviceIds: currentServiceIds,
           compensationModel: compensationRule.model,
+          accessRevokedAfterEmailChange: emailChanged,
         },
       });
       const currentVisible = updatedBarber.isVisible !== false && await isBarberAssignedToLocation(barberId, locationId);
-      res.json({ ...attachCompensationRule(updatedBarber, compensationRule), isVisible: currentVisible, serviceIds: currentServiceIds });
+      res.json({
+        ...sanitizeBarberForResponse(attachCompensationRule(updatedBarber, compensationRule), true, true),
+        isVisible: currentVisible,
+        serviceIds: currentServiceIds,
+        accessReset: emailChanged,
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({

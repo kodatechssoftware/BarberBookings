@@ -273,6 +273,7 @@ export interface IStorage {
   getBarberByEmail(email: string): Promise<Barber | undefined>;
   createBarber(barber: CreateBarberRequest): Promise<Barber>;
   updateBarber(id: number, barber: Partial<CreateBarberRequest>): Promise<Barber | undefined>;
+  updateBarberAndRevokeAccess(id: number, barber: Partial<CreateBarberRequest>): Promise<Barber | undefined>;
   deleteBarber(id: number): Promise<"deleted" | "hidden">;
 
   // Services
@@ -475,6 +476,30 @@ export class DatabaseStorage implements IStorage {
   async updateBarber(id: number, barber: Partial<CreateBarberRequest>): Promise<Barber | undefined> {
     const [updated] = await db.update(barbers).set(barber).where(eq(barbers.id, id)).returning();
     return updated;
+  }
+
+  async updateBarberAndRevokeAccess(
+    id: number,
+    barber: Partial<CreateBarberRequest>,
+  ): Promise<Barber | undefined> {
+    return await db.transaction(async (tx) => {
+      // Uses the same advisory lock as invite creation so an email change and a
+      // concurrent invite can never leave an old invitation active.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${id}, -1)`);
+      const now = new Date();
+      const [updated] = await tx
+        .update(barbers)
+        .set({ ...barber, password: null })
+        .where(eq(barbers.id, id))
+        .returning();
+      if (!updated) return undefined;
+
+      await tx
+        .update(barberInvites)
+        .set({ usedAt: now })
+        .where(and(eq(barberInvites.barberId, id), isNull(barberInvites.usedAt)));
+      return updated;
+    });
   }
 
   async deleteBarber(id: number): Promise<"deleted" | "hidden"> {
@@ -1579,6 +1604,16 @@ export class MemoryStorage implements IStorage {
     }
     this.barbers[index] = { ...this.barbers[index], ...barber };
     return this.barbers[index];
+  }
+
+  async updateBarberAndRevokeAccess(
+    id: number,
+    barber: Partial<CreateBarberRequest>,
+  ): Promise<Barber | undefined> {
+    const updated = await this.updateBarber(id, { ...barber, password: null });
+    if (!updated) return undefined;
+    await this.invalidateBarberInvites(id);
+    return updated;
   }
 
   async deleteBarber(id: number): Promise<"deleted" | "hidden"> {
