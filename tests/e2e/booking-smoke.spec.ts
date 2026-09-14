@@ -631,6 +631,25 @@ test.describe("public booking flow", () => {
     await expectNoBrokenImages(page);
   });
 
+  test("only requests public appointments after reaching the date and time step", async ({ page }) => {
+    const appointmentRequests: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/appointments/public") {
+        appointmentRequests.push(request.url());
+      }
+    });
+
+    await page.goto("/booking");
+    await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(appointmentRequests).toEqual([]);
+
+    await page.goto("/book?barberId=1&serviceId=1");
+    await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
+    await expect.poll(() => appointmentRequests.length).toBeGreaterThan(0);
+    await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ }).first()).toBeVisible();
+  });
+
   test("automatically selects a date whose displayed slots are really available", async ({ page, request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),

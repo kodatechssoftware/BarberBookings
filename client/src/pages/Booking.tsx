@@ -335,7 +335,7 @@ export default function Booking() {
   const { data: existingAppointments, isLoading: loadingAppointments, isError: appointmentsError } = usePublicAppointments({
     barberId: selectedBarberId === 0 ? undefined : (selectedBarberId?.toString()), 
     date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, 'yyyy-MM-dd') : undefined,
-    enabled: Boolean(selectedDate && isPublicDateAllowed(selectedDate)),
+    enabled: step === 3 && selectedBarberId !== null && Boolean(selectedServiceId && selectedDate && isPublicDateAllowed(selectedDate)),
   });
 
   const bookingWindowStart = useMemo(
