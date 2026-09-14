@@ -441,7 +441,7 @@ test.describe("public booking flow", () => {
     await page.getByPlaceholder("912 345 678").fill("912695760");
     await page.getByPlaceholder("exemplo@email.com").fill("fluxo-ui@example.com");
     await expect(page.getByText(
-      "Este número será utilizado para comunicações relacionadas com a sua marcação.",
+      "Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.",
     )).toBeVisible();
     await expect(page.getByText(/O indicativo é adicionado automaticamente/)).toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
@@ -454,7 +454,7 @@ test.describe("public booking flow", () => {
     expect(appointment.whatsappOptInAt).toBeTruthy();
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
     await expect(page.getByText("A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.")).toBeVisible();
-    await expect(page.getByText("Se não receber a confirmação nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.")).toBeVisible();
+    await expect(page.getByText("Se não receber a confirmação por WhatsApp nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.")).toBeVisible();
 
     await page.goto(`/reschedule/${appointment.cancelToken}`);
     await expect(page.getByText(/Atual: .*16:00h/)).toBeVisible();
@@ -480,10 +480,10 @@ test.describe("public booking flow", () => {
     await page.goto(`/book?barberId=1&serviceId=1&date=${bookingDate}&time=15:30`);
 
     await expect(page.getByText(
-      "Utilizado para enviar confirmações e atualizações da marcação quando necessário.",
+      "Este email será utilizado como alternativa para receber confirmações e atualizações da marcação caso o envio por WhatsApp não seja possível.",
     )).toBeVisible();
     await expect(page.getByText(
-      "Este número será utilizado para comunicações relacionadas com a sua marcação.",
+      "Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.",
     )).toBeVisible();
     await expect(page.getByText(/O indicativo é adicionado automaticamente/)).toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
@@ -3149,8 +3149,8 @@ test.describe("booking rules", () => {
 
       const dialog = page.getByRole("dialog", { name: "Marcação manual" });
       await expect(dialog).toBeVisible();
-      await expect(dialog.getByText("Utilizado para enviar confirmações e atualizações da marcação quando necessário.")).toBeVisible();
-      await expect(dialog.getByText("Com um número válido, o cliente poderá receber comunicações relacionadas com a marcação.")).toBeVisible();
+      await expect(dialog.getByText("Este email será utilizado como alternativa para receber confirmações e atualizações da marcação caso o envio por WhatsApp não seja possível.")).toBeVisible();
+      await expect(dialog.getByText("Com um número válido, a confirmação e as atualizações serão enviadas por WhatsApp.")).toBeVisible();
       await expect(dialog.getByText("As marcações criadas manualmente são confirmadas por email. O WhatsApp só é utilizado quando existe consentimento do cliente.")).toHaveCount(0);
       await expect(dialog.getByRole("checkbox", { name: /WhatsApp/i })).toHaveCount(0);
       await expect(dialog.getByText("Telemóvel (opcional)")).toBeVisible();
