@@ -170,6 +170,23 @@ export type CancelAppointmentResult = RescheduleAppointmentResult;
 
 export type CreateMetaWebhookReceiptRequest = Omit<MetaWebhookReceipt, "id" | "createdAt">;
 
+export type ClaimMetaInboundAutoReplyRequest = {
+  receiptKey: string;
+  inboundMessageId: string;
+  senderKey: string;
+  messageType: string;
+  providerTimestamp: Date | null;
+  wabaId: string;
+  phoneNumberId: string;
+  windowStart: Date;
+};
+
+export type ClaimMetaInboundAutoReplyResult = {
+  claimed: boolean;
+  reason: "claimed" | "duplicate" | "rate_limited";
+  receipt?: MetaWebhookReceipt;
+};
+
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const appointmentConflictCode = "APPOINTMENT_CONFLICT";
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
@@ -397,6 +414,8 @@ export interface IStorage {
   createMetaWebhookReceipt(receipt: CreateMetaWebhookReceiptRequest): Promise<{ receipt: MetaWebhookReceipt; created: boolean }>;
   getMetaWebhookReceipts(providerMessageId: string): Promise<MetaWebhookReceipt[]>;
   reconcileMetaWebhookReceipts(providerMessageId: string, eventId: number): Promise<void>;
+  claimMetaInboundAutoReply(request: ClaimMetaInboundAutoReplyRequest): Promise<ClaimMetaInboundAutoReplyResult>;
+  completeMetaInboundAutoReply(receiptId: number, status: string, errorCode?: string | null): Promise<void>;
 
   // Verification
   createVerificationCode(phone: string, code: string): Promise<void>;
@@ -1411,6 +1430,44 @@ export class DatabaseStorage implements IStorage {
         eq(metaWebhookReceipts.providerMessageId, providerMessageId),
         isNull(metaWebhookReceipts.notificationEventId),
       ));
+  }
+
+  async claimMetaInboundAutoReply(request: ClaimMetaInboundAutoReplyRequest): Promise<ClaimMetaInboundAutoReplyResult> {
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('meta_inbound_auto_reply'), hashtext(${request.senderKey}))`);
+      const [duplicate] = await tx.select().from(metaWebhookReceipts)
+        .where(eq(metaWebhookReceipts.receiptKey, request.receiptKey)).limit(1);
+      if (duplicate) return { claimed: false, reason: "duplicate" as const };
+
+      const senderSummary = JSON.stringify({ senderKey: request.senderKey });
+      const [recent] = await tx.select({ id: metaWebhookReceipts.id }).from(metaWebhookReceipts)
+        .where(and(
+          eq(metaWebhookReceipts.payloadSummary, senderSummary),
+          gte(metaWebhookReceipts.createdAt, request.windowStart),
+          sql`(${metaWebhookReceipts.status} LIKE 'inbound_auto_reply_claimed:%' OR ${metaWebhookReceipts.status} LIKE 'inbound_auto_reply_sent:%' OR ${metaWebhookReceipts.status} LIKE 'inbound_auto_reply_unknown:%')`,
+        )).limit(1);
+      if (recent) return { claimed: false, reason: "rate_limited" as const };
+
+      const [receipt] = await tx.insert(metaWebhookReceipts).values({
+        receiptKey: request.receiptKey,
+        providerMessageId: request.inboundMessageId,
+        status: `inbound_auto_reply_claimed:${request.messageType}`,
+        providerTimestamp: request.providerTimestamp,
+        errorCode: null,
+        wabaId: request.wabaId,
+        phoneNumberId: request.phoneNumberId,
+        notificationEventId: null,
+        payloadSummary: senderSummary,
+      }).onConflictDoNothing({ target: metaWebhookReceipts.receiptKey }).returning();
+      return receipt
+        ? { claimed: true, reason: "claimed" as const, receipt }
+        : { claimed: false, reason: "duplicate" as const };
+    });
+  }
+
+  async completeMetaInboundAutoReply(receiptId: number, status: string, errorCode?: string | null): Promise<void> {
+    await db.update(metaWebhookReceipts).set({ status, errorCode: errorCode ?? null })
+      .where(eq(metaWebhookReceipts.id, receiptId));
   }
 
   async getWhatsappMessage(id: number): Promise<WhatsappMessage | undefined> {
@@ -2456,6 +2513,35 @@ export class MemoryStorage implements IStorage {
       if (receipt.providerMessageId === providerMessageId && receipt.notificationEventId === null) {
         receipt.notificationEventId = eventId;
       }
+    }
+  }
+
+  async claimMetaInboundAutoReply(request: ClaimMetaInboundAutoReplyRequest): Promise<ClaimMetaInboundAutoReplyResult> {
+    const duplicate = this.metaWebhookReceipts.find((item) => item.receiptKey === request.receiptKey);
+    if (duplicate) return { claimed: false, reason: "duplicate" };
+    const senderSummary = JSON.stringify({ senderKey: request.senderKey });
+    const recent = this.metaWebhookReceipts.find((item) => item.payloadSummary === senderSummary
+      && item.createdAt >= request.windowStart
+      && (item.status.startsWith("inbound_auto_reply_claimed:")
+        || item.status.startsWith("inbound_auto_reply_sent:")
+        || item.status.startsWith("inbound_auto_reply_unknown:")));
+    if (recent) return { claimed: false, reason: "rate_limited" };
+    const receipt: MetaWebhookReceipt = {
+      id: this.nextIds.metaWebhookReceipt++, receiptKey: request.receiptKey,
+      providerMessageId: request.inboundMessageId, status: `inbound_auto_reply_claimed:${request.messageType}`,
+      providerTimestamp: request.providerTimestamp, errorCode: null, wabaId: request.wabaId,
+      phoneNumberId: request.phoneNumberId, notificationEventId: null,
+      payloadSummary: senderSummary, createdAt: new Date(),
+    };
+    this.metaWebhookReceipts.push(receipt);
+    return { claimed: true, reason: "claimed", receipt };
+  }
+
+  async completeMetaInboundAutoReply(receiptId: number, status: string, errorCode?: string | null): Promise<void> {
+    const receipt = this.metaWebhookReceipts.find((item) => item.id === receiptId);
+    if (receipt) {
+      receipt.status = status;
+      receipt.errorCode = errorCode ?? null;
     }
   }
 

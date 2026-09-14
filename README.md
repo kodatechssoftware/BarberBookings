@@ -207,6 +207,7 @@ O webhook fica desligado por defeito. Para o ativar apenas em DEV, definir no ge
 
 ```env
 META_WHATSAPP_WEBHOOK_ENABLED=true
+META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED=false
 META_WHATSAPP_WEBHOOK_VERIFY_TOKEN=
 META_WHATSAPP_APP_SECRET=
 NOTIFICATION_OUTBOX_POLL_INTERVAL_MS=5000
@@ -215,6 +216,13 @@ NOTIFICATION_OUTBOX_POLL_INTERVAL_MS=5000
 Callback: `https://barberbookings-dev.onrender.com/api/webhooks/whatsapp/meta`. O GET valida o
 verify token e o POST valida `X-Hub-Signature-256` sobre o raw body. Estados `sent`, `delivered`,
 `read` e `failed` sao persistidos; nesta fase um `failed` por webhook nao envia email tardio.
+
+A resposta informativa a mensagens WhatsApp recebidas tem uma flag independente e permanece
+desligada por defeito. Quando `META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED=true`, mensagens reais do
+cliente podem receber no maximo uma resposta automatica por numero em cada periodo de 24 horas.
+Reacoes, estados de entrega e eventos tecnicos sao ignorados. Apenas o identificador da mensagem,
+um hash do numero, o tipo e timestamps tecnicos sao persistidos; o conteudo recebido nao e guardado.
+Em Development, `META_WHATSAPP_DEV_ALLOWLIST` continua obrigatoria e limita os destinatarios.
 
 ## Mensagens automaticas
 
