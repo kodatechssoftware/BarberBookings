@@ -61,6 +61,7 @@ import { supportedPhonesMatch } from "@shared/phone-countries";
 export type AppointmentNotificationEventType =
   | "appointment_confirmation"
   | "appointment_rescheduled"
+  | "appointment_updated"
   | "appointment_cancelled"
   | "appointment_recurring_confirmation";
 
@@ -167,6 +168,11 @@ export type RescheduleAppointmentResult = {
 };
 
 export type CancelAppointmentResult = RescheduleAppointmentResult;
+
+export type UpdateAppointmentWithNotificationResult = {
+  appointment: Appointment;
+  notificationEvent: AppointmentNotificationEvent | null;
+};
 
 export type CreateMetaWebhookReceiptRequest = Omit<MetaWebhookReceipt, "id" | "createdAt">;
 
@@ -283,6 +289,52 @@ function shouldProtectAppointment(status?: string | null) {
   return (status || "booked") === "booked";
 }
 
+function appointmentValuesEqual(left: unknown, right: unknown) {
+  if (left instanceof Date || right instanceof Date) {
+    return new Date(left as Date | string).getTime() === new Date(right as Date | string).getTime();
+  }
+  return left === right;
+}
+
+function getAppointmentUpdateChanges(
+  current: Appointment,
+  patch: Partial<Omit<Appointment, "id">>,
+) {
+  const candidate = { ...current, ...patch };
+  const changedFields = Object.keys(patch).filter((key) =>
+    key !== "notificationRevision"
+    && !appointmentValuesEqual(current[key as keyof Appointment], candidate[key as keyof Appointment]));
+  const startChanged = !appointmentValuesEqual(current.startTime, candidate.startTime);
+  const barberChanged = current.barberId !== candidate.barberId;
+  const serviceChanged = current.serviceId !== candidate.serviceId;
+  const contactChanged = current.customerName !== candidate.customerName
+    || current.customerEmail !== candidate.customerEmail
+    || current.customerPhone !== candidate.customerPhone;
+  const deliveryPreferenceChanged = current.whatsappOptIn !== candidate.whatsappOptIn
+    || !appointmentValuesEqual(current.whatsappOptInAt, candidate.whatsappOptInAt);
+  const statusChanged = current.status !== candidate.status;
+  let notificationEventType: AppointmentNotificationEventType | null = null;
+  if (current.status === "booked" && statusChanged
+    && (candidate.status === "cancelled" || candidate.status === "late_cancelled")) {
+    notificationEventType = "appointment_cancelled";
+  } else if (current.status === "booked" && candidate.status === "booked" && startChanged) {
+    notificationEventType = "appointment_rescheduled";
+  } else if (current.status === "booked" && candidate.status === "booked" && (barberChanged || serviceChanged)) {
+    notificationEventType = "appointment_updated";
+  }
+  return {
+    candidate,
+    changedFields,
+    startChanged,
+    barberChanged,
+    serviceChanged,
+    contactChanged,
+    deliveryPreferenceChanged,
+    statusChanged,
+    notificationEventType,
+  };
+}
+
 export interface IStorage {
   // Barbers
   getBarbers(): Promise<Barber[]>;
@@ -315,6 +367,12 @@ export interface IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     expectedStatus?: AppointmentStatus,
   ): Promise<Appointment | undefined>;
+  updateAppointmentWithNotification(
+    id: number,
+    appointment: Partial<Omit<Appointment, "id">>,
+    createNotificationEvent: boolean,
+    expectedStatus?: AppointmentStatus,
+  ): Promise<UpdateAppointmentWithNotificationResult | undefined>;
   rescheduleAppointment(
     id: number,
     expectedRevision: number,
@@ -764,6 +822,82 @@ export class DatabaseStorage implements IStorage {
       if (isAppointmentConflictError(error)) {
         throw new AppointmentConflictError();
       }
+      throw error;
+    }
+  }
+
+  async updateAppointmentWithNotification(
+    id: number,
+    appointment: Partial<Omit<Appointment, "id">>,
+    createNotificationEvent: boolean,
+    expectedStatus?: AppointmentStatus,
+  ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
+    try {
+      return await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(-2, ${id})`);
+        const appointmentConditions = [eq(appointments.id, id)];
+        if (expectedStatus) appointmentConditions.push(eq(appointments.status, expectedStatus));
+        const [current] = await tx.select().from(appointments)
+          .where(and(...appointmentConditions)).limit(1);
+        if (!current) return undefined;
+
+        const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
+        const changes = getAppointmentUpdateChanges(current, safePatch);
+        if (changes.changedFields.length === 0) {
+          return { appointment: current, notificationEvent: null };
+        }
+
+        if (shouldProtectAppointment(changes.candidate.status)) {
+          await this.lockAppointmentDay(tx, changes.candidate.barberId, changes.candidate.startTime);
+          await this.assertNoAppointmentConflict(tx, changes.candidate, id);
+        }
+
+        const notificationContextChanged = changes.startChanged || changes.barberChanged
+          || changes.serviceChanged || changes.contactChanged || changes.deliveryPreferenceChanged
+          || changes.statusChanged;
+        const nextRevision = notificationContextChanged
+          ? current.notificationRevision + 1
+          : current.notificationRevision;
+        const [updated] = await tx.update(appointments).set({
+          ...safePatch,
+          notificationRevision: nextRevision,
+        }).where(and(...appointmentConditions)).returning();
+        if (!updated) return undefined;
+
+        if (current.seriesId && notificationContextChanged) {
+          await tx.update(appointmentSeries).set({
+            notificationRevision: sql`${appointmentSeries.notificationRevision} + 1`,
+            updatedAt: new Date(),
+          }).where(eq(appointmentSeries.id, current.seriesId));
+        }
+
+        if (!createNotificationEvent || !changes.notificationEventType) {
+          return { appointment: updated, notificationEvent: null };
+        }
+        const eventLabel = changes.notificationEventType === "appointment_rescheduled"
+          ? "rescheduled"
+          : changes.notificationEventType === "appointment_updated"
+            ? "updated"
+            : "cancelled";
+        const eventStartTime = toAppointmentDate(updated.startTime);
+        const [notificationEvent] = await tx.insert(appointmentNotificationEvents).values({
+          appointmentId: id,
+          eventType: changes.notificationEventType,
+          eventRevision: nextRevision,
+          eventKey: `appointment:${id}:${eventLabel}:${nextRevision}`,
+          appointmentStartTime: eventStartTime,
+          previousStartTime: changes.notificationEventType === "appointment_rescheduled"
+            || changes.notificationEventType === "appointment_cancelled"
+            ? toAppointmentDate(current.startTime)
+            : null,
+          newStartTime: changes.notificationEventType === "appointment_rescheduled"
+            ? eventStartTime
+            : null,
+        }).returning();
+        return { appointment: updated, notificationEvent };
+      });
+    } catch (error) {
+      if (isAppointmentConflictError(error)) throw new AppointmentConflictError();
       throw error;
     }
   }
@@ -1946,6 +2080,65 @@ export class MemoryStorage implements IStorage {
       if (series) { series.notificationRevision += 1; series.updatedAt = new Date(); }
     }
     return this.appointments[index];
+  }
+
+  async updateAppointmentWithNotification(
+    id: number,
+    appointment: Partial<Omit<Appointment, "id">>,
+    createNotificationEvent: boolean,
+    expectedStatus?: AppointmentStatus,
+  ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
+    const index = this.appointments.findIndex((item) => item.id === id);
+    if (index === -1) return undefined;
+    const current = this.appointments[index];
+    if (expectedStatus && current.status !== expectedStatus) return undefined;
+    const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
+    const changes = getAppointmentUpdateChanges(current, safePatch);
+    if (changes.changedFields.length === 0) {
+      return { appointment: current, notificationEvent: null };
+    }
+    this.assertNoAppointmentConflict(changes.candidate, id);
+    const notificationContextChanged = changes.startChanged || changes.barberChanged
+      || changes.serviceChanged || changes.contactChanged || changes.deliveryPreferenceChanged
+      || changes.statusChanged;
+    const updated: Appointment = {
+      ...changes.candidate,
+      notificationRevision: notificationContextChanged
+        ? current.notificationRevision + 1
+        : current.notificationRevision,
+    };
+    this.appointments[index] = updated;
+    if (current.seriesId && notificationContextChanged) {
+      const series = this.appointmentSeries.find((item) => item.id === current.seriesId);
+      if (series) { series.notificationRevision += 1; series.updatedAt = new Date(); }
+    }
+    if (!createNotificationEvent || !changes.notificationEventType) {
+      return { appointment: updated, notificationEvent: null };
+    }
+    const now = new Date();
+    const eventLabel = changes.notificationEventType === "appointment_rescheduled"
+      ? "rescheduled"
+      : changes.notificationEventType === "appointment_updated" ? "updated" : "cancelled";
+    const notificationEvent: AppointmentNotificationEvent = {
+      id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
+      eventType: changes.notificationEventType, eventRevision: updated.notificationRevision,
+      eventKey: `appointment:${id}:${eventLabel}:${updated.notificationRevision}`,
+      appointmentStartTime: toAppointmentDate(updated.startTime),
+      previousStartTime: changes.notificationEventType === "appointment_rescheduled"
+        || changes.notificationEventType === "appointment_cancelled"
+        ? toAppointmentDate(current.startTime) : null,
+      newStartTime: changes.notificationEventType === "appointment_rescheduled"
+        ? toAppointmentDate(updated.startTime) : null,
+      provider: null, templateName: null, whatsappStatus: "pending", providerMessageId: null,
+      providerStatus: null, responseStatus: null, errorCode: null, processingStartedAt: null,
+      processingCompletedAt: null, whatsappAttemptedAt: null, whatsappAcceptedAt: null,
+      sentAt: null, deliveredAt: null, readAt: null, failedAt: null, lastProviderTimestamp: null,
+      webhookFallbackClaimedAt: null, payloadSnapshot: null, emailStatus: "not_needed",
+      emailProviderMessageId: null, emailErrorCode: null, emailAttemptedAt: null,
+      emailSentAt: null, createdAt: now, updatedAt: now,
+    };
+    this.appointmentNotificationEvents.push(notificationEvent);
+    return { appointment: updated, notificationEvent };
   }
 
   async rescheduleAppointment(

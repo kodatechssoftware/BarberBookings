@@ -122,6 +122,9 @@ META_WHATSAPP_CONFIRMATION_TEMPLATE=appointment_confirmation_v1
 META_WHATSAPP_CONFIRMATION_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_RESCHEDULED_TEMPLATE=appointment_rescheduled_v1
 META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE=pt_PT
+# Sem default em Development; definir apenas depois de o template estar aprovado na WABA desse ambiente.
+META_WHATSAPP_UPDATED_TEMPLATE=
+META_WHATSAPP_UPDATED_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_CANCELLED_TEMPLATE=appointment_cancelled_v1
 META_WHATSAPP_CANCELLED_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE=appointment_recurring_confirmation_v1
@@ -129,14 +132,16 @@ META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE_LANGUAGE=pt_PT
 META_WHATSAPP_DEV_ALLOWLIST=3519XXXXXXXX
 ```
 
-Os quatro nomes acima sao os defaults de Development. Num deployment identificado por
+Os quatro templates existentes acima mantêm os defaults de Development. O template de atualização
+fica deliberadamente sem default enquanto não estiver aprovado. Num deployment identificado por
 `NODE_ENV=production` e `APP_ENV=production`, nao existe fallback para estes nomes: antes de uma
-ativacao futura do WhatsApp, os quatro templates de Production terao de ser definidos
+ativacao futura do WhatsApp, os cinco templates de Production terao de ser definidos
 explicitamente:
 
 ```env
 META_WHATSAPP_CONFIRMATION_TEMPLATE=appointment_confirmation_prod_v1
 META_WHATSAPP_RESCHEDULED_TEMPLATE=appointment_rescheduled_prod_v2
+META_WHATSAPP_UPDATED_TEMPLATE=appointment_updated_prod_v1
 META_WHATSAPP_CANCELLED_TEMPLATE=appointment_cancelled_prod_v2
 META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE=appointment_recurring_confirmation_prod_v1
 ```

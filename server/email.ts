@@ -56,6 +56,8 @@ interface SendRescheduleParams {
   idempotencyKey?: string;
 }
 
+export interface SendUpdatedParams extends SendRescheduleParams {}
+
 export interface SendRecurringConfirmationParams {
   customerName: string;
   customerEmail: string;
@@ -342,6 +344,73 @@ export async function sendBookingRescheduled({
     return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
   } catch (error) {
     console.error("Error sending reschedule email:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
+  }
+}
+
+export function buildBookingUpdatedEmail({
+  customerName,
+  barberName,
+  serviceName,
+  startTime,
+  cancelToken,
+  durationMinutes = 30,
+  locationName = shopName,
+  locationAddress = shopAddress,
+  locationTimeZone = shopTimeZone,
+}: Omit<SendUpdatedParams, "customerEmail" | "idempotencyKey">) {
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
+  const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
+  const googleCalendarUrl = buildGoogleCalendarUrl({
+    locationName, locationAddress, serviceName, barberName, startTime, durationMinutes,
+  });
+  return {
+    subject: `Marcação atualizada - ${locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
+        <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+        <p>A sua marcação foi atualizada.</p>
+        <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
+          <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
+          <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
+          <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
+          <p style="margin: 6px 0;"><strong>Localização:</strong> ${escapeHtml(locationName)}</p>
+          <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
+        </div>
+        <p style="font-size: 0.92em; color: #555;">Caso não consiga comparecer, pode reagendar ou cancelar a sua marcação.</p>
+        <p style="text-align: center; margin-top: 20px;">
+          <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
+          <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
+          <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
+        </p>
+      </div>
+    `,
+  };
+}
+
+export async function sendBookingUpdated(params: SendUpdatedParams): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; appointment update email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+  const content = buildBookingUpdatedEmail(params);
+  try {
+    const response = await resend.emails.send({
+      from: emailFrom,
+      to: params.customerEmail,
+      subject: content.subject,
+      html: content.html,
+    }, params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined);
+    if (response.error) {
+      console.error("Resend error while sending appointment update:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
+    }
+    if (!isProduction) console.log("Appointment update email sent.");
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
+  } catch (error) {
+    console.error("Error sending appointment update email:", error instanceof Error ? error.name : "UnknownError");
     return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
   }
 }

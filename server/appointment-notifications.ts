@@ -3,6 +3,7 @@ import {
   sendBookingCancellationConfirmation,
   sendBookingConfirmation,
   sendBookingRescheduled,
+  sendBookingUpdated,
   sendRecurringBookingConfirmation,
   type EmailDeliveryResult,
 } from "./email";
@@ -40,6 +41,7 @@ export type AppointmentNotificationDependencies = {
   sendWhatsApp: (params: MetaAppointmentTemplateParams) => Promise<MetaTemplateDeliveryResult>;
   sendConfirmationEmail: typeof sendBookingConfirmation;
   sendRescheduleEmail: typeof sendBookingRescheduled;
+  sendUpdatedEmail: typeof sendBookingUpdated;
   sendCancellationEmail: typeof sendBookingCancellationConfirmation;
   sendRecurringConfirmationEmail: typeof sendRecurringBookingConfirmation;
   processingEnabled: boolean;
@@ -54,6 +56,7 @@ export const defaultDependencies: AppointmentNotificationDependencies = {
   sendWhatsApp: sendMetaTemplate,
   sendConfirmationEmail: sendBookingConfirmation,
   sendRescheduleEmail: sendBookingRescheduled,
+  sendUpdatedEmail: sendBookingUpdated,
   sendCancellationEmail: sendBookingCancellationConfirmation,
   sendRecurringConfirmationEmail: sendRecurringBookingConfirmation,
   processingEnabled: appointmentNotificationWorkerEnabled,
@@ -63,7 +66,7 @@ export const defaultDependencies: AppointmentNotificationDependencies = {
 };
 
 function eventType(value: string): EventType | null {
-  return ["appointment_confirmation", "appointment_rescheduled", "appointment_cancelled"].includes(value)
+  return ["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_cancelled"].includes(value)
     ? value as EventType : null;
 }
 
@@ -145,6 +148,9 @@ async function emailFallback(
         depositRequired: appointment.depositRequired, depositReason: appointment.depositReason });
     } else if (event.eventType === "appointment_rescheduled") {
       result = await deps.sendRescheduleEmail({ ...common, cancelToken: appointment.cancelToken,
+        durationMinutes: appointment.durationMinutes, locationAddress: details.locationAddress });
+    } else if (event.eventType === "appointment_updated") {
+      result = await deps.sendUpdatedEmail({ ...common, cancelToken: appointment.cancelToken,
         durationMinutes: appointment.durationMinutes, locationAddress: details.locationAddress });
     } else {
       result = await deps.sendCancellationEmail({ ...common, lateCancellation: appointment.status === "late_cancelled",

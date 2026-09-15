@@ -410,7 +410,7 @@ export async function sendMetaInboundAutoReply(recipient: string): Promise<MetaT
 
 export type MetaAppointmentTemplateParams = {
   recipient: string;
-  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_cancelled" | "appointment_recurring_confirmation";
+  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_updated" | "appointment_cancelled" | "appointment_recurring_confirmation";
   customerName: string;
   locationName: string;
   serviceName: string;
@@ -434,6 +434,11 @@ const metaTemplateConfig = {
     nameEnv: "META_WHATSAPP_RESCHEDULED_TEMPLATE",
     languageEnv: "META_WHATSAPP_RESCHEDULED_TEMPLATE_LANGUAGE",
     defaultName: "appointment_rescheduled_v1",
+  },
+  appointment_updated: {
+    nameEnv: "META_WHATSAPP_UPDATED_TEMPLATE",
+    languageEnv: "META_WHATSAPP_UPDATED_TEMPLATE_LANGUAGE",
+    defaultName: null,
   },
   appointment_cancelled: {
     nameEnv: "META_WHATSAPP_CANCELLED_TEMPLATE",
@@ -479,7 +484,7 @@ export function buildMetaAppointmentTemplateComponents(params: MetaAppointmentTe
         date, time, params.address || ""];
   return [
     { type: "body", parameters: bodyValues.map((text) => ({ type: "text", text })) },
-    ...(["appointment_confirmation", "appointment_rescheduled"].includes(params.eventType) ? [{
+    ...(["appointment_confirmation", "appointment_rescheduled", "appointment_updated"].includes(params.eventType) ? [{
       type: "button", sub_type: "url", index: "0",
       parameters: [{ type: "text", text: params.managementToken || "" }],
     }, {

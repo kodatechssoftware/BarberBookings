@@ -75,6 +75,7 @@ export function validateRuntimeConfiguration() {
     const templateEnvironmentNames = [
       "META_WHATSAPP_CONFIRMATION_TEMPLATE",
       "META_WHATSAPP_RESCHEDULED_TEMPLATE",
+      "META_WHATSAPP_UPDATED_TEMPLATE",
       "META_WHATSAPP_CANCELLED_TEMPLATE",
       "META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE",
     ];
