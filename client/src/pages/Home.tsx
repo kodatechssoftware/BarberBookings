@@ -189,7 +189,15 @@ export default function Home() {
     ].filter((group) => group.services.length > 0);
   }, [visibleServices]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
-  const { data: shopHours } = useShopAvailability({ locationId: selectedLocation.id || undefined });
+  const {
+    data: shopHours,
+    isLoading: isLoadingShopHours,
+    isFetching: isFetchingShopHours,
+    isError: isShopHoursError,
+  } = useShopAvailability({ locationId: selectedLocation.id || undefined });
+  // [] is valid availability data. A background refetch must not hide a known status.
+  const showOpeningSkeleton = shopHours === undefined && (isLoadingShopHours || isFetchingShopHours);
+  const showOpeningFallback = shopHours === undefined && isShopHoursError;
   const openingStatus = getTodayOpeningStatus(shopHours, selectedLocation.timezone);
   const warmBookingFlow = useCallback(() => {
     void preloadBookingPage();
@@ -303,12 +311,25 @@ export default function Home() {
               </Button>
             </div>
 
-            <div className="mt-6 w-full rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm sm:max-w-sm">
+            <div
+              data-testid="home-opening-card"
+              aria-busy={showOpeningSkeleton}
+              className="mt-6 w-full rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm sm:max-w-sm"
+            >
               <div className="flex items-start gap-3">
                 <Clock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <div className="min-w-0">
-                  <p className="font-bold text-white">{openingStatus.title}</p>
-                  <p className="mt-1 text-sm text-gray-400">{openingStatus.detail}</p>
+                <div className="min-w-0 min-h-[4.25rem] flex-1">
+                  {showOpeningSkeleton ? (
+                    <div data-testid="home-opening-skeleton" role="status" aria-label="A carregar horários" className="space-y-2 pt-0.5">
+                      <span className="block h-5 w-4/5 animate-pulse rounded bg-white/15" aria-hidden="true" />
+                      <span className="block h-4 w-11/12 animate-pulse rounded bg-white/10" aria-hidden="true" />
+                    </div>
+                  ) : (
+                    <>
+                      <p className="font-bold text-white">{showOpeningFallback ? "Consulte os horários" : openingStatus.title}</p>
+                      <p className="mt-1 text-sm text-gray-400">{showOpeningFallback ? "Atendimento por hora marcada." : openingStatus.detail}</p>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
