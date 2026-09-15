@@ -37,6 +37,7 @@ import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialo
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { LocationsTab } from "@/components/admin/LocationsTab";
 import { AssociateBarberDialog } from "@/components/admin/AssociateBarberDialog";
+import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
@@ -2905,7 +2906,7 @@ export default function Admin() {
           </div>
           {multiLocationConfig?.enabled && availableLocations.length > 0 && (
             <div className="w-full lg:w-80">
-              <Label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-500">Loja em gestão</Label>
+              <Label htmlFor="managed-location" className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-500">Loja em gestão</Label>
               <Select
                 value={String(activeLocation?.id ?? "")}
                 onValueChange={(value) => {
@@ -2915,12 +2916,15 @@ export default function Admin() {
                   void queryClient.invalidateQueries();
                 }}
               >
-                <SelectTrigger className="border-white/10 bg-card text-white">
+                <SelectTrigger id="managed-location" className="border-white/10 bg-card text-white">
                   <SelectValue placeholder="Selecionar localização" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent
+                  className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)] border-white/10 bg-card text-white"
+                  collisionPadding={16}
+                >
                   {availableLocations.map((location) => (
-                    <SelectItem key={location.id} value={String(location.id)}>
+                    <SelectItem key={location.id} value={String(location.id)} className="whitespace-normal break-words [&>span:last-child]:min-w-0">
                       {location.name}{location.isActive ? "" : " (rascunho)"}
                     </SelectItem>
                   ))}
@@ -3621,6 +3625,13 @@ export default function Admin() {
                     <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
                       {getCompensationSummary(barber)}
                     </p>
+                    {multiLocationConfig?.enabled && activeLocation && (
+                      <BarberLocationScheduleDialog
+                        key={`${activeLocation.id}:${barber.id}`}
+                        barber={barber}
+                        location={activeLocation}
+                      />
+                    )}
                     <div className="flex flex-wrap gap-2">
                       <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => setEditingBarberId(open ? barber.id : null)}>
                         <DialogTrigger asChild>

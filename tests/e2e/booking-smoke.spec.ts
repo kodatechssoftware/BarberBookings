@@ -920,6 +920,10 @@ test.describe("public booking flow", () => {
 
 test.describe("admin navigation", () => {
   test("advances to the admin panel from the login response", async ({ page }) => {
+    const perBarberScheduleRequests: string[] = [];
+    page.on("request", (request) => {
+      if (/\/api\/barbers\/\d+\/availability$/.test(new URL(request.url()).pathname)) perBarberScheduleRequests.push(request.url());
+    });
     await page.route("**/api/admin/me", async (route) => {
       await route.fulfill({
         status: 200,
@@ -936,6 +940,11 @@ test.describe("admin navigation", () => {
     await expect(page.getByText("Login efetuado com sucesso", { exact: true })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
     await expect(page.getByText("Acesso para Administradores e Barbeiros")).not.toBeVisible();
+    await expect(page.getByLabel("Loja em gestão")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Localizações", exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Equipa", exact: true }).click();
+    await expect(page.getByRole("button", { name: /Horário de .* nesta loja/ })).toHaveCount(0);
+    expect(perBarberScheduleRequests).toEqual([]);
   });
 
   test("returns to login when the active admin session expires", async ({ page }) => {
