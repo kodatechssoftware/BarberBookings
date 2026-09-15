@@ -95,7 +95,12 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState("");
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const [mapFrame, setMapFrame] = useState({ key: "", src: "", loaded: false });
-  const { data: services, isLoading: isLoadingServices } = useServices();
+  const {
+    data: services,
+    isLoading: isLoadingServices,
+    isFetching: isFetchingServices,
+    isError: isServicesError,
+  } = useServices();
   const { data: barbers, isLoading: isLoadingBarbers } = useBarbers();
   const { data: locations } = useLocations();
   const activeLocationId = useActiveLocationId();
@@ -164,6 +169,9 @@ export default function Home() {
   }, [locations, publicLocations, selectedLocationId]);
 
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
+  // [] is a valid response. Keep usable services visible during background refetches.
+  const showServicesSkeleton = services === undefined && (isLoadingServices || isFetchingServices);
+  const showServicesFallback = services === undefined && isServicesError;
   const serviceGroups = useMemo(() => {
     if (shopBranding.theme !== "barber-pole") {
       return [{ label: "", services: visibleServices }];
@@ -337,7 +345,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="services" className="scroll-mt-20 border-b border-white/5 bg-white/[0.02] py-14 md:py-20">
+      <section id="services" aria-busy={showServicesSkeleton} className="scroll-mt-20 border-b border-white/5 bg-white/[0.02] py-14 md:py-20">
         <div className="container mx-auto px-4">
           <div className="mb-8 max-w-2xl">
             <div className="max-w-2xl">
@@ -346,12 +354,27 @@ export default function Home() {
             </div>
           </div>
 
-          {isLoadingServices ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          {showServicesSkeleton ? (
+            <div data-testid="home-services-skeleton" role="status" aria-label="A carregar serviços" className="grid grid-cols-1 gap-3 md:grid-cols-3">
               {Array.from({ length: 3 }, (_, index) => (
-                <div key={index} className="h-36 animate-pulse rounded-lg border border-white/10 bg-card" />
+                <div key={index} data-testid="home-service-skeleton-card" aria-hidden="true" className="flex h-52 animate-pulse flex-col rounded-lg border border-white/10 bg-card p-5 md:h-36">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <span className="h-10 w-10 shrink-0 rounded-md bg-white/10" />
+                      <div className="space-y-2 pt-1">
+                        <span className="block h-4 w-24 rounded bg-white/15" />
+                        <span className="block h-3 w-32 rounded bg-white/10" />
+                        <span className="block h-3 w-24 rounded bg-white/10 md:hidden" />
+                      </div>
+                    </div>
+                    <span className="h-6 w-12 shrink-0 rounded bg-white/15" />
+                  </div>
+                  <span className="mt-auto h-3 w-14 rounded bg-white/10" />
+                </div>
               ))}
             </div>
+          ) : showServicesFallback ? (
+            <p className="text-sm text-gray-400">Não foi possível carregar os serviços neste momento.</p>
           ) : (
             <div className="space-y-9">
               {serviceGroups.map((group) => (
