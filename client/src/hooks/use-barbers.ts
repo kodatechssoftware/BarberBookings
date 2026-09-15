@@ -53,9 +53,10 @@ export function useBarberAvailability(options?: { locationId?: number; enabled?:
   });
 }
 
-export function useShopAvailability(options?: { locationId?: number; enabled?: boolean }) {
+export function useShopAvailability(options?: { locationId?: number | null; enabled?: boolean }) {
   const activeLocationId = useActiveLocationId();
-  const locationId = options?.locationId ?? activeLocationId;
+  // Explicit null selects the default location, even when another location is stored.
+  const locationId = options?.locationId === null ? null : (options?.locationId ?? activeLocationId);
   return useQuery({
     queryKey: ["/api/shop/availability", { locationId }],
     enabled: options?.enabled ?? true,

@@ -202,7 +202,7 @@ export default function Home() {
     isLoading: isLoadingShopHours,
     isFetching: isFetchingShopHours,
     isError: isShopHoursError,
-  } = useShopAvailability({ locationId: selectedLocation.id || undefined });
+  } = useShopAvailability({ locationId: activeLocationId });
   // [] is valid availability data. A background refetch must not hide a known status.
   const showOpeningSkeleton = shopHours === undefined && (isLoadingShopHours || isFetchingShopHours);
   const showOpeningFallback = shopHours === undefined && isShopHoursError;
@@ -357,7 +357,7 @@ export default function Home() {
           {showServicesSkeleton ? (
             <div data-testid="home-services-skeleton" role="status" aria-label="A carregar serviços" className="grid grid-cols-1 gap-3 md:grid-cols-3">
               {Array.from({ length: 3 }, (_, index) => (
-                <div key={index} data-testid="home-service-skeleton-card" aria-hidden="true" className="flex h-52 animate-pulse flex-col rounded-lg border border-white/10 bg-card p-5 md:h-36">
+                <div key={index} data-testid="home-service-skeleton-card" aria-hidden="true" className="flex h-56 animate-pulse flex-col rounded-lg border border-white/10 bg-card p-5 md:h-36">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3">
                       <span className="h-10 w-10 shrink-0 rounded-md bg-white/10" />

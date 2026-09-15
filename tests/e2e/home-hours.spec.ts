@@ -85,6 +85,95 @@ test("an empty response on a weekday still uses the legacy default hours", async
   await expect(skeleton(page)).toHaveCount(0);
 });
 
+test("default opening hours remain visible without a second request when locations resolve", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-15T10:00:00+01:00"));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let requests = 0;
+  await page.route("**/api/locations", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.route("**/api/shop/availability", async (route) => {
+    requests += 1;
+    expect(route.request().headers()["x-location-id"]).toBeFalsy();
+    await route.fulfill({ json: openTuesday });
+  });
+  try {
+    const locationsLoaded = page.waitForResponse((response) => response.url().endsWith("/api/locations") && response.ok());
+    await page.goto("/");
+    await expect(card(page).getByText("Aberto hoje até às 20h")).toBeVisible();
+    expect(requests).toBe(1);
+    release();
+    await locationsLoaded;
+    await expect(card(page).getByText("Aberto hoje até às 20h")).toBeVisible();
+    await expect(skeleton(page)).toHaveCount(0);
+    expect(requests).toBe(1);
+  } finally {
+    release();
+  }
+});
+
+test("an explicitly selected default location also avoids an extra opening-hours request", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-15T10:00:00+01:00"));
+  await page.addInitScript(() => localStorage.setItem("barberbookings:location-id", "1"));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let requests = 0;
+  await page.route("**/api/locations", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.route("**/api/shop/availability", async (route) => {
+    requests += 1;
+    expect(route.request().headers()["x-location-id"]).toBe("1");
+    await route.fulfill({ json: openTuesday });
+  });
+  try {
+    const locationsLoaded = page.waitForResponse((response) => response.url().endsWith("/api/locations") && response.ok());
+    await page.goto("/");
+    await expect(card(page).getByText("Aberto hoje até às 20h")).toBeVisible();
+    expect(requests).toBe(1);
+    release();
+    await locationsLoaded;
+    await expect(card(page).getByText("Aberto hoje até às 20h")).toBeVisible();
+    expect(requests).toBe(1);
+  } finally {
+    release();
+  }
+});
+
+test("a previously selected non-default location keeps the same opening-hours request through mount", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-15T10:00:00+01:00"));
+  await page.addInitScript(() => localStorage.setItem("barberbookings:location-id", "2"));
+  const [defaultLocation] = await (await page.request.get("/api/locations")).json();
+  const selectedLocation = { ...defaultLocation, id: 2, name: "Outra loja", slug: "outra", isDefault: false };
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let requests = 0;
+  await page.route("**/api/locations", async (route) => {
+    await gate;
+    await route.fulfill({ json: [defaultLocation, selectedLocation] });
+  });
+  await page.route("**/api/shop/availability", async (route) => {
+    requests += 1;
+    expect(route.request().headers()["x-location-id"]).toBe("2");
+    await route.fulfill({ json: openTuesday });
+  });
+  try {
+    const locationsLoaded = page.waitForResponse((response) => response.url().endsWith("/api/locations") && response.ok());
+    await page.goto("/");
+    await expect(card(page).getByText("Aberto hoje até às 20h")).toBeVisible();
+    expect(requests).toBe(1);
+    release();
+    await locationsLoaded;
+    await expect(card(page).getByText("Aberto hoje até às 20h")).toBeVisible();
+    expect(requests).toBe(1);
+  } finally {
+    release();
+  }
+});
+
 test("a failed first request shows neutral fallback instead of endless loading", async ({ page }) => {
   await page.route("**/api/shop/availability", (route) => route.fulfill({ status: 500, json: { message: "indisponível" } }));
   await page.goto("/");
