@@ -3231,6 +3231,83 @@ test.describe("booking rules", () => {
     }
   });
 
+  test("admin visible updates and cancellation create one correctly classified event each", async ({ request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"), request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(), await servicesResponse.json(),
+    );
+    const services = await servicesResponse.json();
+    const alternateService = services.find((item: any) => item.id !== service.id
+      && item.isVisible !== false
+      && (!Array.isArray(barber.serviceIds) || barber.serviceIds.length === 0 || barber.serviceIds.includes(item.id)));
+    expect(alternateService).toBeTruthy();
+    const originalStart = futureThursdayIso(95, 10, 0);
+    const rescheduledStart = futureThursdayIso(95, 11, 0);
+    const customerName = `Admin notifications QA ${Date.now()}`;
+    let appointment: any;
+    try {
+      const createResponse = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id, serviceId: service.id, startTime: originalStart,
+        name: customerName, phone: "+351912695799",
+        customerEmail: "admin-notifications@example.com", isManualBooking: true,
+      } });
+      expect(createResponse.status(), await createResponse.text()).toBe(201);
+      const appointmentsResponse = await request.get("/api/appointments");
+      appointment = (await appointmentsResponse.json()).find((candidate: any) => candidate.customerName === customerName);
+      expect(appointment).toBeTruthy();
+
+      const initialEvents = await (await request.get(`/api/admin/dev/notifications/appointment/${appointment.id}`)).json();
+      expect(initialEvents.map((event: any) => event.eventType)).toEqual(["appointment_confirmation"]);
+
+      const serviceUpdate = await request.patch(`/api/appointments/${appointment.id}`, {
+        data: { serviceId: alternateService.id },
+      });
+      expect(serviceUpdate.ok(), await serviceUpdate.text()).toBe(true);
+      let events = await (await request.get(`/api/admin/dev/notifications/appointment/${appointment.id}`)).json();
+      expect(events.map((event: any) => event.eventType)).toEqual([
+        "appointment_confirmation", "appointment_updated",
+      ]);
+
+      const noOpUpdate = await request.patch(`/api/appointments/${appointment.id}`, {
+        data: { serviceId: alternateService.id },
+      });
+      expect(noOpUpdate.ok(), await noOpUpdate.text()).toBe(true);
+      events = await (await request.get(`/api/admin/dev/notifications/appointment/${appointment.id}`)).json();
+      expect(events).toHaveLength(2);
+
+      const rescheduleUpdate = await request.patch(`/api/appointments/${appointment.id}`, {
+        data: { startTime: rescheduledStart, serviceId: service.id },
+      });
+      expect(rescheduleUpdate.ok(), await rescheduleUpdate.text()).toBe(true);
+      events = await (await request.get(`/api/admin/dev/notifications/appointment/${appointment.id}`)).json();
+      expect(events.map((event: any) => event.eventType)).toEqual([
+        "appointment_confirmation", "appointment_updated", "appointment_rescheduled",
+      ]);
+
+      const cancellation = await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "cancelled", expectedStatus: "booked" },
+      });
+      expect(cancellation.ok(), await cancellation.text()).toBe(true);
+      const repeatedCancellation = await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "cancelled", expectedStatus: "booked" },
+      });
+      expect(repeatedCancellation.status()).toBe(409);
+      events = await (await request.get(`/api/admin/dev/notifications/appointment/${appointment.id}`)).json();
+      expect(events.map((event: any) => event.eventType)).toEqual([
+        "appointment_confirmation", "appointment_updated", "appointment_rescheduled", "appointment_cancelled",
+      ]);
+    } finally {
+      if (appointment?.id) {
+        await request.patch(`/api/appointments/${appointment.id}/status`, {
+          data: { status: "cancelled", expectedStatus: "booked" },
+        });
+      }
+    }
+  });
+
   test("allows a manual booking without phone and does not opt it into WhatsApp", async ({ request }) => {
     await loginAdminRequest(request);
     const [barbersResponse, servicesResponse] = await Promise.all([

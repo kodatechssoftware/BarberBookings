@@ -12,7 +12,7 @@ import {
 } from "../../server/appointment-notifications";
 import { isMetaInboundAutoReplyEnabled, recordMetaWebhookStatuses, verifyMetaWebhookChallenge, verifyMetaWebhookSignature } from "../../server/meta-webhook";
 import { MemoryStorage } from "../../server/storage";
-import { buildRecurringBookingEmail } from "../../server/email";
+import { buildBookingUpdatedEmail, buildRecurringBookingEmail } from "../../server/email";
 import {
   buildMetaAppointmentTemplateComponents,
   buildMetaRecurringTemplateParams,
@@ -50,7 +50,8 @@ function deps(storage: MemoryStorage, whatsapp: MetaTemplateDeliveryResult, coun
     mapUrl: null, mapEmbedUrl: null, phone: null, email: null, timezone: "Europe/Lisbon", isActive: true, isDefault: true,
     sortOrder: 0, createdAt: new Date(), updatedAt: new Date() }),
     sendWhatsApp: async () => { counters.wa += 1; return whatsapp; },
-    sendConfirmationEmail: sendEmail, sendRescheduleEmail: sendEmail, sendCancellationEmail: sendEmail,
+    sendConfirmationEmail: sendEmail, sendRescheduleEmail: sendEmail, sendUpdatedEmail: sendEmail,
+    sendCancellationEmail: sendEmail,
     sendRecurringConfirmationEmail: sendEmail };
 }
 
@@ -74,6 +75,133 @@ async function recurringFixture(optIn = false) {
   });
   return { storage, ...result };
 }
+
+test("administrative visible changes classify into exactly one atomic notification event", async () => {
+  const cases = [
+    { name: "time", patch: { startTime: starts[1] }, expected: "appointment_rescheduled" },
+    { name: "date and time", patch: { startTime: starts[2] }, expected: "appointment_rescheduled" },
+    { name: "barber", patch: { barberId: 2 }, expected: "appointment_updated" },
+    { name: "service", patch: { serviceId: 2, durationMinutes: 45 }, expected: "appointment_updated" },
+    { name: "barber and service", patch: { barberId: 2, serviceId: 2, durationMinutes: 45 }, expected: "appointment_updated" },
+    { name: "time and barber", patch: { startTime: starts[1], barberId: 2 }, expected: "appointment_rescheduled" },
+  ] as const;
+  for (const scenario of cases) {
+    const { storage, appointment } = await fixture(true, "old@example.com", false);
+    await storage.createBarber({ name: "Second barber", specialty: "Cuts", isVisible: true });
+    await storage.createService({ name: "Second service", price: 2000, duration: 45, isVisible: true });
+    const result = await storage.updateAppointmentWithNotification(appointment.id, scenario.patch, true);
+    assert.ok(result, scenario.name);
+    assert.equal(result.notificationEvent?.eventType, scenario.expected, scenario.name);
+    assert.equal((await storage.getAppointmentNotificationEvents(appointment.id)).length, 1, scenario.name);
+  }
+});
+
+test("administrative no-op and internal-only changes create no notification event", async () => {
+  const { storage, appointment } = await fixture(true, "client@example.com", false);
+  const noOp = await storage.updateAppointmentWithNotification(appointment.id, {
+    startTime: new Date(appointment.startTime), barberId: appointment.barberId, serviceId: appointment.serviceId,
+  }, true);
+  assert.ok(noOp);
+  assert.equal(noOp.notificationEvent, null);
+  for (const patch of [
+    { paymentMethod: "cash" as const },
+    { status: "completed" as const, paymentMethod: "cash" as const },
+    { status: "no_show" as const },
+  ]) {
+    const fresh = await fixture(true, "client@example.com", false);
+    const result = await fresh.storage.updateAppointmentWithNotification(fresh.appointment.id, patch, true);
+    assert.ok(result);
+    assert.equal(result.notificationEvent, null);
+    assert.equal((await fresh.storage.getAppointmentNotificationEvents(fresh.appointment.id)).length, 0);
+  }
+  assert.equal((await storage.getAppointmentNotificationEvents(appointment.id)).length, 0);
+});
+
+test("administrative cancellation is atomic and repeated or concurrent requests create one event", async () => {
+  const { storage, appointment } = await fixture(true, "client@example.com", false);
+  const [first, second] = await Promise.all([
+    storage.cancelAppointment(appointment.id, "booked", "cancelled"),
+    storage.cancelAppointment(appointment.id, "booked", "cancelled"),
+  ]);
+  assert.equal([first, second].filter(Boolean).length, 1);
+  assert.equal((await storage.getAppointmentNotificationEvents(appointment.id)).length, 1);
+  assert.equal((await storage.getAppointmentNotificationEvents(appointment.id))[0].eventType, "appointment_cancelled");
+  assert.equal(await storage.cancelAppointment(appointment.id, "booked", "cancelled"), undefined);
+});
+
+test("contact-only changes create no event, while a visible change uses post-update contacts", async () => {
+  const onlyContact = await fixture(true, "old@example.com", false);
+  const contactResult = await onlyContact.storage.updateAppointmentWithNotification(onlyContact.appointment.id, {
+    customerName: "New name", customerEmail: "new@example.com", customerPhone: "+351920000000",
+  }, true);
+  assert.ok(contactResult);
+  assert.equal(contactResult.notificationEvent, null);
+
+  const visible = await fixture(true, "old@example.com", false);
+  await visible.storage.createBarber({ name: "New barber", specialty: "Cuts", isVisible: true });
+  const result = await visible.storage.updateAppointmentWithNotification(visible.appointment.id, {
+    barberId: 2, customerName: "New name", customerEmail: "new@example.com", customerPhone: "+351920000000",
+  }, true);
+  assert.ok(result?.notificationEvent);
+  let whatsappParams: any;
+  let emailParams: any;
+  const dependencies = deps(visible.storage, failed);
+  dependencies.sendWhatsApp = async (params) => { whatsappParams = params; return failed; };
+  dependencies.sendUpdatedEmail = async (params) => {
+    emailParams = params;
+    return { sent: true, providerMessageId: "email.updated", errorCode: null };
+  };
+  assert.equal(await processAppointmentNotification(result.notificationEvent.id, dependencies), "email");
+  assert.equal(whatsappParams.recipient, "+351920000000");
+  assert.equal(whatsappParams.customerName, "New name");
+  assert.equal(emailParams.customerEmail, "new@example.com");
+  assert.equal(emailParams.customerName, "New name");
+});
+
+test("appointment_updated uses its own Meta template and email fallback wording", async () => {
+  const { storage, appointment } = await fixture(true, "client@example.com", false);
+  await storage.createBarber({ name: "Updated barber", specialty: "Cuts", isVisible: true });
+  const result = await storage.updateAppointmentWithNotification(appointment.id, { barberId: 2 }, true);
+  assert.ok(result?.notificationEvent);
+  let eventType = "";
+  let updatedEmailCalls = 0;
+  const dependencies = deps(storage, failed);
+  dependencies.sendWhatsApp = async (params) => { eventType = params.eventType; return failed; };
+  dependencies.sendUpdatedEmail = async () => {
+    updatedEmailCalls += 1;
+    return { sent: true, providerMessageId: "email.updated", errorCode: null };
+  };
+  assert.equal(await processAppointmentNotification(result.notificationEvent.id, dependencies), "email");
+  assert.equal(eventType, "appointment_updated");
+  assert.equal(updatedEmailCalls, 1);
+  assert.equal((await storage.getAppointmentNotificationEvent(result.notificationEvent.id))?.emailStatus, "sent");
+  assert.equal((await storage.getAppointment(appointment.id))?.barberId, 2);
+
+  const content = buildBookingUpdatedEmail({ customerName: "Cliente", barberName: "Barbeiro novo",
+    serviceName: "Corte", startTime: starts[0], cancelToken: token, locationName: "Loja",
+    locationAddress: "Rua 1", locationTimeZone: "Europe/Lisbon" });
+  assert.match(content.subject, /Marcação atualizada/);
+  assert.match(content.html, /A sua marcação foi atualizada/);
+  assert.doesNotMatch(content.html, /foi reagendada/);
+  for (const value of ["Corte", "Barbeiro novo", "Loja", "Rua 1", "/reschedule/", "/cancel/"]) {
+    assert.match(content.html, new RegExp(value));
+  }
+});
+
+test("accepted appointment_updated is idempotent and does not send email", async () => {
+  const { storage, appointment } = await fixture(true, "client@example.com", false);
+  await storage.createService({ name: "Updated service", price: 2000, duration: 45, isVisible: true });
+  const result = await storage.updateAppointmentWithNotification(appointment.id, {
+    serviceId: 2, durationMinutes: 45,
+  }, true);
+  assert.ok(result?.notificationEvent);
+  const counters = { wa: 0, email: 0 };
+  const dependencies = deps(storage, { ...accepted("wamid.updated"), templateName: "appointment_updated_v1" }, counters);
+  assert.equal(await processAppointmentNotification(result.notificationEvent.id, dependencies), "whatsapp");
+  assert.equal(await processAppointmentNotification(result.notificationEvent.id, dependencies), "none");
+  assert.deepEqual(counters, { wa: 1, email: 0 });
+  assert.equal((await storage.getAppointmentNotificationEvent(result.notificationEvent.id))?.providerMessageId, "wamid.updated");
+});
 
 test("confirmation accepted stores wamid, sends no email, and retry is idempotent", async () => {
   const { storage, appointment } = await fixture(); const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
@@ -399,42 +527,53 @@ test("an opt-in event deferred while disabled is discarded if it becomes stale b
   assert.deepEqual(counters, { wa: 1, email: 0 });
 });
 
-test("all three Meta payloads preserve exact body and button order", async () => {
+test("all four appointment Meta payloads preserve exact body and button order", async () => {
   const previousFetch = globalThis.fetch; process.env.WHATSAPP_NOTIFICATIONS_ENABLED = "true"; process.env.MESSAGING_PROVIDER = "meta";
+  const previousUpdatedTemplate = process.env.META_WHATSAPP_UPDATED_TEMPLATE;
   process.env.META_WHATSAPP_GRAPH_API_VERSION = "v25.0"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
   process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_ACCESS_TOKEN = "fake"; process.env.META_WHATSAPP_DEV_ALLOWLIST = "+351910000000";
+  process.env.META_WHATSAPP_UPDATED_TEMPLATE = "appointment_updated_prod_v1";
   const bodies: any[] = []; globalThis.fetch = async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ messages: [{ id: `wamid.${bodies.length}` }] }), { status: 200 }); };
   try {
-    for (const eventType of ["appointment_confirmation", "appointment_rescheduled", "appointment_cancelled"] as const) await sendMetaTemplate({
+    for (const eventType of ["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_cancelled"] as const) await sendMetaTemplate({
       recipient: "+351910000000", eventType, customerName: "1", locationName: "2", serviceName: "3", barberName: "4",
       startTime: new Date("2026-09-15T13:30:00.000Z"), timeZone: "Europe/Lisbon", address: "7", managementToken: token });
-  } finally { globalThis.fetch = previousFetch; }
-  assert.deepEqual(bodies.map((body) => body.template.name), ["appointment_confirmation_v1", "appointment_rescheduled_v1", "appointment_cancelled_v1"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousUpdatedTemplate === undefined) delete process.env.META_WHATSAPP_UPDATED_TEMPLATE;
+    else process.env.META_WHATSAPP_UPDATED_TEMPLATE = previousUpdatedTemplate;
+  }
+  assert.deepEqual(bodies.map((body) => body.template.name), ["appointment_confirmation_v1", "appointment_rescheduled_v1", "appointment_updated_prod_v1", "appointment_cancelled_v1"]);
+  assert.deepEqual(bodies.map((body) => body.template.language.code), ["pt_PT", "pt_PT", "pt_PT", "pt_PT"]);
   assert.deepEqual(bodies[0].template.components[0].parameters.map((p: any) => p.text),
     ["1", "2", "3", "4", "15 de setembro de 2026", "14:30h", "7"]);
   assert.deepEqual(bodies[1].template.components.slice(1).map((c: any) => [c.index, c.parameters[0].text]), [["0", token], ["1", token]]);
   assert.deepEqual(bodies[2].template.components[0].parameters.map((p: any) => p.text),
+    ["1", "2", "3", "4", "15 de setembro de 2026", "14:30h", "7"]);
+  assert.deepEqual(bodies[2].template.components.slice(1).map((c: any) => [c.index, c.parameters[0].text]), [["0", token], ["1", token]]);
+  assert.deepEqual(bodies[3].template.components[0].parameters.map((p: any) => p.text),
     ["1", "2", "3", "15 de setembro de 2026", "14:30h"]);
-  assert.equal(bodies[2].template.components.length, 1);
+  assert.equal(bodies[3].template.components.length, 1);
 });
 
-test("Development defaults and Production configuration select the four exact Meta templates", () => {
-  const eventTypes = ["appointment_confirmation", "appointment_rescheduled", "appointment_cancelled",
+test("Development keeps existing defaults and appointment_updated requires explicit configuration", () => {
+  const eventTypes = ["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_cancelled",
     "appointment_recurring_confirmation"] as const;
   assert.deepEqual(eventTypes.map((eventType) => getMetaAppointmentTemplateName(eventType, {
     NODE_ENV: "production", APP_ENV: "development",
-  })), ["appointment_confirmation_v1", "appointment_rescheduled_v1", "appointment_cancelled_v1",
+  })), ["appointment_confirmation_v1", "appointment_rescheduled_v1", null, "appointment_cancelled_v1",
     "appointment_recurring_confirmation_v1"]);
 
   const productionEnvironment = {
     NODE_ENV: "production", APP_ENV: "production",
     META_WHATSAPP_CONFIRMATION_TEMPLATE: "appointment_confirmation_prod_v1",
     META_WHATSAPP_RESCHEDULED_TEMPLATE: "appointment_rescheduled_prod_v2",
+    META_WHATSAPP_UPDATED_TEMPLATE: "appointment_updated_prod_v1",
     META_WHATSAPP_CANCELLED_TEMPLATE: "appointment_cancelled_prod_v2",
     META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE: "appointment_recurring_confirmation_prod_v1",
   };
   assert.deepEqual(eventTypes.map((eventType) => getMetaAppointmentTemplateName(eventType, productionEnvironment)),
-    ["appointment_confirmation_prod_v1", "appointment_rescheduled_prod_v2", "appointment_cancelled_prod_v2",
+    ["appointment_confirmation_prod_v1", "appointment_rescheduled_prod_v2", "appointment_updated_prod_v1", "appointment_cancelled_prod_v2",
       "appointment_recurring_confirmation_prod_v1"]);
   assert.equal(getMetaAppointmentTemplateName("appointment_confirmation", {
     NODE_ENV: "production", APP_ENV: "production",
@@ -688,6 +827,28 @@ test("accepted Meta message followed by failed webhook sends exactly one late fa
   assert.equal(counters.email, 1); assert.equal(saved?.emailStatus, "sent"); assert.equal(saved?.whatsappStatus, "failed");
   assert.ok(saved?.webhookFallbackClaimedAt);
   assert.equal((await storage.getAppointment(appointment.id))?.status, "booked");
+});
+
+test("accepted appointment_updated followed by failed webhook uses the updated email once", async () => {
+  process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  const { storage, appointment } = await fixture(true, "client@example.com", false);
+  await storage.createBarber({ name: "Updated barber", specialty: "Cuts", isVisible: true });
+  const result = await storage.updateAppointmentWithNotification(appointment.id, { barberId: 2 }, true);
+  assert.ok(result?.notificationEvent);
+  await storage.updateAppointmentNotificationEvent(result.notificationEvent.id, {
+    providerMessageId: "wamid.updated.late", whatsappStatus: "accepted",
+  });
+  let updatedEmails = 0;
+  const dependencies = deps(storage, accepted());
+  dependencies.sendUpdatedEmail = async () => {
+    updatedEmails += 1;
+    return { sent: true, providerMessageId: "email.updated.late", errorCode: null };
+  };
+  const payload = webhook("wamid.updated.late", [{ status: "failed", timestamp: "400" }]);
+  await recordMetaWebhookStatuses(payload, storage, lateFallbackHandler(dependencies));
+  await recordMetaWebhookStatuses(payload, storage, lateFallbackHandler(dependencies));
+  assert.equal(updatedEmails, 1);
+  assert.equal((await storage.getAppointmentNotificationEvent(result.notificationEvent.id))?.emailStatus, "sent");
 });
 
 test("duplicate and concurrent failed webhooks claim and send only one late fallback email", async () => {

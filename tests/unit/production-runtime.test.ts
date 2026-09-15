@@ -21,6 +21,7 @@ const baseEnvironment = {
 const productionTemplateEnvironment = {
   META_WHATSAPP_CONFIRMATION_TEMPLATE: "appointment_confirmation_prod_v1",
   META_WHATSAPP_RESCHEDULED_TEMPLATE: "appointment_rescheduled_prod_v2",
+  META_WHATSAPP_UPDATED_TEMPLATE: "appointment_updated_prod_v1",
   META_WHATSAPP_CANCELLED_TEMPLATE: "appointment_cancelled_prod_v2",
   META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE: "appointment_recurring_confirmation_prod_v1",
 };
@@ -70,7 +71,7 @@ test("Production refuses partially activated outbox, Meta and webhook capabiliti
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
 });
 
-test("Production requires all four appointment template names before WhatsApp activation", () => {
+test("Production requires all five appointment template names before WhatsApp activation", () => {
   const completeEnvironment = {
     ...baseEnvironment,
     ...productionTemplateEnvironment,

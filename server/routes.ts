@@ -3536,11 +3536,12 @@ export async function registerRoutes(
         }
         Object.assign(updateData, getStatusPatch(status));
       }
-      if (Object.keys(updateData).length > 0) {
-        updateData.notificationRevision = currentApp.notificationRevision + 1;
-      }
-
-      const updated = await storage.updateAppointment(appointmentId, updateData);
+      const updateResult = await storage.updateAppointmentWithNotification(
+        appointmentId,
+        updateData,
+        appointmentNotificationEventsEnabled,
+      );
+      const updated = updateResult?.appointment;
       if (updated) {
         await recordAuditLog(req, {
           action: status ? "appointment.status_changed" : "appointment.updated",
@@ -3613,9 +3614,17 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Não autorizado" });
       }
 
-      const updated = expectedStatus === undefined
-        ? await storage.updateAppointmentStatus(appointmentId, status, paymentMethod)
-        : await storage.updateAppointmentStatusIfCurrent(appointmentId, expectedStatus, status, paymentMethod);
+      const isCancellation = status === "cancelled" || status === "late_cancelled";
+      const cancellationResult = appointmentNotificationEventsEnabled && isCancellation
+        ? await storage.cancelAppointment(appointmentId, "booked", status)
+        : null;
+      const updated = cancellationResult?.appointment || (
+        !appointmentNotificationEventsEnabled || !isCancellation
+          ? expectedStatus === undefined
+            ? await storage.updateAppointmentStatus(appointmentId, status, paymentMethod)
+            : await storage.updateAppointmentStatusIfCurrent(appointmentId, expectedStatus, status, paymentMethod)
+          : undefined
+      );
       if (!updated) {
         const latestAppointment = await storage.getAppointment(appointmentId);
         if (!latestAppointment) return res.status(404).json({ message: "Marcação não encontrada" });
@@ -4112,10 +4121,15 @@ export async function registerRoutes(
 
         if (input.cancelFutureAppointments === true && futureAppointments.length > 0) {
           for (const appointment of futureAppointments) {
-            const updated = await storage.updateAppointment(appointment.id, {
-              ...getStatusPatch("cancelled"),
-              notificationRevision: appointment.notificationRevision + 1,
-            });
+            const cancellationResult = appointmentNotificationEventsEnabled
+              ? await storage.cancelAppointment(appointment.id, "booked", "cancelled")
+              : null;
+            const updated = cancellationResult?.appointment || (!appointmentNotificationEventsEnabled
+              ? await storage.updateAppointment(appointment.id, {
+                ...getStatusPatch("cancelled"),
+                notificationRevision: appointment.notificationRevision + 1,
+              })
+              : undefined);
             if (updated) cancelledAppointments.push(updated);
           }
         }
