@@ -55,6 +55,24 @@ Para abrir o runner visual do Playwright:
 npm run test:e2e:ui
 ```
 
+### Horário semanal do barbeiro por loja (apenas multi-location)
+
+Com `MULTI_LOCATION_ENABLED=true`, selecione **Loja em gestão → Equipa → Horário nesta loja**
+no cartão do barbeiro. O perfil pode ser partilhado, mas este editor carrega e guarda apenas
+os horários de `barberId + locationId`, por dia da semana, através dos endpoints existentes.
+Não requer migration. Pode definir vários períodos por dia e dias em que não trabalha nessa loja.
+
+- Exemplo semanal fixo: Seg–Qua 09h–19h na loja A; Qui–Sex 10h–20h e Sáb 09h–18h na loja B.
+- Sem horário próprio, o barbeiro herda o horário da loja. **Usar horário da loja** repõe essa herança.
+  Uma semana toda fechada é guardada explicitamente e não equivale a herdar o horário.
+- A disponibilidade é a interseção do horário do barbeiro com o da loja. Um horário próprio
+  não abre a loja fora do seu funcionamento. Serviços, associação e visibilidade continuam a aplicar-se.
+- Os conflitos de marcações do mesmo barbeiro são globais entre lojas. O sistema não proíbe
+  configurar horários sobrepostos em duas lojas; impede persistir marcações sobrepostas.
+- Ausências continuam reservadas para exceções. Não existe escala rotativa automática de três dias.
+- Com `MULTI_LOCATION_ENABLED=false`, este seletor/editor não é apresentado e o fluxo legado mantém-se.
+- A exceção administrativa explícita para marcar fora do horário continua com o comportamento existente.
+
 ### URLs e acessos
 
 - App local: `http://localhost:5000`
