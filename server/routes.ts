@@ -65,6 +65,7 @@ import {
   getBarberIdsForLocation,
   getDefaultLocation,
   getLocation,
+  getLocationCountsForBarbers,
   getLocationIdsForBarber,
   getServiceIdsForLocation,
   listLocations,
@@ -843,12 +844,18 @@ async function getBarbersWithServiceIds(locationId?: number) {
     storage.getAllBarberServices(),
     storage.getBarberCompensationRules(),
   ]);
-  const [locationBarberIds, locationServiceIds] = locationId === undefined
-    ? [undefined, undefined]
-    : await Promise.all([getBarberIdsForLocation(locationId, true), getServiceIdsForLocation(locationId)]);
-  const activeBarberIds = locationId === undefined ? undefined : new Set(await getBarberIdsForLocation(locationId));
+  const [locationBarberIds, locationServiceIds, activeLocationBarberIds] = locationId === undefined
+    ? [undefined, undefined, undefined]
+    : await Promise.all([
+      getBarberIdsForLocation(locationId, true), getServiceIdsForLocation(locationId), getBarberIdsForLocation(locationId),
+    ]);
+  const activeBarberIds = activeLocationBarberIds === undefined ? undefined : new Set(activeLocationBarberIds);
   const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
   const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
+  const scopedBarbers = barbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
+  const locationCounts = locationId === undefined
+    ? undefined
+    : await getLocationCountsForBarbers(scopedBarbers.map((barber) => barber.id));
   const barberServiceMap = buildBarberServiceMap(serviceRows);
   const currentCompensationByBarberId = new Map<number, BarberCompensationRule>();
   compensationRows.forEach((rule) => {
@@ -857,13 +864,13 @@ async function getBarbersWithServiceIds(locationId?: number) {
     }
   });
 
-  return Promise.all(barbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id)).map(async (barber) => ({
+  return scopedBarbers.map((barber) => ({
     ...attachCompensationRule(barber, currentCompensationByBarberId.get(barber.id)),
     isVisible: barber.isVisible !== false && (!activeBarberIds || activeBarberIds.has(barber.id)),
-    locationCount: locationId === undefined ? 1 : (await getLocationIdsForBarber(barber.id)).length,
+    locationCount: locationCounts === undefined ? 1 : locationCounts.get(barber.id) ?? 0,
     serviceIds: (barberServiceMap.get(barber.id) || []).filter((id) => !allowedServices || allowedServices.has(id)),
     allServicesAllowed: (barberServiceMap.get(barber.id) || []).length === 0,
-  })));
+  }));
 }
 
 async function freezeUniversalBarberServiceAssignments(existingServiceIds: number[], locationId?: number) {
@@ -1531,7 +1538,10 @@ export async function registerRoutes(
 
   app.use("/api", async (req, res, next) => {
     try {
-      const defaultLocation = await getDefaultLocation();
+      // Reuse this request's location snapshot; no shared cache or stale data
+      // across requests. The default and selected shop used to read it twice.
+      const locations = await listLocations(true);
+      const defaultLocation = locations.find((location) => location.isDefault) ?? locations[0];
       if (!defaultLocation) return res.status(503).json({ message: "Localização principal indisponível." });
       if (!MULTI_LOCATION_CONFIG.enabled) {
         res.locals.locationId = defaultLocation.id;
@@ -1549,7 +1559,7 @@ export async function registerRoutes(
       const appSession = getAppSession(req);
       const isPublicBookingRequest = req.path === "/appointments" && req.method === "POST";
       const canUseInactive = appSession.role === "admin" && Boolean(appSession.adminId) && !isPublicBookingRequest;
-      const location = await getLocation(locationId, canUseInactive);
+      const location = locations.find((location) => location.id === locationId && (canUseInactive || location.isActive));
       if (!location) return res.status(404).json({ message: "Localização não encontrada ou indisponível." });
       if (appSession.role === "barber" && appSession.barberId && !ignoresSelectedLocation) {
         const allowedLocationIds = await getLocationIdsForBarber(Number(appSession.barberId));
