@@ -5820,6 +5820,74 @@ test.describe("booking rules", () => {
     }
   });
 
+  test("allows an administrator to update and remove the public barber bio", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const name = `Edit Bio QA ${suffix}`;
+    const initialBio = `Apresentação inicial ${suffix}`;
+    const updatedBio = `Especialista em cortes personalizados ${suffix}.`;
+    const createResponse = await request.post("/api/barbers", {
+      data: {
+        name,
+        specialty: "Cortes modernos",
+        bio: initialBio,
+        color: "#8B5CF6",
+        isVisible: true,
+        serviceIds: [],
+      },
+    });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const barber = await createResponse.json();
+
+    try {
+      await loginAdmin(page);
+      await page.getByRole("tab", { name: "Equipa" }).click();
+      const card = page.getByTestId("team-barber-card").filter({ hasText: name });
+      await expect(card).toBeVisible();
+      await card.getByRole("button", { name: "Editar" }).click();
+
+      let dialog = page.getByRole("dialog", { name: "Editar Barbeiro" });
+      const bioInput = dialog.getByLabel("Bio");
+      await expect(bioInput).toHaveValue(initialBio);
+      await bioInput.fill(updatedBio);
+      await dialog.getByRole("button", { name: "Guardar" }).click();
+      await expect(dialog).not.toBeVisible();
+
+      let barbersResponse = await request.get("/api/barbers?includeHidden=true");
+      expect(barbersResponse.status(), await barbersResponse.text()).toBe(200);
+      let savedBarber = (await barbersResponse.json()).find((candidate: any) => candidate.id === barber.id);
+      expect(savedBarber.bio).toBe(updatedBio);
+
+      await page.goto("/");
+      const publicCard = page.locator("article").filter({ hasText: name });
+      await expect(publicCard).toBeVisible();
+      await expect(publicCard.getByText(updatedBio)).toBeVisible();
+      await expect(publicCard.getByText(initialBio)).toHaveCount(0);
+
+      await page.goto("/admin");
+      await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+      await page.getByRole("tab", { name: "Equipa" }).click();
+      const updatedCard = page.getByTestId("team-barber-card").filter({ hasText: name });
+      await updatedCard.getByRole("button", { name: "Editar" }).click();
+      dialog = page.getByRole("dialog", { name: "Editar Barbeiro" });
+      await dialog.getByLabel("Bio").fill("");
+      await dialog.getByRole("button", { name: "Guardar" }).click();
+      await expect(dialog).not.toBeVisible();
+
+      barbersResponse = await request.get("/api/barbers?includeHidden=true");
+      expect(barbersResponse.status(), await barbersResponse.text()).toBe(200);
+      savedBarber = (await barbersResponse.json()).find((candidate: any) => candidate.id === barber.id);
+      expect(savedBarber.bio).toBeNull();
+
+      await page.goto("/");
+      const publicCardWithoutBio = page.locator("article").filter({ hasText: name });
+      await expect(publicCardWithoutBio).toBeVisible();
+      await expect(publicCardWithoutBio.getByText(updatedBio)).toHaveCount(0);
+    } finally {
+      await request.delete(`/api/barbers/${barber.id}`);
+    }
+  });
+
   test("revokes an open barber session when that barber is removed", async ({ request, playwright }) => {
     await loginAdminRequest(request);
     const suffix = Date.now();

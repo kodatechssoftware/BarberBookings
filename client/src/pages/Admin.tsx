@@ -851,6 +851,7 @@ type BarberListItem = {
   id: number;
   name: string;
   specialty?: string | null;
+  bio?: string | null;
   avatar?: string | null;
   color?: string | null;
   isVisible?: boolean | null;
@@ -3646,6 +3647,18 @@ export default function Admin() {
                             <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>
                             <div className="space-y-2">
+                              <Label htmlFor={`edit-barber-bio-${barber.id}`}>Bio</Label>
+                              <Textarea
+                                defaultValue={barber.bio || ""}
+                                id={`edit-barber-bio-${barber.id}`}
+                                className="min-h-24 bg-background border-white/10"
+                                maxLength={1000}
+                              />
+                              <p className="text-xs leading-relaxed text-gray-400">
+                                Este texto aparece na apresentação pública do barbeiro.
+                              </p>
+                            </div>
+                            <div className="space-y-2">
                               <Label htmlFor={`edit-barber-email-${barber.id}`}>Email de acesso</Label>
                               <Input
                                 type="email"
@@ -3704,6 +3717,7 @@ export default function Admin() {
                                   const formRoot = event.currentTarget.closest("[data-edit-barber-form]");
                                   const name = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-name-${barber.id}`)?.value || "";
                                   const specialty = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-spec-${barber.id}`)?.value || "";
+                                  const bio = formRoot?.querySelector<HTMLTextAreaElement>(`#edit-barber-bio-${barber.id}`)?.value.trim() || "";
                                   const email = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-email-${barber.id}`)?.value.trim() || "";
                                   const color = formRoot?.querySelector<HTMLInputElement>(`#edit-barber-color-${barber.id}`)?.value || defaultBarberColor;
                                   const avatar = getEditedBarberAvatar(barberAvatarDrafts, barber);
@@ -3718,6 +3732,7 @@ export default function Admin() {
                                   const payload: Record<string, unknown> = {
                                     name,
                                     specialty,
+                                    bio: bio || null,
                                     email,
                                     color: normalizeBarberColor(color),
                                     avatar: avatar || null,
