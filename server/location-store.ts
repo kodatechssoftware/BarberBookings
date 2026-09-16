@@ -132,6 +132,30 @@ export async function getLocationIdsForBarber(barberId: number) {
   return result.rows.map((row) => Number(row.location_id));
 }
 
+// Same active-assignment semantics as getLocationIdsForBarber, in one read for
+// the catalogue. Location activity must not change this count (archived shops
+// still have assignments); only barber_locations.is_active is relevant.
+export async function getLocationCountsForBarbers(barberIds: number[]) {
+  const counts = new Map(barberIds.map((id) => [id, 0]));
+  if (counts.size === 0) return counts;
+  if (useMemoryStorage) {
+    memoryBarberLocations.forEach((assigned) => {
+      assigned.forEach((id) => {
+        if (counts.has(id)) counts.set(id, counts.get(id)! + 1);
+      });
+    });
+    return counts;
+  }
+  const result = await pool.query<{ barber_id: number; location_count: number }>(`
+    SELECT barber_id, count(*)::integer AS location_count
+    FROM ${barberLocationsTable}
+    WHERE barber_id = ANY($1::integer[]) AND is_active = true
+    GROUP BY barber_id
+  `, [Array.from(counts.keys())]);
+  for (const row of result.rows) counts.set(Number(row.barber_id), Number(row.location_count));
+  return counts;
+}
+
 export async function getLocationIdsForService(serviceId: number) {
   if (useMemoryStorage) {
     return Array.from(memoryServiceLocations.entries())

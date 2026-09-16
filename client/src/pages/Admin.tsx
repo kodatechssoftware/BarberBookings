@@ -1458,13 +1458,16 @@ export default function Admin() {
     isFetching: isFetchingServices,
     isError: isServicesError,
   } = useServices({ enabled: user?.authorized === true, includeHidden: true });
+  // Only initial loads delay secondary panels. Background refreshes keep the
+  // existing agenda and normal polling behaviour; errors also release the gate.
+  const isLoadingAgenda = isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices;
   const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist"],
     enabled: user?.role === "admin"
   });
   const { data: auditLogs, isLoading: isLoadingAuditLogs } = useQuery<AuditLogItem[]>({
     queryKey: ["/api/admin/audit-logs"],
-    enabled: user?.role === "admin",
+    enabled: user?.role === "admin" && !isLoadingAgenda,
     refetchInterval: 15000,
   });
   const { data: multiLocationConfig } = useQuery<{ enabled: boolean; maxLocations: number }>({
@@ -1491,7 +1494,7 @@ export default function Admin() {
   const { data: shopAvailabilityRows } = useShopAvailability();
   const { data: dashboardData, isLoading: isLoadingDashboard } = useQuery<DashboardData>({
     queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.id, { locationId: activeLocationId }],
-    enabled: user?.authorized === true && user.role === "admin",
+    enabled: user?.authorized === true && user.role === "admin" && !isLoadingAgenda,
     queryFn: async () => {
       const params = new URLSearchParams({ days: dashboardDays });
       if (dashboardBarberFilter !== "all") {
@@ -1515,7 +1518,7 @@ export default function Admin() {
   }, [exportDates.start, exportDates.end]);
   const { data: businessExpenses = [], isLoading: isLoadingExpenses } = useQuery<BusinessExpense[]>({
     queryKey: [expensesUrl, { locationId: activeLocationId }],
-    enabled: user?.authorized === true && user.role === "admin",
+    enabled: user?.authorized === true && user.role === "admin" && activeTab === "reports",
   });
   const businessExpensesTotalCents = useMemo(
     () => businessExpenses.reduce((total, expense) => total + expense.amountCents, 0),
@@ -3379,7 +3382,7 @@ export default function Admin() {
               appointments={filteredAgendaAppointmentList}
               barbers={weeklyAgendaBarberOptions}
               services={services}
-              isLoading={isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices}
+              isLoading={isLoadingAgenda}
               selectedBarberFilter={selectedBarberFilter}
               selectedStatusFilter={selectedAgendaStatusFilter}
               canFilterBarbers={user.role === "admin"}
@@ -3395,7 +3398,7 @@ export default function Admin() {
             />
 
             {user.role === "admin" && (
-              <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs} />
+              <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs || (isLoadingAgenda && !auditLogs)} />
             )}
 
             {user.role === "admin" && (

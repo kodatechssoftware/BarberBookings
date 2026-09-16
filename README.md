@@ -286,6 +286,14 @@ podem sobrepor-se em queries paralelas; nao representam exclusivamente tempo
 de execucao dentro do PostgreSQL. Os logs nao incluem query strings, corpos
 dos pedidos, SQL, contactos ou tokens. Desliga a flag apos a medicao.
 
+O carregamento do catalogo conta as associacoes ativas a lojas de todos os barbeiros
+numa unica query, sem cache entre pedidos. O middleware reutiliza a lista de
+localizacoes apenas dentro do mesmo pedido, mantendo as validacoes de acesso.
+Na area administrativa, auditoria e estatisticas aguardam o carregamento inicial
+dos dados da Agenda; as despesas carregam ao abrir Relatorios. O refetch com
+dados existentes nao volta a bloquear estes paineis. Blacklist e dados necessarios
+as marcacoes continuam disponiveis no carregamento inicial.
+
 Depois de ligares a base de dados, executa `npm run db:push` uma vez para criar/atualizar as tabelas.
 
 ## Deploy separado
