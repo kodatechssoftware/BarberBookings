@@ -391,9 +391,9 @@ export default function Home() {
                 <motion.article
                   key={barber.id}
                   whileHover={{ y: -4 }}
-                  className="overflow-hidden rounded-lg border border-white/10 bg-card"
+                  className="flex h-full overflow-hidden rounded-lg border border-white/10 bg-card"
                 >
-                  <div className="grid grid-cols-[112px_1fr] gap-0 sm:grid-cols-[160px_1fr]">
+                  <div className="grid flex-1 grid-cols-[112px_1fr] gap-0 sm:grid-cols-[160px_1fr]">
                     <img
                       src={getBarberAvatar(barber)}
                       alt={barber.name}
