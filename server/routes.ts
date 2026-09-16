@@ -5,6 +5,7 @@ import { getShopDateBounds, isAppointmentConflictError, storage } from "./storag
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
+import { performance } from "node:perf_hooks";
 import {
   sendBookingCancellationConfirmation,
   sendBookingConfirmation,
@@ -21,6 +22,11 @@ import {
   verifyMetaWebhookSignature,
 } from "./meta-webhook";
 import { pool } from "./db";
+import {
+  performanceTimingsEnabled,
+  recordPhase,
+  requestTimings,
+} from "./performance-timings";
 import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
@@ -1495,7 +1501,17 @@ export async function registerRoutes(
     });
   }
 
-  app.use(session(sessionConfig));
+  const sessionMiddleware = session(sessionConfig);
+  app.use((req, res, next) => {
+    if (!performanceTimingsEnabled || !requestTimings.getStore()) {
+      return sessionMiddleware(req, res, next);
+    }
+    const startedAt = performance.now();
+    return sessionMiddleware(req, res, (error) => {
+      recordPhase("session", startedAt);
+      next(error);
+    });
+  });
 
   app.get("/api/multi-location/config", (_req, res) => {
     res.json(MULTI_LOCATION_CONFIG);
@@ -1530,6 +1546,7 @@ export async function registerRoutes(
   });
 
   app.use("/api", async (req, res, next) => {
+    const startedAt = performanceTimingsEnabled ? performance.now() : 0;
     try {
       const defaultLocation = await getDefaultLocation();
       if (!defaultLocation) return res.status(503).json({ message: "Localização principal indisponível." });
@@ -1562,6 +1579,8 @@ export async function registerRoutes(
       return next();
     } catch (error) {
       return next(error);
+    } finally {
+      if (startedAt) recordPhase("location", startedAt);
     }
   });
 

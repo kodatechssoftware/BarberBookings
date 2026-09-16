@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
+import { instrumentPool } from "./performance-timings";
 
 
 const { Pool } = pg;
@@ -32,6 +33,8 @@ export const pool = new Pool({
     30_000,
   ),
 });
+
+instrumentPool(pool);
 
 pool.on("error", (error) => {
   console.error("Unexpected idle PostgreSQL client error", error);

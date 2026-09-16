@@ -276,6 +276,16 @@ Variaveis minimas para a app no Railway:
 - `ALLOWED_ORIGINS`: mesmo dominio publico da app
 - `RESEND_API_KEY` e `RESEND_FROM_EMAIL` para envio das notificacoes
 
+Para diagnosticar latencia apenas em Development, define temporariamente
+`PERFORMANCE_TIMINGS_ENABLED=true` com `APP_ENV=development`. O valor por defeito
+e `false`; com `APP_ENV=production` esta instrumentacao nunca liga. Cada rota
+selecionada produz uma linha `[perf]` com tempo total, sessao, middleware de
+localizacao, numero/round-trip das queries, aquisicao de ligacoes (idle, nova
+ou em fila) e serializacao JSON. Os tempos SQL e de aquisicao sao agregados e
+podem sobrepor-se em queries paralelas; nao representam exclusivamente tempo
+de execucao dentro do PostgreSQL. Os logs nao incluem query strings, corpos
+dos pedidos, SQL, contactos ou tokens. Desliga a flag apos a medicao.
+
 Depois de ligares a base de dados, executa `npm run db:push` uma vez para criar/atualizar as tabelas.
 
 ## Deploy separado

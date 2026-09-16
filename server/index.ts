@@ -18,6 +18,7 @@ import {
   pool,
   repairKnownTextEncodingArtifacts,
 } from "./db";
+import { performanceTimingMiddleware } from "./performance-timings";
 
 const app = express();
 const httpServer = createServer(app);
@@ -149,6 +150,8 @@ function getErrorLogPayload(body: unknown) {
 
   return ` :: ${JSON.stringify({ message })}`;
 }
+
+app.use(performanceTimingMiddleware);
 
 app.use((req, res, next) => {
   const start = Date.now();
