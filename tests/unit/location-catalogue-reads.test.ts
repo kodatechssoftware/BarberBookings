@@ -113,10 +113,10 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
     const { barberAvatarReference } = await import("../../server/barber-avatars");
     const storage = new DatabaseStorage();
     const full = await storage.getBarbers();
-    const compactTiming = createRequestTimings("GET", "/api/barbers");
-    const compact = await requestTimings.run(compactTiming, () => storage.getBarbers({ avatarReferences: true }));
+    queryCount = 0;
+    const compact = await storage.getBarbers({ avatarReferences: true });
     assert.deepEqual(compact, full.map((barber) => ({ ...barber, avatar: barberAvatarReference(barber.id, barber.avatar) })));
-    assert.equal(compactTiming.sqlCount, 1);
+    assert.equal(queryCount, 1);
     assert.equal((await storage.getBarber(1))?.avatar, upload);
     const beforeBytes = Buffer.byteLength(JSON.stringify(full));
     const afterBytes = Buffer.byteLength(JSON.stringify(compact));
@@ -125,10 +125,9 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
     const samples: unknown[] = [];
     for (let round = 0; round < 6; round++) {
       for (const references of (round % 2 ? [true, false] : [false, true])) {
-        const timings = createRequestTimings("GET", "/api/barbers");
         const start = performance.now();
-        await requestTimings.run(timings, () => storage.getBarbers({ avatarReferences: references }));
-        samples.push({ round, references, wallMs: performance.now() - start, timings });
+        await storage.getBarbers({ avatarReferences: references });
+        samples.push({ round, references, wallMs: performance.now() - start });
       }
     }
     console.log(JSON.stringify({ measurement: "local-pg-catalogue-read-samples", samples }));
