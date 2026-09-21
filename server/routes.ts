@@ -2,6 +2,7 @@
 import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import { getShopDateBounds, isAppointmentConflictError, storage } from "./storage";
+import { decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -844,9 +845,9 @@ async function saveBarberCompensationRuleIfNeeded(
   });
 }
 
-async function getBarbersWithServiceIds(locationId?: number) {
+async function getBarbersWithServiceIds(locationId?: number, avatarReferences = false) {
   const [barbers, serviceRows, compensationRows] = await Promise.all([
-    storage.getBarbers(),
+    storage.getBarbers({ avatarReferences }),
     storage.getAllBarberServices(),
     storage.getBarberCompensationRules(),
   ]);
@@ -1568,7 +1569,14 @@ export async function registerRoutes(
       const ignoresSelectedLocation = ["/account/locations", "/admin/login", "/admin/logout", "/admin/me"].includes(req.path)
         || /^\/appointments\/(token|reschedule|cancel)\//.test(req.path)
         || req.path.startsWith("/barber-invites/");
-      const rawLocationId = ignoresSelectedLocation ? undefined : req.header("x-location-id")?.trim();
+      // <img> cannot supply X-Location-Id. Only this read-only image route accepts
+      // the equivalent URL parameter, through the SAME location access checks.
+      const imageLocation = req.method === "GET" && /^\/barbers\/\d+\/avatar$/.test(req.path)
+        ? req.query.locationId : undefined;
+      if (imageLocation !== undefined && typeof imageLocation !== "string") {
+        return res.status(400).json({ message: "Localização inválida." });
+      }
+      const rawLocationId = ignoresSelectedLocation ? undefined : imageLocation ?? req.header("x-location-id")?.trim();
       const locationId = rawLocationId ? Number(rawLocationId) : defaultLocation.id;
       if (!Number.isInteger(locationId) || locationId <= 0) {
         return res.status(400).json({ message: "Localização inválida." });
@@ -2154,6 +2162,13 @@ export async function registerRoutes(
       const locationBarberIds = await getBarberIdsForLocation(locationId, true);
       if (!existing || (locationBarberIds !== undefined && !locationBarberIds.includes(barberId))) return res.status(404).json({ message: "Barbeiro não encontrado" });
 
+      // Read references must never overwrite the stored upload, including when a
+      // client sends a whole catalogue record back while editing another field.
+      const avatarReferenceId = referencedBarberId(barberPatch.avatar);
+      if (avatarReferenceId !== undefined) {
+        if (avatarReferenceId !== barberId) return res.status(400).json({ message: "Fotografia inválida." });
+        delete barberPatch.avatar;
+      }
       const normalizedBarberPatch = normalizeBarberEmail(barberPatch);
       const emailWasProvided = Object.prototype.hasOwnProperty.call(normalizedBarberPatch, "email");
       const currentEmail = existing.email?.trim().toLowerCase() || null;
@@ -2619,7 +2634,9 @@ export async function registerRoutes(
   // === BARBERS ===
   app.get(api.barbers.list.path, async (req, res) => {
     const locationId = Number(res.locals.locationId);
-    const barbers = await getBarbersWithServiceIds(MULTI_LOCATION_CONFIG.enabled ? locationId : undefined);
+    // Opt-in preserves the API contract for older clients still using inline photos.
+    const avatarReferences = req.query.avatarMode === "reference";
+    const barbers = await getBarbersWithServiceIds(MULTI_LOCATION_CONFIG.enabled ? locationId : undefined, avatarReferences);
     const appSession = getAppSession(req);
     const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
     const ownBarberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
@@ -2631,12 +2648,34 @@ export async function registerRoutes(
     res.json(
       visibleBarbers.map((barber) =>
         sanitizeBarberForResponse(
-          barber,
+          avatarReferences && referencedBarberId(barber.avatar) === barber.id
+            ? { ...barber, avatar: `${barber.avatar}&locationId=${locationId}` }
+            : barber,
           isAdminSession || barber.id === ownBarberId,
           isAdminSession,
         ),
       ),
     );
+  });
+
+  app.get("/api/barbers/:id/avatar", async (req, res) => {
+    const barberId = parsePositiveInteger(req.params.id);
+    if (barberId === null) return res.status(400).end();
+    const barber = await storage.getBarber(barberId);
+    const appSession = getAppSession(req);
+    const isAdmin = appSession.role === "admin" && Boolean(appSession.adminId);
+    const isOwnBarber = appSession.role === "barber" && Number(appSession.barberId) === barberId;
+    const locationId = Number(res.locals.locationId);
+    if (!barber || (!barber.isVisible && !isAdmin && !isOwnBarber)
+      || !await isBarberAssignedToLocation(barberId, locationId, isAdmin || isOwnBarber)) {
+      return res.status(404).end();
+    }
+    const image = decodeBarberAvatar(barber.avatar);
+    if (!image) return res.status(404).end();
+    // Keep the API's no-store policy: visibility/access changes remain effective.
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.type(image.contentType).send(image.bytes);
   });
 
   app.get("/api/shop/availability", async (_req, res) => {

@@ -1677,7 +1677,7 @@ test.describe("admin navigation", () => {
     });
     expect(createAppointmentResponse.ok(), await createAppointmentResponse.text()).toBe(true);
 
-    await page.route("**/api/barbers?includeHidden=true", async (route) => {
+    await page.route((url) => url.pathname === "/api/barbers" && url.searchParams.get("includeHidden") === "true", async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 800));
       await route.continue();
     });
@@ -2566,7 +2566,7 @@ test.describe("agenda interaction", () => {
 
 test.describe("admin list stability", () => {
   test("keeps admin lists from flashing empty while data is loading", async ({ page }) => {
-    await page.route("**/api/barbers?includeHidden=true", async (route) => {
+    await page.route((url) => url.pathname === "/api/barbers" && url.searchParams.get("includeHidden") === "true", async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 1200));
       await route.continue();
     });

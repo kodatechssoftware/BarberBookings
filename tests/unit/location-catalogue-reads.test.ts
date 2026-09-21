@@ -90,6 +90,39 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
     assert.equal((await store.getLocationCountsForBarbers([2])).get(2), 1);
     await store.assignBarberToLocation(14, 1);
     assert.equal((await store.getLocationCountsForBarbers([14])).get(14), 1);
+
+    // Real PostgreSQL projection: only the catalogue representation changes.
+    await pool.query(`CREATE TABLE catalogue_fixture.barbers (
+      id integer PRIMARY KEY, name text, specialty text, bio text, avatar text,
+      email text, password text, color text, is_visible boolean
+    )`);
+    const upload = `data:image/jpeg;base64,${randomBytes(302_480).toString("base64")}`;
+    for (const [id, avatar] of [[1, upload], [2, upload], [3, null], [4, "/images/barber.jpg"]] as const) {
+      await pool.query("INSERT INTO catalogue_fixture.barbers VALUES ($1, 'Fixture', 'Hair', NULL, $2, NULL, NULL, '#123456', true)", [id, avatar]);
+    }
+    const { DatabaseStorage } = await import("../../server/storage");
+    const { barberAvatarReference } = await import("../../server/barber-avatars");
+    const storage = new DatabaseStorage();
+    const full = await storage.getBarbers();
+    const compactTiming = createRequestTimings("GET", "/api/barbers");
+    const compact = await requestTimings.run(compactTiming, () => storage.getBarbers({ avatarReferences: true }));
+    assert.deepEqual(compact, full.map((barber) => ({ ...barber, avatar: barberAvatarReference(barber.id, barber.avatar) })));
+    assert.equal(compactTiming.sqlCount, 1);
+    assert.equal((await storage.getBarber(1))?.avatar, upload);
+    const beforeBytes = Buffer.byteLength(JSON.stringify(full));
+    const afterBytes = Buffer.byteLength(JSON.stringify(compact));
+    assert.ok(afterBytes < beforeBytes / 100);
+    console.log(JSON.stringify({ measurement: "local-pg-catalogue-bytes", beforeBytes, afterBytes, reductionPercent: 100 * (1 - afterBytes / beforeBytes) }));
+    const samples: unknown[] = [];
+    for (let round = 0; round < 6; round++) {
+      for (const references of (round % 2 ? [true, false] : [false, true])) {
+        const timings = createRequestTimings("GET", "/api/barbers");
+        const start = performance.now();
+        await requestTimings.run(timings, () => storage.getBarbers({ avatarReferences: references }));
+        samples.push({ round, references, wallMs: performance.now() - start, timings });
+      }
+    }
+    console.log(JSON.stringify({ measurement: "local-pg-catalogue-read-samples", samples }));
   } finally {
     if (pool) await pool.end();
     if (started) await postgres.stop(); // persistent:false removes only its generated temporary directory
