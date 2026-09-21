@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import {
+  formatPublicBookingMonthOpeningNotice,
+  getPublicBookingMonthOpeningNotice,
   getPublicBookingWindow,
   isDateWithinPublicBookingWindow,
   normalizePublicBookingOpenDay,
@@ -87,7 +89,26 @@ test.describe("janela mensal de marcações públicas", () => {
     await page.goto(`/booking?barberId=${barber.id}&serviceId=${service.id}&date=${lockedDate.toISOString().slice(0, 10)}&time=10:00`);
     await expect(page.getByText("Selecione a Data")).toBeVisible();
     await expect(page.getByText("Resumo da Marcação")).not.toBeVisible();
-    await expect(page.getByText(`As marcações para o próximo mês ficam disponíveis a partir do dia ${bookingWindow.openDay}.`)).toBeVisible();
+  });
+
+  test("mostra o aviso apenas quando o mês seguinte ao calendário ainda está fechado", async ({ page }) => {
+    const now = new Date("2026-09-21T12:00:00Z");
+    const bookingWindow = getPublicBookingWindow(now, "Europe/Lisbon", 20);
+    await page.clock.setFixedTime(now);
+    await page.route("**/api/public-booking-window", (route) => route.fulfill({ json: bookingWindow }));
+
+    await page.goto("/book?barberId=1&serviceId=1&date=2026-09-22");
+    await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
+    const noticePattern = /As marcações para .* ficam disponíveis a partir de/;
+    await expect(page.getByText(noticePattern)).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Go to next month" }).click();
+    const octoberNotice = getPublicBookingMonthOpeningNotice(bookingWindow, "2026-10-01");
+    expect(octoberNotice).not.toBeNull();
+    await expect(page.getByText(formatPublicBookingMonthOpeningNotice(octoberNotice!))).toBeVisible();
+
+    await page.getByRole("button", { name: "Go to previous month" }).click();
+    await expect(page.getByText(noticePattern)).toHaveCount(0);
   });
 
   test("bloqueia criação e reagendamento públicos fora da janela, mas permite administração e cancelamento", async ({ request }) => {

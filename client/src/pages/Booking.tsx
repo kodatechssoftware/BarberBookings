@@ -31,6 +31,10 @@ import {
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
+import {
+  formatPublicBookingMonthOpeningNotice,
+  getPublicBookingMonthOpeningNotice,
+} from "@shared/public-booking-window";
 
 type BookingPreference = {
   step: number;
@@ -381,6 +385,13 @@ export default function Booking() {
 
   const monthStart = startOfMonth(visibleCalendarMonth);
   const monthEnd = endOfMonth(visibleCalendarMonth);
+  const bookingMonthOpeningNotice = useMemo(
+    () => getPublicBookingMonthOpeningNotice(
+      publicBookingWindow,
+      format(visibleCalendarMonth, "yyyy-MM-dd"),
+    ),
+    [publicBookingWindow, visibleCalendarMonth],
+  );
   const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
   const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
   const selectedService = availableServices.find((service) => service.id === selectedServiceId);
@@ -986,11 +997,13 @@ export default function Booking() {
                         ),
                       }}
                     />
-                    {publicBookingWindow?.enabled !== false && <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
-                      {loadingPublicBookingWindow
-                        ? "A carregar o período disponível..."
-                        : `As marcações para o próximo mês ficam disponíveis a partir do dia ${publicBookingWindow?.openDay ?? 20}.`}
-                    </p>}
+                    {(loadingPublicBookingWindow || bookingMonthOpeningNotice) && publicBookingWindow?.enabled !== false && (
+                      <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
+                        {loadingPublicBookingWindow
+                          ? "A carregar o período disponível..."
+                          : formatPublicBookingMonthOpeningNotice(bookingMonthOpeningNotice!)}
+                      </p>
+                    )}
                     <div className="mt-2 flex items-center justify-center gap-2 text-[11px] text-gray-500">
                       <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_0.45rem_hsl(var(--primary)/0.45)]" />
                       <span>Dias com horários disponíveis</span>
