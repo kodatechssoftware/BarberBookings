@@ -13,6 +13,10 @@ import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment 
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
 import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
+import {
+  formatPublicBookingMonthOpeningNotice,
+  getPublicBookingMonthOpeningNotice,
+} from "@shared/public-booking-window";
 
 function formatPublicDateTime(value: Date | string, timeZone: string, dateStyle: "short" | "long") {
   const date = new Date(value);
@@ -30,6 +34,7 @@ export default function Reschedule() {
   const token = params?.token;
   const { toast } = useToast();
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(startOfToday());
+  const [visibleCalendarMonth, setVisibleCalendarMonth] = useState<Date>(startOfToday());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [rescheduledStart, setRescheduledStart] = useState<Date | null>(null);
@@ -48,11 +53,20 @@ export default function Reschedule() {
     format(date, "yyyy-MM-dd") >= publicBookingWindow.today &&
     format(date, "yyyy-MM-dd") <= publicBookingWindow.maxDate
   );
+  const bookingMonthOpeningNotice = useMemo(
+    () => getPublicBookingMonthOpeningNotice(
+      publicBookingWindow,
+      format(visibleCalendarMonth, "yyyy-MM-dd"),
+    ),
+    [publicBookingWindow, visibleCalendarMonth],
+  );
 
   useEffect(() => {
     if (appointment?.startTime && publicBookingWindow) {
       const appointmentDate = parseISO(appointment.startTime);
-      setSelectedDate(isPublicDateAllowed(appointmentDate) ? appointmentDate : parseISO(publicBookingWindow.today));
+      const initialDate = isPublicDateAllowed(appointmentDate) ? appointmentDate : parseISO(publicBookingWindow.today);
+      setSelectedDate(initialDate);
+      setVisibleCalendarMonth(initialDate);
       setSelectedTime(null);
     }
   }, [appointment?.startTime, publicBookingWindow]);
@@ -173,8 +187,11 @@ export default function Reschedule() {
             <Calendar
               mode="single"
               selected={selectedDate}
+              month={visibleCalendarMonth}
+              onMonthChange={setVisibleCalendarMonth}
               onSelect={(date) => {
                 setSelectedDate(date);
+                if (date) setVisibleCalendarMonth(date);
                 setSelectedTime(null);
               }}
               toMonth={maxPublicBookingDate}
@@ -182,11 +199,13 @@ export default function Reschedule() {
               locale={pt}
               className="rounded-md mx-auto"
             />
-            {publicBookingWindow?.enabled !== false && <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
-              {loadingPublicBookingWindow
-                ? "A carregar o período disponível..."
-                : `As marcações para o próximo mês ficam disponíveis a partir do dia ${publicBookingWindow?.openDay ?? 20}.`}
-            </p>}
+            {(loadingPublicBookingWindow || bookingMonthOpeningNotice) && publicBookingWindow?.enabled !== false && (
+              <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
+                {loadingPublicBookingWindow
+                  ? "A carregar o período disponível..."
+                  : formatPublicBookingMonthOpeningNotice(bookingMonthOpeningNotice!)}
+              </p>
+            )}
           </div>
 
           <div className="bg-card border border-white/10 rounded-xl p-4">

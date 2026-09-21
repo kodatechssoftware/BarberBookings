@@ -10,6 +10,11 @@ export type PublicBookingWindow = {
   nextOpeningDate: string;
 };
 
+export type PublicBookingMonthOpeningNotice = {
+  bookingMonth: string;
+  openingDate: string;
+};
+
 type CalendarDate = { year: number; month: number; day: number };
 
 function dateKey({ year, month, day }: CalendarDate) {
@@ -68,4 +73,45 @@ export function getPublicBookingWindow(
 export function isDateWithinPublicBookingWindow(date: Date, window: PublicBookingWindow, timeZone: string) {
   const requestedDate = dateKey(getCalendarDateInTimeZone(date, timeZone));
   return requestedDate >= window.today && requestedDate <= window.maxDate;
+}
+
+export function getPublicBookingMonthOpeningNotice(
+  window: PublicBookingWindow | undefined,
+  visibleMonthDate: string,
+): PublicBookingMonthOpeningNotice | null {
+  if (!window?.enabled) return null;
+
+  const match = /^(\d{4})-(\d{2})-\d{2}$/.exec(visibleMonthDate);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || month < 1 || month > 12) return null;
+
+  const nextMonth = shiftMonth(year, month, 1);
+  const nextMonthFirstDate = dateKey({ ...nextMonth, day: 1 });
+  if (nextMonthFirstDate <= window.maxDate) return null;
+
+  return {
+    bookingMonth: nextMonthFirstDate.slice(0, 7),
+    openingDate: window.nextOpeningDate,
+  };
+}
+
+export function formatPublicBookingMonthOpeningNotice(
+  notice: PublicBookingMonthOpeningNotice,
+  locale = "pt-PT",
+) {
+  const bookingMonth = new Date(`${notice.bookingMonth}-01T00:00:00.000Z`);
+  const openingDate = new Date(`${notice.openingDate}T00:00:00.000Z`);
+  const monthName = new Intl.DateTimeFormat(locale, {
+    month: "long",
+    timeZone: "UTC",
+  }).format(bookingMonth);
+  const formattedOpeningDate = new Intl.DateTimeFormat(locale, {
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  }).format(openingDate);
+
+  return `As marcações para ${monthName} ficam disponíveis a partir de ${formattedOpeningDate}.`;
 }
