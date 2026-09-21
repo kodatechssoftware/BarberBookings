@@ -6,11 +6,13 @@ Esta alteração adiciona observabilidade, não uma otimização funcional. Pres
 as otimizações de avatars e da Home, a ordem do startup, as queries, sessões,
 workers, flags e a configuração do pool. Não inclui migrations nem deploy.
 
-Os logs DEV fornecidos mostram aproximadamente 17 s entre `starting
-BarberBookings API` e `serving`. Ainda não existe decomposição desse intervalo
-no Render. Os 15–24 ms medidos anteriormente para a reparação de encoding em
-PostgreSQL local não permitem estimar a mesma operação remota. Não repetir
-essa medição local como substituto do diagnóstico remoto.
+Os primeiros logs DEV mostravam aproximadamente 17 s entre `starting
+BarberBookings API` e `serving`. A recolha posterior em DEV Render Free
+identificou ~9,55 s no repair e ~4,18 s no demo-sync num startup de ~20 s.
+Não extrapolar estes tempos para Production pago; demo-sync não faz parte
+do startup não-demo. Os 15–24 ms medidos anteriormente em PostgreSQL local
+também não estimam o custo remoto. A otimização posterior, limitada ao repair,
+está descrita em [equivalência e medições](text-encoding-repair-equivalence.md).
 
 ## Ativação e formato
 
