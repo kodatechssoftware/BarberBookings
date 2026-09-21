@@ -3721,7 +3721,8 @@ export default function Admin() {
                                     bio: bio || null,
                                     email,
                                     color: normalizeBarberColor(color),
-                                    avatar: avatar || null,
+                                    ...(Object.prototype.hasOwnProperty.call(barberAvatarDrafts, barber.id)
+                                      ? { avatar: avatar || null } : {}),
                                     ...getBarberCompensationPayload(compensationDraft),
                                   };
                                   if (hasServiceDraft) {

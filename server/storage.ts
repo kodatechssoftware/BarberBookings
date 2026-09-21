@@ -54,7 +54,8 @@ import {
   type CreateBusinessExpenseRequest,
   type CreateWhatsappMessageRequest
 } from "@shared/schema";
-import { eq, and, gte, gt, lt, isNull, sql, desc, type SQL } from "drizzle-orm";
+import { eq, and, gte, gt, lt, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
+import { barberAvatarReference, INLINE_BARBER_AVATAR_PATTERN } from "./barber-avatars";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
 
@@ -337,7 +338,7 @@ function getAppointmentUpdateChanges(
 
 export interface IStorage {
   // Barbers
-  getBarbers(): Promise<Barber[]>;
+  getBarbers(options?: { avatarReferences?: boolean }): Promise<Barber[]>;
   getBarber(id: number): Promise<Barber | undefined>;
   getBarberByEmail(email: string): Promise<Barber | undefined>;
   createBarber(barber: CreateBarberRequest): Promise<Barber>;
@@ -531,7 +532,17 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getBarbers(): Promise<Barber[]> {
+  async getBarbers(options?: { avatarReferences?: boolean }): Promise<Barber[]> {
+    if (options?.avatarReferences) {
+      // Do not transfer the embedded images from PostgreSQL into the catalogue.
+      // md5 only versions the URL; the stored image is neither changed nor resized.
+      return db.select({
+        ...getTableColumns(barbers),
+        avatar: sql<string | null>`case when ${barbers.avatar} ~ ${INLINE_BARBER_AVATAR_PATTERN}
+          then '/api/barbers/' || ${barbers.id} || '/avatar?v=' || md5(${barbers.avatar})
+          else ${barbers.avatar} end`,
+      }).from(barbers).orderBy(barbers.id);
+    }
     return await db.select().from(barbers).orderBy(barbers.id);
   }
 
@@ -1744,8 +1755,10 @@ export class MemoryStorage implements IStorage {
     }
   }
 
-  async getBarbers(): Promise<Barber[]> {
-    return [...this.barbers].sort((a, b) => a.id - b.id);
+  async getBarbers(options?: { avatarReferences?: boolean }): Promise<Barber[]> {
+    return [...this.barbers].sort((a, b) => a.id - b.id).map((barber) => options?.avatarReferences
+      ? { ...barber, avatar: barberAvatarReference(barber.id, barber.avatar) }
+      : barber);
   }
 
   async getBarber(id: number): Promise<Barber | undefined> {

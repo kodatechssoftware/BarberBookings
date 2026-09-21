@@ -652,3 +652,32 @@ test("[multi-location] horário semanal por loja: UI, cache, público, manual e 
     expect(busy.some((appointment: any) => appointment.startTime === iso(monday, "15:30"))).toBe(false);
   }
 });
+
+test("[multi-location] photo references carry shop context and enforce visibility", async ({ request, playwright, baseURL }) => {
+  const locations = await ensureLocations(request, 2);
+  const location = locations[1];
+  await request.patch(`/api/admin/locations/${location.id}`, { data: { isActive: true } });
+  const headers = { "X-Location-Id": String(location.id) };
+  const avatar = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6bpIAAAAASUVORK5CYII=";
+  const create = await request.post("/api/barbers", { headers, data: {
+    name: "Scoped image QA", specialty: "Corte", avatar, isVisible: true, serviceIds: [],
+  } });
+  expect(create.status()).toBe(201);
+  const barber = await create.json();
+  const anonymous = await playwright.request.newContext({ baseURL });
+  try {
+    const records = await (await anonymous.get("/api/barbers?avatarMode=reference", { headers })).json();
+    const reference = records.find((item: any) => item.id === barber.id).avatar;
+    expect(reference).toContain(`locationId=${location.id}`);
+    // An image cannot send X-Location-Id; the URL alone must select the right shop.
+    expect((await anonymous.get(reference)).status()).toBe(200);
+    expect((await anonymous.get(reference.replace(`locationId=${location.id}`, `locationId=${locations[0].id}`))).status()).toBe(404);
+    expect((await anonymous.get(reference.replace(`locationId=${location.id}`, "locationId=invalid"))).status()).toBe(400);
+    await request.patch(`/api/barbers/${barber.id}`, { headers, data: { isVisible: false } });
+    expect((await anonymous.get(reference)).status()).toBe(404);
+    expect((await request.get(reference)).status()).toBe(200);
+  } finally {
+    await request.delete(`/api/barbers/${barber.id}`, { headers });
+    await anonymous.dispose();
+  }
+});

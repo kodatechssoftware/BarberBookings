@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl, type CreateBarberRequest } from "@shared/routes";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, toApiUrl } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
 export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolean }) {
@@ -10,14 +10,18 @@ export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolea
     enabled: options?.enabled ?? true,
     queryFn: async () => {
       const url = options?.includeHidden
-        ? `${api.barbers.list.path}?includeHidden=true`
-        : api.barbers.list.path;
+        ? `${api.barbers.list.path}?includeHidden=true&avatarMode=reference`
+        : `${api.barbers.list.path}?avatarMode=reference`;
       const res = await apiFetch(url, {
         cache: "no-store",
         headers: { "Cache-Control": "no-cache", ...locationHeaders(locationId) },
       });
       if (!res.ok) throw new Error("Failed to fetch barbers");
-      return api.barbers.list.responses[200].parse(await res.json());
+      return api.barbers.list.responses[200].parse(await res.json()).map((barber) => ({
+        ...barber,
+        avatar: barber.avatar?.startsWith(`/api/barbers/${barber.id}/avatar?`)
+          ? toApiUrl(barber.avatar) : barber.avatar,
+      }));
     },
     retry: 2,
     retryDelay: 800,
