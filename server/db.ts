@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
+import { buildTextEncodingRepairQuery } from "./text-encoding-repair";
 
 
 const { Pool } = pg;
@@ -359,15 +360,12 @@ export async function repairKnownTextEncodingArtifacts() {
       const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
       const quotedColumnName = quoteIdentifier(columnName);
 
-      for (const [corruptedText, correctedText] of knownTextEncodingRepairs) {
-        const result = await client.query(
-          `UPDATE ${qualifiedTableName}
-           SET ${quotedColumnName} = replace(${quotedColumnName}, $1, $2)
-           WHERE position($1 in ${quotedColumnName}) > 0`,
-          [corruptedText, correctedText],
-        );
-        repairedRows += result.rowCount || 0;
-      }
+      const result = await client.query<{ repaired_rows: string }>(
+        buildTextEncodingRepairQuery(qualifiedTableName, quotedColumnName, knownTextEncodingRepairs),
+      );
+      // Preserve the old sum of matched rows per substitution, not just the
+      // number of rows written by this consolidated UPDATE.
+      repairedRows += Number(result.rows[0].repaired_rows);
     }
 
     await client.query("COMMIT");
