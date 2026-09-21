@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
 import { instrumentPool } from "./performance-timings";
+import { startupTimings } from "./startup-timings";
 
 
 const { Pool } = pg;
@@ -21,6 +22,7 @@ if (!process.env.DATABASE_URL && !useMemoryStorage) {
   );
 }
 
+const finishPoolConfiguration = startupTimings.start("db-pool-configuration");
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL || fallbackMemoryDatabaseUrl,
   max: getPositiveInteger(process.env.DATABASE_POOL_MAX, 2),
@@ -41,6 +43,9 @@ pool.on("error", (error) => {
 });
 
 export const db = drizzle(pool, { schema });
+// Pool construction is lazy: first connection acquisition belongs to the first
+// SQL phase, not this configuration duration.
+finishPoolConfiguration();
 
 function quoteIdentifier(identifier: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {

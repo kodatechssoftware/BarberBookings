@@ -23,6 +23,7 @@ import {
   verifyMetaWebhookSignature,
 } from "./meta-webhook";
 import { pool } from "./db";
+import { startupTimings } from "./startup-timings";
 import {
   performanceTimingsEnabled,
   recordPhase,
@@ -1487,29 +1488,31 @@ export async function registerRoutes(
   httpServer: Server
 ): Promise<Server> {
   // Session middleware
-  const sessionConfig: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || "baptista-barber-shop-secret",
-    resave: false,
-    saveUninitialized: false,
-    proxy: isProduction,
-    cookie: {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: getSessionSameSite(),
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    },
-  };
+  const sessionMiddleware = await startupTimings.measure("session-store-initialization", async () => {
+    const sessionConfig: session.SessionOptions = {
+      secret: process.env.SESSION_SECRET || "baptista-barber-shop-secret",
+      resave: false,
+      saveUninitialized: false,
+      proxy: isProduction,
+      cookie: {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: getSessionSameSite(),
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      },
+    };
 
-  if (!useMemoryStorage) {
-    await ensureSessionStoreTable();
-    sessionConfig.store = new PostgresSessionStore({
-      pool,
-      schemaName: sessionSchemaName,
-      createTableIfMissing: false,
-    });
-  }
+    if (!useMemoryStorage) {
+      await startupTimings.measure("ensureSessionStoreTable", ensureSessionStoreTable);
+      sessionConfig.store = new PostgresSessionStore({
+        pool,
+        schemaName: sessionSchemaName,
+        createTableIfMissing: false,
+      });
+    }
 
-  const sessionMiddleware = session(sessionConfig);
+    return session(sessionConfig);
+  });
   app.use((req, res, next) => {
     if (!performanceTimingsEnabled || !requestTimings.getStore()) {
       return sessionMiddleware(req, res, next);
@@ -5326,7 +5329,7 @@ export async function registerRoutes(
   });
 
   // === SEED DATA ===
-  await seedDatabase();
+  await startupTimings.measure("seedDatabase", seedDatabase);
 
   return httpServer;
 }
@@ -5507,9 +5510,9 @@ async function seedDatabase() {
     throw new Error("DEMO_ADMIN_PASSWORD é obrigatória em modo demo e deve ter pelo menos 4 caracteres.");
   }
 
-  if (await storage.hasData()) {
+  if (await startupTimings.measure("seed.hasData", () => storage.hasData())) {
     // Check if admin exists, if not create one
-    const admin = await storage.getAdminByUsername("admin");
+    const admin = await startupTimings.measure("seed.admin-read", () => storage.getAdminByUsername("admin"));
     if (!admin) {
       if (!configuredAdminPassword) {
         throw new Error("ADMIN_INITIAL_PASSWORD é obrigatória para criar o administrador inicial.");
@@ -5523,8 +5526,8 @@ async function seedDatabase() {
         console.log("Demo administrator password synchronized from DEMO_ADMIN_PASSWORD.");
       }
     }
-    if (isDemoEnvironment) await synchronizePowerhouseDemoData();
-    await ensureDefaultShopAvailability();
+    if (isDemoEnvironment) await startupTimings.measure("seed.demo-sync", synchronizePowerhouseDemoData);
+    await startupTimings.measure("ensureDefaultShopAvailability", ensureDefaultShopAvailability);
     return;
   }
 
@@ -5619,7 +5622,7 @@ async function seedDatabase() {
   }
   const hashedPassword = await bcrypt.hash(configuredAdminPassword, 10);
   await storage.createAdmin({ username: "admin", password: hashedPassword });
-  await ensureDefaultShopAvailability();
+  await startupTimings.measure("ensureDefaultShopAvailability", ensureDefaultShopAvailability);
 
   console.log("Database seeded!");
 }

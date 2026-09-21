@@ -286,6 +286,12 @@ podem sobrepor-se em queries paralelas; nao representam exclusivamente tempo
 de execucao dentro do PostgreSQL. Os logs nao incluem query strings, corpos
 dos pedidos, SQL, contactos ou tokens. Desliga a flag apos a medicao.
 
+A mesma flag produz logs `[startup]` por fase antes do `listen`, incluindo
+ensures, reparacao de encoding, sessoes e seed. Mantem a ordem e as operacoes
+existentes; nao move trabalho para background nem altera o pool.
+Ver [diagnostico de startup e ensaio do pool](docs/performance-startup-and-pool.md)
+para interpretar os tempos, o mapa de pedidos da Agenda e o protocolo DEV 4/6/8.
+
 O carregamento do catalogo conta as associacoes ativas a lojas de todos os barbeiros
 numa unica query, sem cache entre pedidos. O middleware reutiliza a lista de
 localizacoes apenas dentro do mesmo pedido, mantendo as validacoes de acesso.

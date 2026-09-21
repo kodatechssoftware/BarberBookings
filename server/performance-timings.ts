@@ -15,6 +15,9 @@ type AcquireKind = "idle" | "new" | "queued";
 type Phase = "session" | "location";
 
 export type RequestTimings = {
+  // Startup scopes can create timers. Ignore their inherited context once the
+  // measured phase ends; ordinary request scopes retain existing behaviour.
+  closed?: boolean;
   method: string;
   path: string;
   startedAt: number;
@@ -101,7 +104,7 @@ export function instrumentPool(pool: Pool, enabled = performanceTimingsEnabled) 
     const originalQuery = client.query.bind(client);
     (client as any).query = (...args: any[]) => {
       const timings = requestTimings.getStore();
-      if (!timings) return (originalQuery as any)(...args);
+      if (!timings || timings.closed) return (originalQuery as any)(...args);
 
       timings.sqlCount += 1;
       const startedAt = performance.now();
@@ -135,7 +138,7 @@ export function instrumentPool(pool: Pool, enabled = performanceTimingsEnabled) 
   const originalConnect = pool.connect.bind(pool);
   (pool as any).connect = (callback?: (...args: any[]) => void) => {
     const timings = requestTimings.getStore();
-    if (!timings) return (originalConnect as any)(callback);
+    if (!timings || timings.closed) return (originalConnect as any)(callback);
 
     const kind: AcquireKind = pool.idleCount > 0
       ? "idle"

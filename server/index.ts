@@ -19,7 +19,10 @@ import {
   repairKnownTextEncodingArtifacts,
 } from "./db";
 import { performanceTimingMiddleware } from "./performance-timings";
+import { startupTimings } from "./startup-timings";
 
+startupTimings.mark("entry-module-ready");
+const finishHttpConfiguration = startupTimings.start("http-configuration");
 const app = express();
 const httpServer = createServer(app);
 const isProduction = process.env.NODE_ENV === "production";
@@ -179,23 +182,32 @@ app.use((req, res, next) => {
   next();
 });
 
+finishHttpConfiguration();
+
 (async () => {
-  validateRuntimeConfiguration();
+  startupTimings.sync("runtime-validation", validateRuntimeConfiguration);
+  const finishStartup = startupTimings.start("starting-to-listen");
   log(`starting BarberBookings API (${getSafeDatabaseTarget()} appPoolMax=${pool.options.max})`);
 
-  await ensureServiceAgendaLabelColumn();
-  await ensureAppointmentPaymentMethodColumn();
-  await ensureBarberServicesTable();
-  await ensureBarberCompensationRulesTable();
-  await ensureBusinessExpensesTable();
-  await ensureAppointmentOverlapProtection();
-  const repairedEncodingRows = await repairKnownTextEncodingArtifacts();
+  await startupTimings.measure("ensureServiceAgendaLabelColumn", ensureServiceAgendaLabelColumn);
+  await startupTimings.measure("ensureAppointmentPaymentMethodColumn", ensureAppointmentPaymentMethodColumn);
+  await startupTimings.measure("ensureBarberServicesTable", ensureBarberServicesTable);
+  await startupTimings.measure("ensureBarberCompensationRulesTable", ensureBarberCompensationRulesTable);
+  await startupTimings.measure("ensureBusinessExpensesTable", ensureBusinessExpensesTable);
+  await startupTimings.measure("ensureAppointmentOverlapProtection", ensureAppointmentOverlapProtection);
+  const repairedEncodingRows = await startupTimings.measure("repairKnownTextEncodingArtifacts", repairKnownTextEncodingArtifacts);
   if (repairedEncodingRows > 0) {
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
   }
-  const server = await registerRoutes(app, httpServer);
-  if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
+  const server = await startupTimings.measure("registerRoutes", () => registerRoutes(app, httpServer));
+  if (appointmentNotificationWorkerEnabled) {
+    // Measure scheduling, not the unawaited first tick or later interval work.
+    const finishWorkers = startupTimings.start("workers");
+    startAppointmentNotificationWorker();
+    finishWorkers();
+  } else startupTimings.mark("workers", "skipped");
 
+  const finishFinalHttpConfiguration = startupTimings.start("http-final-configuration");
   app.use("/api", (_req, res) => {
     res.status(404).json({ message: "Endpoint não encontrado." });
   });
@@ -220,19 +232,25 @@ app.use((req, res, next) => {
     res.status(status).json({ message });
   });
 
+  finishFinalHttpConfiguration();
+
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (isProduction) {
-    if (hasStaticBuild()) {
-      serveStatic(app);
-    } else {
-      log("static client build not found, serving API only");
-    }
+    startupTimings.sync("static-setup", () => {
+      if (hasStaticBuild()) {
+        serveStatic(app);
+      } else {
+        log("static client build not found, serving API only");
+      }
+    });
   } else {
-    const viteDevServerModule = "./vite";
-    const { setupVite } = await import(viteDevServerModule);
-    await setupVite(httpServer, app);
+    await startupTimings.measure("vite-setup", async () => {
+      const viteDevServerModule = "./vite";
+      const { setupVite } = await import(viteDevServerModule);
+      await setupVite(httpServer, app);
+    });
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
@@ -240,7 +258,12 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  startupTimings.totalBeforeListen();
+  const finishListen = startupTimings.start("http-listen");
   httpServer.listen(port, () => {
+    finishListen();
+    finishStartup();
+    startupTimings.mark("listening");
     log(`serving on http://localhost:${port}`);
   });
 })().catch((error) => {
