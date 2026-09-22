@@ -196,6 +196,8 @@ export type ClaimMetaInboundAutoReplyResult = {
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const appointmentConflictCode = "APPOINTMENT_CONFLICT";
+const appointmentOverlapConstraintName = "appointments_no_booked_overlap";
+const postgresExclusionViolationCode = "23P01";
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const shopDateTimePartsFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: SHOP_TIME_ZONE,
@@ -258,13 +260,30 @@ export class AppointmentConflictError extends Error {
 }
 
 export function isAppointmentConflictError(error: unknown) {
-  return Boolean(
-    error instanceof AppointmentConflictError ||
-    (error && typeof error === "object" && "code" in error && (
-      (error as { code?: unknown }).code === appointmentConflictCode ||
-      (error as { code?: unknown }).code === "23P01"
-    )),
-  );
+  const visited = new Set<object>();
+  let current = error;
+
+  // DrizzleQueryError keeps the PostgreSQL DatabaseError in `cause`; transaction
+  // wrappers can add further levels. Only this appointment constraint maps to 409.
+  while (current && typeof current === "object") {
+    if (visited.has(current)) return false;
+    visited.add(current);
+
+    if (current instanceof AppointmentConflictError) return true;
+
+    const candidate = current as { code?: unknown; constraint?: unknown; cause?: unknown };
+    if (candidate.code === appointmentConflictCode) return true;
+    if (
+      candidate.code === postgresExclusionViolationCode
+      && candidate.constraint === appointmentOverlapConstraintName
+    ) {
+      return true;
+    }
+
+    current = candidate.cause;
+  }
+
+  return false;
 }
 
 function toAppointmentDate(value: Date | string) {
