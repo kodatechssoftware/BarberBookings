@@ -4,7 +4,7 @@
 
 O repair continua no mesmo ponto do startup, em todos os arranques PostgreSQL,
 com BEGIN/COMMIT, rollback e libertação da ligação. Não passa a one-time nem
-background. Sem alterações a pool, ensure*, demo-sync, migrations ou dados-seed.
+background. Sem alterações a pool, ensure*, migrations ou dados-seed.
 O modo memory continua a ignorar esta rotina.
 
 Antes: BEGIN + 112 UPDATEs + COMMIT = **114 comandos/round-trips**.
@@ -143,22 +143,3 @@ ser medido, não extrapolado destes números.
 - Garantias de booking/anti-overlap estão fora desta alteração. Não foram
   modificadas transações de marcações, ensures ou migrations.
 - Os ~9,55 s anteriores eram DEV Render Free, não uma medida de PRD pago.
-
-## Nova medição Render DEV — operador
-
-1. Selecionar só **BarberBookings DEV**, branch `development`, e o SHA deste
-   commit. Não promover para main nem fazer deploy Production.
-2. Manter `APP_ENV=development`, `PERFORMANCE_TIMINGS_ENABLED=true` e
-   `DATABASE_POOL_MAX=4`, sem alterar outras variáveis.
-3. Fazer deploy manual do commit e recolher `[startup]` até `listening`.
-4. Na fase `repairKnownTextEncodingArtifacts`, confirmar **sqlCount=9** em vez
-   de 114. Registar durationMs, sqlRoundTripMs e métricas acquire*. Continua
-   a adquirir uma ligação para a transação completa.
-5. Comparar `starting-to-listen` e `total-before-listen`, mantendo demo-sync
-   separado. Não atribuir variações do seed/free spin-up/rede a esta alteração.
-6. Para avaliar variabilidade, repetir mais dois arranques DEV do mesmo SHA e
-   configuração, identificando deploy/restart/spin-up. Não reintroduzir dados
-   para fabricar comparação; a BD já pode estar reparada. Não extrapolar para PRD.
-7. Enviar apenas logs sanitizados, sem credenciais/dados de clientes.
-
-Nenhum deploy ou alteração de configuração externa é efetuado pelos testes.

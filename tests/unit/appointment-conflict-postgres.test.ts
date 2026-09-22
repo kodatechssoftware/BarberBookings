@@ -102,7 +102,6 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
       PUBLIC_URL: `http://127.0.0.1:${appPort}`,
       SESSION_SECRET: "appointment-conflict-integration-secret",
       ADMIN_INITIAL_PASSWORD: "Appointment-Conflict-Test-Admin-2026!",
-      DEMO_MODE: "false",
       MULTI_LOCATION_ENABLED: "false",
       MAX_LOCATIONS: "1",
       PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED: "false",
@@ -112,7 +111,6 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
       MESSAGING_PROVIDER: "none",
       RESEND_API_KEY: "",
       RESEND_FROM_EMAIL: "",
-      PERFORMANCE_TIMINGS_ENABLED: "false",
     } satisfies NodeJS.ProcessEnv;
 
     await runCommand(
@@ -203,7 +201,6 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
       DATABASE_SCHEMA: "public",
       DATABASE_POOL_MAX: "6",
       USE_MEMORY_STORAGE: "false",
-      PERFORMANCE_TIMINGS_ENABLED: "false",
     });
     const [{ db, pool: storagePool }, { appointments }, { isAppointmentConflictError }] = await Promise.all([
       import("../../server/db"),
