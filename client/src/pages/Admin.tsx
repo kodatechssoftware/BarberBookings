@@ -32,7 +32,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AppointmentsTab, blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
+import { AppointmentsTab, blockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
 import { LocationsTab } from "@/components/admin/LocationsTab";
@@ -41,6 +41,7 @@ import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationS
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
+import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import { locationHeaders, setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 import type { ShopLocation } from "@shared/locations";
 import {
@@ -71,6 +72,11 @@ import {
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
+import {
+  DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES,
+  createClockAlignedTimeOptions,
+  isClockTimeAligned,
+} from "@shared/booking-slot-interval";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -1471,10 +1477,9 @@ export default function Admin() {
     enabled: user?.role === "admin" && !isLoadingAgenda,
     refetchInterval: 15000,
   });
-  const { data: multiLocationConfig } = useQuery<{ enabled: boolean; maxLocations: number }>({
-    queryKey: ["/api/multi-location/config"],
-    enabled: user?.authorized === true,
-  });
+  const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
+  const bookingSlotIntervalMinutes = multiLocationConfig?.bookingSlotIntervalMinutes
+    ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
   const activeLocationId = useActiveLocationId();
   const { data: availableLocations = [] } = useQuery<ShopLocation[]>({
     queryKey: ["/api/account/locations"],
@@ -2007,11 +2012,14 @@ export default function Admin() {
     date?: Date,
     time?: string,
   ) => {
+    const initialTimes = time && (
+      mode === "exception" || isClockTimeAligned(time, bookingSlotIntervalMinutes)
+    ) ? [time] : [];
     setBlockData((current) => ({
       ...current,
       barberId: barberId || current.barberId,
       serviceId: "",
-      times: time ? [time] : [],
+      times: initialTimes,
       name: "",
       phone: mode === "manual" ? "" : "900000000",
       email: "",
@@ -2047,6 +2055,16 @@ export default function Admin() {
   };
 
   const handleMoveAppointment = async (appointmentId: number, date: Date, time: string, barberId?: number) => {
+    if (!isClockTimeAligned(time, bookingSlotIntervalMinutes)) {
+      toast({
+        title: "Hora não permitida",
+        description: bookingSlotIntervalMinutes === 60
+          ? "Escolha uma hora certa para mover a marcação."
+          : `Escolha uma hora alinhada em intervalos de ${bookingSlotIntervalMinutes} minutos.`,
+        variant: "destructive",
+      });
+      return;
+    }
     const [hours, minutes] = time.split(":").map(Number);
     const startTime = new Date(date);
     startTime.setHours(hours, minutes, 0, 0);
@@ -2622,6 +2640,24 @@ export default function Admin() {
     ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
     : 30;
 
+  const manualBookingTimeOptions = useMemo(() => [
+    ...createClockAlignedTimeOptions({
+      startMinute: 9 * 60,
+      endMinuteExclusive: 13 * 60,
+      intervalMinutes: bookingSlotIntervalMinutes,
+    }),
+    ...createClockAlignedTimeOptions({
+      startMinute: 14 * 60,
+      endMinuteExclusive: 20 * 60,
+      intervalMinutes: bookingSlotIntervalMinutes,
+    }),
+  ], [bookingSlotIntervalMinutes]);
+  const manualBookingOutsideHoursTimeOptions = useMemo(() => createClockAlignedTimeOptions({
+    startMinute: 6 * 60,
+    endMinuteExclusive: 23 * 60,
+    intervalMinutes: bookingSlotIntervalMinutes,
+  }), [bookingSlotIntervalMinutes]);
+
   const createBlockStartTime = (date: Date, timeStr: string) => {
     const [hours, minutes] = timeStr.split(':').map(Number);
     const startTime = new Date(date);
@@ -2633,8 +2669,8 @@ export default function Admin() {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
     const barberId = Number(blockData.barberId);
 
-    const timeOptions = blockData.isManualBooking && blockData.allowOutsideHours
-      ? outsideHoursBlockTimeOptions
+    const timeOptions = blockData.isManualBooking
+      ? blockData.allowOutsideHours ? manualBookingOutsideHoursTimeOptions : manualBookingTimeOptions
       : blockTimeOptions;
 
     return timeOptions.filter((time) => {
@@ -2659,6 +2695,8 @@ export default function Admin() {
     blockData.allowOutsideHours,
     blockData.isManualBooking,
     hasLoadedBlockAppointments,
+    manualBookingOutsideHoursTimeOptions,
+    manualBookingTimeOptions,
     selectedBlockDuration,
     services,
     shopAvailabilityRows,
@@ -3216,6 +3254,7 @@ export default function Admin() {
           appointments={[...agendaAppointmentList, ...appointmentList]}
           availabilityRows={(allAvailabilityRows as AvailabilityRow[] | undefined) ?? []}
           shopAvailabilityRows={(shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? []}
+          bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
           toast={toast}
           getBarberName={getBarberName}
           getServiceName={getServiceName}
@@ -3347,6 +3386,7 @@ export default function Admin() {
           isCalendarOpen={isCalendarOpen}
           onCalendarOpenChange={setIsCalendarOpen}
           availableBlockTimes={availableBlockTimes}
+          bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
           isCheckingAvailability={Boolean(blockData.barberId) && !hasLoadedBlockAppointments}
           onSubmit={handleBlockTime}
         />

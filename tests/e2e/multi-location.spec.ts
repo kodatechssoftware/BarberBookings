@@ -602,14 +602,18 @@ test("[multi-location] horário semanal por loja: UI, cache, público, manual e 
       await page.getByRole("button", { name: "Go to next month" }).click();
     }
     await expect(targetMonth).toBeVisible();
-    await targetMonth.getByRole("gridcell", { name: String(day.getDate()), exact: true }).click();
+    await targetMonth.locator("[role='gridcell']:not(.day-outside)")
+      .filter({ hasText: new RegExp(`^${day.getDate()}$`) })
+      .click();
     await expect(page.locator("button[aria-selected='true']")).toHaveText(String(day.getDate()));
     await expect(page.getByRole("button", { name: index === 0 ? "09:00h" : "10:00h", exact: true })).toBeEnabled();
     if (index === 1) await expect(page.getByRole("button", { name: "09:00h", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "12:00h", exact: true })).toBeDisabled();
     const closedDay = new Date(monday);
     closedDay.setDate(closedDay.getDate() + (index === 0 ? 3 : 0));
-    await targetMonth.getByRole("gridcell", { name: String(closedDay.getDate()), exact: true }).click();
+    await targetMonth.locator("[role='gridcell']:not(.day-outside)")
+      .filter({ hasText: new RegExp(`^${closedDay.getDate()}$`) })
+      .click();
     await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ })).toHaveCount(0);
   }
   for (const shop of [shopA, shopB]) {

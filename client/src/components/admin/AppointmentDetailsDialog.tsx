@@ -32,6 +32,10 @@ import {
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch } from "@/lib/api";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
+import {
+  isClockTimeAligned,
+  type BookingSlotIntervalMinutes,
+} from "@shared/booking-slot-interval";
 
 type AdminAppointment = {
   id: number;
@@ -63,6 +67,7 @@ function EditAppointmentDialog({
   appointments,
   availabilityRows,
   shopAvailabilityRows,
+  bookingSlotIntervalMinutes,
   toast,
 }: {
   appointment: AdminAppointment;
@@ -71,6 +76,7 @@ function EditAppointmentDialog({
   appointments?: AdminAppointment[];
   availabilityRows?: AvailabilityRow[];
   shopAvailabilityRows?: ShopAvailabilityRow[];
+  bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   toast: ReturnType<typeof useToast>["toast"];
 }) {
   const [open, setOpen] = useState(false);
@@ -181,6 +187,20 @@ function EditAppointmentDialog({
       return;
     }
 
+    const originalDate = format(parseISO(appointment.startTime), "yyyy-MM-dd");
+    const originalTime = format(parseISO(appointment.startTime), "HH:mm");
+    const startTimeChanged = dateValue !== originalDate || timeValue !== originalTime;
+    if (startTimeChanged && !isClockTimeAligned(timeValue, bookingSlotIntervalMinutes)) {
+      toast({
+        title: "Hora não permitida",
+        description: bookingSlotIntervalMinutes === 60
+          ? "Escolha uma hora certa para reagendar."
+          : `Escolha uma hora alinhada em intervalos de ${bookingSlotIntervalMinutes} minutos.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!hasCompatibleService) {
       toast({ title: "Serviço inválido", description: "Escolha um serviço compatível com o barbeiro.", variant: "destructive" });
       return;
@@ -226,7 +246,13 @@ function EditAppointmentDialog({
             </div>
             <div className="space-y-2">
               <Label>Hora</Label>
-              <Input type="time" value={timeValue} onChange={(event) => setTimeValue(event.target.value)} className="bg-background border-white/10 text-white" />
+              <Input
+                type="time"
+                value={timeValue}
+                step={bookingSlotIntervalMinutes * 60}
+                onChange={(event) => setTimeValue(event.target.value)}
+                className="bg-background border-white/10 text-white"
+              />
             </div>
           </div>
           <div className="space-y-2">
@@ -366,6 +392,7 @@ export function AppointmentDetailsDialog({
   appointments,
   availabilityRows,
   shopAvailabilityRows,
+  bookingSlotIntervalMinutes,
   toast,
   getBarberName,
   getServiceName,
@@ -385,6 +412,7 @@ export function AppointmentDetailsDialog({
   appointments?: AdminAppointment[];
   availabilityRows?: AvailabilityRow[];
   shopAvailabilityRows?: ShopAvailabilityRow[];
+  bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   toast: ReturnType<typeof useToast>["toast"];
   getBarberName: (id: number) => string;
   getServiceName: (id?: number | null) => string;
@@ -648,6 +676,7 @@ export function AppointmentDetailsDialog({
                       appointments={appointments}
                       availabilityRows={availabilityRows}
                       shopAvailabilityRows={shopAvailabilityRows}
+                      bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
                       toast={toast}
                     />
                   </>

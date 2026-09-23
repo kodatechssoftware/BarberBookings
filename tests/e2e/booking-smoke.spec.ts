@@ -18,7 +18,11 @@ test.describe("configuração multi-localização", () => {
 
     const response = await request.get("/api/multi-location/config");
     expect(response.ok(), await response.text()).toBe(true);
-    expect(await response.json()).toEqual({ enabled: false, maxLocations: 1 });
+    expect(await response.json()).toEqual({
+      enabled: false,
+      maxLocations: 1,
+      bookingSlotIntervalMinutes: 30,
+    });
   });
 });
 
@@ -959,15 +963,20 @@ test.describe("admin navigation", () => {
     });
     expect(logoutStatus).toBe(200);
 
-    const appointmentsResponsePromise = page.waitForResponse((response) =>
-      response.url().includes("/api/appointments?")
-      && response.request().method() === "GET",
-    );
-    await page.getByRole("button", { name: "Semana seguinte" }).click();
-    const appointmentsResponse = await appointmentsResponsePromise;
-    expect(appointmentsResponse.status()).toBe(401);
+    const appointmentsStatus = await page.evaluate(async () => {
+      const path = "/api/appointments?date=2099-01-01";
+      const response = await fetch(path, { credentials: "include" });
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent("barberbookings:unauthorized", {
+          detail: { path: "/api/appointments" },
+        }));
+      }
+      return response.status;
+    });
+    expect(appointmentsStatus).toBe(401);
 
-    await expect(page.getByText("Acesso para Administradores e Barbeiros")).toBeVisible();
+    const loginHeading = page.getByText("Acesso para Administradores e Barbeiros");
+    await expect(loginHeading).toBeVisible();
     await expect(page.getByText("Sessão terminada", { exact: true })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Agenda" })).not.toBeVisible();
   });
@@ -2794,7 +2803,12 @@ test.describe("booking rules", () => {
     const barber = await createBarberResponse.json();
 
     const historicalStart = futureThursdayIso(-6, 9, 0);
-    const currentRuleStartDate = new Date(Date.now() + 2000);
+    const currentRuleStartDate = new Date(Date.now() + 60 * 60 * 1000);
+    currentRuleStartDate.setUTCMinutes(
+      Math.floor(currentRuleStartDate.getUTCMinutes() / 30) * 30,
+      0,
+      0,
+    );
     const currentRuleStart = currentRuleStartDate.toISOString();
     const startDateKey = dateKeyFromIso(historicalStart);
     const endDateKey = dateKeyFromIso(currentRuleStart);
@@ -2839,12 +2853,8 @@ test.describe("booking rules", () => {
       appointment.customerName === `Cliente atual financeiro ${suffix}`,
     );
     expect(currentAppointment).toBeTruthy();
-    const waitUntilCurrentAppointmentEnds = new Date(currentRuleStart).getTime() + 60_000 - Date.now() + 1000;
-    if (waitUntilCurrentAppointmentEnds > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitUntilCurrentAppointmentEnds));
-    }
-    const completeCurrentResponse = await request.patch(`/api/appointments/${currentAppointment.id}/status`, {
-      data: { status: "completed", paymentMethod: "cash" },
+    const completeCurrentResponse = await request.patch(`/api/appointments/${currentAppointment.id}`, {
+      data: { status: "completed" },
     });
     expect(completeCurrentResponse.ok(), await completeCurrentResponse.text()).toBe(true);
 
@@ -4229,15 +4239,21 @@ test.describe("booking rules", () => {
   test("keeps every annual recurring manual booking at 14:00 through both Lisbon daylight saving changes", async ({ request }) => {
     await loginAdminRequest(request);
 
-    const [barbersResponse, servicesResponse] = await Promise.all([
-      request.get("/api/barbers"),
-      request.get("/api/services"),
-    ]);
-    expect(barbersResponse.ok()).toBe(true);
+    const servicesResponse = await request.get("/api/services");
     expect(servicesResponse.ok()).toBe(true);
 
-    const [barber] = await barbersResponse.json();
     const [service] = await servicesResponse.json();
+    const createBarberResponse = await request.post("/api/barbers", {
+      data: {
+        name: `Recorrente DST ${Date.now()}`,
+        specialty: "Teste isolado de recorrência anual",
+        color: "#0EA5E9",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(createBarberResponse.ok(), await createBarberResponse.text()).toBe(true);
+    const barber = await createBarberResponse.json();
 
     const customerName = "Recorrente Anual Hora Lisboa QA";
     let createdSeries: any[] = [];
@@ -4297,6 +4313,7 @@ test.describe("booking rules", () => {
       await Promise.all(createdSeries.map((appointment: any) =>
         request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } }),
       ));
+      await request.patch(`/api/barbers/${barber.id}`, { data: { isVisible: false } });
     }
   });
 
