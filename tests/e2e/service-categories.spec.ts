@@ -53,6 +53,41 @@ test.describe("service categories", () => {
     await page.getByLabel("Nome da nova categoria").fill("Categoria Admin UI QA");
     await page.getByRole("button", { name: "Criar categoria" }).click();
     await expect(page.getByText("Categoria Admin UI QA", { exact: true })).toBeVisible();
+
+    const serviceCard = page.getByTestId(`admin-service-card-${legacyServices[0].id}`);
+    await serviceCard.getByRole("button", { name: "Editar", exact: true }).click();
+    const editServiceDialog = page.getByRole("dialog").filter({ hasText: "Editar Serviço" });
+    const categorySelect = editServiceDialog.getByRole("combobox");
+    await categorySelect.click();
+
+    const categoryListbox = page.getByRole("listbox");
+    await expect(categoryListbox).toBeVisible();
+    const listboxStyle = await categoryListbox.evaluate((element) => {
+      const style = window.getComputedStyle(element);
+      return { backgroundColor: style.backgroundColor, zIndex: Number(style.zIndex) };
+    });
+    expect(listboxStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(listboxStyle.backgroundColor).not.toBe("transparent");
+    expect(listboxStyle.zIndex).toBeGreaterThanOrEqual(100);
+    const selectedEmptyOption = page.getByRole("option", { name: "Sem categoria", exact: true });
+    await expect(selectedEmptyOption).toHaveAttribute("aria-selected", "true");
+    const selectedOptionBackground = await selectedEmptyOption.evaluate((element) => window.getComputedStyle(element).backgroundColor);
+    expect(selectedOptionBackground).not.toBe("rgba(0, 0, 0, 0)");
+    expect(selectedOptionBackground).not.toBe("transparent");
+    await page.getByRole("option", { name: "Categoria Admin UI QA", exact: true }).click();
+    await expect(categorySelect).toContainText("Categoria Admin UI QA");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await categorySelect.click();
+    await expect(page.getByRole("listbox")).toBeVisible();
+    await expect(page.getByRole("option", { name: "Categoria Admin UI QA", exact: true })).toHaveAttribute("aria-selected", "true");
+    const mobileListboxBox = await page.getByRole("listbox").boundingBox();
+    expect(mobileListboxBox).not.toBeNull();
+    expect(mobileListboxBox!.x).toBeGreaterThanOrEqual(0);
+    expect(mobileListboxBox!.x + mobileListboxBox!.width).toBeLessThanOrEqual(390);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+
     await page.getByRole("button", { name: "Eliminar Categoria Admin UI QA" }).click();
     await page.getByRole("button", { name: "Eliminar categoria", exact: true }).click();
     await expect(page.getByText("Categoria Admin UI QA", { exact: true })).toHaveCount(0);

@@ -906,6 +906,9 @@ const emptyServiceFormData: ServiceFormData = {
   categoryId: null,
 };
 
+const serviceCategorySelectContentClassName = "z-[100] border-white/10 bg-card text-white shadow-2xl";
+const serviceCategorySelectItemClassName = "focus:bg-primary/15 focus:text-white data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary";
+
 function getAgendaLabelPayload(value?: string | null) {
   const trimmed = (value || "").trim();
   return trimmed ? trimmed : null;
@@ -4117,10 +4120,10 @@ export default function Admin() {
                           <SelectTrigger className="border-white/10 bg-background text-white">
                             <SelectValue placeholder="Sem categoria" />
                           </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">Sem categoria</SelectItem>
+                          <SelectContent className={serviceCategorySelectContentClassName}>
+                            <SelectItem className={serviceCategorySelectItemClassName} value="none">Sem categoria</SelectItem>
                             {serviceCategories.filter((category) => category.isActive).map((category) => (
-                              <SelectItem key={category.id} value={String(category.id)}>{category.name}</SelectItem>
+                              <SelectItem className={serviceCategorySelectItemClassName} key={category.id} value={String(category.id)}>{category.name}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -4147,8 +4150,13 @@ export default function Admin() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {services?.map(service => {
                 const assignedCategory = serviceCategories.find((category) => category.id === service.categoryId);
+                const hasBookableBarber = activeBarbers.some((barber) => canBarberPerformService(barber, service.id));
+                const showMissingBarberWarning = service.isVisible !== false
+                  && !isLoadingBarbers
+                  && !isBarbersError
+                  && !hasBookableBarber;
                 return (
-                <Card key={service.id} className="bg-card border-white/10 text-white">
+                <Card key={service.id} data-testid={`admin-service-card-${service.id}`} className="bg-card border-white/10 text-white">
                   <CardHeader className="flex flex-row items-start justify-between gap-3">
                     <div className="min-w-0">
                       <CardTitle className="text-lg font-bold">{service.name}</CardTitle>
@@ -4170,6 +4178,12 @@ export default function Admin() {
                       <p>{service.duration} min</p>
                       <p className="text-xs text-gray-500">Agenda: {service.agendaLabel || "etiqueta automática"}</p>
                     </div>
+                    {showMissingBarberWarning && (
+                      <div className="mb-4 flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200" role="status">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span>Não aparece no Booking: associe este serviço a pelo menos um barbeiro visível na área Equipa.</span>
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                       <Dialog open={editingServiceId === service.id} onOpenChange={(open) => {
                         setEditingServiceId(open ? service.id : null);
@@ -4212,12 +4226,12 @@ export default function Admin() {
                                   <SelectTrigger className="border-white/10 bg-background text-white">
                                     <SelectValue placeholder="Sem categoria" />
                                   </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="none">Sem categoria</SelectItem>
+                                  <SelectContent className={serviceCategorySelectContentClassName}>
+                                    <SelectItem className={serviceCategorySelectItemClassName} value="none">Sem categoria</SelectItem>
                                     {serviceCategories
                                       .filter((category) => category.isActive || category.id === service.categoryId)
                                       .map((category) => (
-                                        <SelectItem key={category.id} value={String(category.id)}>
+                                        <SelectItem className={serviceCategorySelectItemClassName} key={category.id} value={String(category.id)}>
                                           {category.name}{category.isActive ? "" : " (inativa)"}
                                         </SelectItem>
                                       ))}
