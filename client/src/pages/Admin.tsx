@@ -4195,7 +4195,7 @@ export default function Admin() {
                     {showMissingBarberWarning && (
                       <div className="mb-4 flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200" role="status">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                        <span>Não aparece no Booking: associe este serviço a pelo menos um barbeiro visível na área Equipa.</span>
+                        <span>Para este serviço aparecer nas marcações online, associe-o a pelo menos um barbeiro visível na área Equipa.</span>
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2">
