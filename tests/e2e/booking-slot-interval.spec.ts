@@ -68,7 +68,7 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
   await page.getByRole("button", { name: "Entrar" }).click();
   await page.getByRole("tab", { name: "Serviços" }).click();
   const unassignedServiceCard = page.getByTestId(`admin-service-card-${service.id}`);
-  await expect(unassignedServiceCard.getByText("Não aparece no Booking:", { exact: false })).toBeVisible();
+  await expect(unassignedServiceCard.getByText("Para este serviço aparecer nas marcações online,", { exact: false })).toBeVisible();
 
   await createBarber("Barbeiro categorias completas QA", [service1.id, service.id, service3.id, uncategorizedService.id]);
   const barber = await createBarber("Barbeiro categorias parciais QA", [service1.id, service.id, uncategorizedService.id]);
@@ -76,7 +76,7 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
   await page.reload();
   await page.getByRole("tab", { name: "Serviços" }).click();
   const assignedServiceCard = page.getByTestId(`admin-service-card-${service.id}`);
-  await expect(assignedServiceCard.getByText("Não aparece no Booking:", { exact: false })).toHaveCount(0);
+  await expect(assignedServiceCard.getByText("Para este serviço aparecer nas marcações online,", { exact: false })).toHaveCount(0);
 
   const catalogue = await (await request.get("/api/services")).json();
   expect(catalogue.find((item: any) => item.id === service.id)).toMatchObject({
