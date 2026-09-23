@@ -38,6 +38,14 @@ test.describe("service categories", () => {
       await expect(page.getByRole("heading", { name: service.name, exact: true })).toHaveCount(1);
     }
 
+    const [barber] = await (await request.get("/api/barbers")).json();
+    expect(barber?.id).toBeTruthy();
+    await page.goto(`/book?barberId=${barber.id}`);
+    await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Outros serviços", exact: true })).toHaveCount(0);
+    expect(await page.getByRole("heading", { level: 3 }).allTextContents())
+      .toEqual(legacyServices.map((service: any) => service.name));
+
     await loginAdmin(page);
     await page.getByRole("tab", { name: "Serviços" }).click();
     await expect(page.getByTestId("service-categories-manager")).toBeVisible();

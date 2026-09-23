@@ -21,9 +21,56 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
     request.get("/api/services"),
   ]);
   const [barber] = await barbersResponse.json();
-  const [service] = await servicesResponse.json();
+  const [service, uncategorizedService] = await servicesResponse.json();
   expect(barber?.id).toBeTruthy();
   expect(service?.id).toBeTruthy();
+  expect(uncategorizedService?.id).toBeTruthy();
+
+  const categoryLogin = await request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Test-Admin-2026!" },
+  });
+  expect(categoryLogin.ok(), await categoryLogin.text()).toBe(true);
+  const categoryResponse = await request.post("/api/service-categories", {
+    data: { name: "Categoria com grelha 60 QA" },
+  });
+  expect(categoryResponse.status(), await categoryResponse.text()).toBe(201);
+  const category = await categoryResponse.json();
+  const assignmentResponse = await request.patch(`/api/services/${service.id}`, {
+    data: { categoryId: category.id },
+  });
+  expect(assignmentResponse.ok(), await assignmentResponse.text()).toBe(true);
+
+  const catalogue = await (await request.get("/api/services")).json();
+  expect(catalogue.find((item: any) => item.id === service.id)).toMatchObject({
+    categoryId: category.id,
+    category: { id: category.id, name: "Categoria com grelha 60 QA" },
+  });
+  expect(catalogue.find((item: any) => item.id === uncategorizedService.id)).not.toHaveProperty("category");
+
+  await page.goto(`/book?barberId=${barber.id}`);
+  await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Categoria com grelha 60 QA", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Outros serviços", exact: true })).toBeVisible();
+  await page.getByRole("heading", { name: service.name, exact: true }).click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^\d{2}:(15|30|45)h$/ })).toHaveCount(0);
+  const firstHourlySlot = page.locator("button:not([disabled])").filter({ hasText: /^\d{2}:00h$/ }).first();
+  await expect(firstHourlySlot).toBeVisible();
+  await firstHourlySlot.click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  await expect(page.getByText("Resumo da Marcação")).toBeVisible();
+  await page.getByPlaceholder("O seu nome").fill("Categorias e intervalo 60 QA");
+  await page.getByPlaceholder("912 345 678").fill("912610000");
+  await page.getByPlaceholder("exemplo@email.com").fill("categorias-intervalo@example.test");
+  const categorizedBookingResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/api/appointments") && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Confirmar" }).click();
+  const categorizedBooking = await categorizedBookingResponse;
+  expect(categorizedBooking.status(), await categorizedBooking.text()).toBe(201);
+  expect(await categorizedBooking.json()).toMatchObject({ serviceId: service.id, barberId: barber.id });
+  await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
 
   const uiDate = futureThursdayIso(8, 15).slice(0, 10);
   await page.goto(`/book?barberId=${barber.id}&serviceId=${service.id}&date=${uiDate}&time=15:30`);
