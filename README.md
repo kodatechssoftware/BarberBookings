@@ -55,6 +55,28 @@ Para abrir o runner visual do Playwright:
 npm run test:e2e:ui
 ```
 
+### Intervalo dos novos horários de marcação
+
+`BOOKING_SLOT_INTERVAL_MINUTES` controla a granularidade dos novos horários apresentados e
+aceites pelo Booking, reagendamento e marcação manual. Aceita apenas `15`, `30` ou `60`.
+Sem a variável, mantém-se o comportamento histórico de 30 minutos. Os inícios são alinhados
+ao relógio (por exemplo, um turno às 09:30 com intervalo 60 começa a oferecer slots às 10:00).
+
+A configuração é global ao deployment/barbearia, incluindo todas as suas localizações. Não
+altera a duração dos serviços, a resolução visual da Agenda nem marcações já existentes. Uma
+marcação histórica fora da grelha continua visível e pode receber alterações não temporais;
+apenas uma nova escolha de data/hora tem de respeitar o intervalo atual.
+
+```env
+BOOKING_SLOT_INTERVAL_MINUTES=60
+```
+
+Testes dedicados:
+
+```powershell
+npm run test:slot-interval
+```
+
 ### Horário semanal do barbeiro por loja (apenas multi-location)
 
 Com `MULTI_LOCATION_ENABLED=true`, selecione **Loja em gestão → Equipa → Horário nesta loja**

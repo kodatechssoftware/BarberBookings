@@ -1,5 +1,10 @@
 import { addDays, isAfter } from "date-fns";
 import type { PublicAppointment } from "@/hooks/use-appointments";
+import {
+  DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES,
+  firstClockAlignedMinute,
+  type BookingSlotIntervalMinutes,
+} from "@shared/booking-slot-interval";
 
 export type AvailabilityRow = {
   barberId: number;
@@ -152,6 +157,7 @@ export function getAvailableTimeSlots({
   existingAppointments,
   now = new Date(),
   timeZone,
+  slotIntervalMinutes = DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES,
 }: {
   selectedService?: ServiceOption | null;
   selectedDate?: Date | null;
@@ -162,6 +168,7 @@ export function getAvailableTimeSlots({
   existingAppointments?: PublicAppointment[] | null;
   now?: Date;
   timeZone?: string;
+  slotIntervalMinutes?: BookingSlotIntervalMinutes;
 }): TimeSlot[] {
   if (!selectedService || !existingAppointments || !selectedDate) return [];
 
@@ -184,7 +191,8 @@ export function getAvailableTimeSlots({
       shopAvailabilityRows: shopAvailability,
       availabilityRows: availability,
     }).forEach((period) => {
-      for (let minutes = period.start; minutes < period.end; minutes += 30) {
+      const firstMinute = firstClockAlignedMinute(period.start, slotIntervalMinutes);
+      for (let minutes = firstMinute; minutes < period.end; minutes += slotIntervalMinutes) {
         if (minutes + selectedService.duration <= period.end) {
           candidateStartMinutes.add(minutes);
         }

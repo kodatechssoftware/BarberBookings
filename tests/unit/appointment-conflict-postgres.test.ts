@@ -59,6 +59,17 @@ function futureThursdayIso(weeksAhead: number, hour: number) {
   return date.toISOString();
 }
 
+function datedThursdayIso(direction: "past" | "future", weeks: number, hour: number, minute: number) {
+  const date = new Date();
+  const currentDay = date.getUTCDay();
+  const dayOffset = direction === "future"
+    ? ((4 - currentDay + 7) % 7 || 7) + weeks * 7
+    : -(((currentDay - 4 + 7) % 7 || 7) + weeks * 7);
+  date.setUTCDate(date.getUTCDate() + dayOffset);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date.toISOString();
+}
+
 test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent public bookings", { timeout: 180_000 }, async () => {
   const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-conflict-pg-"));
   const postgresPort = await availablePort();
@@ -105,6 +116,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
       MULTI_LOCATION_ENABLED: "false",
       MAX_LOCATIONS: "1",
       PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED: "false",
+      BOOKING_SLOT_INTERVAL_MINUTES: "60",
       APPOINTMENT_NOTIFICATION_EVENTS_ENABLED: "true",
       NOTIFICATION_OUTBOX_WORKER_ENABLED: "false",
       WHATSAPP_NOTIFICATIONS_ENABLED: "false",
@@ -130,16 +142,18 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
       },
     });
 
-    serverProcess = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-      cwd: process.cwd(),
-      env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    serverProcess.stdout.on("data", (chunk) => { serverOutput += chunk; });
-    serverProcess.stderr.on("data", (chunk) => { serverOutput += chunk; });
-
     const baseUrl = `http://127.0.0.1:${appPort}`;
-    await waitForServer(baseUrl, () => serverOutput);
+    const startApplication = async () => {
+      serverProcess = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+        cwd: process.cwd(),
+        env: environment,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      serverProcess.stdout.on("data", (chunk) => { serverOutput += chunk; });
+      serverProcess.stderr.on("data", (chunk) => { serverOutput += chunk; });
+      await waitForServer(baseUrl, () => serverOutput);
+    };
+    await startApplication();
 
     const [barbersResponse, servicesResponse] = await Promise.all([
       fetch(`${baseUrl}/api/barbers`),
@@ -151,6 +165,101 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
     const [service] = await servicesResponse.json() as Array<{ id: number }>;
     assert.ok(barber?.id);
     assert.ok(service?.id);
+
+    const historicalFixtures = [
+      { label: "Existing 09:15", startTime: datedThursdayIso("future", 10, 9, 15), action: "same-time" },
+      { label: "Existing 09:30", startTime: datedThursdayIso("future", 11, 9, 30), action: "cancelled" },
+      { label: "Existing 10:30", startTime: datedThursdayIso("past", 2, 10, 30), action: "completed" },
+      { label: "Existing 14:45", startTime: datedThursdayIso("past", 3, 14, 45), action: "no_show" },
+      { label: "Existing 17:30", startTime: datedThursdayIso("future", 12, 17, 30), action: "same-time" },
+    ];
+    const historicalIds = new Map<string, number>();
+    for (const [index, fixture] of historicalFixtures.entries()) {
+      const inserted = await pool.query<{ id: number }>(`
+        INSERT INTO appointments (
+          location_id, barber_id, service_id, start_time, customer_name, customer_email,
+          customer_phone, duration_minutes, status, cancel_token, payment_method,
+          deposit_required, reschedule_revision, notification_revision, whatsapp_opt_in
+        ) VALUES (1, $1, $2, $3, $4, $5, $6, 60, 'booked', $7, 'pending', false, 0, 0, false)
+        RETURNING id
+      `, [
+        barber.id,
+        service.id,
+        fixture.startTime,
+        fixture.label,
+        `${fixture.label.replace(/[^0-9]/g, "") || index}@example.test`,
+        `+3519127${String(index).padStart(5, "0")}`,
+        `existing-off-grid-${index}`,
+      ]);
+      historicalIds.set(fixture.label, inserted.rows[0].id);
+    }
+
+    // Prove that an ordinary application restart does not rewrite historical times.
+    serverProcess.kill();
+    await new Promise<void>((resolve) => serverProcess!.once("exit", () => resolve()));
+    serverProcess = undefined;
+    await startApplication();
+
+    const loginResponse = await fetch(`${baseUrl}/api/admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password: environment.ADMIN_INITIAL_PASSWORD }),
+    });
+    assert.equal(loginResponse.status, 200);
+    const cookie = loginResponse.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    const authenticatedHeaders = { "content-type": "application/json", cookie };
+
+    for (const fixture of historicalFixtures) {
+      const id = historicalIds.get(fixture.label)!;
+      if (fixture.action === "same-time") {
+        const response = await fetch(`${baseUrl}/api/appointments/${id}`, {
+          method: "PATCH",
+          headers: authenticatedHeaders,
+          body: JSON.stringify({ startTime: fixture.startTime, barberId: barber.id, serviceId: service.id }),
+        });
+        assert.equal(response.status, 200, `${fixture.label}: ${await response.text()}`);
+      } else {
+        const response = await fetch(`${baseUrl}/api/appointments/${id}/status`, {
+          method: "PATCH",
+          headers: authenticatedHeaders,
+          body: JSON.stringify({
+            status: fixture.action,
+            expectedStatus: "booked",
+            ...(fixture.action === "completed" ? { paymentMethod: "cash" } : {}),
+          }),
+        });
+        assert.equal(response.status, 200, `${fixture.label}: ${await response.text()}`);
+      }
+    }
+
+    const persistedHistorical = await pool.query<{
+      id: number;
+      start_time: Date;
+      duration_minutes: number;
+      status: string;
+      payment_method: string;
+    }>(`
+      SELECT id, start_time, duration_minutes, status, payment_method
+      FROM appointments WHERE id = ANY($1::int[]) ORDER BY id
+    `, [Array.from(historicalIds.values())]);
+    assert.equal(persistedHistorical.rowCount, 5);
+    for (const fixture of historicalFixtures) {
+      const row = persistedHistorical.rows.find((candidate) => candidate.id === historicalIds.get(fixture.label));
+      assert.ok(row);
+      assert.equal(new Date(row.start_time).toISOString(), fixture.startTime);
+      assert.equal(row.duration_minutes, 60);
+      assert.equal(row.status, fixture.action === "same-time" ? "booked" : fixture.action);
+      if (fixture.action === "completed") assert.equal(row.payment_method, "cash");
+    }
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM appointment_notification_events
+      WHERE appointment_id = ANY($1::int[])
+    `, [Array.from(historicalIds.values())])).rows[0].count), 1);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM whatsapp_messages
+      WHERE appointment_id = ANY($1::int[])
+    `, [Array.from(historicalIds.values())])).rows[0].count), 0);
 
     async function runBurst(size: number, weeksAhead: number, label: string) {
       const startTime = futureThursdayIso(weeksAhead, 15);

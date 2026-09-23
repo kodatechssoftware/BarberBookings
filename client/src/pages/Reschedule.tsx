@@ -13,6 +13,8 @@ import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment 
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
 import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
+import { useRuntimeConfig } from "@/hooks/use-runtime-config";
+import { DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES } from "@shared/booking-slot-interval";
 import {
   formatPublicBookingMonthOpeningNotice,
   getPublicBookingMonthOpeningNotice,
@@ -43,6 +45,9 @@ export default function Reschedule() {
   const { data: availabilityRows, isLoading: loadingAvailability } = useBarberAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
   const { data: shopAvailabilityRows, isLoading: loadingShopAvailability } = useShopAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
+  const { data: runtimeConfig, isLoading: loadingRuntimeConfig } = useRuntimeConfig();
+  const bookingSlotIntervalMinutes = runtimeConfig?.bookingSlotIntervalMinutes
+    ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
   const rescheduleAppointment = useRescheduleAppointment();
   const maxPublicBookingDate = useMemo(
     () => publicBookingWindow ? parseISO(publicBookingWindow.maxDate) : startOfToday(),
@@ -85,7 +90,7 @@ export default function Reschedule() {
   });
 
   const timeSlots = useMemo(() => {
-    if (!appointment || !existingAppointments || !selectedDate || !availabilityRows || !shopAvailabilityRows) return [];
+    if (!runtimeConfig || !appointment || !existingAppointments || !selectedDate || !availabilityRows || !shopAvailabilityRows) return [];
 
     const duration = appointment.duration || 30;
     return getAvailableTimeSlots({
@@ -97,8 +102,9 @@ export default function Reschedule() {
       shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
       existingAppointments: existingAppointments.filter((existing) => existing.id !== appointment.id),
       timeZone: appointment.locationTimeZone,
+      slotIntervalMinutes: bookingSlotIntervalMinutes,
     });
-  }, [appointment, availabilityRows, existingAppointments, selectedDate, shopAvailabilityRows]);
+  }, [appointment, availabilityRows, bookingSlotIntervalMinutes, existingAppointments, runtimeConfig, selectedDate, shopAvailabilityRows]);
 
   const handleSubmit = async () => {
     if (!token || !selectedDate || !selectedTime) return;
@@ -210,7 +216,7 @@ export default function Reschedule() {
 
           <div className="bg-card border border-white/10 rounded-xl p-4">
             <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" /> Nova hora</h2>
-            {loadingAppointments || loadingAvailability || loadingShopAvailability ? (
+            {loadingAppointments || loadingAvailability || loadingShopAvailability || loadingRuntimeConfig ? (
               <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
             ) : timeSlots.length === 0 ? (
               <p className="text-gray-500 text-sm text-center py-10">Não existem horários disponíveis para esta data.</p>

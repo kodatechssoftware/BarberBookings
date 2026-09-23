@@ -18,8 +18,13 @@ import {
 import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
 import {
   appointmentNotificationEventsEnabled,
+  bookingSlotIntervalMinutes,
   isDevelopmentDeployment,
 } from "./runtime-environment";
+import {
+  bookingSlotIntervalMessage,
+  isMinuteOfDayAligned,
+} from "@shared/booking-slot-interval";
 import {
   isMetaWebhookEnabled,
   recordMetaWebhookStatuses,
@@ -399,6 +404,30 @@ function isBeforeShopToday(date: Date) {
 
 function isBeforeNow(date: Date) {
   return date.getTime() < Date.now();
+}
+
+function getBookingSlotValidationError(date: Date, timeZone: string) {
+  if (Number.isNaN(date.getTime())) return "Data ou hora inválida.";
+
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  const hour = Number(parts.hour);
+  const minute = Number(parts.minute);
+
+  return isMinuteOfDayAligned(hour, minute, bookingSlotIntervalMinutes)
+    ? null
+    : bookingSlotIntervalMessage(bookingSlotIntervalMinutes);
+}
+
+function requestLocationTimeZone(res: Response) {
+  const locationTimeZone = res.locals.location?.timezone;
+  return typeof locationTimeZone === "string" && locationTimeZone.trim()
+    ? locationTimeZone
+    : SHOP_TIME_ZONE;
 }
 
 function currentPublicBookingWindow(now = new Date()) {
@@ -1222,10 +1251,6 @@ function getScheduleValidationError(
     return "Data ou hora inválida.";
   }
 
-  if (start.minute % 30 !== 0) {
-    return "As marcações só podem começar de 30 em 30 minutos.";
-  }
-
   const periods = workingPeriods ?? getDefaultShopWorkingPeriods(start.weekday);
   if (periods.length === 0) {
     return "A barbearia está encerrada neste dia.";
@@ -1539,7 +1564,10 @@ export async function registerRoutes(
   app.use(session(sessionConfig));
 
   app.get("/api/multi-location/config", (_req, res) => {
-    res.json(MULTI_LOCATION_CONFIG);
+    res.json({
+      ...MULTI_LOCATION_CONFIG,
+      bookingSlotIntervalMinutes,
+    });
   });
 
   app.get("/api/locations", async (req, res) => {
@@ -3049,6 +3077,14 @@ export async function registerRoutes(
       const input = api.appointments.create.input.parse(body);
       const normalizedCustomerEmail = normalizeEmail(input.customerEmail);
 
+      const slotValidationError = getBookingSlotValidationError(
+        input.startTime,
+        requestLocationTimeZone(res),
+      );
+      if (slotValidationError) {
+        return res.status(400).json({ message: slotValidationError, field: "startTime" });
+      }
+
       if (isBeforeNow(input.startTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
@@ -3261,6 +3297,16 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Data ou hora inválida." });
       }
       const start = requestedStarts[0];
+
+      if (isManualBooking) {
+        const locationTimeZone = requestLocationTimeZone(res);
+        const slotValidationError = requestedStarts
+          .map((value) => getBookingSlotValidationError(value, locationTimeZone))
+          .find((message): message is string => Boolean(message));
+        if (slotValidationError) {
+          return res.status(400).json({ message: slotValidationError, field: "startTime" });
+        }
+      }
 
       const serviceIdNumber = serviceId === null || serviceId === undefined || serviceId === ""
         ? null
@@ -3645,6 +3691,8 @@ export async function registerRoutes(
       if (!currentApp || currentApp.locationId !== locationId) return res.status(404).json({ message: "Marcação não encontrada" });
 
       const newStartTime = hasStartTimePatch ? new Date(startTime) : new Date(currentApp.startTime);
+      const startTimeChanged = hasStartTimePatch
+        && newStartTime.getTime() !== new Date(currentApp.startTime).getTime();
       const newBarberId = hasBarberPatch ? Number(barberId) : currentApp.barberId;
       const locationServiceIds = await getServiceIdsForLocation(locationId);
       const allowedServiceIds = locationServiceIds === undefined ? null : new Set(locationServiceIds);
@@ -3658,7 +3706,17 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Data ou hora inválida." });
       }
 
-      if (hasStartTimePatch && isBeforeNow(newStartTime)) {
+      if (startTimeChanged) {
+        const slotValidationError = getBookingSlotValidationError(
+          newStartTime,
+          requestLocationTimeZone(res),
+        );
+        if (slotValidationError) {
+          return res.status(400).json({ message: slotValidationError, field: "startTime" });
+        }
+      }
+
+      if (startTimeChanged && isBeforeNow(newStartTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
       }
 
@@ -3915,6 +3973,13 @@ export async function registerRoutes(
       const startTime = new Date(req.body?.startTime);
       if (Number.isNaN(startTime.getTime())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
+      }
+      const startTimeChanged = startTime.getTime() !== new Date(appointment.startTime).getTime();
+      if (startTimeChanged) {
+        const slotValidationError = getBookingSlotValidationError(startTime, location.timezone || SHOP_TIME_ZONE);
+        if (slotValidationError) {
+          return res.status(400).json({ message: slotValidationError, field: "startTime" });
+        }
       }
       if (isBeforeNow(startTime)) {
         return res.status(400).json({ message: "Escolha uma data e hora futuras." });
