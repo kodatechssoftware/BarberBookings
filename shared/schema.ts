@@ -11,6 +11,7 @@ const appPgTable = (appPgSchema ? appPgSchema.table : pgTable) as typeof pgTable
 
 export const barbersIdSeq = appPgSchema?.sequence("barbers_id_seq");
 export const servicesIdSeq = appPgSchema?.sequence("services_id_seq");
+export const serviceCategoriesIdSeq = appPgSchema?.sequence("service_categories_id_seq");
 export const appointmentsIdSeq = appPgSchema?.sequence("appointments_id_seq");
 export const adminsIdSeq = appPgSchema?.sequence("admins_id_seq");
 export const blacklistIdSeq = appPgSchema?.sequence("blacklist_id_seq");
@@ -142,6 +143,18 @@ export const barbers = appPgTable("barbers", {
   isVisible: boolean("is_visible").default(true),
 });
 
+export const serviceCategories = appPgTable("service_categories", {
+  id: idColumn("service_categories_id_seq"),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  sortOrderCheck: check("service_categories_sort_order_check", sql`${table.sortOrder} >= 0`),
+  nameNotBlankCheck: check("service_categories_name_not_blank_check", sql`btrim(${table.name}) <> ''`),
+}));
+
 export const services = appPgTable("services", {
   id: idColumn("services_id_seq"),
   name: text("name").notNull(),
@@ -150,6 +163,7 @@ export const services = appPgTable("services", {
   price: integer("price").notNull(),
   duration: integer("duration").notNull(),
   isVisible: boolean("is_visible").default(true),
+  categoryId: integer("category_id").references(() => serviceCategories.id, { onDelete: "set null" }),
 });
 
 export const appointmentSeries = appPgTable("appointment_series", {
@@ -427,9 +441,17 @@ export const barbersRelations = relations(barbers, ({ many }) => ({
   compensationRules: many(barberCompensationRules),
 }));
 
-export const servicesRelations = relations(services, ({ many }) => ({
+export const servicesRelations = relations(services, ({ one, many }) => ({
+  category: one(serviceCategories, {
+    fields: [services.categoryId],
+    references: [serviceCategories.id],
+  }),
   appointments: many(appointments),
   barberAssignments: many(barberServices),
+}));
+
+export const serviceCategoriesRelations = relations(serviceCategories, ({ many }) => ({
+  services: many(services),
 }));
 
 export const barberServicesRelations = relations(barberServices, ({ one }) => ({
@@ -459,6 +481,16 @@ export const insertServiceSchema = createInsertSchema(services).omit({ id: true 
   agendaLabel: z.string().trim().max(40, "A etiqueta da agenda nao pode ter mais de 40 caracteres.").optional().nullable(),
   price: z.number().int("O preço deve ser um número inteiro de cêntimos.").min(0, "O preço não pode ser negativo.").max(1_000_000, "O preço indicado é demasiado elevado."),
   duration: z.number().int("A duração deve ser um número inteiro de minutos.").min(1, "A duração deve ser superior a zero.").max(720, "A duração não pode exceder 12 horas."),
+  categoryId: z.number().int().positive().nullable().optional(),
+});
+export const insertServiceCategorySchema = createInsertSchema(serviceCategories).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  name: z.string().trim().min(1, "Indique o nome da categoria.").max(80, "O nome não pode ter mais de 80 caracteres."),
+  sortOrder: z.number().int().min(0).optional(),
+  isActive: z.boolean().optional(),
 });
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;
@@ -526,6 +558,12 @@ export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).
 
 export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
+export type ServiceCategory = typeof serviceCategories.$inferSelect;
+export type ServiceCategorySummary = Pick<ServiceCategory, "id" | "name" | "sortOrder">;
+export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
+  categoryId?: number | null;
+  category?: ServiceCategorySummary | null;
+};
 export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
 export type AppointmentStatus = typeof appointmentStatuses[number];
@@ -562,6 +600,7 @@ export type BarberWithServices = Barber & {
 
 export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
+export type CreateServiceCategoryRequest = z.infer<typeof insertServiceCategorySchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
 export type CreateAdminRequest = z.infer<typeof insertAdminSchema>;
 export type InsertBlacklist = z.infer<typeof insertBlacklistSchema>;

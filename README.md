@@ -276,6 +276,23 @@ Variaveis minimas para a app no Railway:
 - `ALLOWED_ORIGINS`: mesmo dominio publico da app
 - `RESEND_API_KEY` e `RESEND_FROM_EMAIL` para envio das notificacoes
 
+## Categorias de servicos
+
+A migration `0005_service_categories.sql` adiciona categorias opcionais e uma
+referencia nullable em `services`. Nao cria categorias nem associa servicos
+existentes. Quando nenhum servico visivel tem uma categoria ativa, Home e Booking
+mantem o catalogo flat anterior, na mesma ordem e sem titulos adicionais.
+
+As categorias sao globais; os filtros de loja, barbeiro e visibilidade continuam
+a ser aplicados antes do agrupamento. Eliminar uma categoria nao elimina servicos:
+a FK usa `ON DELETE SET NULL`. Desativar uma categoria preserva as associacoes e
+reativa-las volta a apresentar automaticamente os respetivos grupos.
+
+Limitacao preexistente fora deste trabalho: eliminar diretamente um servico que
+esteja referenciado por `appointment_series` pode ser recusado pela respetiva FK.
+As categorias nao alteram esse comportamento nem entram em appointments, snapshots,
+notificacoes, relatorios ou exports.
+
 Depois de ligares a base de dados, executa `npm run db:push` uma vez para criar/atualizar as tabelas.
 
 ## Deploy separado

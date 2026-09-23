@@ -3,7 +3,12 @@ import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import { getShopDateBounds, isAppointmentConflictError, storage } from "./storage";
 import { decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
-import { api } from "@shared/routes";
+import {
+  api,
+  serviceCategoryCreateInputSchema,
+  serviceCategoryOrderInputSchema,
+  serviceCategoryUpdateInputSchema,
+} from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import {
@@ -33,6 +38,7 @@ import {
   businessExpenseCategories,
   businessExpenseRecurrences,
   insertServiceSchema,
+  type ServiceCatalogueItem,
   type Appointment,
   type AppointmentPaymentMethod,
   type BarberCompensationRule,
@@ -735,6 +741,33 @@ function getErrorCode(error: unknown) {
   return cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
     ? (cause as { code: string }).code
     : undefined;
+}
+
+function hasDatabaseErrorCode(error: unknown, expectedCode: string) {
+  const visited = new Set<object>();
+  let current = error;
+  while (current && typeof current === "object") {
+    if (visited.has(current)) return false;
+    visited.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (candidate.code === expectedCode) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+function serializeServiceCatalogueItem(item: ServiceCatalogueItem, includeInactiveAssignment: boolean) {
+  const { categoryId, category, ...legacyService } = item;
+  if (category) return { ...legacyService, categoryId, category };
+  if (includeInactiveAssignment && categoryId !== null) return { ...legacyService, categoryId };
+  return legacyService;
+}
+
+async function validateServiceCategoryAssignment(categoryId: number | null | undefined, currentCategoryId?: number | null) {
+  if (categoryId === null || categoryId === undefined) return;
+  const category = await storage.getServiceCategory(categoryId);
+  if (!category) throw new Error("SERVICE_CATEGORY_NOT_FOUND");
+  if (!category.isActive && category.id !== currentCategoryId) throw new Error("SERVICE_CATEGORY_INACTIVE");
 }
 
 function validateAppointmentFilters(query: Request["query"]) {
@@ -2498,10 +2531,116 @@ export async function registerRoutes(
     }
   });
 
+  // === SERVICE CATEGORIES MGMT ===
+  app.get(api.serviceCategories.list.path, requireAuth, async (_req, res) => {
+    const [categories, services] = await Promise.all([
+      storage.getServiceCategories({ includeInactive: true }),
+      storage.getServices(),
+    ]);
+    const counts = new Map<number, number>();
+    services.forEach((service) => {
+      if (service.categoryId) counts.set(service.categoryId, (counts.get(service.categoryId) || 0) + 1);
+    });
+    res.json(categories.map((category) => ({ ...category, serviceCount: counts.get(category.id) || 0 })));
+  });
+
+  app.post(api.serviceCategories.create.path, requireAdmin, async (req, res) => {
+    try {
+      const input = serviceCategoryCreateInputSchema.parse(req.body);
+      const category = await storage.createServiceCategory(input);
+      await recordAuditLog(req, {
+        action: "service_category.created",
+        entityType: "service_category",
+        entityId: category.id,
+        summary: `Categoria de serviços criada: ${category.name}`,
+      });
+      res.status(201).json(category);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe uma categoria com este nome." });
+      }
+      console.error("Create service category error:", error);
+      res.status(500).json({ message: "Erro ao criar categoria" });
+    }
+  });
+
+  app.put(api.serviceCategories.reorder.path, requireAdmin, async (req, res) => {
+    try {
+      const { categoryIds } = serviceCategoryOrderInputSchema.parse(req.body);
+      const categories = await storage.reorderServiceCategories(categoryIds);
+      await recordAuditLog(req, {
+        action: "service_category.reordered",
+        entityType: "service_category",
+        summary: "Ordem das categorias de serviços atualizada",
+        metadata: { categoryIds },
+      });
+      res.json(categories);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.errors[0].message });
+      if (getErrorCode(error) === "SERVICE_CATEGORY_ORDER_MISMATCH") {
+        return res.status(409).json({ message: "A lista de categorias mudou. Atualize a página e tente novamente." });
+      }
+      console.error("Reorder service categories error:", error);
+      res.status(500).json({ message: "Erro ao ordenar categorias" });
+    }
+  });
+
+  app.patch(api.serviceCategories.update.path, requireAdmin, async (req, res) => {
+    try {
+      const categoryId = parsePositiveInteger(req.params.id);
+      if (categoryId === null) return res.status(400).json({ message: "Categoria inválida." });
+      const input = serviceCategoryUpdateInputSchema.parse(req.body);
+      if (Object.keys(input).length === 0) return res.status(400).json({ message: "Indique uma alteração." });
+      const category = await storage.updateServiceCategory(categoryId, input);
+      if (!category) return res.status(404).json({ message: "Categoria não encontrada." });
+      await recordAuditLog(req, {
+        action: "service_category.updated",
+        entityType: "service_category",
+        entityId: category.id,
+        summary: `Categoria de serviços atualizada: ${category.name}`,
+        metadata: { fields: Object.keys(input) },
+      });
+      res.json(category);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe uma categoria com este nome." });
+      }
+      console.error("Update service category error:", error);
+      res.status(500).json({ message: "Erro ao atualizar categoria" });
+    }
+  });
+
+  app.delete(api.serviceCategories.remove.path, requireAdmin, async (req, res) => {
+    try {
+      const categoryId = parsePositiveInteger(req.params.id);
+      if (categoryId === null) return res.status(400).json({ message: "Categoria inválida." });
+      const category = await storage.getServiceCategory(categoryId);
+      if (!category) return res.status(404).json({ message: "Categoria não encontrada." });
+      await storage.deleteServiceCategory(categoryId);
+      await recordAuditLog(req, {
+        action: "service_category.deleted",
+        entityType: "service_category",
+        entityId: categoryId,
+        summary: `Categoria de serviços removida: ${category.name}`,
+      });
+      res.json({ message: "Categoria removida. Os serviços associados ficaram sem categoria." });
+    } catch (error) {
+      console.error("Delete service category error:", error);
+      res.status(500).json({ message: "Erro ao remover categoria" });
+    }
+  });
+
   // === SERVICES MGMT ===
   app.post("/api/services", requireAdmin, async (req, res) => {
     try {
       const input = insertServiceSchema.parse(req.body);
+      await validateServiceCategoryAssignment(input.categoryId);
       const locationId = Number(res.locals.locationId);
       const locationServiceIds = await getServiceIdsForLocation(locationId);
       const existingServiceIds = locationServiceIds ?? (await storage.getServices()).map((service) => service.id);
@@ -2523,6 +2662,12 @@ export async function registerRoutes(
           field: error.errors[0].path.join("."),
         });
       }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_NOT_FOUND") {
+        return res.status(400).json({ message: "Categoria não encontrada.", field: "categoryId" });
+      }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_INACTIVE") {
+        return res.status(400).json({ message: "A categoria selecionada está inativa.", field: "categoryId" });
+      }
       res.status(500).json({ message: "Erro ao criar serviço" });
     }
   });
@@ -2534,6 +2679,11 @@ export async function registerRoutes(
       if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
       const locationServiceIds = await getServiceIdsForLocation(Number(res.locals.locationId));
       if (locationServiceIds !== undefined && !locationServiceIds.includes(serviceId)) return res.status(404).json({ message: "Serviço não encontrado" });
+      const currentService = await storage.getService(serviceId);
+      if (!currentService) return res.status(404).json({ message: "Serviço não encontrado" });
+      if (Object.prototype.hasOwnProperty.call(input, "categoryId")) {
+        await validateServiceCategoryAssignment(input.categoryId, currentService.categoryId);
+      }
       const service = await storage.updateService(serviceId, input);
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
       await recordAuditLog(req, {
@@ -2550,6 +2700,12 @@ export async function registerRoutes(
           message: error.errors[0].message,
           field: error.errors[0].path.join("."),
         });
+      }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_NOT_FOUND") {
+        return res.status(400).json({ message: "Categoria não encontrada.", field: "categoryId" });
+      }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_INACTIVE") {
+        return res.status(400).json({ message: "A categoria selecionada está inativa.", field: "categoryId" });
       }
       res.status(500).json({ message: "Erro ao atualizar serviço" });
     }
@@ -2812,7 +2968,7 @@ export async function registerRoutes(
 
   // === SERVICES ===
   app.get(api.services.list.path, async (req, res) => {
-    const allServices = await storage.getServices();
+    const allServices = await storage.getServicesWithCategories();
     const locationServiceIds = MULTI_LOCATION_CONFIG.enabled
       ? await getServiceIdsForLocation(Number(res.locals.locationId))
       : undefined;
@@ -2822,7 +2978,8 @@ export async function registerRoutes(
     const includeHidden = req.query.includeHidden === "true" &&
       Boolean(appSession.adminId || appSession.barberId);
 
-    res.json(includeHidden ? services : services.filter((service) => service.isVisible));
+    const visibleServices = includeHidden ? services : services.filter((service) => service.isVisible);
+    res.json(visibleServices.map((service) => serializeServiceCatalogueItem(service, includeHidden)));
   });
 
   // === APPOINTMENTS ===

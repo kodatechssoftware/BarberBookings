@@ -12,6 +12,7 @@ import { shopBranding } from "@/lib/branding";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 import { resolveLocationMapLinks } from "@shared/location-maps";
+import { groupServicesForDisplay } from "@/lib/service-groups";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -172,6 +173,7 @@ export default function Home() {
   // [] is a valid response. Keep usable services visible during background refetches.
   const showServicesSkeleton = services === undefined && (isLoadingServices || isFetchingServices);
   const showServicesFallback = services === undefined && isServicesError;
+  const serviceGroups = useMemo(() => groupServicesForDisplay(visibleServices), [visibleServices]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const {
     data: shopHours,
@@ -344,25 +346,36 @@ export default function Home() {
           ) : showServicesFallback ? (
             <p className="text-sm text-gray-400">Não foi possível carregar os serviços neste momento.</p>
           ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              {visibleServices.map((service) => (
-                <article key={service.id} className="flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
-                  <div className="flex flex-1 items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                        <Scissors className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-bold text-white">{service.name}</h3>
-                        <p className="mt-2 text-sm leading-relaxed text-gray-400">{service.description}</p>
-                      </div>
-                    </div>
-                    <p className="shrink-0 font-display text-2xl font-bold text-primary">
-                      {(service.price / 100).toFixed(0)}€
-                    </p>
+            <div className="space-y-9">
+              {serviceGroups.map((group) => (
+                <div key={group.key}>
+                  {group.label && (
+                    <h3 className="mb-4 text-sm font-semibold uppercase tracking-[0.22em] text-gray-300">
+                      {group.label}
+                    </h3>
+                  )}
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    {group.services.map((service) => (
+                      <article key={service.id} className="flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
+                        <div className="flex flex-1 items-start justify-between gap-4">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                              <Scissors className="h-5 w-5" />
+                            </span>
+                            <div className="min-w-0">
+                              <h4 className="text-lg font-bold text-white">{service.name}</h4>
+                              <p className="mt-2 text-sm leading-relaxed text-gray-400">{service.description}</p>
+                            </div>
+                          </div>
+                          <p className="shrink-0 font-display text-2xl font-bold text-primary">
+                            {(service.price / 100).toFixed(0)}€
+                          </p>
+                        </div>
+                        <p className="mt-auto pt-5 text-xs font-semibold uppercase tracking-widest text-gray-500">{service.duration} min</p>
+                      </article>
+                    ))}
                   </div>
-                  <p className="mt-auto pt-5 text-xs font-semibold uppercase tracking-widest text-gray-500">{service.duration} min</p>
-                </article>
+                </div>
               ))}
             </div>
           )}

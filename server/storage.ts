@@ -2,6 +2,7 @@ import { db } from "./db";
 import {
   barbers,
   services,
+  serviceCategories,
   appointments,
   appointmentSeries,
   admins,
@@ -20,6 +21,8 @@ import {
   metaWebhookReceipts,
   type Barber,
   type Service,
+  type ServiceCategory,
+  type ServiceCatalogueItem,
   type Appointment,
   type AppointmentSeries,
   type RecurringNotificationSnapshot,
@@ -41,6 +44,7 @@ import {
   type WhatsappMessageStatus,
   type CreateBarberRequest,
   type CreateServiceRequest,
+  type CreateServiceCategoryRequest,
   type CreateAppointmentRequest,
   type CreateAdminRequest,
   type InsertBlacklist,
@@ -367,10 +371,17 @@ export interface IStorage {
 
   // Services
   getServices(): Promise<Service[]>;
+  getServicesWithCategories(): Promise<ServiceCatalogueItem[]>;
   getService(id: number): Promise<Service | undefined>;
   createService(service: CreateServiceRequest): Promise<Service>;
   updateService(id: number, service: Partial<CreateServiceRequest>): Promise<Service | undefined>;
   deleteService(id: number): Promise<void>;
+  getServiceCategories(options?: { includeInactive?: boolean }): Promise<ServiceCategory[]>;
+  getServiceCategory(id: number): Promise<ServiceCategory | undefined>;
+  createServiceCategory(category: CreateServiceCategoryRequest): Promise<ServiceCategory>;
+  updateServiceCategory(id: number, category: Partial<CreateServiceCategoryRequest>): Promise<ServiceCategory | undefined>;
+  deleteServiceCategory(id: number): Promise<boolean>;
+  reorderServiceCategories(categoryIds: number[]): Promise<ServiceCategory[]>;
 
   // Appointments
   getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]>;
@@ -647,6 +658,33 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(services).orderBy(services.id);
   }
 
+  async getServicesWithCategories(): Promise<ServiceCatalogueItem[]> {
+    const rows = await db
+      .select({
+        service: getTableColumns(services),
+        category: {
+          id: serviceCategories.id,
+          name: serviceCategories.name,
+          sortOrder: serviceCategories.sortOrder,
+        },
+      })
+      .from(services)
+      .leftJoin(serviceCategories, and(
+        eq(services.categoryId, serviceCategories.id),
+        eq(serviceCategories.isActive, true),
+      ))
+      .orderBy(services.id);
+
+    return rows.map((row) => ({
+      ...row.service,
+      category: !row.category || row.category.id === null ? null : {
+        id: row.category.id,
+        name: row.category.name!,
+        sortOrder: row.category.sortOrder!,
+      },
+    }));
+  }
+
   async getService(id: number): Promise<Service | undefined> {
     const [service] = await db.select().from(services).where(eq(services.id, id));
     return service;
@@ -684,6 +722,77 @@ export class DatabaseStorage implements IStorage {
     await db.update(appointments).set({ serviceId: null }).where(eq(appointments.serviceId, id));
     // Now we can safely delete the service
     await db.delete(services).where(eq(services.id, id));
+  }
+
+  async getServiceCategories(options?: { includeInactive?: boolean }): Promise<ServiceCategory[]> {
+    const query = db.select().from(serviceCategories);
+    return options?.includeInactive
+      ? await query.orderBy(serviceCategories.sortOrder, serviceCategories.id)
+      : await query.where(eq(serviceCategories.isActive, true)).orderBy(serviceCategories.sortOrder, serviceCategories.id);
+  }
+
+  async getServiceCategory(id: number): Promise<ServiceCategory | undefined> {
+    const [category] = await db.select().from(serviceCategories).where(eq(serviceCategories.id, id));
+    return category;
+  }
+
+  async createServiceCategory(category: CreateServiceCategoryRequest): Promise<ServiceCategory> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(424242, 1301)`);
+      const [lastCategory] = await tx
+        .select({ sortOrder: serviceCategories.sortOrder })
+        .from(serviceCategories)
+        .orderBy(desc(serviceCategories.sortOrder), desc(serviceCategories.id))
+        .limit(1);
+      const [created] = await tx.insert(serviceCategories).values({
+        ...category,
+        name: category.name.trim(),
+        sortOrder: category.sortOrder ?? ((lastCategory?.sortOrder ?? -1) + 1),
+        isActive: category.isActive ?? true,
+      }).returning();
+      return created;
+    });
+  }
+
+  async updateServiceCategory(
+    id: number,
+    category: Partial<CreateServiceCategoryRequest>,
+  ): Promise<ServiceCategory | undefined> {
+    const [updated] = await db.update(serviceCategories).set({
+      ...category,
+      ...(category.name !== undefined ? { name: category.name.trim() } : {}),
+      updatedAt: new Date(),
+    }).where(eq(serviceCategories.id, id)).returning();
+    return updated;
+  }
+
+  async deleteServiceCategory(id: number): Promise<boolean> {
+    const deleted = await db.delete(serviceCategories).where(eq(serviceCategories.id, id)).returning({ id: serviceCategories.id });
+    return deleted.length === 1;
+  }
+
+  async reorderServiceCategories(categoryIds: number[]): Promise<ServiceCategory[]> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(424242, 1301)`);
+      const existing = await tx.select({ id: serviceCategories.id }).from(serviceCategories).orderBy(serviceCategories.id);
+      const existingIds = existing.map((category) => category.id);
+      const uniqueRequested = Array.from(new Set(categoryIds));
+      if (
+        uniqueRequested.length !== categoryIds.length ||
+        uniqueRequested.length !== existingIds.length ||
+        [...uniqueRequested].sort((a, b) => a - b).some((id, index) => id !== existingIds[index])
+      ) {
+        const error = new Error("Service category order is stale") as Error & { code?: string };
+        error.code = "SERVICE_CATEGORY_ORDER_MISMATCH";
+        throw error;
+      }
+
+      for (let sortOrder = 0; sortOrder < categoryIds.length; sortOrder += 1) {
+        await tx.update(serviceCategories).set({ sortOrder, updatedAt: new Date() })
+          .where(eq(serviceCategories.id, categoryIds[sortOrder]));
+      }
+      return await tx.select().from(serviceCategories).orderBy(serviceCategories.sortOrder, serviceCategories.id);
+    });
   }
 
   async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {
@@ -1709,6 +1818,7 @@ type VerificationCodeRecord = {
 export class MemoryStorage implements IStorage {
   private barbers: Barber[] = [];
   private services: Service[] = [];
+  private serviceCategories: ServiceCategory[] = [];
   private appointments: Appointment[] = [];
   private appointmentSeries: AppointmentSeries[] = [];
   private admins: Admin[] = [];
@@ -1729,6 +1839,7 @@ export class MemoryStorage implements IStorage {
   private nextIds = {
     barber: 1,
     service: 1,
+    serviceCategory: 1,
     appointment: 1,
     admin: 1,
     blacklist: 1,
@@ -1866,6 +1977,19 @@ export class MemoryStorage implements IStorage {
     return [...this.services].sort((a, b) => a.id - b.id);
   }
 
+  async getServicesWithCategories(): Promise<ServiceCatalogueItem[]> {
+    const activeCategories = new Map(this.serviceCategories
+      .filter((category) => category.isActive)
+      .map((category) => [category.id, category]));
+    return (await this.getServices()).map((service) => {
+      const category = service.categoryId ? activeCategories.get(service.categoryId) : undefined;
+      return {
+        ...service,
+        category: category ? { id: category.id, name: category.name, sortOrder: category.sortOrder } : null,
+      };
+    });
+  }
+
   async getService(id: number): Promise<Service | undefined> {
     return this.services.find((service) => service.id === id);
   }
@@ -1879,6 +2003,7 @@ export class MemoryStorage implements IStorage {
       price: service.price,
       duration: service.duration,
       isVisible: service.isVisible ?? true,
+      categoryId: service.categoryId ?? null,
     };
     this.services.push(newService);
     return newService;
@@ -1908,6 +2033,89 @@ export class MemoryStorage implements IStorage {
     );
     this.barberServices = this.barberServices.filter((row) => row.serviceId !== id);
     this.services = this.services.filter((service) => service.id !== id);
+  }
+
+  async getServiceCategories(options?: { includeInactive?: boolean }): Promise<ServiceCategory[]> {
+    return this.serviceCategories
+      .filter((category) => options?.includeInactive || category.isActive)
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id)
+      .map((category) => ({ ...category }));
+  }
+
+  async getServiceCategory(id: number): Promise<ServiceCategory | undefined> {
+    const category = this.serviceCategories.find((item) => item.id === id);
+    return category ? { ...category } : undefined;
+  }
+
+  async createServiceCategory(category: CreateServiceCategoryRequest): Promise<ServiceCategory> {
+    const name = category.name.trim();
+    if (this.serviceCategories.some((existing) => existing.name.trim().toLocaleLowerCase("pt-PT") === name.toLocaleLowerCase("pt-PT"))) {
+      const error = new Error("Duplicate service category name") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
+    const now = new Date();
+    const created: ServiceCategory = {
+      id: this.nextIds.serviceCategory++,
+      name,
+      sortOrder: category.sortOrder ?? (this.serviceCategories.reduce((maximum, item) => Math.max(maximum, item.sortOrder), -1) + 1),
+      isActive: category.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.serviceCategories.push(created);
+    return { ...created };
+  }
+
+  async updateServiceCategory(
+    id: number,
+    category: Partial<CreateServiceCategoryRequest>,
+  ): Promise<ServiceCategory | undefined> {
+    const index = this.serviceCategories.findIndex((item) => item.id === id);
+    if (index === -1) return undefined;
+    const name = category.name?.trim();
+    if (name && this.serviceCategories.some((existing) =>
+      existing.id !== id && existing.name.trim().toLocaleLowerCase("pt-PT") === name.toLocaleLowerCase("pt-PT"))) {
+      const error = new Error("Duplicate service category name") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
+    this.serviceCategories[index] = {
+      ...this.serviceCategories[index],
+      ...category,
+      ...(name !== undefined ? { name } : {}),
+      updatedAt: new Date(),
+    };
+    return { ...this.serviceCategories[index] };
+  }
+
+  async deleteServiceCategory(id: number): Promise<boolean> {
+    if (!this.serviceCategories.some((category) => category.id === id)) return false;
+    this.serviceCategories = this.serviceCategories.filter((category) => category.id !== id);
+    this.services = this.services.map((service) => service.categoryId === id ? { ...service, categoryId: null } : service);
+    return true;
+  }
+
+  async reorderServiceCategories(categoryIds: number[]): Promise<ServiceCategory[]> {
+    const existingIds = this.serviceCategories.map((category) => category.id).sort((a, b) => a - b);
+    const uniqueRequested = Array.from(new Set(categoryIds));
+    if (
+      uniqueRequested.length !== categoryIds.length ||
+      uniqueRequested.length !== existingIds.length ||
+      [...uniqueRequested].sort((a, b) => a - b).some((id, index) => id !== existingIds[index])
+    ) {
+      const error = new Error("Service category order is stale") as Error & { code?: string };
+      error.code = "SERVICE_CATEGORY_ORDER_MISMATCH";
+      throw error;
+    }
+    const orderById = new Map(categoryIds.map((id, index) => [id, index]));
+    const now = new Date();
+    this.serviceCategories = this.serviceCategories.map((category) => ({
+      ...category,
+      sortOrder: orderById.get(category.id)!,
+      updatedAt: now,
+    }));
+    return this.getServiceCategories({ includeInactive: true });
   }
 
   async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {

@@ -5,6 +5,9 @@ import path from "node:path";
 import net from "node:net";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { boolean, integer, pgSchema, text } from "drizzle-orm/pg-core";
+import { asc } from "drizzle-orm";
 import { getMigrationLocationConfig, migrationChecksum, runSchemaMigrations } from "../server/migrations";
 
 async function availablePort() {
@@ -27,6 +30,7 @@ const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
 let pool: pg.Pool | undefined;
+let applicationPool: pg.Pool | undefined;
 try {
   await embedded.initialise();
   await embedded.start();
@@ -75,7 +79,9 @@ try {
       created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now()
     );
     INSERT INTO ${table("barbers")} (name, specialty) VALUES ('Barbeiro original', 'Corte');
-    INSERT INTO ${table("services")} (name, price, duration) VALUES ('Serviço original', 1500, 30);
+    INSERT INTO ${table("services")} (name, description, agenda_label, price, duration, is_visible) VALUES
+      ('Serviço original', 'Descrição original', 'Original', 1500, 30, true),
+      ('Serviço oculto', 'Mantém todos os campos', NULL, 2750, 75, false);
     INSERT INTO ${table("appointments")} (barber_id, service_id, start_time, customer_name, customer_email, customer_phone, cancel_token)
       VALUES (1, 1, '2030-09-09 13:30:00', 'Cliente original', 'cliente@example.test', '910000000', 'token-fixture');
     INSERT INTO ${table("appointments")} (barber_id, start_time, customer_name, customer_phone, cancel_token)
@@ -90,6 +96,10 @@ try {
 
   const preservedTables = ["barbers", "services", "appointments", "shop_availability", "barber_availability",
     "barber_services", "customer_notes", "blacklist", "business_expenses"];
+  const legacyServicesBefore = (await pool.query(`
+    SELECT id, name, description, agenda_label, price, duration, is_visible
+    FROM ${table("services")} ORDER BY id
+  `)).rows;
   const countsBefore = new Map<string, number>();
   for (const name of preservedTables) countsBefore.set(name, Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count));
 
@@ -104,14 +114,55 @@ try {
   assert.deepEqual(firstRun.applied, [
     "0001_multi_location_foundation.sql", "0002_whatsapp_messages.sql",
     "0003_appointment_notification_outbox.sql", "0004_appointment_series.sql",
+    "0005_service_categories.sql",
   ]);
   const secondRun = await runSchemaMigrations(pool, { schemaName: schema, environment });
   assert.equal(secondRun.applied.length, 0);
-  assert.equal(secondRun.alreadyApplied, 4);
+  assert.equal(secondRun.alreadyApplied, 5);
 
   for (const name of preservedTables) {
     assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count), countsBefore.get(name), `${name} row count`);
   }
+  const migratedServices = (await pool.query(`
+    SELECT id, name, description, agenda_label, price, duration, is_visible, category_id
+    FROM ${table("services")} ORDER BY id
+  `)).rows;
+  assert.deepEqual(
+    migratedServices.map(({ category_id: _categoryId, ...service }) => service),
+    legacyServicesBefore,
+    "service values and legacy ordering must remain unchanged",
+  );
+  assert.ok(migratedServices.every((service) => service.category_id === null),
+    "pre-category services must remain uncategorized");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("service_categories")}`)).rows[0].count), 0,
+    "the migration must not create or infer categories");
+  // This is the exact projection used by pre-category code. It must remain readable
+  // after the additive migration and return the same shape and values.
+  const legacyProjectionAfter = (await pool.query(`
+    SELECT id, name, description, agenda_label, price, duration, is_visible
+    FROM ${table("services")} ORDER BY id
+  `)).rows;
+  assert.deepEqual(legacyProjectionAfter, legacyServicesBefore, "pre-category code projection must remain compatible");
+  const legacySchema = pgSchema(schema);
+  const legacyServicesTable = legacySchema.table("services", {
+    id: integer("id").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    agendaLabel: text("agenda_label"),
+    price: integer("price").notNull(),
+    duration: integer("duration").notNull(),
+    isVisible: boolean("is_visible"),
+  });
+  const legacyDrizzleRead = await drizzle(pool).select().from(legacyServicesTable).orderBy(asc(legacyServicesTable.id));
+  assert.deepEqual(legacyDrizzleRead.map((service) => ({
+    id: service.id,
+    name: service.name,
+    description: service.description,
+    agenda_label: service.agendaLabel,
+    price: service.price,
+    duration: service.duration,
+    is_visible: service.isVisible,
+  })), legacyServicesBefore, "the pre-category Drizzle model must read the migrated services table unchanged");
   const defaultLocation = (await pool.query(`SELECT * FROM ${table("locations")} WHERE is_default = true`)).rows[0];
   assert.equal(defaultLocation.name, environment.MIGRATION_DEFAULT_LOCATION_NAME);
   assert.equal(defaultLocation.address, environment.MIGRATION_DEFAULT_LOCATION_ADDRESS);
@@ -121,7 +172,10 @@ try {
     assert.equal(result.rows[0].assigned, result.rows[0].total, `${name} default location backfill`);
   }
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("barber_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count), 1);
-  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("service_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count), 1);
+  assert.equal(
+    Number((await pool.query(`SELECT count(*) AS count FROM ${table("service_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count),
+    legacyServicesBefore.length,
+  );
   assert.equal((await pool.query(`SELECT customer_name FROM ${table("appointments")} WHERE cancel_token = 'token-fixture'`)).rows[0].customer_name, "Cliente original");
   assert.equal((await pool.query(`SELECT notes FROM ${table("customer_notes")} WHERE phone = '910000000'`)).rows[0].notes, "Nota existente");
   assert.equal((await pool.query(`SELECT description FROM ${table("business_expenses")} WHERE amount_cents = 50000`)).rows[0].description, "Renda existente");
@@ -142,7 +196,68 @@ try {
     "appointment_notification_events_event_key_idx", "appointment_notification_events_pending_idx",
     "meta_webhook_receipts_receipt_key_idx", "meta_webhook_receipts_provider_message_id_idx",
     "appointments_series_occurrence_idx", "appointment_notification_events_series_idx",
+    "service_categories_name_ci_idx", "service_categories_active_order_idx", "services_category_id_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
+
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("service_categories")} (name, sort_order) VALUES ('   ', 0)`),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("service_categories")} (name, sort_order) VALUES ('Inválida', -1)`),
+    (error: any) => error?.code === "23514",
+  );
+  const categoryId = Number((await pool.query(`
+    INSERT INTO ${table("service_categories")} (name, sort_order)
+    VALUES ('Cortes', 0) RETURNING id
+  `)).rows[0].id);
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("service_categories")} (name, sort_order) VALUES ('  cortes  ', 1)`),
+    (error: any) => error?.code === "23505",
+  );
+  await pool.query(`UPDATE ${table("services")} SET category_id = $1 WHERE id = 1`, [categoryId]);
+  await pool.query(`UPDATE ${table("service_categories")} SET is_active = false WHERE id = $1`, [categoryId]);
+  assert.equal((await pool.query(`SELECT category_id FROM ${table("services")} WHERE id = 1`)).rows[0].category_id, categoryId,
+    "deactivating a category must preserve service associations");
+  const serviceCountBeforeCategoryDelete = Number((await pool.query(`SELECT count(*) AS count FROM ${table("services")}`)).rows[0].count);
+  await pool.query(`DELETE FROM ${table("service_categories")} WHERE id = $1`, [categoryId]);
+  assert.equal((await pool.query(`SELECT category_id FROM ${table("services")} WHERE id = 1`)).rows[0].category_id, null,
+    "deleting a category must set services.category_id to null");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("services")}`)).rows[0].count), serviceCountBeforeCategoryDelete,
+    "deleting a category must not delete services");
+
+  process.env.DATABASE_URL = `postgresql://postgres:migration-test@127.0.0.1:${port}/postgres`;
+  process.env.DATABASE_SCHEMA = schema;
+  process.env.DATABASE_POOL_MAX = "2";
+  process.env.USE_MEMORY_STORAGE = "false";
+  const [{ DatabaseStorage }, { pool: importedApplicationPool }] = await Promise.all([
+    import("../server/storage"),
+    import("../server/db"),
+  ]);
+  applicationPool = importedApplicationPool;
+  const databaseStorage = new DatabaseStorage();
+  const cuts = await databaseStorage.createServiceCategory({ name: "Cortes storage" });
+  const treatments = await databaseStorage.createServiceCategory({ name: "Tratamentos storage" });
+  assert.deepEqual((await databaseStorage.getServiceCategories({ includeInactive: true })).map((category) => category.id), [cuts.id, treatments.id]);
+  assert.deepEqual((await databaseStorage.reorderServiceCategories([treatments.id, cuts.id])).map((category) => category.id), [treatments.id, cuts.id]);
+  await assert.rejects(
+    databaseStorage.reorderServiceCategories([cuts.id]),
+    (error: any) => error?.code === "SERVICE_CATEGORY_ORDER_MISMATCH",
+  );
+  assert.deepEqual((await databaseStorage.getServiceCategories({ includeInactive: true })).map((category) => category.id), [treatments.id, cuts.id],
+    "a rejected reorder must leave the previous deterministic order intact");
+  await databaseStorage.updateService(1, { categoryId: cuts.id });
+  assert.equal((await databaseStorage.getServicesWithCategories()).find((service) => service.id === 1)?.category?.id, cuts.id);
+  await databaseStorage.updateServiceCategory(cuts.id, { isActive: false });
+  assert.equal((await databaseStorage.getService(1))?.categoryId, cuts.id, "storage deactivation must preserve the association");
+  assert.equal((await databaseStorage.getServicesWithCategories()).find((service) => service.id === 1)?.category, null,
+    "inactive category metadata must not be exposed publicly");
+  await databaseStorage.updateServiceCategory(cuts.id, { isActive: true });
+  assert.equal((await databaseStorage.getServicesWithCategories()).find((service) => service.id === 1)?.category?.id, cuts.id,
+    "reactivation must restore grouping without reassigning the service");
+  await databaseStorage.deleteServiceCategory(cuts.id);
+  assert.equal((await databaseStorage.getService(1))?.categoryId, null);
+  await databaseStorage.deleteServiceCategory(treatments.id);
 
   await pool.query(`
     INSERT INTO ${table("appointment_series")} (
@@ -238,6 +353,7 @@ try {
 
   console.log("PASS: representative main data was preserved/backfilled; revisions, opt-in, outbox, series, constraints, indexes and controlled re-execution passed on real PostgreSQL.");
 } finally {
+  if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
   await embedded.stop().catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
