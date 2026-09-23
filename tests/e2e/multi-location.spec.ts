@@ -80,6 +80,14 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   });
   expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
   const portoService = await serviceResponse.json();
+  const categoryResponse = await request.post("/api/service-categories", { data: { name: "Categoria Porto QA" } });
+  expect(categoryResponse.status(), await categoryResponse.text()).toBe(201);
+  const portoCategory = await categoryResponse.json();
+  const categorizePortoService = await request.patch(`/api/services/${portoService.id}`, {
+    headers: portoHeaders,
+    data: { categoryId: portoCategory.id },
+  });
+  expect(categorizePortoService.ok(), await categorizePortoService.text()).toBe(true);
 
   const barberResponse = await request.post("/api/barbers", {
     headers: portoHeaders,
@@ -98,11 +106,16 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   const portoServices = await (await request.get("/api/services", { headers: portoHeaders })).json();
   const portoBarbers = await (await request.get("/api/barbers", { headers: portoHeaders })).json();
   expect(portoServices.some((service: any) => service.id === portoService.id)).toBe(true);
+  expect(portoServices.find((service: any) => service.id === portoService.id)?.category).toMatchObject({
+    id: portoCategory.id,
+    name: "Categoria Porto QA",
+  });
   expect(portoBarbers.some((barber: any) => barber.id === portoBarber.id)).toBe(true);
 
   const defaultServices = await (await request.get("/api/services")).json();
   const defaultBarbers = await (await request.get("/api/barbers")).json();
   expect(defaultServices.some((service: any) => service.id === portoService.id)).toBe(false);
+  expect(defaultServices.every((service: any) => service.category?.id !== portoCategory.id)).toBe(true);
   expect(defaultBarbers.some((barber: any) => barber.id === portoBarber.id)).toBe(false);
   expect((await request.get(`/api/barbers/${portoBarber.id}`)).status()).toBe(404);
   expect((await request.get(`/api/barbers/${portoBarber.id}/availability`)).status()).toBe(404);
@@ -174,6 +187,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await expect(locationSection.locator("iframe")).toHaveAttribute("src", embed("Porto"));
   await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", "https://www.google.com/maps?q=Porto");
   await expect(page.getByText("Rui Porto", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Categoria Porto QA", exact: true })).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -187,6 +201,10 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   const changeLocation = await page.getByRole("button", { name: "Mudar loja" }).boundingBox();
   expect(changeLocation).toBeTruthy();
   expect(changeLocation!.x + changeLocation!.width).toBeLessThanOrEqual(390);
+  await page.getByText("Rui Porto", { exact: true }).click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  await expect(page.getByRole("heading", { name: "Categoria Porto QA", exact: true })).toBeVisible();
+  expect((await request.delete(`/api/service-categories/${portoCategory.id}`)).ok()).toBe(true);
 
   const invalidEmbed = await request.patch(`/api/admin/locations/${created[0].id}`, {
     data: { mapEmbedUrl: "https://example.com/not-a-map" },
@@ -602,14 +620,18 @@ test("[multi-location] horário semanal por loja: UI, cache, público, manual e 
       await page.getByRole("button", { name: "Go to next month" }).click();
     }
     await expect(targetMonth).toBeVisible();
-    await targetMonth.getByRole("gridcell", { name: String(day.getDate()), exact: true }).click();
+    await targetMonth.locator("button[role='gridcell']:not(.day-outside)", {
+      hasText: new RegExp(`^${day.getDate()}$`),
+    }).click();
     await expect(page.locator("button[aria-selected='true']")).toHaveText(String(day.getDate()));
     await expect(page.getByRole("button", { name: index === 0 ? "09:00h" : "10:00h", exact: true })).toBeEnabled();
     if (index === 1) await expect(page.getByRole("button", { name: "09:00h", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "12:00h", exact: true })).toBeDisabled();
     const closedDay = new Date(monday);
     closedDay.setDate(closedDay.getDate() + (index === 0 ? 3 : 0));
-    await targetMonth.getByRole("gridcell", { name: String(closedDay.getDate()), exact: true }).click();
+    await targetMonth.locator("button[role='gridcell']:not(.day-outside)", {
+      hasText: new RegExp(`^${closedDay.getDate()}$`),
+    }).click();
     await expect(page.getByRole("button", { name: /^\d{2}:\d{2}h$/ })).toHaveCount(0);
   }
   for (const shop of [shopA, shopB]) {

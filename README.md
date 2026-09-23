@@ -292,6 +292,23 @@ existentes; nao move trabalho para background nem altera o pool.
 Ver [diagnostico de startup e ensaio do pool](docs/performance-startup-and-pool.md)
 para interpretar os tempos, o mapa de pedidos da Agenda e o protocolo DEV 4/6/8.
 
+## Categorias de servicos
+
+A migration `0005_service_categories.sql` adiciona categorias opcionais e uma
+referencia nullable em `services`. Nao cria categorias nem associa servicos
+existentes. Quando nenhum servico visivel tem uma categoria ativa, Home e Booking
+mantem o catalogo flat anterior, na mesma ordem e sem titulos adicionais.
+
+As categorias sao globais; os filtros de loja, barbeiro e visibilidade continuam
+a ser aplicados antes do agrupamento. Eliminar uma categoria nao elimina servicos:
+a FK usa `ON DELETE SET NULL`. Desativar uma categoria preserva as associacoes e
+reativa-las volta a apresentar automaticamente os respetivos grupos.
+
+Limitação preexistente fora deste trabalho: eliminar diretamente um serviço que
+esteja referenciado por `appointment_series` pode ser recusado pela respetiva FK.
+As categorias não alteram esse comportamento nem entram em appointments, snapshots,
+notificações, relatórios ou exports.
+
 O carregamento do catalogo conta as associacoes ativas a lojas de todos os barbeiros
 numa unica query, sem cache entre pedidos. O middleware reutiliza a lista de
 localizacoes apenas dentro do mesmo pedido, mantendo as validacoes de acesso.

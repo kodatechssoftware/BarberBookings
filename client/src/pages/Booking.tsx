@@ -35,6 +35,8 @@ import {
   formatPublicBookingMonthOpeningNotice,
   getPublicBookingMonthOpeningNotice,
 } from "@shared/public-booking-window";
+import type { ServiceCatalogueItem } from "@shared/schema";
+import { groupServicesForDisplay } from "@/lib/service-groups";
 
 type BookingPreference = {
   step: number;
@@ -334,6 +336,42 @@ export default function Booking() {
       visibleBarbers.some((barber) => canBarberPerformService(barber, service.id)),
     );
   }, [selectedBarber, selectedBarberId, visibleBarbers, visibleServices]);
+  const availableServiceGroups = useMemo(
+    () => groupServicesForDisplay(availableServices),
+    [availableServices],
+  );
+  const hasVisibleServiceCategories = availableServiceGroups.some((group) => group.label !== null);
+  const renderServiceCard = (service: ServiceCatalogueItem) => (
+    <div
+      key={service.id}
+      onClick={() => setSelectedServiceId(service.id)}
+      className={cn(
+        "flex min-h-[112px] items-stretch justify-between p-4 md:p-6 rounded-xl border bg-card cursor-pointer transition-all duration-200",
+        selectedServiceId === service.id
+          ? "border-primary bg-primary/5"
+          : "border-white/5 hover:border-white/20 hover:bg-white/5"
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-start gap-3 md:gap-4">
+        <div className={cn(
+          "w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center border shrink-0",
+          selectedServiceId === service.id ? "border-primary text-primary" : "border-white/20 text-gray-400"
+        )}>
+          <Scissors className="w-4 h-4 md:w-5 md:h-5" />
+        </div>
+        <div className="flex min-h-full min-w-0 flex-col justify-between">
+          <h3 className="font-bold text-sm md:text-lg text-white leading-tight">{service.name}</h3>
+          <p className="mt-1 text-xs md:text-sm text-gray-400 line-clamp-2">{service.description}</p>
+          <p className="mt-3 text-[10px] md:text-xs text-gray-500">{service.duration} min</p>
+        </div>
+      </div>
+      <div className="self-center text-right pl-2">
+        <span className="block text-base md:text-xl font-bold text-primary font-display whitespace-nowrap">
+          {(service.price / 100).toFixed(2)}€
+        </span>
+      </div>
+    </div>
+  );
 
   const bookingWindowStart = useMemo(
     () => parseDateParam(publicBookingWindow?.today ?? null),
@@ -916,38 +954,22 @@ export default function Booking() {
                     {Array.from({ length: 3 }, (_, i) => <ServiceCardSkeleton key={i} />)}
                   </div>
                 ) : (
-                  <div className="mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0">
-                    {availableServices.map((service) => (
-                      <div
-                        key={service.id}
-                        onClick={() => setSelectedServiceId(service.id)}
-                        className={cn(
-                          "flex min-h-[112px] items-stretch justify-between p-4 md:p-6 rounded-xl border bg-card cursor-pointer transition-all duration-200",
-                          selectedServiceId === service.id
-                            ? "border-primary bg-primary/5"
-                            : "border-white/5 hover:border-white/20 hover:bg-white/5"
-                        )}
-                      >
-                        <div className="flex min-w-0 flex-1 items-start gap-3 md:gap-4">
-                          <div className={cn(
-                            "w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center border shrink-0",
-                            selectedServiceId === service.id ? "border-primary text-primary" : "border-white/20 text-gray-400"
-                          )}>
-                            <Scissors className="w-4 h-4 md:w-5 md:h-5" />
-                          </div>
-                          <div className="flex min-h-full min-w-0 flex-col justify-between">
-                            <h3 className="font-bold text-sm md:text-lg text-white leading-tight">{service.name}</h3>
-                            <p className="mt-1 text-xs md:text-sm text-gray-400 line-clamp-2">{service.description}</p>
-                            <p className="mt-3 text-[10px] md:text-xs text-gray-500">{service.duration} min</p>
-                          </div>
-                        </div>
-                        <div className="self-center text-right pl-2">
-                          <span className="block text-base md:text-xl font-bold text-primary font-display whitespace-nowrap">
-                            {(service.price / 100).toFixed(2)}€
-                          </span>
-                        </div>
-                      </div>
-                    ))}
+                  <div className={hasVisibleServiceCategories
+                    ? "mx-auto max-w-6xl space-y-7 px-1"
+                    : "mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0"}
+                  >
+                    {hasVisibleServiceCategories
+                      ? availableServiceGroups.map((group) => (
+                          <section key={group.key}>
+                            <h3 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-gray-300 md:text-sm">
+                              {group.label}
+                            </h3>
+                            <div className="max-w-2xl space-y-3 md:space-y-4 lg:grid lg:max-w-none lg:grid-cols-3 lg:gap-4 lg:space-y-0">
+                              {group.services.map(renderServiceCard)}
+                            </div>
+                          </section>
+                        ))
+                      : availableServices.map(renderServiceCard)}
                     {availableServices.length === 0 && (
                       <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
                         Este barbeiro não tem serviços disponíveis para marcação online.

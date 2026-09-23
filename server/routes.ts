@@ -3,7 +3,12 @@ import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import { getShopDateBounds, isAppointmentConflictError, storage } from "./storage";
 import { decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
-import { api } from "@shared/routes";
+import {
+  api,
+  serviceCategoryCreateInputSchema,
+  serviceCategoryOrderInputSchema,
+  serviceCategoryUpdateInputSchema,
+} from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { performance } from "node:perf_hooks";
@@ -40,6 +45,7 @@ import {
   businessExpenseCategories,
   businessExpenseRecurrences,
   insertServiceSchema,
+  type ServiceCatalogueItem,
   type Appointment,
   type AppointmentPaymentMethod,
   type BarberCompensationRule,
@@ -742,6 +748,33 @@ function getErrorCode(error: unknown) {
   return cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
     ? (cause as { code: string }).code
     : undefined;
+}
+
+function hasDatabaseErrorCode(error: unknown, expectedCode: string) {
+  const visited = new Set<object>();
+  let current = error;
+  while (current && typeof current === "object") {
+    if (visited.has(current)) return false;
+    visited.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (candidate.code === expectedCode) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+function serializeServiceCatalogueItem(item: ServiceCatalogueItem, includeInactiveAssignment: boolean) {
+  const { categoryId, category, ...legacyService } = item;
+  if (category) return { ...legacyService, categoryId, category };
+  if (includeInactiveAssignment && categoryId !== null) return { ...legacyService, categoryId };
+  return legacyService;
+}
+
+async function validateServiceCategoryAssignment(categoryId: number | null | undefined, currentCategoryId?: number | null) {
+  if (categoryId === null || categoryId === undefined) return;
+  const category = await storage.getServiceCategory(categoryId);
+  if (!category) throw new Error("SERVICE_CATEGORY_NOT_FOUND");
+  if (!category.isActive && category.id !== currentCategoryId) throw new Error("SERVICE_CATEGORY_INACTIVE");
 }
 
 function validateAppointmentFilters(query: Request["query"]) {
@@ -2520,10 +2553,116 @@ export async function registerRoutes(
     }
   });
 
+  // === SERVICE CATEGORIES MGMT ===
+  app.get(api.serviceCategories.list.path, requireAuth, async (_req, res) => {
+    const [categories, services] = await Promise.all([
+      storage.getServiceCategories({ includeInactive: true }),
+      storage.getServices(),
+    ]);
+    const counts = new Map<number, number>();
+    services.forEach((service) => {
+      if (service.categoryId) counts.set(service.categoryId, (counts.get(service.categoryId) || 0) + 1);
+    });
+    res.json(categories.map((category) => ({ ...category, serviceCount: counts.get(category.id) || 0 })));
+  });
+
+  app.post(api.serviceCategories.create.path, requireAdmin, async (req, res) => {
+    try {
+      const input = serviceCategoryCreateInputSchema.parse(req.body);
+      const category = await storage.createServiceCategory(input);
+      await recordAuditLog(req, {
+        action: "service_category.created",
+        entityType: "service_category",
+        entityId: category.id,
+        summary: `Categoria de serviços criada: ${category.name}`,
+      });
+      res.status(201).json(category);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe uma categoria com este nome." });
+      }
+      console.error("Create service category error:", error);
+      res.status(500).json({ message: "Erro ao criar categoria" });
+    }
+  });
+
+  app.put(api.serviceCategories.reorder.path, requireAdmin, async (req, res) => {
+    try {
+      const { categoryIds } = serviceCategoryOrderInputSchema.parse(req.body);
+      const categories = await storage.reorderServiceCategories(categoryIds);
+      await recordAuditLog(req, {
+        action: "service_category.reordered",
+        entityType: "service_category",
+        summary: "Ordem das categorias de serviços atualizada",
+        metadata: { categoryIds },
+      });
+      res.json(categories);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.errors[0].message });
+      if (getErrorCode(error) === "SERVICE_CATEGORY_ORDER_MISMATCH") {
+        return res.status(409).json({ message: "A lista de categorias mudou. Atualize a página e tente novamente." });
+      }
+      console.error("Reorder service categories error:", error);
+      res.status(500).json({ message: "Erro ao ordenar categorias" });
+    }
+  });
+
+  app.patch(api.serviceCategories.update.path, requireAdmin, async (req, res) => {
+    try {
+      const categoryId = parsePositiveInteger(req.params.id);
+      if (categoryId === null) return res.status(400).json({ message: "Categoria inválida." });
+      const input = serviceCategoryUpdateInputSchema.parse(req.body);
+      if (Object.keys(input).length === 0) return res.status(400).json({ message: "Indique uma alteração." });
+      const category = await storage.updateServiceCategory(categoryId, input);
+      if (!category) return res.status(404).json({ message: "Categoria não encontrada." });
+      await recordAuditLog(req, {
+        action: "service_category.updated",
+        entityType: "service_category",
+        entityId: category.id,
+        summary: `Categoria de serviços atualizada: ${category.name}`,
+        metadata: { fields: Object.keys(input) },
+      });
+      res.json(category);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe uma categoria com este nome." });
+      }
+      console.error("Update service category error:", error);
+      res.status(500).json({ message: "Erro ao atualizar categoria" });
+    }
+  });
+
+  app.delete(api.serviceCategories.remove.path, requireAdmin, async (req, res) => {
+    try {
+      const categoryId = parsePositiveInteger(req.params.id);
+      if (categoryId === null) return res.status(400).json({ message: "Categoria inválida." });
+      const category = await storage.getServiceCategory(categoryId);
+      if (!category) return res.status(404).json({ message: "Categoria não encontrada." });
+      await storage.deleteServiceCategory(categoryId);
+      await recordAuditLog(req, {
+        action: "service_category.deleted",
+        entityType: "service_category",
+        entityId: categoryId,
+        summary: `Categoria de serviços removida: ${category.name}`,
+      });
+      res.json({ message: "Categoria removida. Os serviços associados ficaram sem categoria." });
+    } catch (error) {
+      console.error("Delete service category error:", error);
+      res.status(500).json({ message: "Erro ao remover categoria" });
+    }
+  });
+
   // === SERVICES MGMT ===
   app.post("/api/services", requireAdmin, async (req, res) => {
     try {
       const input = insertServiceSchema.parse(req.body);
+      await validateServiceCategoryAssignment(input.categoryId);
       const locationId = Number(res.locals.locationId);
       const locationServiceIds = await getServiceIdsForLocation(locationId);
       const existingServiceIds = locationServiceIds ?? (await storage.getServices()).map((service) => service.id);
@@ -2545,6 +2684,12 @@ export async function registerRoutes(
           field: error.errors[0].path.join("."),
         });
       }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_NOT_FOUND") {
+        return res.status(400).json({ message: "Categoria não encontrada.", field: "categoryId" });
+      }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_INACTIVE") {
+        return res.status(400).json({ message: "A categoria selecionada está inativa.", field: "categoryId" });
+      }
       res.status(500).json({ message: "Erro ao criar serviço" });
     }
   });
@@ -2556,6 +2701,11 @@ export async function registerRoutes(
       if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
       const locationServiceIds = await getServiceIdsForLocation(Number(res.locals.locationId));
       if (locationServiceIds !== undefined && !locationServiceIds.includes(serviceId)) return res.status(404).json({ message: "Serviço não encontrado" });
+      const currentService = await storage.getService(serviceId);
+      if (!currentService) return res.status(404).json({ message: "Serviço não encontrado" });
+      if (Object.prototype.hasOwnProperty.call(input, "categoryId")) {
+        await validateServiceCategoryAssignment(input.categoryId, currentService.categoryId);
+      }
       const service = await storage.updateService(serviceId, input);
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
       await recordAuditLog(req, {
@@ -2572,6 +2722,12 @@ export async function registerRoutes(
           message: error.errors[0].message,
           field: error.errors[0].path.join("."),
         });
+      }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_NOT_FOUND") {
+        return res.status(400).json({ message: "Categoria não encontrada.", field: "categoryId" });
+      }
+      if (error instanceof Error && error.message === "SERVICE_CATEGORY_INACTIVE") {
+        return res.status(400).json({ message: "A categoria selecionada está inativa.", field: "categoryId" });
       }
       res.status(500).json({ message: "Erro ao atualizar serviço" });
     }
@@ -2834,7 +2990,7 @@ export async function registerRoutes(
 
   // === SERVICES ===
   app.get(api.services.list.path, async (req, res) => {
-    const allServices = await storage.getServices();
+    const allServices = await storage.getServicesWithCategories();
     const locationServiceIds = MULTI_LOCATION_CONFIG.enabled
       ? await getServiceIdsForLocation(Number(res.locals.locationId))
       : undefined;
@@ -2844,7 +3000,8 @@ export async function registerRoutes(
     const includeHidden = req.query.includeHidden === "true" &&
       Boolean(appSession.adminId || appSession.barberId);
 
-    res.json(includeHidden ? services : services.filter((service) => service.isVisible));
+    const visibleServices = includeHidden ? services : services.filter((service) => service.isVisible);
+    res.json(visibleServices.map((service) => serializeServiceCatalogueItem(service, includeHidden)));
   });
 
   // === APPOINTMENTS ===
@@ -5338,74 +5495,91 @@ const POWERHOUSE_DEMO_NAME = "Powerhouse barbershop";
 const POWERHOUSE_DEMO_ADDRESS = "Rua Adelino de Oliveira 85, 4470-025 Maia";
 const POWERHOUSE_DEMO_MAP_URL =
   "https://www.google.com/maps/search/?api=1&query=Rua%20Adelino%20de%20Oliveira%2085%2C%204470-025%20Maia";
+const POWERHOUSE_DEMO_CATEGORIES = [
+  { key: "services", name: "Serviços", sortOrder: 0 },
+  { key: "treatments", name: "Tratamentos", sortOrder: 1 },
+  { key: "students", name: "Só à quarta-feira · Estudantes", sortOrder: 2 },
+] as const;
 const POWERHOUSE_DEMO_SERVICES = [
   {
+    categoryKey: "services",
     name: "Corte + Barba (Barboterapia)",
     description: "Corte personalizado com ritual completo de barboterapia.",
     price: 2200,
     duration: 60,
   },
   {
+    categoryKey: "services",
     name: "Corte",
     description: "Corte masculino personalizado com acabamento cuidado.",
     price: 1500,
     duration: 45,
   },
   {
+    categoryKey: "services",
     name: "Corte 1 pente por todo + Barba (Barboterapia)",
     description: "Corte uniforme à máquina com ritual completo de barboterapia.",
     price: 1900,
     duration: 45,
   },
   {
+    categoryKey: "services",
     name: "Corte 1 pente por todo",
     description: "Corte uniforme à máquina, prático e preciso.",
     price: 1200,
     duration: 30,
   },
   {
+    categoryKey: "services",
     name: "Barba (Barboterapia)",
     description: "Ritual de barboterapia, desenho e acabamento da barba.",
     price: 1200,
     duration: 30,
   },
   {
+    categoryKey: "services",
     name: "Design Sobrancelha (pinça, linha)",
     description: "Design e definição de sobrancelha com pinça e linha.",
     price: 1000,
     duration: 20,
   },
   {
+    categoryKey: "services",
     name: "Sobrancelhas cera ou navalhado",
     description: "Definição de sobrancelhas com cera ou navalha.",
     price: 400,
     duration: 15,
   },
   {
+    categoryKey: "services",
     name: "Corte, barba (barboterapia) e sobrancelhas",
     description: "Experiência completa de corte, barboterapia e sobrancelhas.",
     price: 2600,
     duration: 75,
   },
   {
+    categoryKey: "treatments",
     name: "Platinar cabelo curto",
     description: "Tratamento para cabelo curto com acabamento platinado.",
     price: 3500,
     duration: 120,
   },
   {
+    categoryKey: "treatments",
     name: "Madeixas/Luzes cabelo curto",
     description: "Madeixas ou luzes em cabelo curto.",
     price: 2500,
     duration: 90,
   },
   {
+    categoryKey: "treatments",
     name: "Alisamento",
     description: "Tratamento de alisamento para um acabamento uniforme.",
     price: 1000,
     duration: 45,
   },
   {
+    categoryKey: "students",
     name: "Corte estudante",
     description: "Preço especial para estudantes, disponível apenas à quarta-feira.",
     price: 1200,
@@ -5420,6 +5594,31 @@ const LEGACY_DEMO_SERVICE_NAMES = [
   "Corte Degradê + Barba",
   "Corte Simples + Barba",
 ];
+
+async function ensurePowerhouseDemoCategories() {
+  const existingCategories = await storage.getServiceCategories({ includeInactive: true });
+  const categoryIds = new Map<(typeof POWERHOUSE_DEMO_CATEGORIES)[number]["key"], number>();
+
+  for (const desired of POWERHOUSE_DEMO_CATEGORIES) {
+    const existing = existingCategories.find((category) =>
+      category.name.trim().toLocaleLowerCase("pt-PT") === desired.name.toLocaleLowerCase("pt-PT"));
+    const category = existing
+      ? await storage.updateServiceCategory(existing.id, {
+          name: desired.name,
+          sortOrder: desired.sortOrder,
+          isActive: true,
+        })
+      : await storage.createServiceCategory({
+          name: desired.name,
+          sortOrder: desired.sortOrder,
+          isActive: true,
+        });
+    if (!category) throw new Error(`Não foi possível sincronizar a categoria demo: ${desired.name}`);
+    categoryIds.set(desired.key, category.id);
+  }
+
+  return categoryIds;
+}
 
 async function synchronizePowerhouseDemoData() {
   const defaultLocation = await getDefaultLocation();
@@ -5471,11 +5670,15 @@ async function synchronizePowerhouseDemoData() {
       .map((barber) => storage.updateBarber(barber.id, { isVisible: false })),
   );
 
+  const demoCategoryIds = await ensurePowerhouseDemoCategories();
   const existingServices = await storage.getServices();
   const claimedServiceIds = new Set<number>();
   const desiredServiceIds: number[] = [];
   for (let index = 0; index < POWERHOUSE_DEMO_SERVICES.length; index += 1) {
     const desired = POWERHOUSE_DEMO_SERVICES[index];
+    const { categoryKey, ...serviceData } = desired;
+    const categoryId = demoCategoryIds.get(categoryKey);
+    if (!categoryId) throw new Error(`Categoria demo indisponível: ${categoryKey}`);
     const exact = existingServices.find(
       (service) => service.name === desired.name && !claimedServiceIds.has(service.id),
     );
@@ -5483,10 +5686,10 @@ async function synchronizePowerhouseDemoData() {
       (service) => service.name === LEGACY_DEMO_SERVICE_NAMES[index] && !claimedServiceIds.has(service.id),
     );
     const synchronized = exact
-      ? await storage.updateService(exact.id, { ...desired, isVisible: true })
+      ? await storage.updateService(exact.id, { ...serviceData, categoryId, isVisible: true })
       : legacy
-        ? await storage.updateService(legacy.id, { ...desired, isVisible: true })
-        : await storage.createService({ ...desired, isVisible: true });
+        ? await storage.updateService(legacy.id, { ...serviceData, categoryId, isVisible: true })
+        : await storage.createService({ ...serviceData, categoryId, isVisible: true });
     if (!synchronized) throw new Error(`Não foi possível sincronizar o serviço demo: ${desired.name}`);
     claimedServiceIds.add(synchronized.id);
     desiredServiceIds.push(synchronized.id);
@@ -5610,8 +5813,20 @@ async function seedDatabase() {
         },
       ];
   const seededServices = [];
+  const demoCategoryIds = isDemoEnvironment ? await ensurePowerhouseDemoCategories() : null;
   for (const service of serviceSeeds) {
-    seededServices.push(await storage.createService({ ...service, isVisible: true }));
+    const categoryKey = "categoryKey" in service ? service.categoryKey : null;
+    const categoryId = categoryKey ? demoCategoryIds?.get(categoryKey) : undefined;
+    if (categoryKey && !categoryId) throw new Error(`Categoria demo indisponível: ${categoryKey}`);
+    const serviceInput = {
+      name: service.name,
+      description: service.description,
+      price: service.price,
+      duration: service.duration,
+      isVisible: true,
+      ...(categoryId ? { categoryId } : {}),
+    };
+    seededServices.push(await storage.createService(serviceInput));
   }
   for (const service of seededServices) {
     await assignServiceToLocation(service.id, defaultLocation.id);

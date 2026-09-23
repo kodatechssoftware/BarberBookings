@@ -12,6 +12,7 @@ import { shopBranding } from "@/lib/branding";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 import { resolveLocationMapLinks } from "@shared/location-maps";
+import { groupServicesForDisplay } from "@/lib/service-groups";
 
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -172,30 +173,7 @@ export default function Home() {
   // [] is a valid response. Keep usable services visible during background refetches.
   const showServicesSkeleton = services === undefined && (isLoadingServices || isFetchingServices);
   const showServicesFallback = services === undefined && isServicesError;
-  const serviceGroups = useMemo(() => {
-    if (shopBranding.theme !== "barber-pole") {
-      return [{ label: "", services: visibleServices }];
-    }
-    const treatmentNames = new Set([
-      "Platinar cabelo curto",
-      "Madeixas/Luzes cabelo curto",
-      "Alisamento",
-    ]);
-    return [
-      {
-        label: "Serviços",
-        services: visibleServices.filter((service) => !treatmentNames.has(service.name) && service.name !== "Corte estudante"),
-      },
-      {
-        label: "Tratamentos",
-        services: visibleServices.filter((service) => treatmentNames.has(service.name)),
-      },
-      {
-        label: "Só à quarta-feira · Estudantes",
-        services: visibleServices.filter((service) => service.name === "Corte estudante"),
-      },
-    ].filter((group) => group.services.length > 0);
-  }, [visibleServices]);
+  const serviceGroups = useMemo(() => groupServicesForDisplay(visibleServices), [visibleServices]);
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const {
     data: shopHours,
@@ -378,7 +356,7 @@ export default function Home() {
           ) : (
             <div className="space-y-9">
               {serviceGroups.map((group) => (
-                <div key={group.label || "all-services"}>
+                <div key={group.key}>
                   {group.label && (
                     <h3 className="mb-4 text-sm font-semibold uppercase tracking-[0.22em] text-gray-300">
                       {group.label}

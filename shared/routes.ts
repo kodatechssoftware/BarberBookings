@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   insertBarberSchema,
   insertServiceSchema,
+  insertServiceCategorySchema,
   insertAppointmentSchema,
   appointmentPaymentMethods,
   appointmentStatuses,
@@ -10,6 +11,8 @@ import {
   barberCompensationModels,
   chairRentPeriods,
   type BarberWithServices,
+  type ServiceCatalogueItem,
+  type ServiceCategory,
 } from "./schema";
 
 const serviceIdsInputSchema = z.array(z.number().int().positive()).optional();
@@ -39,6 +42,12 @@ export const barberInputSchema = barberProfileInputSchema.merge(barberCompensati
 export type CreateBarberRequest = z.infer<typeof barberInputSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
+export const serviceCategoryCreateInputSchema = insertServiceCategorySchema.pick({ name: true }).strict();
+export const serviceCategoryUpdateInputSchema = insertServiceCategorySchema.pick({ name: true, isActive: true }).partial().strict();
+export const serviceCategoryOrderInputSchema = z.object({
+  categoryIds: z.array(z.number().int().positive()),
+}).strict();
+export type ServiceCategoryWithCount = ServiceCategory & { serviceCount: number };
 
 // ============================================
 // SHARED ERROR SCHEMAS
@@ -94,7 +103,7 @@ export const api = {
       method: "GET" as const,
       path: "/api/services",
       responses: {
-        200: z.array(z.custom<typeof services.$inferSelect>()),
+        200: z.array(z.custom<ServiceCatalogueItem>()),
       },
     },
     create: {
@@ -105,6 +114,36 @@ export const api = {
         201: z.custom<typeof services.$inferSelect>(),
         400: errorSchemas.validation,
       },
+    },
+  },
+  serviceCategories: {
+    list: {
+      method: "GET" as const,
+      path: "/api/service-categories",
+      responses: { 200: z.array(z.custom<ServiceCategoryWithCount>()) },
+    },
+    create: {
+      method: "POST" as const,
+      path: "/api/service-categories",
+      input: serviceCategoryCreateInputSchema,
+      responses: { 201: z.custom<ServiceCategory>() },
+    },
+    update: {
+      method: "PATCH" as const,
+      path: "/api/service-categories/:id",
+      input: serviceCategoryUpdateInputSchema,
+      responses: { 200: z.custom<ServiceCategory>() },
+    },
+    remove: {
+      method: "DELETE" as const,
+      path: "/api/service-categories/:id",
+      responses: { 200: z.object({ message: z.string() }) },
+    },
+    reorder: {
+      method: "PUT" as const,
+      path: "/api/service-categories/order",
+      input: serviceCategoryOrderInputSchema,
+      responses: { 200: z.array(z.custom<ServiceCategory>()) },
     },
   },
   appointments: {

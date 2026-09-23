@@ -38,6 +38,7 @@ import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsD
 import { LocationsTab } from "@/components/admin/LocationsTab";
 import { AssociateBarberDialog } from "@/components/admin/AssociateBarberDialog";
 import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
+import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesManager";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
@@ -71,6 +72,7 @@ import {
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
+import { useServiceCategories } from "@/hooks/use-service-categories";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -842,9 +844,13 @@ function getEditedBarberAvatar(
 type ServiceListItem = {
   id: number;
   name: string;
+  description?: string | null;
   agendaLabel?: string | null;
+  price: number;
   duration?: number;
   isVisible?: boolean | null;
+  categoryId?: number | null;
+  category?: { id: number; name: string; sortOrder: number } | null;
 };
 
 type BarberListItem = {
@@ -882,6 +888,7 @@ type ServiceFormData = {
   agendaLabel: string;
   price: number;
   duration: number;
+  categoryId: number | null;
 };
 
 const emptyServiceFormData: ServiceFormData = {
@@ -890,6 +897,7 @@ const emptyServiceFormData: ServiceFormData = {
   agendaLabel: "",
   price: 0,
   duration: 30,
+  categoryId: null,
 };
 
 function getAgendaLabelPayload(value?: string | null) {
@@ -1406,6 +1414,7 @@ export default function Admin() {
   const [isReassigningBarber, setIsReassigningBarber] = useState(false);
   const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
   const [editingServiceId, setEditingServiceId] = useState<number | null>(null);
+  const [serviceCategoryDrafts, setServiceCategoryDrafts] = useState<Record<number, number | null>>({});
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
@@ -1459,6 +1468,11 @@ export default function Admin() {
     isFetching: isFetchingServices,
     isError: isServicesError,
   } = useServices({ enabled: user?.authorized === true, includeHidden: true });
+  const {
+    data: serviceCategories = [],
+    isLoading: isLoadingServiceCategories,
+    isError: isServiceCategoriesError,
+  } = useServiceCategories({ enabled: user?.role === "admin" && activeTab === "services" });
   // Only initial loads delay secondary panels. Background refreshes keep the
   // existing agenda and normal polling behaviour; errors also release the gate.
   const isLoadingAgenda = isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices;
@@ -1711,6 +1725,7 @@ export default function Admin() {
       const createdService = await response.json().catch(() => null);
       await rollbackServiceIfAgendaLabelFailed(createdService, payload.agendaLabel);
       queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
       refreshBookableLocationsCache();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingService(false);
@@ -4063,6 +4078,28 @@ export default function Admin() {
                         required
                       />
                     </div>
+                    {serviceCategories.some((category) => category.isActive) && (
+                      <div>
+                        <Label>Categoria</Label>
+                        <Select
+                          value={serviceFormData.categoryId === null ? "none" : String(serviceFormData.categoryId)}
+                          onValueChange={(value) => setServiceFormData({
+                            ...serviceFormData,
+                            categoryId: value === "none" ? null : Number(value),
+                          })}
+                        >
+                          <SelectTrigger className="border-white/10 bg-background text-white">
+                            <SelectValue placeholder="Sem categoria" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">Sem categoria</SelectItem>
+                            {serviceCategories.filter((category) => category.isActive).map((category) => (
+                              <SelectItem key={category.id} value={String(category.id)}>{category.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                     <Button 
                       variant="gold" 
                       className="w-full" 
@@ -4074,17 +4111,49 @@ export default function Admin() {
                 </DialogContent>
               </Dialog>
             </div>
+            {user?.role === "admin" && (
+              <ServiceCategoriesManager
+                categories={serviceCategories}
+                isLoading={isLoadingServiceCategories}
+                isError={isServiceCategoriesError}
+              />
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {services?.map(service => (
+              {services?.map(service => {
+                const assignedCategory = serviceCategories.find((category) => category.id === service.categoryId);
+                return (
                 <Card key={service.id} className="bg-card border-white/10 text-white">
-                  <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-lg font-bold">{service.name}</CardTitle><span className="text-primary font-bold">{(service.price / 100).toFixed(2)}€</span></CardHeader>
+                  <CardHeader className="flex flex-row items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <CardTitle className="text-lg font-bold">{service.name}</CardTitle>
+                      {assignedCategory && (
+                        <span className={cn(
+                          "mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                          assignedCategory.isActive
+                            ? "border-primary/30 bg-primary/10 text-primary"
+                            : "border-white/10 bg-white/5 text-gray-400",
+                        )}>
+                          {assignedCategory.name}{assignedCategory.isActive ? "" : " · inativa"}
+                        </span>
+                      )}
+                    </div>
+                    <span className="shrink-0 text-primary font-bold">{(service.price / 100).toFixed(2)}€</span>
+                  </CardHeader>
                   <CardContent>
                     <div className="mb-4 space-y-1 text-sm text-gray-400">
                       <p>{service.duration} min</p>
                       <p className="text-xs text-gray-500">Agenda: {service.agendaLabel || "etiqueta automática"}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Dialog open={editingServiceId === service.id} onOpenChange={(open) => setEditingServiceId(open ? service.id : null)}>
+                      <Dialog open={editingServiceId === service.id} onOpenChange={(open) => {
+                        setEditingServiceId(open ? service.id : null);
+                        if (open) {
+                          setServiceCategoryDrafts((current) => ({
+                            ...current,
+                            [service.id]: service.categoryId ?? null,
+                          }));
+                        }
+                      }}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
@@ -4104,6 +4173,32 @@ export default function Admin() {
                             </div>
                             <div><Label>Preço (€)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Duração (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
+                            {serviceCategories.length > 0 && (
+                              <div>
+                                <Label>Categoria</Label>
+                                <Select
+                                  value={(serviceCategoryDrafts[service.id] ?? null) === null ? "none" : String(serviceCategoryDrafts[service.id])}
+                                  onValueChange={(value) => setServiceCategoryDrafts((current) => ({
+                                    ...current,
+                                    [service.id]: value === "none" ? null : Number(value),
+                                  }))}
+                                >
+                                  <SelectTrigger className="border-white/10 bg-background text-white">
+                                    <SelectValue placeholder="Sem categoria" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">Sem categoria</SelectItem>
+                                    {serviceCategories
+                                      .filter((category) => category.isActive || category.id === service.categoryId)
+                                      .map((category) => (
+                                        <SelectItem key={category.id} value={String(category.id)}>
+                                          {category.name}{category.isActive ? "" : " (inativa)"}
+                                        </SelectItem>
+                                      ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )}
                             <Button variant="gold" className="w-full" onClick={async (event) => {
                               try {
                                 const formRoot = event.currentTarget.closest("[data-edit-service-form]");
@@ -4112,9 +4207,13 @@ export default function Admin() {
                                 const agendaLabel = getAgendaLabelPayload(formRoot?.querySelector<HTMLInputElement>(`#edit-service-agenda-label-${service.id}`)?.value);
                                 const price = Math.round(Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-price-${service.id}`)?.value || 0) * 100);
                                 const duration = Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-dur-${service.id}`)?.value || 0);
-                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, agendaLabel, price, duration });
+                                const categoryId = Object.prototype.hasOwnProperty.call(serviceCategoryDrafts, service.id)
+                                  ? serviceCategoryDrafts[service.id]
+                                  : service.categoryId ?? null;
+                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, agendaLabel, price, duration, categoryId });
                                 await assertServiceAgendaLabelPersisted(response, agendaLabel);
                                 queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                                queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
                                 refreshBookableLocationsCache();
                                 queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                                 setEditingServiceId(null);
@@ -4135,6 +4234,7 @@ export default function Admin() {
                           try {
                             await apiRequest("DELETE", `/api/services/${service.id}`);
                             queryClient.invalidateQueries({ queryKey: ["/api/services"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
                             refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({ title: "Sucesso", description: "Serviço removido." });
@@ -4175,7 +4275,8 @@ export default function Admin() {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
             {(!services || services.length === 0) && (isLoadingServices || isFetchingServices) ? (
               <div className="mt-6 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
