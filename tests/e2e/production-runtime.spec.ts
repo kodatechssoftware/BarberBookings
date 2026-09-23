@@ -24,7 +24,11 @@ test("Production-equivalent runtime remains single-location and keeps external f
   await expect(page.locator("body")).toBeVisible();
 
   const config = await request.get("/api/multi-location/config");
-  expect(await config.json()).toEqual({ enabled: false, maxLocations: 1 });
+  expect(await config.json()).toEqual({
+    enabled: false,
+    maxLocations: 1,
+    bookingSlotIntervalMinutes: Number(process.env.BOOKING_SLOT_INTERVAL_MINUTES || 30),
+  });
   const locations = await request.get("/api/locations");
   expect((await locations.json())).toHaveLength(1);
 

@@ -14,6 +14,10 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { emailValidationMessage, isValidOptionalEmail } from "@shared/customer-validation";
 import {
+  createClockAlignedTimeOptions,
+  type BookingSlotIntervalMinutes,
+} from "@shared/booking-slot-interval";
+import {
   PHONE_COUNTRIES,
   formatPhoneInput,
   getPhoneCountry,
@@ -42,6 +46,7 @@ type AppointmentBlockDialogProps = {
   isCalendarOpen: boolean;
   onCalendarOpenChange: (open: boolean) => void;
   availableBlockTimes: string[];
+  bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   isCheckingAvailability?: boolean;
   onSubmit: () => void;
 };
@@ -56,14 +61,32 @@ export function AppointmentBlockDialog({
   isCalendarOpen,
   onCalendarOpenChange,
   availableBlockTimes,
+  bookingSlotIntervalMinutes,
   isCheckingAvailability = false,
   onSubmit,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking && blockData.isRecurring;
-  const visibleBlockTimeOptions = blockData.isManualBooking && blockData.allowOutsideHours
-    ? outsideHoursBlockTimeOptions
-    : blockTimeOptions;
+  const manualBookingTimeOptions = [
+    ...createClockAlignedTimeOptions({
+      startMinute: 9 * 60,
+      endMinuteExclusive: 13 * 60,
+      intervalMinutes: bookingSlotIntervalMinutes,
+    }),
+    ...createClockAlignedTimeOptions({
+      startMinute: 14 * 60,
+      endMinuteExclusive: 20 * 60,
+      intervalMinutes: bookingSlotIntervalMinutes,
+    }),
+  ];
+  const manualBookingOutsideHoursTimeOptions = createClockAlignedTimeOptions({
+    startMinute: 6 * 60,
+    endMinuteExclusive: 23 * 60,
+    intervalMinutes: bookingSlotIntervalMinutes,
+  });
+  const visibleBlockTimeOptions = blockData.isManualBooking
+    ? blockData.allowOutsideHours ? manualBookingOutsideHoursTimeOptions : manualBookingTimeOptions
+    : blockData.allowOutsideHours ? outsideHoursBlockTimeOptions : blockTimeOptions;
   const morningBlockTimes = visibleBlockTimeOptions.filter((time) => time < "13:00");
   const afternoonBlockTimes = visibleBlockTimeOptions.filter((time) => time >= "14:00");
   const today = startOfToday();

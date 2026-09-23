@@ -1,3 +1,5 @@
+import { parseBookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
+
 const appEnvironment = process.env.APP_ENV?.trim().toLowerCase();
 
 export const isDevelopmentDeployment =
@@ -24,6 +26,10 @@ export const appointmentNotificationWorkerEnabled =
 
 export const recurringWhatsappNotificationsEnabled =
   explicitBoolean("META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED") ?? false;
+
+export const bookingSlotIntervalMinutes = parseBookingSlotIntervalMinutes(
+  process.env.BOOKING_SLOT_INTERVAL_MINUTES,
+);
 
 export function validateRuntimeConfiguration() {
   if (process.env.NODE_ENV === "production" && !["development", "production"].includes(appEnvironment || "")) {

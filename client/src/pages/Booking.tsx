@@ -29,6 +29,11 @@ import {
   type PhoneCountryCode,
 } from "@shared/phone-countries";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
+import { useRuntimeConfig } from "@/hooks/use-runtime-config";
+import {
+  DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES,
+  isClockTimeAligned,
+} from "@shared/booking-slot-interval";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 import {
@@ -316,6 +321,18 @@ export default function Booking() {
     isError: shopAvailabilityError,
   } = useShopAvailability();
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
+  const {
+    data: runtimeConfig,
+    isLoading: loadingRuntimeConfig,
+    isError: runtimeConfigError,
+  } = useRuntimeConfig();
+  const bookingSlotIntervalMinutes = runtimeConfig?.bookingSlotIntervalMinutes
+    ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
+  useEffect(() => {
+    if (!runtimeConfig || !selectedTime || isClockTimeAligned(selectedTime, bookingSlotIntervalMinutes)) return;
+    setSelectedTime(null);
+    setStep((currentStep) => Math.min(currentStep, 3));
+  }, [bookingSlotIntervalMinutes, runtimeConfig, selectedTime]);
   const createAppointment = useCreateAppointment();
   const maxPublicBookingDate = useMemo(
     () => parseDateParam(publicBookingWindow?.maxDate ?? null),
@@ -492,6 +509,7 @@ export default function Booking() {
 
   // Generate Time Slots
   const timeSlots = useMemo(() => {
+    if (!runtimeConfig) return [];
     return getAvailableTimeSlots({
       selectedService,
       selectedDate,
@@ -501,8 +519,9 @@ export default function Booking() {
       shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
       existingAppointments,
       timeZone: locationTimeZone,
+      slotIntervalMinutes: bookingSlotIntervalMinutes,
     });
-  }, [availabilityRows, existingAppointments, locationTimeZone, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
+  }, [availabilityRows, bookingSlotIntervalMinutes, existingAppointments, locationTimeZone, runtimeConfig, selectedBarberId, selectedDate, selectedService, shopAvailabilityRows, visibleBarbers]);
   const shopAvailabilityForCalendar = useMemo(
     () => (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
     [shopAvailabilityRows],
@@ -514,7 +533,7 @@ export default function Booking() {
   const selectedDateIsShopClosed = selectedDate ? isShopClosedDate(selectedDate) : false;
 
   const availableDateKeys = useMemo(() => {
-    if (!selectedService || selectedBarberId === null) return new Set<string>();
+    if (!runtimeConfig || !selectedService || selectedBarberId === null) return new Set<string>();
     if (loadingBookingWindowAppointments || bookingWindowAppointmentsError || !bookingWindowAppointments) return new Set<string>();
 
     const today = startOfToday();
@@ -535,6 +554,7 @@ export default function Booking() {
         shopAvailabilityRows: shopAvailabilityForCalendar,
         existingAppointments: appointments,
         timeZone: locationTimeZone,
+        slotIntervalMinutes: bookingSlotIntervalMinutes,
       });
 
       if (slots.some((slot) => slot.available)) {
@@ -545,6 +565,7 @@ export default function Booking() {
     return availableKeys;
   }, [
     availabilityRows,
+    bookingSlotIntervalMinutes,
     bookingWindowAppointments,
     bookingWindowAppointmentsError,
     calendarEnd,
@@ -555,6 +576,7 @@ export default function Booking() {
     shopAvailabilityForCalendar,
     visibleBarbers,
     locationTimeZone,
+    runtimeConfig,
   ]);
 
   const initialAvailabilitySelectionKey = [
@@ -567,12 +589,12 @@ export default function Booking() {
   const completedInitialAvailabilityKey = useRef<string | null>(null);
   const failedInitialAvailabilityKey = useRef<string | null>(null);
   const loadingInitialAvailability = loadingBarbers || loadingServices || loadingAvailability
-    || loadingShopAvailability || loadingPublicBookingWindow || loadingBookingWindowAppointments;
+    || loadingShopAvailability || loadingPublicBookingWindow || loadingRuntimeConfig || loadingBookingWindowAppointments;
   const initialAvailabilityHasError = availabilityError || shopAvailabilityError
-    || bookingWindowAppointmentsError;
+    || runtimeConfigError || bookingWindowAppointmentsError;
   const firstAvailableDate = useMemo(() => {
     if (!bookingWindowStart || !maxPublicBookingDate || !selectedService || selectedBarberId === null
-      || !bookingWindowAppointments || initialAvailabilityHasError) return undefined;
+      || !runtimeConfig || !bookingWindowAppointments || initialAvailabilityHasError) return undefined;
     return findFirstAvailableDate({
       startDate: bookingWindowStart,
       endDate: maxPublicBookingDate,
@@ -583,9 +605,10 @@ export default function Booking() {
       shopAvailabilityRows: shopAvailabilityForCalendar,
       existingAppointments: bookingWindowAppointments,
       timeZone: locationTimeZone,
+      slotIntervalMinutes: bookingSlotIntervalMinutes,
     });
-  }, [availabilityRows, bookingWindowAppointments, bookingWindowStart, initialAvailabilityHasError,
-    locationTimeZone, maxPublicBookingDate, selectedBarberId, selectedService, shopAvailabilityForCalendar, visibleBarbers]);
+  }, [availabilityRows, bookingSlotIntervalMinutes, bookingWindowAppointments, bookingWindowStart, initialAvailabilityHasError,
+    locationTimeZone, maxPublicBookingDate, runtimeConfig, selectedBarberId, selectedService, shopAvailabilityForCalendar, visibleBarbers]);
 
   useEffect(() => {
     if (step !== 3 || loadingInitialAvailability
@@ -608,7 +631,7 @@ export default function Booking() {
   }, [bookingWindowStart, firstAvailableDate, initialAvailabilityHasError, initialAvailabilitySelectionKey,
     loadingInitialAvailability, step]);
   const loadingSelectedDateAvailability = loadingBarbers || loadingServices || loadingAvailability
-    || loadingShopAvailability || loadingPublicBookingWindow || loadingAppointments;
+    || loadingShopAvailability || loadingPublicBookingWindow || loadingRuntimeConfig || loadingAppointments;
   const initialAvailabilityError = step === 3
     && failedInitialAvailabilityKey.current === initialAvailabilitySelectionKey;
   const noAvailabilityInBookingWindow = step === 3

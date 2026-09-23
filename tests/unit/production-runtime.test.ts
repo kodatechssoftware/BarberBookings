@@ -37,11 +37,30 @@ test("Production runtime starts fail-closed without Meta credentials", () => {
   const output = evaluate(baseEnvironment, `m.validateRuntimeConfiguration(); console.log(JSON.stringify({
     production:m.isProductionDeployment, development:m.isDevelopmentDeployment,
     events:m.appointmentNotificationEventsEnabled, worker:m.appointmentNotificationWorkerEnabled,
-    recurring:m.recurringWhatsappNotificationsEnabled
+    recurring:m.recurringWhatsappNotificationsEnabled,
+    bookingSlotInterval:m.bookingSlotIntervalMinutes
   }))`);
   assert.deepEqual(JSON.parse(output), {
     production: true, development: false, events: false, worker: false, recurring: false,
+    bookingSlotInterval: 30,
   });
+});
+
+test("booking slot interval accepts 15, 30 and 60 and fails fast for every other configured value", () => {
+  for (const value of ["15", "30", "60"]) {
+    const output = evaluate(
+      { ...baseEnvironment, BOOKING_SLOT_INTERVAL_MINUTES: value },
+      "m.validateRuntimeConfiguration(); console.log(m.bookingSlotIntervalMinutes)",
+    );
+    assert.equal(output, value);
+  }
+
+  for (const value of ["abc", "0", "-30", "17", "90"]) {
+    assert.throws(() => evaluate(
+      { ...baseEnvironment, BOOKING_SLOT_INTERVAL_MINUTES: value },
+      "m.validateRuntimeConfiguration()",
+    ));
+  }
 });
 
 test("Production notification capabilities also default to off when activation flags are absent", () => {
