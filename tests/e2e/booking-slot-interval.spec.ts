@@ -16,41 +16,101 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
     bookingSlotIntervalMinutes: 60,
   });
 
-  const [barbersResponse, servicesResponse] = await Promise.all([
-    request.get("/api/barbers"),
-    request.get("/api/services"),
-  ]);
-  const [barber] = await barbersResponse.json();
-  const [service, uncategorizedService] = await servicesResponse.json();
-  expect(barber?.id).toBeTruthy();
-  expect(service?.id).toBeTruthy();
-  expect(uncategorizedService?.id).toBeTruthy();
-
   const categoryLogin = await request.post("/api/admin/login", {
     data: { username: "admin", password: "Playwright-Test-Admin-2026!" },
   });
   expect(categoryLogin.ok(), await categoryLogin.text()).toBe(true);
-  const categoryResponse = await request.post("/api/service-categories", {
-    data: { name: "Categoria com grelha 60 QA" },
-  });
-  expect(categoryResponse.status(), await categoryResponse.text()).toBe(201);
-  const category = await categoryResponse.json();
-  const assignmentResponse = await request.patch(`/api/services/${service.id}`, {
-    data: { categoryId: category.id },
-  });
-  expect(assignmentResponse.ok(), await assignmentResponse.text()).toBe(true);
+
+  const createCategory = async (name: string) => {
+    const response = await request.post("/api/service-categories", { data: { name } });
+    expect(response.status(), await response.text()).toBe(201);
+    return response.json();
+  };
+  const createService = async (name: string, categoryId: number | null) => {
+    const response = await request.post("/api/services", {
+      data: {
+        name,
+        description: `${name} descrição`,
+        price: 1500,
+        duration: 30,
+        isVisible: true,
+        categoryId,
+      },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    return response.json();
+  };
+  const createBarber = async (name: string, serviceIds: number[]) => {
+    const response = await request.post("/api/barbers", {
+      data: {
+        name,
+        specialty: "Categorias QA",
+        bio: "Teste de categorias no Booking",
+        color: "#4f46e5",
+        isVisible: true,
+        serviceIds,
+      },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    return response.json();
+  };
+
+  const categoryA = await createCategory("Categoria A booking QA");
+  const categoryB = await createCategory("Categoria B booking QA");
+  const service1 = await createService("Serviço 1 categorias QA", categoryA.id);
+  const service = await createService("Serviço 2 categorias QA", categoryA.id);
+  const service3 = await createService("Serviço 3 categorias QA", categoryB.id);
+  const uncategorizedService = await createService("Serviço 4 categorias QA", null);
+
+  await page.goto("/admin");
+  await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
+  await page.locator('input[type="password"]').fill("Playwright-Test-Admin-2026!");
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await page.getByRole("tab", { name: "Serviços" }).click();
+  const unassignedServiceCard = page.getByTestId(`admin-service-card-${service.id}`);
+  await expect(unassignedServiceCard.getByText("Não aparece no Booking:", { exact: false })).toBeVisible();
+
+  await createBarber("Barbeiro categorias completas QA", [service1.id, service.id, service3.id, uncategorizedService.id]);
+  const barber = await createBarber("Barbeiro categorias parciais QA", [service1.id, service.id, uncategorizedService.id]);
+
+  await page.reload();
+  await page.getByRole("tab", { name: "Serviços" }).click();
+  const assignedServiceCard = page.getByTestId(`admin-service-card-${service.id}`);
+  await expect(assignedServiceCard.getByText("Não aparece no Booking:", { exact: false })).toHaveCount(0);
 
   const catalogue = await (await request.get("/api/services")).json();
   expect(catalogue.find((item: any) => item.id === service.id)).toMatchObject({
-    categoryId: category.id,
-    category: { id: category.id, name: "Categoria com grelha 60 QA" },
+    categoryId: categoryA.id,
+    category: { id: categoryA.id, name: "Categoria A booking QA" },
+  });
+  expect(catalogue.find((item: any) => item.id === service3.id)).toMatchObject({
+    categoryId: categoryB.id,
+    category: { id: categoryB.id, name: "Categoria B booking QA" },
   });
   expect(catalogue.find((item: any) => item.id === uncategorizedService.id)).not.toHaveProperty("category");
 
-  await page.goto(`/book?barberId=${barber.id}`);
+  await page.goto("/");
+  const homeServices = page.locator("#services");
+  await expect(homeServices.getByRole("heading", { name: categoryA.name, exact: true })).toBeVisible();
+  await expect(homeServices.getByRole("heading", { name: categoryB.name, exact: true })).toBeVisible();
+  await expect(homeServices.getByRole("heading", { name: "Outros serviços", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Marcar agora", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+  await page.getByRole("heading", { name: "Sem preferência", exact: true }).click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
   await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Categoria com grelha 60 QA", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: categoryA.name, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: categoryB.name, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Outros serviços", exact: true })).toBeVisible();
+
+  await page.goto("/book");
+  await page.getByRole("heading", { name: barber.name, exact: true }).click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  await expect(page.getByRole("heading", { name: categoryA.name, exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: categoryB.name, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: service3.name, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Outros serviços", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: uncategorizedService.name, exact: true })).toBeVisible();
   await page.getByRole("heading", { name: service.name, exact: true }).click();
   await page.getByRole("button", { name: "Seguinte" }).click();
   await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
