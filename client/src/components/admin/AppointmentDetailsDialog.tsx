@@ -31,6 +31,7 @@ import {
 } from "@/lib/availability";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch } from "@/lib/api";
+import { createAppointmentTimeOptions } from "@/lib/appointment-time-options";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
 import {
   isClockTimeAligned,
@@ -85,6 +86,11 @@ function EditAppointmentDialog({
   const [barberId, setBarberId] = useState(String(appointment.barberId));
   const [serviceId, setServiceId] = useState(appointment.serviceId ? String(appointment.serviceId) : "none");
   const [isSaving, setIsSaving] = useState(false);
+  const originalTime = format(parseISO(appointment.startTime), "HH:mm");
+  const timeOptions = useMemo(() => createAppointmentTimeOptions({
+    currentTime: originalTime,
+    intervalMinutes: bookingSlotIntervalMinutes,
+  }), [bookingSlotIntervalMinutes, originalTime]);
   const serviceList = (services || []).filter((service) =>
     service.isVisible !== false || service.id === appointment.serviceId,
   );
@@ -188,7 +194,6 @@ function EditAppointmentDialog({
     }
 
     const originalDate = format(parseISO(appointment.startTime), "yyyy-MM-dd");
-    const originalTime = format(parseISO(appointment.startTime), "HH:mm");
     const startTimeChanged = dateValue !== originalDate || timeValue !== originalTime;
     if (startTimeChanged && !isClockTimeAligned(timeValue, bookingSlotIntervalMinutes)) {
       toast({
@@ -246,13 +251,21 @@ function EditAppointmentDialog({
             </div>
             <div className="space-y-2">
               <Label>Hora</Label>
-              <Input
-                type="time"
-                value={timeValue}
-                step={bookingSlotIntervalMinutes * 60}
-                onChange={(event) => setTimeValue(event.target.value)}
-                className="bg-background border-white/10 text-white"
-              />
+              <Select value={timeValue} onValueChange={setTimeValue}>
+                <SelectTrigger
+                  aria-label="Hora"
+                  className="border-white/10 bg-background text-white focus:ring-primary"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[70] max-h-[min(20rem,70dvh)] border-white/10 bg-card text-white">
+                  {timeOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="space-y-2">
