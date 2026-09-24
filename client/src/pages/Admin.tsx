@@ -4063,9 +4063,17 @@ export default function Admin() {
           <TabsContent value="services" className="outline-none">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <h2 className="text-xl font-bold text-white">Serviços Disponíveis</h2>
-              <Dialog open={isAddingService} onOpenChange={setIsAddingService}>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                {user?.role === "admin" && (
+                  <ServiceCategoriesManager
+                    categories={serviceCategories}
+                    isLoading={isLoadingServiceCategories}
+                    isError={isServiceCategoriesError}
+                  />
+                )}
+                <Dialog open={isAddingService} onOpenChange={setIsAddingService}>
                 <DialogTrigger asChild>
-                  <Button variant="gold" className="gap-2">
+                  <Button variant="gold" className="w-full gap-2 sm:w-auto">
                     <Plus className="w-4 h-4" /> Adicionar Serviço
                   </Button>
                 </DialogTrigger>
@@ -4152,15 +4160,9 @@ export default function Admin() {
                     </Button>
                   </div>
                 </DialogContent>
-              </Dialog>
+                </Dialog>
+              </div>
             </div>
-            {user?.role === "admin" && (
-              <ServiceCategoriesManager
-                categories={serviceCategories}
-                isLoading={isLoadingServiceCategories}
-                isError={isServiceCategoriesError}
-              />
-            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {services?.map(service => {
                 const assignedCategory = serviceCategories.find((category) => category.id === service.categoryId);

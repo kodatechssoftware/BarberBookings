@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import type { ServiceCategoryWithCount } from "@shared/routes";
 import { Button } from "@/components/ui/button-custom";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -34,6 +35,7 @@ type Props = {
 
 export function ServiceCategoriesManager({ categories, isLoading, isError }: Props) {
   const { toast } = useToast();
+  const [isManagerOpen, setIsManagerOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -99,20 +101,43 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
   };
 
   return (
-    <div className="mb-6 rounded-xl border border-white/10 bg-card p-4 md:p-5" data-testid="service-categories-manager">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="font-bold text-white">Categorias de serviços</h3>
-          <p className="text-xs text-gray-400">Organize a apresentação no site e no formulário de marcação. É opcional.</p>
-        </div>
-        {isLoading && <Loader2 className="h-4 w-4 animate-spin text-primary" aria-label="A carregar categorias" />}
-      </div>
+    <Dialog
+      open={isManagerOpen}
+      onOpenChange={(open) => {
+        setIsManagerOpen(open);
+        if (!open) {
+          setNewName("");
+          closeEditDialog();
+        }
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" className="w-full gap-2 sm:w-auto">
+          <Tags className="h-4 w-4" />
+          Gerir categorias
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="grid max-h-[85vh] w-[calc(100%-2rem)] max-w-3xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-white/10 bg-card text-white">
+        <DialogHeader>
+          <DialogTitle>Gerir categorias</DialogTitle>
+          <DialogDescription className="text-gray-400">
+            Organize os serviços por categorias para facilitar a escolha nas marcações online.
+          </DialogDescription>
+        </DialogHeader>
 
-      {isError ? (
-        <p className="mt-4 text-sm text-red-300">Não foi possível carregar as categorias.</p>
-      ) : (
-        <>
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+        <div className="min-h-0 overflow-y-auto pr-1" data-testid="service-categories-manager">
+          {isLoading && (
+            <div className="mb-3 flex items-center gap-2 text-sm text-gray-400">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" aria-label="A carregar categorias" />
+              A carregar categorias...
+            </div>
+          )}
+
+          {isError ? (
+            <p className="text-sm text-red-300">Não foi possível carregar as categorias.</p>
+          ) : (
+            <>
+              <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={newName}
               onChange={(event) => setNewName(event.target.value)}
@@ -138,8 +163,8 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
             </Button>
           </div>
 
-          {categories.length > 0 && (
-            <div className="mt-4 space-y-2">
+              {categories.length > 0 ? (
+                <div className="mt-4 space-y-2">
               {categories.map((category, index) => (
                 <div
                   key={category.id}
@@ -192,6 +217,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       <Switch
                         checked={category.isActive}
                         disabled={pendingAction !== null}
+                        aria-label={`${category.isActive ? "Desativar" : "Ativar"} ${category.name}`}
                         onCheckedChange={(isActive) => void runAction(`toggle-${category.id}`, async () => {
                           await apiRequest("PATCH", `/api/service-categories/${category.id}`, { isActive });
                         }, isActive ? "Categoria ativada." : "Categoria desativada.")}
@@ -227,10 +253,12 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                   </div>
                 </div>
               ))}
-            </div>
-          )}
+                </div>
+              ) : (
+                !isLoading && <p className="mt-4 text-sm text-gray-400">Ainda não existem categorias.</p>
+              )}
 
-          {categories.map((category) => (
+              {categories.map((category) => (
             <Dialog
               key={`edit-${category.id}`}
               open={editingId === category.id}
@@ -286,9 +314,11 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                 </form>
               </DialogContent>
             </Dialog>
-          ))}
-        </>
-      )}
-    </div>
+              ))}
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
