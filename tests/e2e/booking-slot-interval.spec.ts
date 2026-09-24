@@ -68,7 +68,10 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
   await page.getByRole("button", { name: "Entrar" }).click();
   await page.getByRole("tab", { name: "Serviços" }).click();
   const unassignedServiceCard = page.getByTestId(`admin-service-card-${service.id}`);
-  await expect(unassignedServiceCard.getByText("Para este serviço aparecer nas marcações online,", { exact: false })).toBeVisible();
+  await expect(unassignedServiceCard.getByText(
+    "Para este serviço aparecer nas marcações online, associe-o a pelo menos um barbeiro visível na área Equipa.",
+    { exact: true },
+  )).toBeVisible();
 
   await createBarber("Barbeiro categorias completas QA", [service1.id, service.id, service3.id, uncategorizedService.id]);
   const barber = await createBarber("Barbeiro categorias parciais QA", [service1.id, service.id, uncategorizedService.id]);
