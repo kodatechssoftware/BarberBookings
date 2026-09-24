@@ -173,11 +173,23 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
     data: { startTime: validRescheduleStart },
   });
   expect(validReschedule.status(), await validReschedule.text()).toBe(200);
+  expect(await validReschedule.json()).toMatchObject({
+    id: publicAppointment.id,
+    startTime: validRescheduleStart,
+  });
 
   const login = await request.post("/api/admin/login", {
     data: { username: "admin", password: "Playwright-Test-Admin-2026!" },
   });
   expect(login.ok(), await login.text()).toBe(true);
+
+  let publicAppointmentEvents = await (await request.get(
+    `/api/admin/dev/notifications/appointment/${publicAppointment.id}`,
+  )).json();
+  expect(publicAppointmentEvents.map((event: any) => event.eventType)).toEqual([
+    "appointment_confirmation",
+    "appointment_rescheduled",
+  ]);
 
   const invalidManual = await request.post("/api/appointments/block", { data: {
     barberId: barber.id,
@@ -245,9 +257,41 @@ test("60-minute runtime config governs public, Admin, reschedule and recurring t
   } });
   expect(invalidAdminMove.status(), await invalidAdminMove.text()).toBe(400);
 
+  publicAppointmentEvents = await (await request.get(
+    `/api/admin/dev/notifications/appointment/${publicAppointment.id}`,
+  )).json();
+  expect(publicAppointmentEvents.map((event: any) => event.eventType)).toEqual([
+    "appointment_confirmation",
+    "appointment_rescheduled",
+  ]);
+
+  const validAdminMoveStart = futureThursdayIso(7, 15);
+  const validAdminMove = await request.patch(`/api/appointments/${publicAppointment.id}`, { data: {
+    startTime: validAdminMoveStart,
+  } });
+  expect(validAdminMove.status(), await validAdminMove.text()).toBe(200);
+  expect(await validAdminMove.json()).toMatchObject({ startTime: validAdminMoveStart });
+  publicAppointmentEvents = await (await request.get(
+    `/api/admin/dev/notifications/appointment/${publicAppointment.id}`,
+  )).json();
+  expect(publicAppointmentEvents.map((event: any) => event.eventType)).toEqual([
+    "appointment_confirmation",
+    "appointment_rescheduled",
+    "appointment_rescheduled",
+  ]);
+
   const cancellation = await request.patch(`/api/appointments/${publicAppointment.id}/status`, { data: {
     status: "cancelled",
     expectedStatus: "booked",
   } });
   expect(cancellation.status(), await cancellation.text()).toBe(200);
+  publicAppointmentEvents = await (await request.get(
+    `/api/admin/dev/notifications/appointment/${publicAppointment.id}`,
+  )).json();
+  expect(publicAppointmentEvents.map((event: any) => event.eventType)).toEqual([
+    "appointment_confirmation",
+    "appointment_rescheduled",
+    "appointment_rescheduled",
+    "appointment_cancelled",
+  ]);
 });
