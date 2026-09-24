@@ -2,6 +2,14 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 const adminPassword = "Playwright-Test-Admin-2026!";
 
+function futureThursdayIso(weeksAhead: number, hour: number, minute = 0) {
+  const date = new Date();
+  const daysUntilThursday = (4 - date.getUTCDay() + 7) % 7 || 7;
+  date.setUTCDate(date.getUTCDate() + daysUntilThursday + weeksAhead * 7);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date.toISOString();
+}
+
 async function loginAdminRequest(request: APIRequestContext) {
   const response = await request.post("/api/admin/login", {
     data: { username: "admin", password: adminPassword },
@@ -19,6 +27,7 @@ async function loginAdmin(page: Page) {
 
 test.describe("service categories", () => {
   test("preserves the legacy catalogue contract and Admin UI with zero categories", async ({ page, request }) => {
+    test.setTimeout(60_000);
     expect((await request.get("/api/service-categories")).status()).toBe(401);
     expect((await request.post("/api/service-categories", { data: { name: "Não autorizada" } })).status()).toBe(401);
     await loginAdminRequest(request);
@@ -86,11 +95,123 @@ test.describe("service categories", () => {
     expect(mobileListboxBox!.x).toBeGreaterThanOrEqual(0);
     expect(mobileListboxBox!.x + mobileListboxBox!.width).toBeLessThanOrEqual(390);
     await page.keyboard.press("Escape");
-    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await editServiceDialog.getByRole("button", { name: "Guardar", exact: true }).click();
+    await expect(editServiceDialog).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Eliminar Categoria Admin UI QA" }).click();
-    await page.getByRole("button", { name: "Eliminar categoria", exact: true }).click();
-    await expect(page.getByText("Categoria Admin UI QA", { exact: true })).toHaveCount(0);
+    const categoriesAfterAssignment = await (await request.get("/api/service-categories")).json();
+    const category = categoriesAfterAssignment.find((item: any) => item.name === "Categoria Admin UI QA");
+    expect(category).toMatchObject({ isActive: true, serviceCount: 1 });
+    const duplicateResponse = await request.post("/api/service-categories", {
+      data: { name: "Categoria Duplicada Admin UI QA" },
+    });
+    expect(duplicateResponse.status(), await duplicateResponse.text()).toBe(201);
+    const duplicateCategory = await duplicateResponse.json();
+
+    const createAppointment = await request.post("/api/appointments", { data: {
+      barberId: barber.id,
+      serviceId: legacyServices[0].id,
+      startTime: futureThursdayIso(30, 15),
+      customerName: "Categoria rename appointment QA",
+      customerPhone: "+351912640001",
+      customerEmail: "categoria-rename@example.test",
+    } });
+    expect(createAppointment.status(), await createAppointment.text()).toBe(201);
+    const appointment = await createAppointment.json();
+    const appointmentSnapshot = {
+      id: appointment.id,
+      barberId: appointment.barberId,
+      serviceId: appointment.serviceId,
+      startTime: appointment.startTime,
+      durationMinutes: appointment.durationMinutes,
+      status: appointment.status,
+      cancelToken: appointment.cancelToken,
+    };
+
+    const categoryRow = page.getByTestId(`service-category-${category.id}`);
+    await expect(categoryRow.getByRole("button", { name: "Editar Categoria Admin UI QA" })).toBeVisible();
+    await expect(categoryRow.getByTitle("Mover para cima")).toHaveAttribute("aria-label", "Mover Categoria Admin UI QA para cima");
+    await expect(categoryRow.getByTitle("Mover para baixo")).toHaveAttribute("aria-label", "Mover Categoria Admin UI QA para baixo");
+
+    await categoryRow.getByRole("button", { name: "Editar Categoria Admin UI QA" }).click();
+    let editCategoryDialog = page.getByRole("dialog", { name: "Editar categoria" });
+    await expect(editCategoryDialog).toBeVisible();
+    await expect(editCategoryDialog.getByLabel("Nome da categoria")).toHaveValue("Categoria Admin UI QA");
+    await editCategoryDialog.getByRole("button", { name: "Cancelar", exact: true }).click();
+    await expect(editCategoryDialog).toHaveCount(0);
+    await expect(categoryRow.getByText("Categoria Admin UI QA", { exact: true })).toBeVisible();
+
+    await categoryRow.getByRole("button", { name: "Editar Categoria Admin UI QA" }).click();
+    editCategoryDialog = page.getByRole("dialog", { name: "Editar categoria" });
+    await editCategoryDialog.getByLabel("Nome da categoria").fill("  categoria duplicada admin ui qa  ");
+    await editCategoryDialog.getByRole("button", { name: "Guardar alterações", exact: true }).click();
+    await expect(page.getByText("Já existe uma categoria com este nome.", { exact: true })).toBeVisible();
+    await expect(editCategoryDialog).toBeVisible();
+    await editCategoryDialog.getByLabel("Nome da categoria").fill("  Categoria Renomeada Admin UI QA  ");
+    await editCategoryDialog.getByRole("button", { name: "Guardar alterações", exact: true }).click();
+    await expect(editCategoryDialog).toHaveCount(0);
+    await expect(categoryRow.getByText("Categoria Renomeada Admin UI QA", { exact: true })).toBeVisible();
+
+    const renamedCategory = (await (await request.get("/api/service-categories")).json())
+      .find((item: any) => item.id === category.id);
+    expect(renamedCategory).toMatchObject({
+      id: category.id,
+      name: "Categoria Renomeada Admin UI QA",
+      sortOrder: category.sortOrder,
+      isActive: category.isActive,
+      serviceCount: 1,
+    });
+    const serviceAfterRename = (await (await request.get("/api/services?includeHidden=true")).json())
+      .find((item: any) => item.id === legacyServices[0].id);
+    expect(serviceAfterRename.categoryId).toBe(category.id);
+
+    await page.goto("/");
+    await expect(page.locator("#services").getByRole("heading", {
+      name: "Categoria Renomeada Admin UI QA",
+      exact: true,
+    })).toBeVisible();
+    await page.goto(`/book?barberId=${barber.id}`);
+    await expect(page.getByRole("heading", { name: "Categoria Renomeada Admin UI QA", exact: true })).toBeVisible();
+
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: "Serviços" }).click();
+    const renamedRow = page.getByTestId(`service-category-${category.id}`);
+    await renamedRow.getByRole("button", { name: "Eliminar Categoria Renomeada Admin UI QA" }).click();
+    const deleteDialog = page.getByRole("alertdialog");
+    await expect(deleteDialog.getByRole("heading", {
+      name: "Eliminar a categoria “Categoria Renomeada Admin UI QA”?",
+      exact: true,
+    })).toBeVisible();
+    await expect(deleteDialog.getByText(
+      "Esta ação elimina apenas a categoria. Os serviços associados mantêm-se e ficam sem categoria.",
+      { exact: true },
+    )).toBeVisible();
+    await deleteDialog.getByRole("button", { name: "Cancelar", exact: true }).click();
+    await expect(renamedRow).toBeVisible();
+
+    await renamedRow.getByRole("button", { name: "Eliminar Categoria Renomeada Admin UI QA" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Eliminar categoria", exact: true }).click();
+    await expect(renamedRow).toHaveCount(0);
+
+    const serviceAfterDelete = (await (await request.get("/api/services?includeHidden=true")).json())
+      .find((item: any) => item.id === legacyServices[0].id);
+    expect(serviceAfterDelete).toBeTruthy();
+    expect(serviceAfterDelete).not.toHaveProperty("categoryId");
+    const appointmentAfterCategoryChanges = (await (await request.get(`/api/appointments?barberId=${barber.id}`)).json())
+      .find((item: any) => item.id === appointment.id);
+    expect({
+      id: appointmentAfterCategoryChanges.id,
+      barberId: appointmentAfterCategoryChanges.barberId,
+      serviceId: appointmentAfterCategoryChanges.serviceId,
+      startTime: appointmentAfterCategoryChanges.startTime,
+      durationMinutes: appointmentAfterCategoryChanges.durationMinutes,
+      status: appointmentAfterCategoryChanges.status,
+      cancelToken: appointmentAfterCategoryChanges.cancelToken,
+    }).toEqual(appointmentSnapshot);
+
+    const removeDuplicate = await request.delete(`/api/service-categories/${duplicateCategory.id}`);
+    expect(removeDuplicate.status(), await removeDuplicate.text()).toBe(200);
+    await request.patch(`/api/appointments/${appointment.id}/status`, { data: { status: "cancelled" } });
   });
 
   test("supports atomic CRUD, inactive associations, deterministic order and delete set-null", async ({ request }) => {
@@ -112,6 +233,11 @@ test.describe("service categories", () => {
 
     const duplicate = await request.post("/api/service-categories", { data: { name: "  cortes e2e  " } });
     expect(duplicate.status()).toBe(409);
+
+    const duplicateRename = await request.patch(`/api/service-categories/${second.id}`, {
+      data: { name: "  CORTES E2E  " },
+    });
+    expect(duplicateRename.status()).toBe(409);
 
     const reorder = await request.put("/api/service-categories/order", {
       data: { categoryIds: [second.id, first.id] },

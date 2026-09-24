@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import type { ServiceCategoryWithCount } from "@shared/routes";
 import { Button } from "@/components/ui/button-custom";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -67,14 +75,17 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
 
   const saveName = async (category: ServiceCategoryWithCount) => {
     const name = editingName.trim();
-    if (!name || name === category.name) {
-      setEditingId(null);
-      return;
-    }
+    if (!name || name === category.name) return;
     await runAction(`rename-${category.id}`, async () => {
       await apiRequest("PATCH", `/api/service-categories/${category.id}`, { name });
       setEditingId(null);
+      setEditingName("");
     }, "Categoria renomeada.");
+  };
+
+  const closeEditDialog = () => {
+    setEditingId(null);
+    setEditingName("");
   };
 
   const moveCategory = async (index: number, direction: -1 | 1) => {
@@ -130,43 +141,39 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
           {categories.length > 0 && (
             <div className="mt-4 space-y-2">
               {categories.map((category, index) => (
-                <div key={category.id} className="flex flex-col gap-3 rounded-lg border border-white/10 bg-background/50 p-3 lg:flex-row lg:items-center">
+                <div
+                  key={category.id}
+                  className="flex flex-col gap-3 rounded-lg border border-white/10 bg-background/50 p-3 lg:flex-row lg:items-center"
+                  data-testid={`service-category-${category.id}`}
+                >
                   <div className="min-w-0 flex-1">
-                    {editingId === category.id ? (
-                      <div className="flex gap-2">
-                        <Input
-                          value={editingName}
-                          onChange={(event) => setEditingName(event.target.value)}
-                          maxLength={80}
-                          className="h-9 border-white/10 bg-background text-white"
-                          aria-label={`Novo nome de ${category.name}`}
-                        />
-                        <Button size="sm" variant="gold" onClick={() => void saveName(category)}>Guardar</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancelar</Button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="text-left"
-                        onClick={() => {
-                          setEditingId(category.id);
-                          setEditingName(category.name);
-                        }}
-                      >
-                        <span className="block font-medium text-white">{category.name}</span>
-                        <span className="text-xs text-gray-400">{category.serviceCount} {category.serviceCount === 1 ? "serviço associado" : "serviços associados"}</span>
-                      </button>
-                    )}
+                    <span className="block font-medium text-white">{category.name}</span>
+                    <span className="text-xs text-gray-400">{category.serviceCount} {category.serviceCount === 1 ? "serviço associado" : "serviços associados"}</span>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-2"
+                      disabled={pendingAction !== null}
+                      onClick={() => {
+                        setEditingId(category.id);
+                        setEditingName(category.name);
+                      }}
+                      aria-label={`Editar ${category.name}`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Editar
+                    </Button>
                     <Button
                       variant="outline"
                       size="icon"
                       className="h-8 w-8"
                       disabled={index === 0 || pendingAction !== null}
                       onClick={() => void moveCategory(index, -1)}
-                      aria-label={`Subir ${category.name}`}
+                      title="Mover para cima"
+                      aria-label={`Mover ${category.name} para cima`}
                     >
                       <ChevronUp className="h-4 w-4" />
                     </Button>
@@ -176,7 +183,8 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       className="h-8 w-8"
                       disabled={index === categories.length - 1 || pendingAction !== null}
                       onClick={() => void moveCategory(index, 1)}
-                      aria-label={`Descer ${category.name}`}
+                      title="Mover para baixo"
+                      aria-label={`Mover ${category.name} para baixo`}
                     >
                       <ChevronDown className="h-4 w-4" />
                     </Button>
@@ -198,13 +206,13 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       </AlertDialogTrigger>
                       <AlertDialogContent className="border-white/10 bg-card text-white">
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Eliminar {category.name}?</AlertDialogTitle>
+                          <AlertDialogTitle>Eliminar a categoria “{category.name}”?</AlertDialogTitle>
                           <AlertDialogDescription className="text-gray-400">
-                            Os {category.serviceCount} serviços associados não serão eliminados; ficarão sem categoria.
+                            Esta ação elimina apenas a categoria. Os serviços associados mantêm-se e ficam sem categoria.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">Voltar</AlertDialogCancel>
+                          <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">Cancelar</AlertDialogCancel>
                           <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={() => void runAction(`delete-${category.id}`, async () => {
@@ -221,6 +229,64 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
               ))}
             </div>
           )}
+
+          {categories.map((category) => (
+            <Dialog
+              key={`edit-${category.id}`}
+              open={editingId === category.id}
+              onOpenChange={(open) => {
+                if (!open) closeEditDialog();
+              }}
+            >
+              <DialogContent className="max-w-md border-white/10 bg-card text-white">
+                <DialogHeader>
+                  <DialogTitle>Editar categoria</DialogTitle>
+                  <DialogDescription className="sr-only">
+                    Altere o nome apresentado para esta categoria de serviços.
+                  </DialogDescription>
+                </DialogHeader>
+                <form
+                  className="space-y-4"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveName(category);
+                  }}
+                >
+                  <div className="space-y-2">
+                    <label htmlFor={`service-category-name-${category.id}`} className="text-sm font-medium text-white">
+                      Nome da categoria
+                    </label>
+                    <Input
+                      id={`service-category-name-${category.id}`}
+                      value={editingName}
+                      onChange={(event) => setEditingName(event.target.value)}
+                      maxLength={80}
+                      required
+                      autoFocus
+                      className="border-white/10 bg-background text-white"
+                    />
+                  </div>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={closeEditDialog}>
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="gold"
+                      disabled={
+                        !editingName.trim()
+                        || editingName.trim() === category.name
+                        || pendingAction !== null
+                      }
+                    >
+                      {pendingAction === `rename-${category.id}` && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Guardar alterações
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          ))}
         </>
       )}
     </div>
