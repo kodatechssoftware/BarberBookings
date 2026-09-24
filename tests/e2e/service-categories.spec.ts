@@ -57,13 +57,61 @@ test.describe("service categories", () => {
 
     await loginAdmin(page);
     await page.getByRole("tab", { name: "Serviços" }).click();
-    await expect(page.getByTestId("service-categories-manager")).toBeVisible();
-    await expect(page.getByText("Organize a apresentação no site e no formulário de marcação. É opcional.")).toBeVisible();
-    await page.getByLabel("Nome da nova categoria").fill("Categoria Admin UI QA");
-    await page.getByRole("button", { name: "Criar categoria" }).click();
-    await expect(page.getByText("Categoria Admin UI QA", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Serviços Disponíveis" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Gerir categorias", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Adicionar Serviço", exact: true })).toBeVisible();
+    await expect(page.getByTestId("service-categories-manager")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Gerir categorias", exact: true }).click();
+    let manageCategoriesDialog = page.getByRole("dialog", { name: "Gerir categorias" });
+    await expect(manageCategoriesDialog).toBeVisible();
+    await expect(manageCategoriesDialog.getByText(
+      "Organize os serviços por categorias para facilitar a escolha nas marcações online.",
+      { exact: true },
+    )).toBeVisible();
+    await manageCategoriesDialog.getByLabel("Nome da nova categoria").fill("Categoria Admin UI QA");
+    await manageCategoriesDialog.getByRole("button", { name: "Criar categoria" }).click();
+    await expect(manageCategoriesDialog.getByText("Categoria Admin UI QA", { exact: true })).toBeVisible();
+    await manageCategoriesDialog.getByLabel("Nome da nova categoria").fill("Categoria Duplicada Admin UI QA");
+    await manageCategoriesDialog.getByRole("button", { name: "Criar categoria" }).click();
+    await expect(manageCategoriesDialog.getByText("Categoria Duplicada Admin UI QA", { exact: true })).toBeVisible();
+
+    const categoriesAfterCreation = await (await request.get("/api/service-categories")).json();
+    const category = categoriesAfterCreation.find((item: any) => item.name === "Categoria Admin UI QA");
+    const duplicateCategory = categoriesAfterCreation.find((item: any) => item.name === "Categoria Duplicada Admin UI QA");
+    expect(category).toMatchObject({ isActive: true, serviceCount: 0 });
+    expect(duplicateCategory).toMatchObject({ isActive: true, serviceCount: 0 });
+
+    let categoryRow = manageCategoriesDialog.getByTestId(`service-category-${category.id}`);
+    await categoryRow.getByRole("button", { name: "Mover Categoria Admin UI QA para baixo" }).click();
+    await expect.poll(async () => (await (await request.get("/api/service-categories")).json())
+      .map((item: any) => item.id)).toEqual([duplicateCategory.id, category.id]);
+    await categoryRow.getByRole("button", { name: "Mover Categoria Admin UI QA para cima" }).click();
+    await expect.poll(async () => (await (await request.get("/api/service-categories")).json())
+      .map((item: any) => item.id)).toEqual([category.id, duplicateCategory.id]);
+
+    await categoryRow.getByRole("switch", { name: "Desativar Categoria Admin UI QA" }).click();
+    await expect.poll(async () => (await (await request.get("/api/service-categories")).json())
+      .find((item: any) => item.id === category.id)?.isActive).toBe(false);
+    await categoryRow.getByRole("switch", { name: "Ativar Categoria Admin UI QA" }).click();
+    await expect.poll(async () => (await (await request.get("/api/service-categories")).json())
+      .find((item: any) => item.id === category.id)?.isActive).toBe(true);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileManagerBox = await manageCategoriesDialog.boundingBox();
+    expect(mobileManagerBox).not.toBeNull();
+    expect(mobileManagerBox!.x).toBeGreaterThanOrEqual(0);
+    expect(mobileManagerBox!.x + mobileManagerBox!.width).toBeLessThanOrEqual(390);
+    expect(mobileManagerBox!.height).toBeLessThanOrEqual(844 * 0.85 + 1);
+    await expect(manageCategoriesDialog.getByTestId("service-categories-manager"))
+      .toHaveCSS("overflow-y", "auto");
+    await manageCategoriesDialog.getByRole("button", { name: "Close" }).click();
+    await expect(manageCategoriesDialog).toHaveCount(0);
+    await expect(page.getByTestId("service-categories-manager")).toHaveCount(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     const serviceCard = page.getByTestId(`admin-service-card-${legacyServices[0].id}`);
+    await expect(serviceCard).toBeVisible();
     await serviceCard.getByRole("button", { name: "Editar", exact: true }).click();
     const editServiceDialog = page.getByRole("dialog").filter({ hasText: "Editar Serviço" });
     const categorySelect = editServiceDialog.getByRole("combobox");
@@ -99,14 +147,9 @@ test.describe("service categories", () => {
     await editServiceDialog.getByRole("button", { name: "Guardar", exact: true }).click();
     await expect(editServiceDialog).toHaveCount(0);
 
-    const categoriesAfterAssignment = await (await request.get("/api/service-categories")).json();
-    const category = categoriesAfterAssignment.find((item: any) => item.name === "Categoria Admin UI QA");
-    expect(category).toMatchObject({ isActive: true, serviceCount: 1 });
-    const duplicateResponse = await request.post("/api/service-categories", {
-      data: { name: "Categoria Duplicada Admin UI QA" },
-    });
-    expect(duplicateResponse.status(), await duplicateResponse.text()).toBe(201);
-    const duplicateCategory = await duplicateResponse.json();
+    const categoryAfterAssignment = (await (await request.get("/api/service-categories")).json())
+      .find((item: any) => item.id === category.id);
+    expect(categoryAfterAssignment).toMatchObject({ isActive: true, serviceCount: 1 });
 
     const createAppointment = await request.post("/api/appointments", { data: {
       barberId: barber.id,
@@ -128,7 +171,9 @@ test.describe("service categories", () => {
       cancelToken: appointment.cancelToken,
     };
 
-    const categoryRow = page.getByTestId(`service-category-${category.id}`);
+    await page.getByRole("button", { name: "Gerir categorias", exact: true }).click();
+    manageCategoriesDialog = page.getByRole("dialog", { name: "Gerir categorias" });
+    categoryRow = manageCategoriesDialog.getByTestId(`service-category-${category.id}`);
     await expect(categoryRow.getByRole("button", { name: "Editar Categoria Admin UI QA" })).toBeVisible();
     await expect(categoryRow.getByTitle("Mover para cima")).toHaveAttribute("aria-label", "Mover Categoria Admin UI QA para cima");
     await expect(categoryRow.getByTitle("Mover para baixo")).toHaveAttribute("aria-label", "Mover Categoria Admin UI QA para baixo");
@@ -165,6 +210,14 @@ test.describe("service categories", () => {
       .find((item: any) => item.id === legacyServices[0].id);
     expect(serviceAfterRename.categoryId).toBe(category.id);
 
+    await manageCategoriesDialog.getByRole("button", { name: "Close" }).click();
+    await expect(manageCategoriesDialog).toHaveCount(0);
+    await page.getByRole("button", { name: "Gerir categorias", exact: true }).click();
+    manageCategoriesDialog = page.getByRole("dialog", { name: "Gerir categorias" });
+    await expect(manageCategoriesDialog.getByTestId(`service-category-${category.id}`)
+      .getByText("Categoria Renomeada Admin UI QA", { exact: true })).toBeVisible();
+    await manageCategoriesDialog.getByRole("button", { name: "Close" }).click();
+
     await page.goto("/");
     await expect(page.locator("#services").getByRole("heading", {
       name: "Categoria Renomeada Admin UI QA",
@@ -175,7 +228,9 @@ test.describe("service categories", () => {
 
     await page.goto("/admin");
     await page.getByRole("tab", { name: "Serviços" }).click();
-    const renamedRow = page.getByTestId(`service-category-${category.id}`);
+    await page.getByRole("button", { name: "Gerir categorias", exact: true }).click();
+    manageCategoriesDialog = page.getByRole("dialog", { name: "Gerir categorias" });
+    const renamedRow = manageCategoriesDialog.getByTestId(`service-category-${category.id}`);
     await renamedRow.getByRole("button", { name: "Eliminar Categoria Renomeada Admin UI QA" }).click();
     const deleteDialog = page.getByRole("alertdialog");
     await expect(deleteDialog.getByRole("heading", {
