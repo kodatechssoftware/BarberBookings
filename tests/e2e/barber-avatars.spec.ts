@@ -24,8 +24,16 @@ test("compact barber catalogue preserves uploads, legacy clients and access rest
     const response = await anonymous.get(record.avatar);
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toContain("image/png");
-    expect(response.headers()["cache-control"]).toBe("no-store");
+    expect(response.headers()["cache-control"]).toBe("private, max-age=86400, immutable");
+    expect(response.headers().vary).toContain("Cookie");
+    expect(response.headers().pragma).toBeUndefined();
     expect(await response.body()).toEqual(Buffer.from(photo.split(",")[1], "base64"));
+    const unversioned = await anonymous.get(`${path}/avatar?locationId=${new URL(record.avatar, "http://local").searchParams.get("locationId")}`);
+    expect(unversioned.status()).toBe(200);
+    expect(unversioned.headers()["cache-control"]).toBe("no-store");
+    const invalidVersion = await anonymous.get(record.avatar.replace(/v=[a-f0-9]{32}/, "v=invalid"));
+    expect(invalidVersion.status()).toBe(200);
+    expect(invalidVersion.headers()["cache-control"]).toBe("no-store");
     // Whole-record clients must not overwrite uploads with read references.
     expect((await request.patch(path, { data: { bio: "Updated bio", avatar: record.avatar } })).ok()).toBe(true);
     expect((await (await request.get(path)).json()).avatar).toBe(photo);
@@ -37,13 +45,16 @@ test("compact barber catalogue preserves uploads, legacy clients and access rest
     expect(updatedReference).not.toBe(record.avatar);
     const updatedImage = await anonymous.get(updatedReference);
     expect(updatedImage.headers()["content-type"]).toContain("image/gif");
+    expect(updatedImage.headers()["cache-control"]).toBe("private, max-age=86400, immutable");
     expect(await updatedImage.body()).toEqual(Buffer.from(replacement.split(",")[1], "base64"));
     // A stale editor cannot restore the previous upload by sending its old reference.
     await request.patch(path, { data: { avatar: record.avatar, bio: "Stale editor" } });
     expect((await (await request.get(path)).json()).avatar).toBe(replacement);
     expect((await request.patch(path, { data: { isVisible: false } })).ok()).toBe(true);
-    expect((await anonymous.get(record.avatar)).status()).toBe(404);
-    expect((await request.get(record.avatar)).status()).toBe(200);
+    expect((await anonymous.get(updatedReference)).status()).toBe(404);
+    const hiddenAdminImage = await request.get(updatedReference);
+    expect(hiddenAdminImage.status()).toBe(200);
+    expect(hiddenAdminImage.headers()["cache-control"]).toBe("no-store");
     expect((await request.patch(path, { data: { avatar: null } })).ok()).toBe(true);
     expect((await request.get(record.avatar)).status()).toBe(404);
     expect((await request.patch(path, { data: { avatar: "/images/demo-logo.svg" } })).ok()).toBe(true);
@@ -72,8 +83,32 @@ test("Agenda skips photo bytes; team, edit, homepage and booking retain usable p
     await expect(page.getByRole("tab", { name: "Agenda", exact: true })).toBeVisible();
     expect(imageRequests).toHaveLength(0);
     await page.getByRole("tab", { name: "Equipa", exact: true }).click();
-    const card = page.getByTestId("team-barber-card").filter({ hasText: barber.name });
-    await expect.poll(() => card.locator("img").evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    let card = page.getByTestId("team-barber-card").filter({ hasText: barber.name });
+    let teamImage = card.locator("img");
+    await expect.poll(() => teamImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    const avatarUrl = await teamImage.evaluate((image: HTMLImageElement) => image.currentSrc);
+    const firstEntryCount = await page.evaluate((url) => performance.getEntriesByName(url).length, avatarUrl);
+    await page.getByRole("tab", { name: "Agenda", exact: true }).click();
+    await page.getByRole("tab", { name: "Equipa", exact: true }).click();
+    card = page.getByTestId("team-barber-card").filter({ hasText: barber.name });
+    teamImage = card.locator("img");
+    await expect.poll(() => teamImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    const entriesAfterTabReturn = await page.evaluate((url) => performance.getEntriesByName(url)
+      .map((entry) => (entry as PerformanceResourceTiming).transferSize), avatarUrl);
+    if (entriesAfterTabReturn.length > firstEntryCount) {
+      expect(entriesAfterTabReturn.at(-1)).toBe(0);
+    }
+
+    await page.reload();
+    await page.getByRole("tab", { name: "Equipa", exact: true }).click();
+    card = page.getByTestId("team-barber-card").filter({ hasText: barber.name });
+    teamImage = card.locator("img");
+    await expect.poll(() => teamImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    const reloadEntry = await page.evaluate((url) => {
+      const entries = performance.getEntriesByName(url) as PerformanceResourceTiming[];
+      return entries.at(-1)?.transferSize;
+    }, avatarUrl);
+    expect(reloadEntry).toBe(0);
     await card.getByRole("button", { name: "Editar", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Editar Barbeiro" });
     const update = page.waitForRequest((request) => request.method() === "PATCH" && new URL(request.url()).pathname === path);
@@ -84,9 +119,9 @@ test("Agenda skips photo bytes; team, edit, homepage and booking retain usable p
     for (const width of [390, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/");
-      const teamImage = page.locator(`#team img[src*="/barbers/${barber.id}/avatar?"]`);
-      await teamImage.scrollIntoViewIfNeeded();
-      await expect.poll(() => teamImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+      const publicTeamImage = page.locator(`#team img[src*="/barbers/${barber.id}/avatar?"]`);
+      await publicTeamImage.scrollIntoViewIfNeeded();
+      await expect.poll(() => publicTeamImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
     }
     await page.goto("/booking");
     const bookingImage = page.locator(`img[src*="/barbers/${barber.id}/avatar?"]`).first();

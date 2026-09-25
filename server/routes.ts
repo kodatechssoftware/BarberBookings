@@ -2,7 +2,7 @@
 import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import { getShopDateBounds, isAppointmentConflictError, storage } from "./storage";
-import { decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
+import { barberAvatarVersion, decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
 import {
   api,
   serviceCategoryCreateInputSchema,
@@ -2837,8 +2837,19 @@ export async function registerRoutes(
     }
     const image = decodeBarberAvatar(barber.avatar);
     if (!image) return res.status(404).end();
-    // Keep the API's no-store policy: visibility/access changes remain effective.
-    res.setHeader("Cache-Control", "no-store");
+    const requestedVersion = typeof req.query.v === "string" ? req.query.v : undefined;
+    const currentVersion = barberAvatarVersion(barber.avatar);
+    if (barber.isVisible !== false && requestedVersion && requestedVersion === currentVersion) {
+      // The URL is content-addressed. Keep it in this browser only: hidden
+      // profiles and authenticated reads must never enter shared caches.
+      res.setHeader("Cache-Control", "private, max-age=86400, immutable");
+      res.vary("Cookie");
+      res.removeHeader("Pragma");
+      res.removeHeader("Expires");
+    } else {
+      // Preserve the existing behaviour for unversioned/invalid legacy URLs.
+      res.setHeader("Cache-Control", "no-store");
+    }
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.type(image.contentType).send(image.bytes);
   });

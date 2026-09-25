@@ -5,9 +5,15 @@ import { createHash } from "node:crypto";
 export const INLINE_BARBER_AVATAR_PATTERN = "^data:image/(jpeg|png|webp|gif);base64,";
 const inlinePattern = new RegExp(INLINE_BARBER_AVATAR_PATTERN);
 
+export function barberAvatarVersion(avatar: string | null): string | undefined {
+  if (!avatar || !inlinePattern.test(avatar)) return undefined;
+  return createHash("md5").update(avatar).digest("hex");
+}
+
 export function barberAvatarReference(id: number, avatar: string | null): string | null {
-  if (!avatar || !inlinePattern.test(avatar)) return avatar;
-  const version = createHash("md5").update(avatar).digest("hex"); // content version, not authentication
+  const version = barberAvatarVersion(avatar);
+  if (!version) return avatar;
+  // Content version, not authentication.
   return `/api/barbers/${id}/avatar?v=${version}`;
 }
 
