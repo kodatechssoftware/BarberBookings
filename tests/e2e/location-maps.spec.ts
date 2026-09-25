@@ -19,6 +19,16 @@ test.describe("mapas automáticos das localizações", () => {
     expect(new URL(links.mapEmbedUrl).hash).toBe("");
   });
 
+  test("usa o nome da localização para centrar o mapa incorporado sem alterar o link externo", () => {
+    const name = "Baptista Barber Shop";
+    const productionAddress = "Rua Comandante Agatão Lança Nº28";
+    const links = resolveLocationMapLinks({ name, address: productionAddress });
+
+    expect(new URL(links.mapUrl).searchParams.get("query")).toBe(productionAddress);
+    expect(new URL(links.mapEmbedUrl).searchParams.get("q")).toBe(`${name}, ${productionAddress}`);
+    expect(new URL(links.mapEmbedUrl).searchParams.get("output")).toBe("embed");
+  });
+
   test("ignora espaços exteriores e ligações opcionais em branco", () => {
     expect(resolveLocationMapLinks({ address: `  ${address}  `, mapUrl: " \t", mapEmbedUrl: "\n " }))
       .toEqual({ mapUrl: automaticMapUrl, mapEmbedUrl: automaticEmbedUrl });

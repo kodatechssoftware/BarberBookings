@@ -176,8 +176,18 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await locationSection.getByRole("button", { name: /Loja Braga/ }).click();
   await expect(locationSection.locator("iframe")).toHaveCount(1);
   await expect(locationSection.locator("iframe")).toHaveAttribute("title", "Mapa de Loja Braga");
-  await expect(locationSection.locator("iframe")).toHaveAttribute("src", `https://www.google.com/maps?q=${encodeURIComponent(created[1].address)}&output=embed`);
-  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(created[1].address)}`);
+  const bragaEmbedUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${created[1].name}, ${created[1].address}`)}&output=embed`;
+  const bragaMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(created[1].address)}`;
+  await expect(locationSection.locator("iframe")).toHaveAttribute("src", bragaEmbedUrl);
+  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", bragaMapUrl);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(locationSection.locator("iframe")).toHaveAttribute("src", bragaEmbedUrl);
+  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", bragaMapUrl);
+  const mobileMap = await locationSection.getByTestId("location-map-container").boundingBox();
+  expect(mobileMap).not.toBeNull();
+  expect(mobileMap!.x).toBeGreaterThanOrEqual(0);
+  expect(mobileMap!.x + mobileMap!.width).toBeLessThanOrEqual(390);
+  await page.setViewportSize({ width: 1280, height: 900 });
   // A shop change from another tab must update the map and the public catalogue together.
   await page.evaluate((id) => {
     localStorage.setItem("barberbookings:location-id", String(id));
@@ -248,7 +258,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   });
   await page.goto("/");
   await locationSection.getByRole("button", { name: new RegExp(initial[0].name) }).click();
-  await expect(locationSection.locator("iframe")).toHaveAttribute("src", `https://www.google.com/maps?q=${encodeURIComponent(updatedAddress)}&output=embed`);
+  await expect(locationSection.locator("iframe")).toHaveAttribute("src", `https://www.google.com/maps?q=${encodeURIComponent(`${initial[0].name}, ${updatedAddress}`)}&output=embed`);
   await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(updatedAddress)}`);
   // Keep the remainder of the isolation tests managing Porto.
   await locationSection.getByRole("button", { name: /Loja Porto/ }).click();
