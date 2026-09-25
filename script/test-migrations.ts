@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { boolean, integer, pgSchema, text } from "drizzle-orm/pg-core";
+import { boolean, integer, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import { asc } from "drizzle-orm";
 import { getMigrationLocationConfig, migrationChecksum, runSchemaMigrations } from "../server/migrations";
 
@@ -26,6 +26,16 @@ assert.throws(() => getMigrationLocationConfig({ NODE_ENV: "production", APP_ENV
 assert.equal(migrationChecksum("SELECT 1;\nSELECT 2;\n"), migrationChecksum("SELECT 1;\r\nSELECT 2;\r\n"));
 
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
+const preCategoriesMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-categories-"));
+const migrationsDirectory = path.resolve(process.cwd(), "migrations");
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preCategoriesMigrationsDirectory, file));
+}
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -34,7 +44,14 @@ let applicationPool: pg.Pool | undefined;
 try {
   await embedded.initialise();
   await embedded.start();
-  pool = new pg.Pool({ connectionString: `postgresql://postgres:migration-test@127.0.0.1:${port}/postgres`, max: 4 });
+  const serverUrl = `postgresql://postgres:migration-test@127.0.0.1:${port}/`;
+  const bootstrapPool = new pg.Pool({ connectionString: `${serverUrl}postgres` });
+  await bootstrapPool.query(
+    "CREATE DATABASE migration_test ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0",
+  );
+  await bootstrapPool.end();
+  const databaseUrl = `${serverUrl}migration_test`;
+  pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
   const schema = "main_fixture";
   const table = (name: string) => `"${schema}"."${name}"`;
   await pool.query(`CREATE SCHEMA "${schema}"`);
@@ -72,6 +89,11 @@ try {
       id serial PRIMARY KEY, phone text NOT NULL, customer_name_key text NOT NULL DEFAULT '', email text,
       notes text NOT NULL DEFAULT '', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now()
     );
+    CREATE TABLE ${table("audit_logs")} (
+      id serial PRIMARY KEY, actor_type text NOT NULL, actor_id integer, actor_name text,
+      action text NOT NULL, entity_type text NOT NULL, entity_id integer,
+      summary text NOT NULL, metadata text, created_at timestamp NOT NULL DEFAULT now()
+    );
     CREATE TABLE ${table("blacklist")} (id serial PRIMARY KEY, email text, phone text NOT NULL, reason text, created_at timestamp NOT NULL DEFAULT now());
     CREATE TABLE ${table("business_expenses")} (
       id serial PRIMARY KEY, category text NOT NULL, description text NOT NULL, amount_cents integer NOT NULL,
@@ -90,18 +112,22 @@ try {
     INSERT INTO ${table("barber_availability")} (barber_id, day_of_week, start_time, end_time) VALUES (1, 1, '09:00', '18:00');
     INSERT INTO ${table("barber_services")} VALUES (1, 1);
     INSERT INTO ${table("customer_notes")} (phone, customer_name_key, email, notes) VALUES ('910000000', 'cliente original', 'cliente@example.test', 'Nota existente');
+    INSERT INTO ${table("audit_logs")} (actor_type, actor_name, action, entity_type, entity_id, summary, metadata)
+      VALUES ('admin', 'Administrador', 'appointment.created', 'appointment', 1, 'Marcação existente', '{"fixture":true}');
     INSERT INTO ${table("blacklist")} (phone, reason) VALUES ('919999999', 'Teste existente');
     INSERT INTO ${table("business_expenses")} (category, description, amount_cents, expense_date) VALUES ('rent', 'Renda existente', 50000, '2030-09-01');
   `);
 
   const preservedTables = ["barbers", "services", "appointments", "shop_availability", "barber_availability",
-    "barber_services", "customer_notes", "blacklist", "business_expenses"];
+    "barber_services", "customer_notes", "audit_logs", "blacklist", "business_expenses"];
   const legacyServicesBefore = (await pool.query(`
     SELECT id, name, description, agenda_label, price, duration, is_visible
     FROM ${table("services")} ORDER BY id
   `)).rows;
-  const countsBefore = new Map<string, number>();
-  for (const name of preservedTables) countsBefore.set(name, Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count));
+  const countsBeforeFoundationMigrations = new Map<string, number>();
+  for (const name of preservedTables) {
+    countsBeforeFoundationMigrations.set(name, Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count));
+  }
 
   const environment = {
     NODE_ENV: "production", APP_ENV: "production",
@@ -110,19 +136,136 @@ try {
     MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
     MIGRATION_DEFAULT_LOCATION_MAP_URL: "https://maps.example.test/shop",
   };
-  const firstRun = await runSchemaMigrations(pool, { schemaName: schema, environment });
-  assert.deepEqual(firstRun.applied, [
+  const foundationRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preCategoriesMigrationsDirectory,
+  });
+  assert.deepEqual(foundationRun.applied, [
     "0001_multi_location_foundation.sql", "0002_whatsapp_messages.sql",
     "0003_appointment_notification_outbox.sql", "0004_appointment_series.sql",
-    "0005_service_categories.sql",
   ]);
-  const secondRun = await runSchemaMigrations(pool, { schemaName: schema, environment });
-  assert.equal(secondRun.applied.length, 0);
-  assert.equal(secondRun.alreadyApplied, 5);
 
   for (const name of preservedTables) {
-    assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count), countsBefore.get(name), `${name} row count`);
+    assert.equal(
+      Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count),
+      countsBeforeFoundationMigrations.get(name),
+      `${name} row count after migrations 0001-0004`,
+    );
   }
+  const defaultLocation = (await pool.query(`SELECT * FROM ${table("locations")} WHERE is_default = true`)).rows[0];
+  assert.equal(defaultLocation.name, environment.MIGRATION_DEFAULT_LOCATION_NAME);
+  assert.equal(defaultLocation.address, environment.MIGRATION_DEFAULT_LOCATION_ADDRESS);
+  assert.equal(defaultLocation.timezone, environment.MIGRATION_DEFAULT_LOCATION_TIME_ZONE);
+  for (const name of ["appointments", "shop_availability", "barber_availability", "business_expenses"]) {
+    const result = await pool.query(`SELECT count(*) AS total, count(*) FILTER (WHERE location_id = $1) AS assigned FROM ${table(name)}`, [defaultLocation.id]);
+    assert.equal(result.rows[0].assigned, result.rows[0].total, `${name} default location backfill`);
+  }
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("barber_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count), 1);
+  assert.equal(
+    Number((await pool.query(`SELECT count(*) AS count FROM ${table("service_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count),
+    legacyServicesBefore.length,
+  );
+
+  // Reproduce the actual release boundary: Production already has migrations
+  // 0001-0004 and representative operational data when 0005 is applied.
+  await pool.query(`
+    INSERT INTO ${table("appointment_series")} (
+      id, location_id, barber_id, service_id, customer_name, customer_email, customer_phone,
+      whatsapp_opt_in, interval_weeks, duration_months, occurrence_count, first_start_time
+    ) VALUES (
+      'series-fixture', ${Number(defaultLocation.id)}, 1, 1, 'Cliente série',
+      'serie@example.test', '910000000', true, 1, 1, 2, '2031-01-02 10:00:00'
+    );
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_email, customer_phone,
+      cancel_token, location_id, series_id, series_occurrence_index, payment_method,
+      deposit_required, reschedule_revision, notification_revision, whatsapp_opt_in
+    ) VALUES
+      (1, 1, '2031-01-02 10:00:00', 'Cliente série', 'serie@example.test', '910000000',
+        'series-token-1', ${Number(defaultLocation.id)}, 'series-fixture', 0, 'cash', true, 2, 3, true),
+      (1, 1, '2031-01-09 10:00:00', 'Cliente série', 'serie@example.test', '910000000',
+        'series-token-2', ${Number(defaultLocation.id)}, 'series-fixture', 1, 'card', false, 1, 2, true);
+    INSERT INTO ${table("appointment_notification_events")} (
+      series_id, event_type, event_revision, event_key, appointment_start_time, payload_snapshot
+    ) VALUES ('series-fixture', 'appointment_recurring_confirmation', 1,
+      'series:series-fixture:recurring_confirmation:1', '2031-01-02 10:00:00', '{"schemaVersion":1}'::jsonb);
+    INSERT INTO ${table("whatsapp_messages")} (
+      appointment_id, message_type, phone, provider_message_id, status, provider_status
+    ) VALUES (1, 'appointment_confirmation', '910000000', 'wamid.migration-fixture', 'sent', 'delivered');
+    INSERT INTO ${table("meta_webhook_receipts")} (
+      receipt_key, provider_message_id, status, waba_id, phone_number_id, payload_summary
+    ) VALUES ('migration-fixture-receipt', 'wamid.migration-fixture', 'delivered', 'waba', 'phone', '{"fixture":true}');
+  `);
+
+  const releaseDataQueries = {
+    locations: `SELECT * FROM ${table("locations")} ORDER BY id`,
+    barbers: `SELECT * FROM ${table("barbers")} ORDER BY id`,
+    services: `SELECT id, name, description, agenda_label, price, duration, is_visible FROM ${table("services")} ORDER BY id`,
+    appointments: `SELECT * FROM ${table("appointments")} ORDER BY id`,
+    appointmentSeries: `SELECT * FROM ${table("appointment_series")} ORDER BY id`,
+    shopAvailability: `SELECT * FROM ${table("shop_availability")} ORDER BY id`,
+    barberAvailability: `SELECT * FROM ${table("barber_availability")} ORDER BY id`,
+    barberServices: `SELECT * FROM ${table("barber_services")} ORDER BY barber_id, service_id`,
+    barberLocations: `SELECT * FROM ${table("barber_locations")} ORDER BY barber_id, location_id`,
+    serviceLocations: `SELECT * FROM ${table("service_locations")} ORDER BY service_id, location_id`,
+    customerNotes: `SELECT * FROM ${table("customer_notes")} ORDER BY id`,
+    auditLogs: `SELECT * FROM ${table("audit_logs")} ORDER BY id`,
+    blacklist: `SELECT * FROM ${table("blacklist")} ORDER BY id`,
+    businessExpenses: `SELECT * FROM ${table("business_expenses")} ORDER BY id`,
+    whatsappMessages: `SELECT * FROM ${table("whatsapp_messages")} ORDER BY id`,
+    notificationEvents: `SELECT * FROM ${table("appointment_notification_events")} ORDER BY id`,
+    webhookReceipts: `SELECT * FROM ${table("meta_webhook_receipts")} ORDER BY id`,
+  } as const;
+  async function captureReleaseData() {
+    return Object.fromEntries(await Promise.all(Object.entries(releaseDataQueries).map(async ([name, sql]) => [
+      name,
+      (await pool!.query(sql)).rows,
+    ]))) as Record<keyof typeof releaseDataQueries, Record<string, unknown>[]>;
+  }
+  const releaseDataBeforeCategoryMigration = await captureReleaseData();
+  const rollbackSchema = pgSchema(schema);
+  const rollbackAppointmentsTable = rollbackSchema.table("appointments", {
+    id: integer("id").notNull(),
+    locationId: integer("location_id").notNull(),
+    barberId: integer("barber_id").notNull(),
+    serviceId: integer("service_id"),
+    startTime: timestamp("start_time").notNull(),
+    durationMinutes: integer("duration_minutes").notNull(),
+    status: text("status").notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    cancelToken: text("cancel_token").notNull(),
+    depositRequired: boolean("deposit_required").notNull(),
+    rescheduleRevision: integer("reschedule_revision").notNull(),
+    notificationRevision: integer("notification_revision").notNull(),
+    whatsappOptIn: boolean("whatsapp_opt_in").notNull(),
+  });
+  const rollbackAppointmentsBeforeCategoryMigration = await drizzle(pool).select()
+    .from(rollbackAppointmentsTable).orderBy(asc(rollbackAppointmentsTable.id));
+
+  const categoryRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory,
+  });
+  assert.deepEqual(categoryRun.applied, ["0005_service_categories.sql"]);
+  assert.equal(categoryRun.alreadyApplied, 4);
+  const releaseDataAfterCategoryMigration = await captureReleaseData();
+  assert.deepEqual(
+    releaseDataAfterCategoryMigration,
+    releaseDataBeforeCategoryMigration,
+    "migration 0005 must preserve every representative operational value byte-for-byte",
+  );
+
+  const secondRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondRun.applied.length, 0);
+  assert.equal(secondRun.alreadyApplied, 5);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataAfterCategoryMigration,
+    "controlled migration re-execution must not mutate operational data",
+  );
+
   const migratedServices = (await pool.query(`
     SELECT id, name, description, agenda_label, price, duration, is_visible, category_id
     FROM ${table("services")} ORDER BY id
@@ -163,18 +306,27 @@ try {
     duration: service.duration,
     is_visible: service.isVisible,
   })), legacyServicesBefore, "the pre-category Drizzle model must read the migrated services table unchanged");
-  const defaultLocation = (await pool.query(`SELECT * FROM ${table("locations")} WHERE is_default = true`)).rows[0];
-  assert.equal(defaultLocation.name, environment.MIGRATION_DEFAULT_LOCATION_NAME);
-  assert.equal(defaultLocation.address, environment.MIGRATION_DEFAULT_LOCATION_ADDRESS);
-  assert.equal(defaultLocation.timezone, environment.MIGRATION_DEFAULT_LOCATION_TIME_ZONE);
-  for (const name of ["appointments", "shop_availability", "barber_availability", "business_expenses"]) {
-    const result = await pool.query(`SELECT count(*) AS total, count(*) FILTER (WHERE location_id = $1) AS assigned FROM ${table(name)}`, [defaultLocation.id]);
-    assert.equal(result.rows[0].assigned, result.rows[0].total, `${name} default location backfill`);
-  }
-  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("barber_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count), 1);
-  assert.equal(
-    Number((await pool.query(`SELECT count(*) AS count FROM ${table("service_locations")} WHERE location_id = $1`, [defaultLocation.id])).rows[0].count),
-    legacyServicesBefore.length,
+  const legacyAppointmentsTable = legacySchema.table("appointments", {
+    id: integer("id").notNull(),
+    locationId: integer("location_id").notNull(),
+    barberId: integer("barber_id").notNull(),
+    serviceId: integer("service_id"),
+    startTime: timestamp("start_time").notNull(),
+    durationMinutes: integer("duration_minutes").notNull(),
+    status: text("status").notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    cancelToken: text("cancel_token").notNull(),
+    depositRequired: boolean("deposit_required").notNull(),
+    rescheduleRevision: integer("reschedule_revision").notNull(),
+    notificationRevision: integer("notification_revision").notNull(),
+    whatsappOptIn: boolean("whatsapp_opt_in").notNull(),
+  });
+  const legacyAppointmentsRead = await drizzle(pool).select().from(legacyAppointmentsTable)
+    .orderBy(asc(legacyAppointmentsTable.id));
+  assert.deepEqual(
+    legacyAppointmentsRead,
+    rollbackAppointmentsBeforeCategoryMigration,
+    "the pre-category appointment model must read every critical field unchanged after migration 0005",
   );
   assert.equal((await pool.query(`SELECT customer_name FROM ${table("appointments")} WHERE cancel_token = 'token-fixture'`)).rows[0].customer_name, "Cliente original");
   assert.equal((await pool.query(`SELECT notes FROM ${table("customer_notes")} WHERE phone = '910000000'`)).rows[0].notes, "Nota existente");
@@ -188,6 +340,37 @@ try {
     reschedule_revision: 0, notification_revision: 0, whatsapp_opt_in: false,
     whatsapp_opt_in_at: null, series_id: null, series_occurrence_index: null,
   });
+
+  process.env.DATABASE_URL = databaseUrl;
+  process.env.DATABASE_SCHEMA = schema;
+  process.env.DATABASE_POOL_MAX = "4";
+  process.env.USE_MEMORY_STORAGE = "false";
+  const [{ DatabaseStorage }, databaseModule] = await Promise.all([
+    import("../server/storage"),
+    import("../server/db"),
+  ]);
+  applicationPool = databaseModule.pool;
+  await databaseModule.ensureServiceAgendaLabelColumn();
+  await databaseModule.ensureAppointmentPaymentMethodColumn();
+  await databaseModule.ensureBarberServicesTable();
+  await databaseModule.ensureBarberCompensationRulesTable();
+  await databaseModule.ensureBusinessExpensesTable();
+  await databaseModule.ensureAppointmentOverlapProtection();
+  assert.equal(await databaseModule.repairKnownTextEncodingArtifacts(), 0,
+    "startup must not rewrite already-correct representative text");
+  const databaseStorage = new DatabaseStorage();
+  await Promise.all([
+    databaseStorage.getAppointments(),
+    databaseStorage.getAppointmentSeries("series-fixture"),
+    databaseStorage.getBarbers({ avatarReferences: true }),
+    databaseStorage.getServicesWithCategories(),
+    databaseStorage.getShopAvailability(Number(defaultLocation.id)),
+  ]);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataAfterCategoryMigration,
+    "startup database guards and representative application reads must not mutate operational data",
+  );
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -226,16 +409,6 @@ try {
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("services")}`)).rows[0].count), serviceCountBeforeCategoryDelete,
     "deleting a category must not delete services");
 
-  process.env.DATABASE_URL = `postgresql://postgres:migration-test@127.0.0.1:${port}/postgres`;
-  process.env.DATABASE_SCHEMA = schema;
-  process.env.DATABASE_POOL_MAX = "2";
-  process.env.USE_MEMORY_STORAGE = "false";
-  const [{ DatabaseStorage }, { pool: importedApplicationPool }] = await Promise.all([
-    import("../server/storage"),
-    import("../server/db"),
-  ]);
-  applicationPool = importedApplicationPool;
-  const databaseStorage = new DatabaseStorage();
   const cuts = await databaseStorage.createServiceCategory({ name: "Cortes storage" });
   const treatments = await databaseStorage.createServiceCategory({ name: "Tratamentos storage" });
   assert.deepEqual((await databaseStorage.getServiceCategories({ includeInactive: true })).map((category) => category.id), [cuts.id, treatments.id]);
@@ -259,22 +432,6 @@ try {
   assert.equal((await databaseStorage.getService(1))?.categoryId, null);
   await databaseStorage.deleteServiceCategory(treatments.id);
 
-  await pool.query(`
-    INSERT INTO ${table("appointment_series")} (
-      id, location_id, barber_id, service_id, customer_name, customer_phone,
-      interval_weeks, duration_months, occurrence_count, first_start_time
-    ) VALUES ('series-fixture', ${Number(defaultLocation.id)}, 1, 1, 'Cliente série', '910000000', 1, 1, 2, '2031-01-02 10:00:00');
-    INSERT INTO ${table("appointments")} (
-      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
-      series_id, series_occurrence_index
-    ) VALUES
-      (1, 1, '2031-01-02 10:00:00', 'Cliente série', '910000000', 'series-token-1', ${Number(defaultLocation.id)}, 'series-fixture', 0),
-      (1, 1, '2031-01-09 10:00:00', 'Cliente série', '910000000', 'series-token-2', ${Number(defaultLocation.id)}, 'series-fixture', 1);
-    INSERT INTO ${table("appointment_notification_events")} (
-      series_id, event_type, event_revision, event_key, appointment_start_time, payload_snapshot
-    ) VALUES ('series-fixture', 'appointment_recurring_confirmation', 1,
-      'series:series-fixture:recurring_confirmation:1', '2031-01-02 10:00:00', '{"schemaVersion":1}'::jsonb);
-  `);
   await assert.rejects(pool.query(`
     INSERT INTO ${table("appointment_notification_events")} (
       appointment_id, series_id, event_type, event_revision, event_key, appointment_start_time
@@ -357,4 +514,5 @@ try {
   if (pool) await pool.end();
   await embedded.stop().catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
+  await rm(preCategoriesMigrationsDirectory, { recursive: true, force: true });
 }
