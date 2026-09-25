@@ -125,7 +125,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 overflow-y-auto pr-1" data-testid="service-categories-manager">
+        <div className="min-h-0 overflow-y-auto p-1" data-testid="service-categories-manager">
           {isLoading && (
             <div className="mb-3 flex items-center gap-2 text-sm text-gray-400">
               <Loader2 className="h-4 w-4 animate-spin text-primary" aria-label="A carregar categorias" />

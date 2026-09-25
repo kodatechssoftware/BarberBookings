@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 const adminPassword = "Playwright-Test-Admin-2026!";
 
@@ -25,7 +25,71 @@ async function loginAdmin(page: Page) {
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
 }
 
+async function focusedInputStyle(input: Locator) {
+  await input.focus();
+  return input.evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderColor: style.borderColor,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+    };
+  });
+}
+
 test.describe("service categories", () => {
+  test("category name inputs preserve the complete Admin focus ring", async ({ page }) => {
+    test.setTimeout(60_000);
+    await loginAdmin(page);
+    const createdResponse = await page.request.post("/api/service-categories", {
+      data: { name: "Categoria Focus QA" },
+    });
+    expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    const category = await createdResponse.json();
+
+    try {
+      await page.getByRole("tab", { name: /Servi/ }).click();
+
+      await page.getByRole("button", { name: /Adicionar Servi/, exact: true }).click();
+      const serviceDialog = page.getByRole("dialog", { name: /Novo Servi/ });
+      const referenceStyle = await focusedInputStyle(serviceDialog.locator("input").first());
+      await serviceDialog.getByRole("button", { name: "Close" }).click();
+
+      await page.getByRole("button", { name: "Gerir categorias", exact: true }).click();
+      const categoriesDialog = page.getByRole("dialog", { name: "Gerir categorias" });
+      const manager = categoriesDialog.getByTestId("service-categories-manager");
+      const newCategoryInput = categoriesDialog.getByLabel("Nome da nova categoria");
+      expect(await focusedInputStyle(newCategoryInput)).toEqual(referenceStyle);
+
+      const assertRingFitsScrollableArea = async () => {
+        const [managerBox, inputBox] = await Promise.all([manager.boundingBox(), newCategoryInput.boundingBox()]);
+        expect(managerBox).not.toBeNull();
+        expect(inputBox).not.toBeNull();
+        expect(inputBox!.x - managerBox!.x).toBeGreaterThanOrEqual(3.5);
+        expect(inputBox!.y - managerBox!.y).toBeGreaterThanOrEqual(3.5);
+        expect(managerBox!.x + managerBox!.width - inputBox!.x - inputBox!.width).toBeGreaterThanOrEqual(3.5);
+      };
+      await assertRingFitsScrollableArea();
+
+      const categoryRow = categoriesDialog.getByTestId(`service-category-${category.id}`);
+      await categoryRow.getByRole("button", { name: "Editar Categoria Focus QA" }).click();
+      const editDialog = page.getByRole("dialog", { name: "Editar categoria" });
+      expect(await focusedInputStyle(editDialog.getByLabel("Nome da categoria"))).toEqual(referenceStyle);
+      await editDialog.getByRole("button", { name: "Cancelar", exact: true }).click();
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await newCategoryInput.focus();
+      await assertRingFitsScrollableArea();
+      const dialogBox = await categoriesDialog.boundingBox();
+      expect(dialogBox).not.toBeNull();
+      expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+      expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390);
+    } finally {
+      await page.request.delete(`/api/service-categories/${category.id}`);
+    }
+  });
+
   test("preserves the legacy catalogue contract and Admin UI with zero categories", async ({ page, request }) => {
     test.setTimeout(60_000);
     expect((await request.get("/api/service-categories")).status()).toBe(401);
