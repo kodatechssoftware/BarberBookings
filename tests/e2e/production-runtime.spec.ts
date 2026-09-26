@@ -80,6 +80,37 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(appointment.notificationEventId).toBeUndefined();
   expect(appointment.locationId).toBe(1);
 
+  const missingBusyBarber = await request.get("/api/appointments?scope=busy", { headers: authHeaders });
+  expect(missingBusyBarber.status()).toBe(400);
+  expect(await missingBusyBarber.json()).toEqual({
+    code: "BARBER_ID_REQUIRED",
+    message: "Indique um barbeiro para consultar os horários ocupados.",
+  });
+
+  const busyResponse = await request.get(`/api/appointments?scope=busy&barberId=${barber.id}`, {
+    headers: authHeaders,
+  });
+  expect(busyResponse.status(), await busyResponse.text()).toBe(200);
+  const busyAppointments = await busyResponse.json();
+  const busyAppointment = busyAppointments.find((item: any) => item.startTime === publicStart);
+  expect(busyAppointment).toBeTruthy();
+  expect(Object.keys(busyAppointment).sort()).toEqual(["barberId", "durationMinutes", "startTime", "status"]);
+  expect(busyAppointment).toMatchObject({ barberId: barber.id, startTime: publicStart, status: "booked" });
+
+  const standardResponse = await request.get(`/api/appointments?barberId=${barber.id}`, { headers: authHeaders });
+  expect(standardResponse.status(), await standardResponse.text()).toBe(200);
+  const standardAppointments = await standardResponse.json();
+  expect(standardAppointments.find((item: any) => item.id === appointment.id)).toMatchObject({
+    id: appointment.id,
+    locationId: 1,
+    barberId: barber.id,
+    serviceId: service.id,
+    customerName: "Production Runtime Public",
+    customerPhone: "+351912000001",
+    customerEmail: "runtime-public@example.test",
+    canManage: true,
+  });
+
   const rescheduledStart = futureThursday(31, 15);
   const reschedule = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
     data: { startTime: rescheduledStart },
