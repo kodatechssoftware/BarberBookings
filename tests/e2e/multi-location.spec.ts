@@ -178,12 +178,10 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await expect(locationSection.locator("iframe")).toHaveCount(1);
   await expect(locationSection.locator("iframe")).toHaveAttribute("title", "Mapa de Loja Braga");
   const bragaEmbedUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${created[1].name}, ${created[1].address}`)}&output=embed`;
-  const bragaMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(created[1].address)}`;
   await expect(locationSection.locator("iframe")).toHaveAttribute("src", bragaEmbedUrl);
-  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", bragaMapUrl);
+  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(locationSection.locator("iframe")).toHaveAttribute("src", bragaEmbedUrl);
-  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", bragaMapUrl);
   const mobileMap = await locationSection.getByTestId("location-map-container").boundingBox();
   expect(mobileMap).not.toBeNull();
   expect(mobileMap!.x).toBeGreaterThanOrEqual(0);
@@ -196,7 +194,6 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   }, created[0].id);
   await expect(locationSection.locator("iframe")).toHaveAttribute("title", "Mapa de Loja Porto");
   await expect(locationSection.locator("iframe")).toHaveAttribute("src", embed("Porto"));
-  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", "https://www.google.com/maps?q=Porto");
   await expect(page.getByText("Rui Porto", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Categoria Porto QA", exact: true })).toBeVisible();
 
@@ -260,7 +257,6 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await page.goto("/");
   await locationSection.getByRole("button", { name: new RegExp(initial[0].name) }).click();
   await expect(locationSection.locator("iframe")).toHaveAttribute("src", `https://www.google.com/maps?q=${encodeURIComponent(`${initial[0].name}, ${updatedAddress}`)}&output=embed`);
-  await expect(locationSection.getByRole("link", { name: "Abrir no Google Maps" })).toHaveAttribute("href", `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(updatedAddress)}`);
   // Keep the remainder of the isolation tests managing Porto.
   await locationSection.getByRole("button", { name: /Loja Porto/ }).click();
   await page.goto("/admin");
