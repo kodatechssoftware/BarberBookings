@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Clock, ExternalLink, MapPin, Scissors } from "lucide-react";
+import { Clock, MapPin, Scissors } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
@@ -487,13 +487,6 @@ export default function Home() {
                 </span>
               ))}
             </div>}
-            {shopBranding.showMap && selectedMapLinks.mapUrl && <a href={selectedMapLinks.mapUrl} target="_blank" rel="noreferrer" className="mt-6 inline-flex">
-              <Button variant="outline" className="border-white/15 bg-card text-white hover:bg-white/10">
-                <MapPin className="mr-2 h-4 w-4" />
-                Abrir no Google Maps
-                <ExternalLink className="ml-2 h-4 w-4" />
-              </Button>
-            </a>}
           </div>
 
           {shopBranding.showMap && selectedMapLinks.mapEmbedUrl && <div

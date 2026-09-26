@@ -43,10 +43,9 @@ test("applies environment-specific branding without leaking production identity"
   }
 
   if (hideMap) {
-    await expect(page.getByRole("button", { name: "Abrir no Google Maps" })).toHaveCount(0);
     await expect(page.locator('iframe[src*="google.com/maps"]')).toHaveCount(0);
   } else {
-    await expect(page.getByRole("button", { name: "Abrir no Google Maps" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Abrir no Google Maps" })).toHaveCount(0);
     await expect(page.getByTestId("location-map-placeholder")).toHaveCount(1);
     await page.getByTestId("location-map-container").scrollIntoViewIfNeeded();
     await expect(page.locator('iframe[src*="google.com/maps"]')).toBeVisible();
