@@ -26,6 +26,10 @@ address or with an invalid timezone/URL. These values are only used when the
 database has no location yet. Existing appointments, availability, expenses,
 barbers, and services are associated with the resulting default location.
 
+`0006_customer_notes_location.sql` associates each legacy customer note with
+that existing default location without changing its contents or timestamps.
+New notes are unique per `(location_id, phone, customer_name_key)`.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification

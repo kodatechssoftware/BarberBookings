@@ -72,6 +72,8 @@ try {
       id serial PRIMARY KEY, phone text NOT NULL, customer_name_key text NOT NULL DEFAULT '', email text,
       notes text NOT NULL DEFAULT '', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now()
     );
+    CREATE UNIQUE INDEX customer_notes_phone_name_idx
+      ON ${table("customer_notes")} (phone, customer_name_key);
     CREATE TABLE ${table("blacklist")} (id serial PRIMARY KEY, email text, phone text NOT NULL, reason text, created_at timestamp NOT NULL DEFAULT now());
     CREATE TABLE ${table("business_expenses")} (
       id serial PRIMARY KEY, category text NOT NULL, description text NOT NULL, amount_cents integer NOT NULL,
@@ -100,6 +102,10 @@ try {
     SELECT id, name, description, agenda_label, price, duration, is_visible
     FROM ${table("services")} ORDER BY id
   `)).rows;
+  const legacyCustomerNoteBefore = (await pool.query(`
+    SELECT id, phone, customer_name_key, email, notes, created_at, updated_at
+    FROM ${table("customer_notes")} WHERE phone = '910000000'
+  `)).rows[0];
   const countsBefore = new Map<string, number>();
   for (const name of preservedTables) countsBefore.set(name, Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count));
 
@@ -114,11 +120,11 @@ try {
   assert.deepEqual(firstRun.applied, [
     "0001_multi_location_foundation.sql", "0002_whatsapp_messages.sql",
     "0003_appointment_notification_outbox.sql", "0004_appointment_series.sql",
-    "0005_service_categories.sql",
+    "0005_service_categories.sql", "0006_customer_notes_location.sql",
   ]);
   const secondRun = await runSchemaMigrations(pool, { schemaName: schema, environment });
   assert.equal(secondRun.applied.length, 0);
-  assert.equal(secondRun.alreadyApplied, 5);
+  assert.equal(secondRun.alreadyApplied, 6);
 
   for (const name of preservedTables) {
     assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count), countsBefore.get(name), `${name} row count`);
@@ -178,6 +184,14 @@ try {
   );
   assert.equal((await pool.query(`SELECT customer_name FROM ${table("appointments")} WHERE cancel_token = 'token-fixture'`)).rows[0].customer_name, "Cliente original");
   assert.equal((await pool.query(`SELECT notes FROM ${table("customer_notes")} WHERE phone = '910000000'`)).rows[0].notes, "Nota existente");
+  const migratedCustomerNote = (await pool.query(`
+    SELECT id, location_id, phone, customer_name_key, email, notes, created_at, updated_at
+    FROM ${table("customer_notes")} WHERE phone = '910000000'
+  `)).rows[0];
+  assert.equal(migratedCustomerNote.location_id, defaultLocation.id);
+  const { location_id: _noteLocationId, ...legacyCustomerNoteFields } = migratedCustomerNote;
+  assert.deepEqual(legacyCustomerNoteFields, legacyCustomerNoteBefore,
+    "customer note contents and timestamps must remain byte-for-byte unchanged");
   assert.equal((await pool.query(`SELECT description FROM ${table("business_expenses")} WHERE amount_cents = 50000`)).rows[0].description, "Renda existente");
   const migratedAppointment = (await pool.query(`
     SELECT reschedule_revision, notification_revision, whatsapp_opt_in, whatsapp_opt_in_at,
@@ -197,7 +211,28 @@ try {
     "meta_webhook_receipts_receipt_key_idx", "meta_webhook_receipts_provider_message_id_idx",
     "appointments_series_occurrence_idx", "appointment_notification_events_series_idx",
     "service_categories_name_ci_idx", "service_categories_active_order_idx", "services_category_id_idx",
+    "customer_notes_location_id_idx", "customer_notes_location_phone_name_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
+  assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
+    "the legacy global customer-note identity index must be removed");
+
+  const secondLocationId = Number((await pool.query(`
+    INSERT INTO ${table("locations")} (name, slug, address, timezone, is_active, is_default, sort_order)
+    VALUES ('Loja secundária', 'secundaria', 'Morada B', 'Europe/Lisbon', true, false, 1)
+    RETURNING id
+  `)).rows[0].id);
+  await pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, notes)
+    VALUES ($1, '910000000', 'cliente original', 'cliente@example.test', 'Nota independente B')
+  `, [secondLocationId]);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("customer_notes")}
+    WHERE phone = '910000000' AND customer_name_key = 'cliente original'
+  `)).rows[0].count), 2, "the same customer identity must support one independent note per location");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, notes)
+    VALUES ($1, '910000000', 'cliente original', 'Duplicada A')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23505");
 
   await assert.rejects(
     pool.query(`INSERT INTO ${table("service_categories")} (name, sort_order) VALUES ('   ', 0)`),

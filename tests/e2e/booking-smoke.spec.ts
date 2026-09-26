@@ -3608,7 +3608,7 @@ test.describe("booking rules", () => {
           isManualBooking: true,
         },
       });
-      expect(duplicateResponse.status(), await duplicateResponse.text()).toBe(400);
+      expect(duplicateResponse.status(), await duplicateResponse.text()).toBe(409);
 
       const recurringResponse = await request.post("/api/appointments/block", {
         data: {

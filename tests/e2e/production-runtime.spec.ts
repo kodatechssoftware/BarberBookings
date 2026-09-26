@@ -102,6 +102,19 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(recurringAppointments.length).toBeGreaterThan(1);
   expect(recurringAppointments.every((item: any) => item.locationId === 1)).toBe(true);
 
+  const notePhone = "+351912000003";
+  const noteUpdate = await request.patch(`/api/admin/customers/${encodeURIComponent(notePhone)}/notes`, {
+    headers: authHeaders,
+    data: { customerName: "Cliente Single Location", email: "single@example.test", notes: "Nota single-location" },
+  });
+  expect(noteUpdate.ok(), await noteUpdate.text()).toBe(true);
+  const noteHistory = await request.get(
+    `/api/admin/customers/${encodeURIComponent(notePhone)}/history?name=Cliente%20Single%20Location&email=single%40example.test`,
+    { headers: authHeaders },
+  );
+  expect(noteHistory.ok(), await noteHistory.text()).toBe(true);
+  expect((await noteHistory.json()).notes.notes).toBe("Nota single-location");
+
   const bookingWindow = await request.get("/api/public-booking-window");
   expect((await bookingWindow.json()).enabled).toBe(false);
 });

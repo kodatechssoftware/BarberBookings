@@ -1,7 +1,14 @@
 ﻿import type { Express } from "express";
 import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
-import { getShopDateBounds, isAppointmentConflictError, storage } from "./storage";
+import {
+  appointmentBarberLocationUnavailableCode,
+  appointmentLocationInactiveCode,
+  getShopDateBounds,
+  isAppointmentConflictError,
+  isAppointmentLocationIntegrityError,
+  storage,
+} from "./storage";
 import { barberAvatarVersion, decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
 import {
   api,
@@ -837,6 +844,33 @@ function validateAppointmentFilters(query: Request["query"]) {
   return null;
 }
 
+function isLocationSensitiveMutation(req: Request) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return false;
+
+  return [
+    /^\/admin\/expenses(?:\/\d+)?$/,
+    /^\/admin\/location-barbers$/,
+    /^\/barbers(?:\/\d+(?:\/(?:services|availability|reset-password|invite))?)?$/,
+    /^\/services(?:\/\d+)?$/,
+    /^\/shop\/availability$/,
+    /^\/appointments$/,
+    /^\/appointments\/block$/,
+    /^\/appointments\/\d+(?:\/status)?$/,
+    /^\/admin\/customers\/[^/]+\/notes$/,
+  ].some((pattern) => pattern.test(req.path));
+}
+
+function sendAppointmentLocationIntegrityError(res: Response, error: unknown) {
+  if (!isAppointmentLocationIntegrityError(error)) return false;
+  const message = error.code === appointmentLocationInactiveCode
+    ? "Esta localização não aceita novas marcações."
+    : error.code === appointmentBarberLocationUnavailableCode
+      ? "Este barbeiro já não está disponível nesta localização."
+      : error.message;
+  res.status(409).json({ code: error.code, message });
+  return true;
+}
+
 function normalizeBarberCompensationInput(input: BarberCompensationInput) {
   const model = input.compensationModel || "none";
 
@@ -1641,6 +1675,12 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Localização inválida." });
       }
       const rawLocationId = ignoresSelectedLocation ? undefined : imageLocation ?? req.header("x-location-id")?.trim();
+      if (!ignoresSelectedLocation && isLocationSensitiveMutation(req) && !rawLocationId) {
+        return res.status(400).json({
+          code: "LOCATION_REQUIRED",
+          message: "Indique explicitamente a localização para concluir esta operação.",
+        });
+      }
       const locationId = rawLocationId ? Number(rawLocationId) : defaultLocation.id;
       if (!Number.isInteger(locationId) || locationId <= 0) {
         return res.status(400).json({ message: "Localização inválida." });
@@ -1974,6 +2014,9 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof Error && error.message === "DEFAULT_LOCATION_CANNOT_BE_DEACTIVATED") {
         return res.status(409).json({ message: "A localização principal não pode ser desativada." });
+      }
+      if (error instanceof Error && error.message === "LOCATION_HAS_FUTURE_APPOINTMENTS") {
+        return res.status(409).json({ message: "Existem marcações futuras nesta loja. Resolva essas marcações antes de desativar a localização." });
       }
       throw error;
     }
@@ -2335,6 +2378,9 @@ export async function registerRoutes(
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
         return res.status(400).json({ message: error.message });
       }
+      if (error instanceof Error && error.message === "BARBER_LOCATION_HAS_FUTURE_APPOINTMENTS") {
+        return res.status(409).json({ message: "Reatribua ou cancele as marcações futuras desta loja antes de retirar o barbeiro." });
+      }
       if (getErrorCode(error) === "23505") {
         return res.status(409).json({ message: "Já existe um barbeiro com este email." });
       }
@@ -2451,6 +2497,9 @@ export async function registerRoutes(
           : "Barbeiro removido.",
       });
     } catch (error: any) {
+      if (error instanceof Error && error.message === "BARBER_LOCATION_HAS_FUTURE_APPOINTMENTS") {
+        return res.status(409).json({ message: "Reatribua ou cancele as marcações futuras desta loja antes de retirar o barbeiro." });
+      }
       if (error?.code === "BARBER_HAS_FUTURE_APPOINTMENTS") {
         return res.status(409).json({
           message: "Este barbeiro tem marcações futuras. Reatribua ou cancele essas marcações antes de o remover.",
@@ -3066,12 +3115,14 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Barbeiro não encontrado." });
       }
       const busyAppointments = await storage.getAppointments(effectiveBarberId, date);
-      return res.json(busyAppointments.map((appointment) => ({
-        ...appointment,
-        customerName: appointment.locationId === locationId ? "Ocupado" : "Ocupado noutra loja",
-        customerEmail: null, customerPhone: "", cancelToken: "",
-        depositReason: null, canManage: false,
-      })));
+      return res.json(busyAppointments
+        .filter((appointment) => appointment.status === "booked")
+        .map((appointment) => ({
+          barberId: appointment.barberId,
+          startTime: appointment.startTime,
+          durationMinutes: appointment.durationMinutes,
+          status: "booked" as const,
+        })));
     }
     const appointments = await storage.getAppointments(effectiveBarberId, date, locationId);
 
@@ -3288,6 +3339,7 @@ export async function registerRoutes(
       if (isAppointmentConflictError(err)) {
         return res.status(409).json({ message: "Este horário já está reservado." });
       }
+      if (sendAppointmentLocationIntegrityError(res, err)) return;
       throw err;
     }
   });
@@ -3295,6 +3347,12 @@ export async function registerRoutes(
   app.post("/api/appointments/block", requireAdmin, async (req, res) => {
     try {
       const locationId = Number(res.locals.locationId);
+      if (MULTI_LOCATION_CONFIG.enabled && res.locals.location?.isActive === false) {
+        return res.status(409).json({
+          code: appointmentLocationInactiveCode,
+          message: "Esta localização não aceita novas marcações.",
+        });
+      }
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
@@ -3552,7 +3610,7 @@ export async function registerRoutes(
           conflicts 
         });
       } else if (conflicts.length > 0) {
-        return res.status(400).json({ message: "Horário indisponível para este barbeiro." });
+        return res.status(409).json({ message: "Horário indisponível para este barbeiro." });
       }
 
       const shouldCreateSeries = Boolean(
@@ -3658,6 +3716,7 @@ export async function registerRoutes(
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Horário indisponível para este barbeiro." });
       }
+      if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Block error:", error);
       res.status(500).json({ message: "Erro ao bloquear horário" });
     }
@@ -3866,6 +3925,7 @@ export async function registerRoutes(
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
       }
+      if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Update appointment error:", error);
       res.status(500).json({ message: "Erro ao atualizar marcação" });
     }
@@ -3947,6 +4007,7 @@ export async function registerRoutes(
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Este horário já está reservado." });
       }
+      if (sendAppointmentLocationIntegrityError(res, error)) return;
       throw error;
     }
   });
@@ -4071,6 +4132,7 @@ export async function registerRoutes(
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Este horário já está reservado." });
       }
+      if (sendAppointmentLocationIntegrityError(res, error)) return;
       throw error;
     }
   });
@@ -4553,8 +4615,8 @@ export async function registerRoutes(
     });
     const metrics = getCustomerMetrics(matchingAppointments, req.params.phone, email);
     const customerNote = phone && (appSession.role === "admin" || matchingAppointments.length > 0)
-      ? await storage.getCustomerNoteByIdentity(phone, customerNameKey) ??
-        (customerNameKey ? await storage.getCustomerNoteByIdentity(phone, "") : undefined)
+      ? await storage.getCustomerNoteByIdentity(locationId, phone, customerNameKey) ??
+        (customerNameKey ? await storage.getCustomerNoteByIdentity(locationId, phone, "") : undefined)
       : undefined;
 
     res.json({
@@ -4605,6 +4667,7 @@ export async function registerRoutes(
     }
 
     const note = await storage.upsertCustomerNote({
+      locationId: Number(res.locals.locationId),
       phone,
       customerNameKey,
       email: email || undefined,
@@ -4615,7 +4678,7 @@ export async function registerRoutes(
       entityType: "customer_note",
       entityId: note.id,
       summary: `Notas do cliente atualizadas: ${parsed.data.customerName || phone}`,
-      metadata: { phone, customerNameKey },
+      metadata: { phone, customerNameKey, locationId: Number(res.locals.locationId) },
     });
 
     res.json(note);

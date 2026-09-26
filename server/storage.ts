@@ -13,6 +13,8 @@ import {
   barberServices,
   barberInvites,
   customerNotes,
+  locations,
+  barberLocations,
   auditLogs,
   barberCompensationRules,
   businessExpenses,
@@ -58,7 +60,7 @@ import {
   type CreateBusinessExpenseRequest,
   type CreateWhatsappMessageRequest
 } from "@shared/schema";
-import { eq, and, gte, gt, lt, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
+import { eq, and, or, inArray, gte, gt, lt, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
 import { barberAvatarReference, INLINE_BARBER_AVATAR_PATTERN } from "./barber-avatars";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
@@ -263,6 +265,29 @@ export class AppointmentConflictError extends Error {
   }
 }
 
+export const appointmentLocationInactiveCode = "APPOINTMENT_LOCATION_INACTIVE";
+export const appointmentBarberLocationUnavailableCode = "APPOINTMENT_BARBER_LOCATION_UNAVAILABLE";
+
+export class AppointmentLocationIntegrityError extends Error {
+  status = 409;
+
+  constructor(
+    public code: typeof appointmentLocationInactiveCode | typeof appointmentBarberLocationUnavailableCode,
+  ) {
+    super(code === appointmentLocationInactiveCode
+      ? "Esta localização não aceita novas marcações."
+      : "Este barbeiro já não está disponível nesta localização.");
+    this.name = "AppointmentLocationIntegrityError";
+  }
+}
+
+export function isAppointmentLocationIntegrityError(error: unknown): error is AppointmentLocationIntegrityError {
+  return error instanceof AppointmentLocationIntegrityError
+    || Boolean(error && typeof error === "object" && "code" in error
+      && ((error as { code?: unknown }).code === appointmentLocationInactiveCode
+        || (error as { code?: unknown }).code === appointmentBarberLocationUnavailableCode));
+}
+
 export function isAppointmentConflictError(error: unknown) {
   const visited = new Set<object>();
   let current = error;
@@ -456,7 +481,7 @@ export interface IStorage {
   acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined>;
 
   // Customer notes
-  getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
+  getCustomerNoteByIdentity(locationId: number, phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
   upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote>;
 
   // Audit log
@@ -515,6 +540,54 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private async lockAndValidateAppointmentScopes(
+    tx: Pick<typeof db, "select">,
+    appointmentInputs: Array<Pick<CreateAppointmentStorageRequest, "locationId" | "barberId">>,
+  ) {
+    const scopedAppointments = appointmentInputs.filter(
+      (appointment): appointment is Pick<CreateAppointmentStorageRequest, "barberId"> & { locationId: number } =>
+        Number.isInteger(appointment.locationId) && Number(appointment.locationId) > 0,
+    );
+    if (scopedAppointments.length === 0) return;
+
+    const locationIds = Array.from(new Set(scopedAppointments.map((appointment) => appointment.locationId))).sort((a, b) => a - b);
+    const lockedLocations = await tx
+      .select({ id: locations.id, isActive: locations.isActive })
+      .from(locations)
+      .where(inArray(locations.id, locationIds))
+      .orderBy(locations.id)
+      .for("share");
+    const activeLocations = new Set(lockedLocations.filter((location) => location.isActive).map((location) => location.id));
+    if (locationIds.some((locationId) => !activeLocations.has(locationId))) {
+      throw new AppointmentLocationIntegrityError(appointmentLocationInactiveCode);
+    }
+
+    const pairs = Array.from(new Map(scopedAppointments.map((appointment) => [
+      `${appointment.locationId}:${appointment.barberId}`,
+      { locationId: appointment.locationId, barberId: appointment.barberId },
+    ])).values()).sort((left, right) => left.locationId - right.locationId || left.barberId - right.barberId);
+    const assignmentConditions = pairs.map((pair) => and(
+      eq(barberLocations.locationId, pair.locationId),
+      eq(barberLocations.barberId, pair.barberId),
+    ));
+    const lockedAssignments = await tx
+      .select({
+        locationId: barberLocations.locationId,
+        barberId: barberLocations.barberId,
+        isActive: barberLocations.isActive,
+      })
+      .from(barberLocations)
+      .where(or(...assignmentConditions))
+      .orderBy(barberLocations.locationId, barberLocations.barberId)
+      .for("share");
+    const activeAssignments = new Set(lockedAssignments
+      .filter((assignment) => assignment.isActive)
+      .map((assignment) => `${assignment.locationId}:${assignment.barberId}`));
+    if (pairs.some((pair) => !activeAssignments.has(`${pair.locationId}:${pair.barberId}`))) {
+      throw new AppointmentLocationIntegrityError(appointmentBarberLocationUnavailableCode);
+    }
+  }
+
   private async lockAppointmentDay(
     tx: Pick<typeof db, "execute">,
     barberId: number,
@@ -866,6 +939,7 @@ export class DatabaseStorage implements IStorage {
 
     try {
       return await db.transaction(async (tx) => {
+        await this.lockAndValidateAppointmentScopes(tx, appointmentInputs);
         const lockTargets = new Map<string, CreateAppointmentStorageRequest>();
         for (const appointment of appointmentInputs) {
           const dayKey = getAppointmentLockDayKey(toAppointmentDate(appointment.startTime));
@@ -940,6 +1014,12 @@ export class DatabaseStorage implements IStorage {
         };
 
         if (shouldProtectAppointment(candidate.status)) {
+          const introducesBookedOccupancy = current.status !== "booked"
+            || candidate.barberId !== current.barberId
+            || toAppointmentDate(candidate.startTime).getTime() !== toAppointmentDate(current.startTime).getTime();
+          if (introducesBookedOccupancy) {
+            await this.lockAndValidateAppointmentScopes(tx, [candidate]);
+          }
           await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
           await this.assertNoAppointmentConflict(tx, candidate, id);
         }
@@ -987,6 +1067,11 @@ export class DatabaseStorage implements IStorage {
         }
 
         if (shouldProtectAppointment(changes.candidate.status)) {
+          const introducesBookedOccupancy = current.status !== "booked"
+            || changes.barberChanged || changes.startChanged;
+          if (introducesBookedOccupancy) {
+            await this.lockAndValidateAppointmentScopes(tx, [changes.candidate]);
+          }
           await this.lockAppointmentDay(tx, changes.candidate.barberId, changes.candidate.startTime);
           await this.assertNoAppointmentConflict(tx, changes.candidate, id);
         }
@@ -1087,6 +1172,11 @@ export class DatabaseStorage implements IStorage {
       const [current] = await tx.select().from(appointments)
         .where(and(eq(appointments.id, id), eq(appointments.status, currentStatus))).limit(1);
       if (!current) return undefined;
+      if (status === "booked" && current.status !== "booked") {
+        await this.lockAndValidateAppointmentScopes(tx, [current]);
+        await this.lockAppointmentDay(tx, current.barberId, current.startTime);
+        await this.assertNoAppointmentConflict(tx, { ...current, status }, id);
+      }
       const [updated] = await tx
         .update(appointments)
         .set({ ...updateData, notificationRevision: sql`${appointments.notificationRevision} + 1` })
@@ -1133,6 +1223,7 @@ export class DatabaseStorage implements IStorage {
         if (!current) return undefined;
 
         const candidate = { ...current, startTime };
+        await this.lockAndValidateAppointmentScopes(tx, [candidate]);
         await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
         await this.assertNoAppointmentConflict(tx, candidate, id);
 
@@ -1183,6 +1274,7 @@ export class DatabaseStorage implements IStorage {
     validateRecurringAppointmentSeriesRequest(request);
     try {
       return await db.transaction(async (tx) => {
+        await this.lockAndValidateAppointmentScopes(tx, request.appointments);
         const lockTargets = new Map<string, CreateAppointmentStorageRequest>();
         for (const appointment of request.appointments) {
           const dayKey = getAppointmentLockDayKey(toAppointmentDate(appointment.startTime));
@@ -1467,11 +1559,15 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
+  async getCustomerNoteByIdentity(locationId: number, phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
     const [note] = await db
       .select()
       .from(customerNotes)
-      .where(and(eq(customerNotes.phone, phone), eq(customerNotes.customerNameKey, customerNameKey)));
+      .where(and(
+        eq(customerNotes.locationId, locationId),
+        eq(customerNotes.phone, phone),
+        eq(customerNotes.customerNameKey, customerNameKey),
+      ));
     return note;
   }
 
@@ -1480,6 +1576,7 @@ export class DatabaseStorage implements IStorage {
     const [savedNote] = await db
       .insert(customerNotes)
       .values({
+        locationId: note.locationId,
         phone: note.phone,
         customerNameKey: note.customerNameKey || "",
         email: note.email || null,
@@ -1487,7 +1584,7 @@ export class DatabaseStorage implements IStorage {
         updatedAt: now,
       })
       .onConflictDoUpdate({
-        target: [customerNotes.phone, customerNotes.customerNameKey],
+        target: [customerNotes.locationId, customerNotes.phone, customerNotes.customerNameKey],
         set: {
           email: note.email || null,
           notes: note.notes || "",
@@ -2693,15 +2790,17 @@ export class MemoryStorage implements IStorage {
     return this.barbers[barberIndex];
   }
 
-  async getCustomerNoteByIdentity(phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
-    return this.customerNotes.find((note) => note.phone === phone && note.customerNameKey === customerNameKey);
+  async getCustomerNoteByIdentity(locationId: number, phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
+    return this.customerNotes.find((note) =>
+      note.locationId === locationId && note.phone === phone && note.customerNameKey === customerNameKey,
+    );
   }
 
   async upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote> {
     const now = new Date();
     const customerNameKey = note.customerNameKey || "";
     const existingIndex = this.customerNotes.findIndex((item) =>
-      item.phone === note.phone && item.customerNameKey === customerNameKey,
+      item.locationId === note.locationId && item.phone === note.phone && item.customerNameKey === customerNameKey,
     );
     if (existingIndex !== -1) {
       this.customerNotes[existingIndex] = {
@@ -2715,6 +2814,7 @@ export class MemoryStorage implements IStorage {
 
     const savedNote: CustomerNote = {
       id: this.nextIds.customerNote++,
+      locationId: note.locationId,
       phone: note.phone,
       customerNameKey,
       email: note.email || null,
