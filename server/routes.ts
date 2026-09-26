@@ -3110,7 +3110,13 @@ export async function registerRoutes(
     // If barberId is 0 (Any), we fetch for all barbers to find combined busy slots
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
     const locationId = Number(res.locals.locationId);
-    if (req.query.scope === "busy" && effectiveBarberId) {
+    if (req.query.scope === "busy") {
+      if (req.query.barberId === undefined || !effectiveBarberId) {
+        return res.status(400).json({
+          code: "BARBER_ID_REQUIRED",
+          message: "Indique um barbeiro para consultar os horários ocupados.",
+        });
+      }
       if (!await isBarberAssignedToLocation(effectiveBarberId, locationId)) {
         return res.status(404).json({ message: "Barbeiro não encontrado." });
       }
