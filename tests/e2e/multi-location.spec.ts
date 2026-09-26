@@ -363,6 +363,14 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     const refused = simultaneous.find((response) => response.status() !== 201)!;
     expect(refused.status()).toBe(409);
     expect((await refused.json()).message).toContain("indisponível");
+
+    const missingBusyBarber = await request.get("/api/appointments?scope=busy", { headers: primaryHeaders });
+    expect(missingBusyBarber.status()).toBe(400);
+    expect(await missingBusyBarber.json()).toEqual({
+      code: "BARBER_ID_REQUIRED",
+      message: "Indique um barbeiro para consultar os horários ocupados.",
+    });
+
     for (const headers of [primaryHeaders, portoHeaders]) {
       const busy = await (await guest.get(`/api/appointments/public?barberId=${sharedBarber.id}&date=${monday.toISOString().slice(0, 10)}`, { headers })).json();
       expect(busy).toHaveLength(1);
