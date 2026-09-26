@@ -14,6 +14,7 @@ function quoteIdentifier(identifier: string) {
 const locationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
 const barberLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_locations")}`;
 const serviceLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("service_locations")}`;
+const appointmentsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("appointments")}`;
 
 function toSlug(value: string) {
   return value
@@ -207,11 +208,39 @@ export async function removeBarberFromLocation(barberId: number, locationId: num
     memoryInactiveBarberLocations.set(locationId, inactive);
     return;
   }
-  await pool.query(`
-    UPDATE ${barberLocationsTable}
-    SET is_active = false
-    WHERE barber_id = $1 AND location_id = $2
-  `, [barberId, locationId]);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const assignment = await client.query(`
+      SELECT is_active
+      FROM ${barberLocationsTable}
+      WHERE barber_id = $1 AND location_id = $2
+      FOR UPDATE
+    `, [barberId, locationId]);
+    if (!assignment.rowCount) {
+      await client.query("COMMIT");
+      return;
+    }
+    const futureAppointment = await client.query(`
+      SELECT 1
+      FROM ${appointmentsTable}
+      WHERE barber_id = $1 AND location_id = $2
+        AND status = 'booked' AND start_time >= $3
+      LIMIT 1
+    `, [barberId, locationId, new Date()]);
+    if (futureAppointment.rowCount) throw new Error("BARBER_LOCATION_HAS_FUTURE_APPOINTMENTS");
+    await client.query(`
+      UPDATE ${barberLocationsTable}
+      SET is_active = false
+      WHERE barber_id = $1 AND location_id = $2
+    `, [barberId, locationId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function removeServiceFromLocation(serviceId: number, locationId: number) {
@@ -235,10 +264,6 @@ function chooseUniqueSlug(name: string, locations: Array<{ id: number; slug: str
   let suffix = 2;
   while (usedSlugs.has(`${baseSlug}-${suffix}`)) suffix += 1;
   return `${baseSlug}-${suffix}`;
-}
-
-async function uniqueSlug(name: string, existingId?: number) {
-  return chooseUniqueSlug(name, await listLocations(true), existingId);
 }
 
 export async function createLocation(input: LocationInput, maxLocations: number) {
@@ -322,39 +347,65 @@ export async function updateLocation(id: number, input: LocationUpdate) {
     return memoryLocations[index];
   }
 
-  const currentResult = await pool.query(`SELECT * FROM ${locationsTable} WHERE id = $1`, [id]);
-  if (!currentResult.rowCount) return undefined;
-  const current = mapLocation(currentResult.rows[0]);
-  if (current.isDefault && input.isActive === false) {
-    throw new Error("DEFAULT_LOCATION_CANNOT_BE_DEACTIVATED");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const currentResult = await client.query(`SELECT * FROM ${locationsTable} WHERE id = $1 FOR UPDATE`, [id]);
+    if (!currentResult.rowCount) {
+      await client.query("COMMIT");
+      return undefined;
+    }
+    const current = mapLocation(currentResult.rows[0]);
+    if (current.isDefault && input.isActive === false) {
+      throw new Error("DEFAULT_LOCATION_CANNOT_BE_DEACTIVATED");
+    }
+    if (current.isActive && input.isActive === false) {
+      const futureAppointment = await client.query(`
+        SELECT 1
+        FROM ${appointmentsTable}
+        WHERE location_id = $1 AND status = 'booked' AND start_time >= $2
+        LIMIT 1
+      `, [id, new Date()]);
+      if (futureAppointment.rowCount) throw new Error("LOCATION_HAS_FUTURE_APPOINTMENTS");
+    }
+    let slug = current.slug;
+    if (input.name) {
+      const locations = await client.query<{ id: number; slug: string }>(`SELECT id, slug FROM ${locationsTable} ORDER BY id`);
+      slug = chooseUniqueSlug(input.name, locations.rows, id);
+    }
+    const updated = await client.query(`
+      UPDATE ${locationsTable}
+      SET
+        name = $2,
+        slug = $3,
+        address = $4,
+        map_url = $5,
+        map_embed_url = $6,
+        phone = $7,
+        email = $8,
+        timezone = $9,
+        is_active = $10,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *
+    `, [
+      id,
+      input.name ?? current.name,
+      slug,
+      input.address ?? current.address,
+      input.mapUrl === undefined ? current.mapUrl : input.mapUrl || null,
+      input.mapEmbedUrl === undefined ? current.mapEmbedUrl : input.mapEmbedUrl || null,
+      input.phone === undefined ? current.phone : input.phone || null,
+      input.email === undefined ? current.email : input.email || null,
+      input.timezone ?? current.timezone,
+      input.isActive ?? current.isActive,
+    ]);
+    await client.query("COMMIT");
+    return mapLocation(updated.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-  const slug = input.name ? await uniqueSlug(input.name, id) : current.slug;
-  const updated = await pool.query(`
-    UPDATE ${locationsTable}
-    SET
-      name = $2,
-      slug = $3,
-      address = $4,
-      map_url = $5,
-      map_embed_url = $6,
-      phone = $7,
-      email = $8,
-      timezone = $9,
-      is_active = $10,
-      updated_at = now()
-    WHERE id = $1
-    RETURNING *
-  `, [
-    id,
-    input.name ?? current.name,
-    slug,
-    input.address ?? current.address,
-    input.mapUrl === undefined ? current.mapUrl : input.mapUrl || null,
-    input.mapEmbedUrl === undefined ? current.mapEmbedUrl : input.mapEmbedUrl || null,
-    input.phone === undefined ? current.phone : input.phone || null,
-    input.email === undefined ? current.email : input.email || null,
-    input.timezone ?? current.timezone,
-    input.isActive ?? current.isActive,
-  ]);
-  return mapLocation(updated.rows[0]);
 }

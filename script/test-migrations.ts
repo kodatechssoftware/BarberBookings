@@ -27,6 +27,7 @@ assert.equal(migrationChecksum("SELECT 1;\nSELECT 2;\n"), migrationChecksum("SEL
 
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
 const preCategoriesMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-categories-"));
+const preCustomerNotesMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-notes-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -35,7 +36,12 @@ for (const file of [
   "0004_appointment_series.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preCategoriesMigrationsDirectory, file));
+  await copyFile(path.join(migrationsDirectory, file), path.join(preCustomerNotesMigrationsDirectory, file));
 }
+await copyFile(
+  path.join(migrationsDirectory, "0005_service_categories.sql"),
+  path.join(preCustomerNotesMigrationsDirectory, "0005_service_categories.sql"),
+);
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -94,6 +100,8 @@ try {
       action text NOT NULL, entity_type text NOT NULL, entity_id integer,
       summary text NOT NULL, metadata text, created_at timestamp NOT NULL DEFAULT now()
     );
+    CREATE UNIQUE INDEX customer_notes_phone_name_idx
+      ON ${table("customer_notes")} (phone, customer_name_key);
     CREATE TABLE ${table("blacklist")} (id serial PRIMARY KEY, email text, phone text NOT NULL, reason text, created_at timestamp NOT NULL DEFAULT now());
     CREATE TABLE ${table("business_expenses")} (
       id serial PRIMARY KEY, category text NOT NULL, description text NOT NULL, amount_cents integer NOT NULL,
@@ -124,6 +132,10 @@ try {
     SELECT id, name, description, agenda_label, price, duration, is_visible
     FROM ${table("services")} ORDER BY id
   `)).rows;
+  const legacyCustomerNoteBefore = (await pool.query(`
+    SELECT id, phone, customer_name_key, email, notes, created_at, updated_at
+    FROM ${table("customer_notes")} WHERE phone = '910000000'
+  `)).rows[0];
   const countsBeforeFoundationMigrations = new Map<string, number>();
   for (const name of preservedTables) {
     countsBeforeFoundationMigrations.set(name, Number((await pool.query(`SELECT count(*) AS count FROM ${table(name)}`)).rows[0].count));
@@ -246,7 +258,7 @@ try {
   const categoryRun = await runSchemaMigrations(pool, {
     schemaName: schema,
     environment,
-    migrationsDirectory,
+    migrationsDirectory: preCustomerNotesMigrationsDirectory,
   });
   assert.deepEqual(categoryRun.applied, ["0005_service_categories.sql"]);
   assert.equal(categoryRun.alreadyApplied, 4);
@@ -257,9 +269,13 @@ try {
     "migration 0005 must preserve every representative operational value byte-for-byte",
   );
 
-  const secondRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
-  assert.equal(secondRun.applied.length, 0);
-  assert.equal(secondRun.alreadyApplied, 5);
+  const secondCategoryRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preCustomerNotesMigrationsDirectory,
+  });
+  assert.equal(secondCategoryRun.applied.length, 0);
+  assert.equal(secondCategoryRun.alreadyApplied, 5);
   assert.deepEqual(
     await captureReleaseData(),
     releaseDataAfterCategoryMigration,
@@ -328,8 +344,72 @@ try {
     rollbackAppointmentsBeforeCategoryMigration,
     "the pre-category appointment model must read every critical field unchanged after migration 0005",
   );
+
+  await pool.query(`
+    INSERT INTO ${table("customer_notes")} (
+      phone, customer_name_key, email, notes, created_at, updated_at
+    ) VALUES (
+      '920000000', 'cliente release', 'release@example.test', 'Nota criada após 0005',
+      '2030-08-01 10:15:00', '2030-08-02 11:30:00'
+    )
+  `);
+  const releaseDataBeforeCustomerNotesMigration = await captureReleaseData();
+  const customerNotesRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(customerNotesRun.applied, ["0006_customer_notes_location.sql"]);
+  assert.equal(customerNotesRun.alreadyApplied, 5);
+  const releaseDataAfterCustomerNotesMigration = await captureReleaseData();
+  const { customerNotes: customerNotesBefore, ...unrelatedDataBeforeCustomerNotesMigration } = releaseDataBeforeCustomerNotesMigration;
+  const { customerNotes: customerNotesAfter, ...unrelatedDataAfterCustomerNotesMigration } = releaseDataAfterCustomerNotesMigration;
+  assert.deepEqual(
+    unrelatedDataAfterCustomerNotesMigration,
+    unrelatedDataBeforeCustomerNotesMigration,
+    "migration 0006 must not alter unrelated operational entities",
+  );
+  assert.deepEqual(
+    customerNotesAfter.map(({ location_id: _locationId, ...note }) => note),
+    customerNotesBefore,
+    "migration 0006 must preserve customer note contents and timestamps byte-for-byte",
+  );
+  const secondCustomerNotesRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondCustomerNotesRun.applied.length, 0);
+  assert.equal(secondCustomerNotesRun.alreadyApplied, 6);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataAfterCustomerNotesMigration,
+    "controlled migration re-execution must not mutate operational data",
+  );
+
   assert.equal((await pool.query(`SELECT customer_name FROM ${table("appointments")} WHERE cancel_token = 'token-fixture'`)).rows[0].customer_name, "Cliente original");
   assert.equal((await pool.query(`SELECT notes FROM ${table("customer_notes")} WHERE phone = '910000000'`)).rows[0].notes, "Nota existente");
+  const migratedCustomerNote = (await pool.query(`
+    SELECT id, location_id, phone, customer_name_key, email, notes, created_at, updated_at
+    FROM ${table("customer_notes")} WHERE phone = '910000000'
+  `)).rows[0];
+  assert.equal(migratedCustomerNote.location_id, defaultLocation.id);
+  const { location_id: _noteLocationId, ...legacyCustomerNoteFields } = migratedCustomerNote;
+  assert.deepEqual(legacyCustomerNoteFields, legacyCustomerNoteBefore,
+    "customer note contents and timestamps must remain byte-for-byte unchanged");
+  const noteLocationCounts = (await pool.query(`
+    SELECT count(*) AS total,
+      count(*) FILTER (WHERE location_id = $1) AS assigned,
+      count(*) FILTER (WHERE location_id IS NULL) AS orphaned
+    FROM ${table("customer_notes")}
+  `, [defaultLocation.id])).rows[0];
+  assert.equal(noteLocationCounts.assigned, noteLocationCounts.total,
+    "all legacy customer notes must be assigned deterministically to the default location");
+  assert.equal(Number(noteLocationCounts.orphaned), 0, "migration 0006 must not leave orphaned customer notes");
+  assert.equal((await pool.query(`
+    SELECT is_nullable FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'customer_notes' AND column_name = 'location_id'
+  `, [schema])).rows[0].is_nullable, "NO", "customer_notes.location_id must be NOT NULL");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = $1 AND t.relname = 'customer_notes'
+      AND c.conname = 'customer_notes_location_id_fkey' AND c.contype = 'f'
+  `, [schema])).rows[0].count), 1, "customer_notes.location_id must keep its foreign key");
   assert.equal((await pool.query(`SELECT description FROM ${table("business_expenses")} WHERE amount_cents = 50000`)).rows[0].description, "Renda existente");
   const migratedAppointment = (await pool.query(`
     SELECT reschedule_revision, notification_revision, whatsapp_opt_in, whatsapp_opt_in_at,
@@ -368,7 +448,7 @@ try {
   ]);
   assert.deepEqual(
     await captureReleaseData(),
-    releaseDataAfterCategoryMigration,
+    releaseDataAfterCustomerNotesMigration,
     "startup database guards and representative application reads must not mutate operational data",
   );
 
@@ -380,7 +460,28 @@ try {
     "meta_webhook_receipts_receipt_key_idx", "meta_webhook_receipts_provider_message_id_idx",
     "appointments_series_occurrence_idx", "appointment_notification_events_series_idx",
     "service_categories_name_ci_idx", "service_categories_active_order_idx", "services_category_id_idx",
+    "customer_notes_location_id_idx", "customer_notes_location_phone_name_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
+  assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
+    "the legacy global customer-note identity index must be removed");
+
+  const secondLocationId = Number((await pool.query(`
+    INSERT INTO ${table("locations")} (name, slug, address, timezone, is_active, is_default, sort_order)
+    VALUES ('Loja secundária', 'secundaria', 'Morada B', 'Europe/Lisbon', true, false, 1)
+    RETURNING id
+  `)).rows[0].id);
+  await pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, notes)
+    VALUES ($1, '910000000', 'cliente original', 'cliente@example.test', 'Nota independente B')
+  `, [secondLocationId]);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("customer_notes")}
+    WHERE phone = '910000000' AND customer_name_key = 'cliente original'
+  `)).rows[0].count), 2, "the same customer identity must support one independent note per location");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, notes)
+    VALUES ($1, '910000000', 'cliente original', 'Duplicada A')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23505");
 
   await assert.rejects(
     pool.query(`INSERT INTO ${table("service_categories")} (name, sort_order) VALUES ('   ', 0)`),
@@ -515,4 +616,5 @@ try {
   await embedded.stop().catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
   await rm(preCategoriesMigrationsDirectory, { recursive: true, force: true });
+  await rm(preCustomerNotesMigrationsDirectory, { recursive: true, force: true });
 }

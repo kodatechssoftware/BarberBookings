@@ -297,6 +297,7 @@ export const barberInvites = appPgTable("barber_invites", {
 
 export const customerNotes = appPgTable("customer_notes", {
   id: idColumn("customer_notes_id_seq"),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
   phone: text("phone").notNull(),
   customerNameKey: text("customer_name_key").notNull().default(""),
   email: text("email"),
@@ -304,7 +305,8 @@ export const customerNotes = appPgTable("customer_notes", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
-  customerNotesIdentityIdx: uniqueIndex("customer_notes_phone_name_idx").on(table.phone, table.customerNameKey),
+  customerNotesIdentityIdx: uniqueIndex("customer_notes_location_phone_name_idx")
+    .on(table.locationId, table.phone, table.customerNameKey),
 }));
 
 export const auditLogs = appPgTable("audit_logs", {
