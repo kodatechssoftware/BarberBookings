@@ -1318,6 +1318,42 @@ function getScheduleValidationError(
   return null;
 }
 
+function crossesShopCalendarDay(startTime: Date, durationMinutes: number) {
+  const start = getShopDateParts(startTime);
+  const end = getShopDateParts(new Date(startTime.getTime() + durationMinutes * 60000));
+  return start.dateKey !== end.dateKey;
+}
+
+function parseAppointmentPriceCents(value: unknown) {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= 0
+    && value <= MAX_APPOINTMENT_SERVICE_PRICE_CENTS
+    ? value
+    : null;
+}
+
+function parseCustomAppointmentDuration(value: unknown) {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value > 0
+    && value <= MAX_APPOINTMENT_DURATION_MINUTES
+    ? value
+    : null;
+}
+
+function resolveEffectiveServiceTerms(
+  _locationId: number,
+  service: { id: number; name: string; duration: number; price: number },
+) {
+  return {
+    serviceId: service.id,
+    name: service.name,
+    durationMinutes: service.duration,
+    priceCents: service.price,
+  };
+}
+
 type AppointmentLike = AppointmentServiceTermsLike & {
   id?: number;
   barberId: number;
@@ -3167,8 +3203,9 @@ export async function registerRoutes(
       if (!requestedService) {
         return res.status(400).json({ message: "Serviço indisponível para marcação online." });
       }
+      const requestedServiceTerms = resolveEffectiveServiceTerms(locationId, requestedService);
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
-      const requestedDuration = getAppointmentDurationMinutes(input.serviceId, serviceDurations);
+      const requestedDuration = requestedServiceTerms.durationMinutes;
       const requestedEndTime = new Date(input.startTime.getTime() + requestedDuration * 60000);
       const dateStr = getShopDateParts(input.startTime).dateKey;
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(input.customerPhone);
@@ -3270,6 +3307,9 @@ export async function registerRoutes(
         whatsappOptIn: true,
         cancelToken,
         durationMinutes: requestedDuration,
+        serviceNameSnapshot: requestedServiceTerms.name,
+        servicePriceCentsSnapshot: requestedServiceTerms.priceCents,
+        manualOutsideHours: false,
         depositRequired: false,
         depositReason: null,
         notificationEventType: appointmentNotificationEventsEnabled ? "appointment_confirmation" : undefined,
@@ -3337,13 +3377,31 @@ export async function registerRoutes(
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
-      const { barberId, startTime, startTimes, name, phone, customerEmail, serviceId, isManualBooking, allowOutsideHours, isRecurring, recurringWeeks, recurringMonths } = req.body;
+      const {
+        barberId,
+        startTime,
+        startTimes,
+        name,
+        phone,
+        customerEmail,
+        serviceId,
+        serviceMode,
+        customServiceName,
+        customDurationMinutes,
+        servicePriceCents,
+        isManualBooking,
+        allowOutsideHours,
+        isRecurring,
+        recurringWeeks,
+        recurringMonths,
+      } = req.body;
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
         (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
-        (isRecurring && startTimes !== undefined)
+        (isRecurring && startTimes !== undefined) ||
+        (serviceMode !== undefined && serviceMode !== "existing" && serviceMode !== "custom")
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
@@ -3383,13 +3441,18 @@ export async function registerRoutes(
       const serviceIdNumber = serviceId === null || serviceId === undefined || serviceId === ""
         ? null
         : Number(serviceId);
+      const isCustomService = serviceMode === "custom";
+      const hasManualPrice = servicePriceCents !== undefined;
       if (serviceIdNumber !== null && (!Number.isInteger(serviceIdNumber) || serviceIdNumber <= 0)) {
         return res.status(400).json({ message: "Serviço inválido." });
       }
-      if (isManualBooking && serviceIdNumber === null) {
+      if (isCustomService && serviceIdNumber !== null) {
+        return res.status(400).json({ message: "Um serviço personalizado não pode referenciar o catálogo." });
+      }
+      if (isManualBooking && serviceIdNumber === null && !isCustomService) {
         return res.status(400).json({ message: "Selecione um serviço para a marcação manual." });
       }
-      if (!isManualBooking && serviceIdNumber !== null) {
+      if (!isManualBooking && (serviceIdNumber !== null || isCustomService || hasManualPrice)) {
         return res.status(400).json({ message: "Uma ausência não pode ter um serviço associado." });
       }
 
@@ -3423,6 +3486,12 @@ export async function registerRoutes(
       if (isRecurring && !isManualBooking) {
         return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
       }
+      if (isRecurring && isCustomService) {
+        return res.status(400).json({ message: "Serviços personalizados não podem ser recorrentes." });
+      }
+      if (isRecurring && hasManualPrice) {
+        return res.status(400).json({ message: "Preços extraordinários não podem ser recorrentes." });
+      }
       if (allowOutsideHours && !isManualBooking) {
         return res.status(400).json({ message: "A exceção de horário só está disponível para marcações manuais." });
       }
@@ -3448,9 +3517,28 @@ export async function registerRoutes(
       if (isManualBooking && selectedService?.isVisible === false) {
         return res.status(400).json({ message: "Serviço indisponível para novas marcações." });
       }
-      const duration = serviceIdNumber
-        ? getAppointmentDurationMinutes(serviceIdNumber, serviceDurations)
-        : DEFAULT_APPOINTMENT_DURATION_MINUTES;
+      const customName = typeof customServiceName === "string" ? customServiceName.trim() : "";
+      const customDuration = parseCustomAppointmentDuration(customDurationMinutes);
+      const parsedManualPrice = parseAppointmentPriceCents(servicePriceCents);
+      if (isCustomService) {
+        if (!customName || customName.length > MAX_APPOINTMENT_SERVICE_NAME_LENGTH) {
+          return res.status(400).json({ message: "O nome do serviço personalizado deve ter entre 1 e 100 caracteres." });
+        }
+        if (customDuration === null) {
+          return res.status(400).json({ message: "A duração do serviço personalizado deve ser um número inteiro entre 1 e 720 minutos." });
+        }
+        if (parsedManualPrice === null) {
+          return res.status(400).json({ message: "O preço do serviço personalizado é inválido." });
+        }
+      } else if (hasManualPrice && parsedManualPrice === null) {
+        return res.status(400).json({ message: "O preço desta marcação é inválido." });
+      }
+      const selectedServiceTerms = selectedService
+        ? resolveEffectiveServiceTerms(locationId, selectedService)
+        : null;
+      const duration = isCustomService
+        ? customDuration!
+        : selectedServiceTerms?.durationMinutes ?? DEFAULT_APPOINTMENT_DURATION_MINUTES;
       if (isManualBooking && serviceIdNumber) {
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
         if (!barberCanPerformService(barberServiceMap, barberIdNumber, serviceIdNumber)) {
@@ -3492,25 +3580,36 @@ export async function registerRoutes(
       const requestTimestamp = Date.now();
       const workingPeriodsByWeekday = new Map<number, MinutePeriod[]>();
       const existingAppointmentsByDate = new Map<string, Appointment[]>();
+      const outsideHoursByOccurrence: boolean[] = [];
 
-      for (const currentStart of occurrenceStarts) {
+      for (let occurrenceIndex = 0; occurrenceIndex < occurrenceStarts.length; occurrenceIndex += 1) {
+        const currentStart = occurrenceStarts[occurrenceIndex];
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
         const isHistoricalManualBooking = Boolean(
           isManualBooking && !isRecurring && currentEnd.getTime() <= requestTimestamp,
         );
         const shopDateParts = getShopDateParts(currentStart);
-        const canBypassSchedule = Boolean(isManualBooking && allowOutsideHours);
         let workingPeriods = workingPeriodsByWeekday.get(shopDateParts.weekday);
-        if (!canBypassSchedule && !workingPeriods) {
+        if (!workingPeriods) {
           workingPeriods = await getBarberWorkingPeriods(barberIdNumber, shopDateParts.weekday, locationId);
           workingPeriodsByWeekday.set(shopDateParts.weekday, workingPeriods);
         }
-        const scheduleError = canBypassSchedule
-          ? null
-          : getScheduleValidationError(currentStart, duration, workingPeriods);
-        if (scheduleError) {
+        if (crossesShopCalendarDay(currentStart, duration)) {
+          return res.status(400).json({
+            message: `A marcação não pode atravessar a meia-noite (${formatShopDateTime(currentStart)}, ${duration} min).`,
+          });
+        }
+        const scheduleError = getScheduleValidationError(currentStart, duration, workingPeriods);
+        const isActuallyOutsideHours = Boolean(scheduleError);
+        outsideHoursByOccurrence.push(isActuallyOutsideHours);
+        if (isActuallyOutsideHours && !(isManualBooking && allowOutsideHours)) {
           return res.status(400).json({
             message: `${scheduleError} (${formatShopDateTime(currentStart)}, ${duration} min).`,
+          });
+        }
+        if (!isActuallyOutsideHours && (isCustomService || hasManualPrice)) {
+          return res.status(400).json({
+            message: "Serviço personalizado e preço manual só estão disponíveis em marcações realmente fora do horário.",
           });
         }
 
@@ -3575,6 +3674,13 @@ export async function registerRoutes(
           whatsappOptIn: manualWhatsappOptIn,
           whatsappOptInAt: manualWhatsappOptInAt,
           durationMinutes: duration,
+          serviceNameSnapshot: isManualBooking
+            ? isCustomService ? customName : selectedServiceTerms?.name ?? null
+            : null,
+          servicePriceCentsSnapshot: isManualBooking
+            ? isCustomService ? parsedManualPrice : hasManualPrice ? parsedManualPrice : selectedServiceTerms?.priceCents ?? null
+            : null,
+          manualOutsideHours: Boolean(isManualBooking && outsideHoursByOccurrence[occurrenceIndex]),
           status: isHistoricalManualBooking ? "completed" : "booked",
           cancelToken: randomUUID(),
           depositRequired: false,
