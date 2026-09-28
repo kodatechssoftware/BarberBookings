@@ -79,6 +79,11 @@ import {
   createClockAlignedTimeOptions,
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
+import {
+  MAX_APPOINTMENT_DURATION_MINUTES,
+  MAX_APPOINTMENT_SERVICE_NAME_LENGTH,
+  MAX_APPOINTMENT_SERVICE_PRICE_CENTS,
+} from "@shared/appointment-service-terms";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -964,6 +969,15 @@ function eurosInputToCents(value: string) {
   return Math.round(parsed * 100);
 }
 
+function appointmentEurosInputToCents(value: string) {
+  const normalized = value.replace(",", ".").trim();
+  if (!normalized || !/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return null;
+  const cents = Math.round(parsed * 100);
+  return cents <= MAX_APPOINTMENT_SERVICE_PRICE_CENTS ? cents : null;
+}
+
 function getBarberCompensationFormData(barber?: BarberListItem): BarberCompensationFormData {
   return {
     compensationModel: barber?.compensationModel || defaultBarberCompensationFormData.compensationModel,
@@ -1625,6 +1639,10 @@ export default function Admin() {
   const [blockData, setBlockData] = useState<AppointmentBlockData>({
     barberId: "",
     serviceId: "",
+    serviceMode: "existing",
+    customServiceName: "",
+    customDurationMinutes: "30",
+    servicePrice: "",
     times: [],
     name: "",
     phone: "900000000",
@@ -1694,7 +1712,16 @@ export default function Admin() {
     setAbsenceConflict(null);
     setBarberServiceDrafts({});
     setPendingManualBookingBlacklistWarning(null);
-    setBlockData((current) => ({ ...current, barberId: "", serviceId: "", times: [] }));
+    setBlockData((current) => ({
+      ...current,
+      barberId: "",
+      serviceId: "",
+      serviceMode: "existing",
+      customServiceName: "",
+      customDurationMinutes: "30",
+      servicePrice: "",
+      times: [],
+    }));
   }, [activeLocationId]);
 
   const handleAddBarber = async (e: React.FormEvent) => {
@@ -2042,6 +2069,10 @@ export default function Admin() {
       ...current,
       barberId: barberId || current.barberId,
       serviceId: "",
+      serviceMode: "existing",
+      customServiceName: "",
+      customDurationMinutes: "30",
+      servicePrice: "",
       times: initialTimes,
       name: "",
       phone: mode === "manual" ? "" : "900000000",
@@ -2672,7 +2703,7 @@ export default function Admin() {
   }, [blockData.barberId, selectedBlockBarber, services]);
 
   useEffect(() => {
-    if (!blockData.isManualBooking || !blockData.serviceId) return;
+    if (!blockData.isManualBooking || blockData.serviceMode !== "existing" || !blockData.serviceId) return;
     if (manualBookingServices.some((service) => String(service.id) === blockData.serviceId)) return;
 
     setBlockData((current) => ({
@@ -2680,11 +2711,16 @@ export default function Admin() {
       serviceId: "",
       times: [],
     }));
-  }, [blockData.isManualBooking, blockData.serviceId, manualBookingServices]);
+  }, [blockData.isManualBooking, blockData.serviceId, blockData.serviceMode, manualBookingServices]);
 
-  const selectedBlockDuration = blockData.isManualBooking && blockData.serviceId
-    ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
-    : 30;
+  const parsedCustomBlockDuration = Number(blockData.customDurationMinutes);
+  const selectedBlockDuration = blockData.isManualBooking && blockData.serviceMode === "custom"
+    ? Number.isInteger(parsedCustomBlockDuration) && parsedCustomBlockDuration > 0
+      ? parsedCustomBlockDuration
+      : 30
+    : blockData.isManualBooking && blockData.serviceId
+      ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
+      : 30;
 
   const manualBookingTimeOptions = useMemo(() => [
     ...createClockAlignedTimeOptions({
@@ -2710,6 +2746,37 @@ export default function Admin() {
     startTime.setHours(hours, minutes, 0, 0);
     return startTime;
   };
+
+  const selectedOutsideHoursCount = blockData.isManualBooking && blockData.barberId
+    ? blockData.times.filter((time) =>
+        !isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId),
+      ).length
+    : 0;
+  const isSelectedManualBookingOutsideHours = Boolean(
+    blockData.isManualBooking &&
+    blockData.times.length > 0 &&
+    selectedOutsideHoursCount === blockData.times.length,
+  );
+  const hasMixedManualBookingScheduleContext = Boolean(
+    blockData.isManualBooking &&
+    selectedOutsideHoursCount > 0 &&
+    selectedOutsideHoursCount < blockData.times.length,
+  );
+
+  useEffect(() => {
+    if (blockData.serviceMode !== "custom") return;
+    if (isSelectedManualBookingOutsideHours && !blockData.isRecurring) return;
+
+    setBlockData((current) => current.serviceMode === "custom"
+      ? {
+          ...current,
+          serviceMode: "existing",
+          customServiceName: "",
+          customDurationMinutes: "30",
+          servicePrice: "",
+        }
+      : current);
+  }, [blockData.isRecurring, blockData.serviceMode, isSelectedManualBookingOutsideHours]);
 
   const availableBlockTimes = useMemo(() => {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
@@ -2790,8 +2857,31 @@ export default function Admin() {
       toast({ title: "Erro", description: "Selecione pelo menos um horário.", variant: "destructive" });
       return;
     }
-    if (blockData.isManualBooking && !blockData.serviceId) {
+    if (blockData.isManualBooking && blockData.serviceMode === "existing" && !blockData.serviceId) {
       toast({ title: "Erro", description: "Selecione um serviço.", variant: "destructive" });
+      return;
+    }
+    const usesExtraordinaryTerms = isSelectedManualBookingOutsideHours && !blockData.isRecurring;
+    const appointmentPriceCents = usesExtraordinaryTerms
+      ? appointmentEurosInputToCents(blockData.servicePrice)
+      : null;
+    const customDurationMinutes = Number(blockData.customDurationMinutes);
+    if (blockData.isManualBooking && blockData.serviceMode === "custom") {
+      if (!usesExtraordinaryTerms) {
+        toast({ title: "Erro", description: "O serviço personalizado só está disponível fora do horário.", variant: "destructive" });
+        return;
+      }
+      if (!blockData.customServiceName.trim() || blockData.customServiceName.trim().length > MAX_APPOINTMENT_SERVICE_NAME_LENGTH) {
+        toast({ title: "Erro", description: "Indique uma descrição do serviço até 100 caracteres.", variant: "destructive" });
+        return;
+      }
+      if (!Number.isInteger(customDurationMinutes) || customDurationMinutes < 1 || customDurationMinutes > MAX_APPOINTMENT_DURATION_MINUTES) {
+        toast({ title: "Erro", description: "Indique uma duração entre 1 e 720 minutos.", variant: "destructive" });
+        return;
+      }
+    }
+    if (usesExtraordinaryTerms && appointmentPriceCents === null) {
+      toast({ title: "Erro", description: "Indique um preço válido para esta marcação.", variant: "destructive" });
       return;
     }
     if (blockData.isManualBooking && !blockData.name.trim()) {
@@ -2841,6 +2931,7 @@ export default function Admin() {
         await apiRequest("POST", "/api/appointments/block", {
           barberId: Number(blockData.barberId),
           serviceId: Number(blockData.serviceId),
+          serviceMode: "existing",
           startTime: startTime,
           name: blockData.name.trim(),
           phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
@@ -2872,7 +2963,17 @@ export default function Admin() {
 
         await apiRequest("POST", "/api/appointments/block", {
           barberId: Number(blockData.barberId),
-          serviceId: blockData.isManualBooking ? Number(blockData.serviceId) : null,
+          serviceId: blockData.isManualBooking && blockData.serviceMode === "existing"
+            ? Number(blockData.serviceId)
+            : null,
+          ...(blockData.isManualBooking ? { serviceMode: blockData.serviceMode } : {}),
+          ...(blockData.isManualBooking && blockData.serviceMode === "custom" ? {
+            customServiceName: blockData.customServiceName.trim(),
+            customDurationMinutes,
+          } : {}),
+          ...(blockData.isManualBooking && usesExtraordinaryTerms ? {
+            servicePriceCents: appointmentPriceCents,
+          } : {}),
           startTime: startTimes[0],
           startTimes,
           name: blockData.isManualBooking ? blockData.name.trim() : (blockData.name.trim() || "BLOQUEIO MANUAL"),
@@ -2885,7 +2986,22 @@ export default function Admin() {
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
       setIsBlocking(false);
-      setBlockData({ ...blockData, times: [], name: "", phone: "900000000", email: "", serviceId: "", isMultiDay: false, isManualBooking: false, allowOutsideHours: false, isRecurring: false });
+      setBlockData({
+        ...blockData,
+        times: [],
+        name: "",
+        phone: "900000000",
+        email: "",
+        serviceId: "",
+        serviceMode: "existing",
+        customServiceName: "",
+        customDurationMinutes: "30",
+        servicePrice: "",
+        isMultiDay: false,
+        isManualBooking: false,
+        allowOutsideHours: false,
+        isRecurring: false,
+      });
       refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
@@ -3464,6 +3580,8 @@ export default function Admin() {
           onCalendarOpenChange={setIsCalendarOpen}
           availableBlockTimes={availableBlockTimes}
           bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
+          isSelectedOutsideHours={isSelectedManualBookingOutsideHours}
+          hasMixedScheduleContext={hasMixedManualBookingScheduleContext}
           isCheckingAvailability={Boolean(blockData.barberId) && !hasLoadedBlockAppointments}
           onSubmit={handleBlockTime}
         />
