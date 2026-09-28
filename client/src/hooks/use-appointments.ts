@@ -16,6 +16,9 @@ export type AppointmentRecord = {
   customerEmail: string | null;
   customerPhone: string;
   durationMinutes: number;
+  serviceNameSnapshot: string | null;
+  servicePriceCentsSnapshot: number | null;
+  manualOutsideHours: boolean;
   status: AppointmentStatus;
   paymentMethod: AppointmentPaymentMethod;
   cancelToken: string;
@@ -62,6 +65,7 @@ export type AppointmentByToken = {
   serviceName: string;
   duration: number;
   price: number;
+  manualOutsideHours: boolean;
 };
 
 export type CancelAppointmentResponse = {

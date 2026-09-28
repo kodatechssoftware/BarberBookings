@@ -359,6 +359,8 @@ function getAppointmentUpdateChanges(
   const startChanged = !appointmentValuesEqual(current.startTime, candidate.startTime);
   const barberChanged = current.barberId !== candidate.barberId;
   const serviceChanged = current.serviceId !== candidate.serviceId;
+  const serviceNameChanged = current.serviceNameSnapshot !== candidate.serviceNameSnapshot;
+  const durationChanged = current.durationMinutes !== candidate.durationMinutes;
   const contactChanged = current.customerName !== candidate.customerName
     || current.customerEmail !== candidate.customerEmail
     || current.customerPhone !== candidate.customerPhone;
@@ -371,7 +373,11 @@ function getAppointmentUpdateChanges(
     notificationEventType = "appointment_cancelled";
   } else if (current.status === "booked" && candidate.status === "booked" && startChanged) {
     notificationEventType = "appointment_rescheduled";
-  } else if (current.status === "booked" && candidate.status === "booked" && (barberChanged || serviceChanged)) {
+  } else if (
+    current.status === "booked"
+    && candidate.status === "booked"
+    && (barberChanged || serviceChanged || serviceNameChanged || durationChanged)
+  ) {
     notificationEventType = "appointment_updated";
   }
   return {
@@ -380,6 +386,8 @@ function getAppointmentUpdateChanges(
     startChanged,
     barberChanged,
     serviceChanged,
+    serviceNameChanged,
+    durationChanged,
     contactChanged,
     deliveryPreferenceChanged,
     statusChanged,
@@ -1080,7 +1088,8 @@ export class DatabaseStorage implements IStorage {
         }
 
         const notificationContextChanged = changes.startChanged || changes.barberChanged
-          || changes.serviceChanged || changes.contactChanged || changes.deliveryPreferenceChanged
+          || changes.serviceChanged || changes.serviceNameChanged || changes.durationChanged
+          || changes.contactChanged || changes.deliveryPreferenceChanged
           || changes.statusChanged;
         const nextRevision = notificationContextChanged
           ? current.notificationRevision + 1
@@ -2445,7 +2454,8 @@ export class MemoryStorage implements IStorage {
     }
     this.assertNoAppointmentConflict(changes.candidate, id);
     const notificationContextChanged = changes.startChanged || changes.barberChanged
-      || changes.serviceChanged || changes.contactChanged || changes.deliveryPreferenceChanged
+      || changes.serviceChanged || changes.serviceNameChanged || changes.durationChanged
+      || changes.contactChanged || changes.deliveryPreferenceChanged
       || changes.statusChanged;
     const updated: Appointment = {
       ...changes.candidate,
