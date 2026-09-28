@@ -4079,7 +4079,16 @@ export async function registerRoutes(
           return res.status(400).json({ message: "O preço manual só está disponível fora do horário." });
         }
 
-        if (finalServiceId !== null || requestedServiceMode === "custom") {
+        const shouldPersistCatalogueTerms = requestedServiceMode === "existing"
+          && finalServiceId !== null
+          && (
+            switchingCatalogueService
+            || hasAppointmentServiceTermsSnapshot(currentApp)
+            || currentApp.manualOutsideHours
+            || isOutsideHours
+            || hasServicePricePatch
+          );
+        if (requestedServiceMode === "custom" || shouldPersistCatalogueTerms) {
           updateData.serviceId = finalServiceId;
           updateData.serviceNameSnapshot = finalServiceName;
           updateData.servicePriceCentsSnapshot = finalServicePrice;
