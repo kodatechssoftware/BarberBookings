@@ -188,6 +188,44 @@ test("appointment_updated uses its own Meta template and email fallback wording"
   }
 });
 
+test("appointment notifications keep the service name agreed when the catalogue changes", async () => {
+  const storage = new MemoryStorage();
+  await storage.createBarber({ name: "Barber", specialty: "Cuts", isVisible: true });
+  await storage.createService({ name: "Current catalogue name", price: 2500, duration: 45, isVisible: true });
+  const appointment = await storage.createAppointment({
+    locationId: 1,
+    barberId: 1,
+    serviceId: 1,
+    startTime: starts[0],
+    customerName: "Client",
+    customerEmail: "client@example.com",
+    customerPhone: "+351910000000",
+    whatsappOptIn: true,
+    durationMinutes: 30,
+    serviceNameSnapshot: "Agreed one-off service",
+    servicePriceCentsSnapshot: 1900,
+    cancelToken: token,
+    notificationEventType: "appointment_confirmation",
+  });
+  await storage.updateService(1, { name: "Renamed after booking" });
+  const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  let whatsappServiceName = "";
+  let emailServiceName = "";
+  const dependencies = deps(storage, failed);
+  dependencies.sendWhatsApp = async (params) => {
+    whatsappServiceName = params.serviceName;
+    return failed;
+  };
+  dependencies.sendConfirmationEmail = async (params) => {
+    emailServiceName = params.serviceName;
+    return { sent: true, providerMessageId: "email.snapshot", errorCode: null };
+  };
+
+  assert.equal(await processAppointmentNotification(event.id, dependencies), "email");
+  assert.equal(whatsappServiceName, "Agreed one-off service");
+  assert.equal(emailServiceName, "Agreed one-off service");
+});
+
 test("accepted appointment_updated is idempotent and does not send email", async () => {
   const { storage, appointment } = await fixture(true, "client@example.com", false);
   await storage.createService({ name: "Updated service", price: 2000, duration: 45, isVisible: true });

@@ -16,6 +16,9 @@ export type WeeklyAgendaAppointment = {
   serviceId: number | null;
   startTime: string;
   durationMinutes: number;
+  serviceNameSnapshot?: string | null;
+  servicePriceCentsSnapshot?: number | null;
+  manualOutsideHours?: boolean;
   status: AppointmentStatus;
   customerName: string;
   customerPhone: string;
@@ -450,11 +453,14 @@ function normalizeServiceNameForBadge(serviceName?: string | null) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function getServiceBadge(service?: WeeklyAgendaService) {
-  const customAgendaLabel = service?.agendaLabel?.trim();
+function getServiceBadge(service?: WeeklyAgendaService, serviceNameSnapshot?: string | null) {
+  const snapshotName = serviceNameSnapshot?.trim();
+  const customAgendaLabel = !snapshotName || snapshotName === service?.name?.trim()
+    ? service?.agendaLabel?.trim()
+    : null;
   if (customAgendaLabel) return customAgendaLabel;
 
-  const serviceName = service?.name?.trim();
+  const serviceName = snapshotName || service?.name?.trim();
   const normalizedName = normalizeServiceNameForBadge(serviceName);
   const hasBarba = normalizedName.includes("barba");
   const hasDegrade = normalizedName.includes("degrade");
@@ -676,7 +682,7 @@ export function WeeklyAgenda({
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
     const color = normalizeBarberColor(barber?.color);
-    const serviceBadge = getServiceBadge(service);
+    const serviceBadge = getServiceBadge(service, appointment.serviceNameSnapshot);
     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
     return (
@@ -738,7 +744,7 @@ export function WeeklyAgenda({
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
             <p className="truncate text-sm font-semibold text-white">{appointment.customerName}</p>
           </div>
-          <p className="mt-1 truncate text-xs text-gray-400">{barber?.name || "Barbeiro"} · {getServiceBadge(service)}</p>
+          <p className="mt-1 truncate text-xs text-gray-400">{barber?.name || "Barbeiro"} · {getServiceBadge(service, appointment.serviceNameSnapshot)}</p>
         </div>
       </button>
     );
@@ -1069,7 +1075,7 @@ export function WeeklyAgenda({
                                   const laneWidth = 100 / layout.laneCount;
                                   const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                                   const color = normalizeBarberColor(barber.color);
-                                  const serviceBadge = getServiceBadge(service);
+                                  const serviceBadge = getServiceBadge(service, appointment.serviceNameSnapshot);
                                   const isCompact = height < 46 || laneWidth < 55;
                                   const isTiny = height < 32;
                                   const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
@@ -1396,7 +1402,7 @@ export function WeeklyAgenda({
                             const barber = barbersById.get(appointment.barberId);
                             const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                             const color = normalizeBarberColor(barber?.color);
-                            const serviceBadge = getServiceBadge(service);
+                            const serviceBadge = getServiceBadge(service, appointment.serviceNameSnapshot);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
                             return (
