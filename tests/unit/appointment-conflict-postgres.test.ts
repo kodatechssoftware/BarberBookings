@@ -70,7 +70,7 @@ function datedThursdayIso(direction: "past" | "future", weeks: number, hour: num
   return date.toISOString();
 }
 
-test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent public bookings", { timeout: 180_000 }, async () => {
+test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent bookings", { timeout: 180_000 }, async () => {
   const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-conflict-pg-"));
   const postgresPort = await availablePort();
   const appPort = await availablePort();
@@ -436,6 +436,77 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent publ
 
     const firstBurst = await runBurst(2, 3, "Conflict two");
     await runBurst(5, 4, "Conflict five");
+
+    async function runManualCustomBurst(size: number, weeksAhead: number, label: string) {
+      const startTime = futureThursdayIso(weeksAhead, 6);
+      const responses = await Promise.all(Array.from({ length: size }, (_, index) =>
+        fetch(`${baseUrl}/api/appointments/block`, {
+          method: "POST",
+          headers: authenticatedHeaders,
+          body: JSON.stringify({
+            barberId: barber.id,
+            serviceId: null,
+            serviceMode: "custom",
+            customServiceName: "Serviço extraordinário concorrente",
+            customDurationMinutes: 45,
+            servicePriceCents: 2750,
+            allowOutsideHours: true,
+            startTime,
+            name: `${label} ${index + 1}`,
+            phone: `+351913${String(weeksAhead).padStart(2, "0")}${String(index).padStart(4, "0")}`,
+            customerEmail: null,
+            isManualBooking: true,
+            isRecurring: false,
+          }),
+        }),
+      ));
+      const statuses = responses.map((response) => response.status).sort((left, right) => left - right);
+      assert.deepEqual(statuses, [201, ...Array(size - 1).fill(409)]);
+
+      const persisted = await pool!.query<{
+        id: number;
+        service_id: number | null;
+        service_name_snapshot: string | null;
+        service_price_cents_snapshot: number | null;
+        duration_minutes: number;
+        manual_outside_hours: boolean;
+      }>(`
+        SELECT id, service_id, service_name_snapshot, service_price_cents_snapshot,
+               duration_minutes, manual_outside_hours
+        FROM appointments
+        WHERE customer_name LIKE $1 AND barber_id = $2 AND start_time = $3 AND status = 'booked'
+      `, [`${label}%`, barber.id, startTime]);
+      assert.equal(persisted.rowCount, 1);
+      assert.deepEqual({
+        serviceId: persisted.rows[0].service_id,
+        serviceName: persisted.rows[0].service_name_snapshot,
+        servicePriceCents: persisted.rows[0].service_price_cents_snapshot,
+        durationMinutes: persisted.rows[0].duration_minutes,
+        manualOutsideHours: persisted.rows[0].manual_outside_hours,
+      }, {
+        serviceId: null,
+        serviceName: "Serviço extraordinário concorrente",
+        servicePriceCents: 2750,
+        durationMinutes: 45,
+        manualOutsideHours: true,
+      });
+      const appointmentId = persisted.rows[0].id;
+      assert.equal(Number((await pool!.query(
+        "SELECT count(*) AS count FROM audit_logs WHERE action = 'appointment.created_manual' AND entity_id = $1",
+        [appointmentId],
+      )).rows[0].count), 1);
+      assert.equal(Number((await pool!.query(
+        "SELECT count(*) AS count FROM appointment_notification_events WHERE appointment_id = $1",
+        [appointmentId],
+      )).rows[0].count), 1);
+      assert.equal(Number((await pool!.query(
+        "SELECT count(*) AS count FROM whatsapp_messages WHERE appointment_id = $1",
+        [appointmentId],
+      )).rows[0].count), 0);
+    }
+
+    await runManualCustomBurst(2, 5, "Manual custom conflict two");
+    await runManualCustomBurst(5, 6, "Manual custom conflict five");
 
     Object.assign(process.env, {
       DATABASE_URL: databaseUrl,

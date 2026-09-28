@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { boolean, integer, pgSchema, text } from "drizzle-orm/pg-core";
+import { boolean, integer, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import { asc } from "drizzle-orm";
 import { getMigrationLocationConfig, migrationChecksum, runSchemaMigrations } from "../server/migrations";
 
@@ -26,6 +26,18 @@ assert.throws(() => getMigrationLocationConfig({ NODE_ENV: "production", APP_ENV
 assert.equal(migrationChecksum("SELECT 1;\nSELECT 2;\n"), migrationChecksum("SELECT 1;\r\nSELECT 2;\r\n"));
 
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
+const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-terms-"));
+const migrationsDirectory = path.resolve(process.cwd(), "migrations");
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preServiceTermsMigrationsDirectory, file));
+}
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -34,7 +46,8 @@ let applicationPool: pg.Pool | undefined;
 try {
   await embedded.initialise();
   await embedded.start();
-  pool = new pg.Pool({ connectionString: `postgresql://postgres:migration-test@127.0.0.1:${port}/postgres`, max: 4 });
+  const databaseUrl = `postgresql://postgres:migration-test@127.0.0.1:${port}/postgres`;
+  pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
   const schema = "main_fixture";
   const table = (name: string) => `"${schema}"."${name}"`;
   await pool.query(`CREATE SCHEMA "${schema}"`);
@@ -116,13 +129,21 @@ try {
     MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
     MIGRATION_DEFAULT_LOCATION_MAP_URL: "https://maps.example.test/shop",
   };
-  const firstRun = await runSchemaMigrations(pool, { schemaName: schema, environment });
+  const firstRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preServiceTermsMigrationsDirectory,
+  });
   assert.deepEqual(firstRun.applied, [
     "0001_multi_location_foundation.sql", "0002_whatsapp_messages.sql",
     "0003_appointment_notification_outbox.sql", "0004_appointment_series.sql",
     "0005_service_categories.sql", "0006_customer_notes_location.sql",
   ]);
-  const secondRun = await runSchemaMigrations(pool, { schemaName: schema, environment });
+  const secondRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preServiceTermsMigrationsDirectory,
+  });
   assert.equal(secondRun.applied.length, 0);
   assert.equal(secondRun.alreadyApplied, 6);
 
@@ -203,6 +224,135 @@ try {
     whatsapp_opt_in_at: null, series_id: null, series_occurrence_index: null,
   });
 
+  const releaseDataQueries = {
+    locations: `SELECT * FROM ${table("locations")} ORDER BY id`,
+    barbers: `SELECT * FROM ${table("barbers")} ORDER BY id`,
+    services: `SELECT * FROM ${table("services")} ORDER BY id`,
+    appointments: `SELECT * FROM ${table("appointments")} ORDER BY id`,
+    appointmentSeries: `SELECT * FROM ${table("appointment_series")} ORDER BY id`,
+    shopAvailability: `SELECT * FROM ${table("shop_availability")} ORDER BY id`,
+    barberAvailability: `SELECT * FROM ${table("barber_availability")} ORDER BY id`,
+    barberServices: `SELECT * FROM ${table("barber_services")} ORDER BY barber_id, service_id`,
+    barberLocations: `SELECT * FROM ${table("barber_locations")} ORDER BY barber_id, location_id`,
+    serviceLocations: `SELECT * FROM ${table("service_locations")} ORDER BY service_id, location_id`,
+    customerNotes: `SELECT * FROM ${table("customer_notes")} ORDER BY id`,
+    blacklist: `SELECT * FROM ${table("blacklist")} ORDER BY id`,
+    businessExpenses: `SELECT * FROM ${table("business_expenses")} ORDER BY id`,
+    whatsappMessages: `SELECT * FROM ${table("whatsapp_messages")} ORDER BY id`,
+    notificationEvents: `SELECT * FROM ${table("appointment_notification_events")} ORDER BY id`,
+    webhookReceipts: `SELECT * FROM ${table("meta_webhook_receipts")} ORDER BY id`,
+  } as const;
+  async function captureReleaseData() {
+    return Object.fromEntries(await Promise.all(Object.entries(releaseDataQueries).map(async ([name, sql]) => [
+      name,
+      (await pool!.query(sql)).rows,
+    ]))) as Record<keyof typeof releaseDataQueries, Record<string, unknown>[]>;
+  }
+  const legacyAppointmentsSchema = pgSchema(schema);
+  const legacyAppointmentsTable = legacyAppointmentsSchema.table("appointments", {
+    id: integer("id").notNull(),
+    locationId: integer("location_id").notNull(),
+    barberId: integer("barber_id").notNull(),
+    serviceId: integer("service_id"),
+    startTime: timestamp("start_time").notNull(),
+    durationMinutes: integer("duration_minutes").notNull(),
+    status: text("status").notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    cancelToken: text("cancel_token").notNull(),
+    depositRequired: boolean("deposit_required").notNull(),
+    rescheduleRevision: integer("reschedule_revision").notNull(),
+    notificationRevision: integer("notification_revision").notNull(),
+    whatsappOptIn: boolean("whatsapp_opt_in").notNull(),
+  });
+  const legacyAppointmentsBeforeServiceTerms = await drizzle(pool).select()
+    .from(legacyAppointmentsTable).orderBy(asc(legacyAppointmentsTable.id));
+  const releaseDataBeforeServiceTermsMigration = await captureReleaseData();
+  const serviceTermsRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(serviceTermsRun.applied, ["0007_appointment_service_snapshots.sql"]);
+  assert.equal(serviceTermsRun.alreadyApplied, 6);
+  const releaseDataAfterServiceTermsMigration = await captureReleaseData();
+  const {
+    appointments: appointmentsBeforeServiceTermsMigration,
+    ...unrelatedDataBeforeServiceTermsMigration
+  } = releaseDataBeforeServiceTermsMigration;
+  const {
+    appointments: appointmentsAfterServiceTermsMigration,
+    ...unrelatedDataAfterServiceTermsMigration
+  } = releaseDataAfterServiceTermsMigration;
+  assert.deepEqual(
+    unrelatedDataAfterServiceTermsMigration,
+    unrelatedDataBeforeServiceTermsMigration,
+    "migration 0007 must not alter any unrelated operational entity",
+  );
+  assert.deepEqual(
+    appointmentsAfterServiceTermsMigration.map((appointment) => {
+      const {
+        service_name_snapshot: _serviceNameSnapshot,
+        service_price_cents_snapshot: _servicePriceSnapshot,
+        manual_outside_hours: _manualOutsideHours,
+        ...legacyFields
+      } = appointment;
+      return legacyFields;
+    }),
+    appointmentsBeforeServiceTermsMigration,
+    "migration 0007 must preserve every legacy appointment value byte-for-byte",
+  );
+  for (const appointment of appointmentsAfterServiceTermsMigration) {
+    assert.equal(appointment.service_name_snapshot, null);
+    assert.equal(appointment.service_price_cents_snapshot, null);
+    assert.equal(appointment.manual_outside_hours, false);
+  }
+  const legacyAppointmentsReadAfterServiceTerms = await drizzle(pool).select()
+    .from(legacyAppointmentsTable).orderBy(asc(legacyAppointmentsTable.id));
+  assert.deepEqual(
+    legacyAppointmentsReadAfterServiceTerms,
+    legacyAppointmentsBeforeServiceTerms,
+    "the previous appointment model must remain readable after migration 0007",
+  );
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot
+    ) VALUES (1, 1, '2032-01-01 10:00:00', 'Par inválido', '910000001', 'invalid-pair', $1, 'Corte', NULL)
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot
+    ) VALUES (1, 1, '2032-01-01 11:00:00', 'Nome inválido', '910000002', 'invalid-name', $1, '   ', 1000)
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot
+    ) VALUES (1, 1, '2032-01-01 12:00:00', 'Preço inválido', '910000003', 'invalid-price', $1, 'Corte', -1)
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot, manual_outside_hours
+    ) VALUES (1, 1, '2032-01-01 13:00:00', 'Preço zero', '910000004', 'valid-zero-price', $1, 'Corte oferta', 0, true)
+  `, [defaultLocation.id]);
+  const zeroPriceSnapshot = (await pool.query(`
+    SELECT service_name_snapshot, service_price_cents_snapshot, manual_outside_hours
+    FROM ${table("appointments")} WHERE cancel_token = 'valid-zero-price'
+  `)).rows[0];
+  assert.deepEqual(zeroPriceSnapshot, {
+    service_name_snapshot: "Corte oferta",
+    service_price_cents_snapshot: 0,
+    manual_outside_hours: true,
+  });
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE cancel_token = 'valid-zero-price'`);
+  const releaseDataAfterConstraintChecks = await captureReleaseData();
+  assert.deepEqual(releaseDataAfterConstraintChecks, releaseDataAfterServiceTermsMigration);
+  const secondServiceTermsRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondServiceTermsRun.applied.length, 0);
+  assert.equal(secondServiceTermsRun.alreadyApplied, 7);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataAfterServiceTermsMigration,
+    "controlled migration 0007 re-execution must not mutate operational data",
+  );
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
@@ -261,7 +411,7 @@ try {
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("services")}`)).rows[0].count), serviceCountBeforeCategoryDelete,
     "deleting a category must not delete services");
 
-  process.env.DATABASE_URL = `postgresql://postgres:migration-test@127.0.0.1:${port}/postgres`;
+  process.env.DATABASE_URL = databaseUrl;
   process.env.DATABASE_SCHEMA = schema;
   process.env.DATABASE_POOL_MAX = "2";
   process.env.USE_MEMORY_STORAGE = "false";
@@ -386,10 +536,11 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: representative main data was preserved/backfilled; revisions, opt-in, outbox, series, constraints, indexes and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: representative main data and legacy appointments were preserved; service snapshots, constraints, rollback compatibility and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
   await embedded.stop().catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
+  await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
 }
