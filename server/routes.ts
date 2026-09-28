@@ -1474,10 +1474,6 @@ function getAppointmentPaymentMethodLabel(paymentMethod?: AppointmentPaymentMeth
   return appointmentPaymentMethodLabels[paymentMethod || "pending"] || "Por confirmar";
 }
 
-function getServicePriceCents(serviceId: number | null, servicePrices: Map<number, number>) {
-  return serviceId ? servicePrices.get(serviceId) ?? 0 : 0;
-}
-
 function getCollectedCents(appointment: Appointment, priceCents: number) {
   if (appointment.status !== "completed") return 0;
   return appointment.paymentMethod === "gift" ? 0 : priceCents;
@@ -4492,7 +4488,7 @@ export async function registerRoutes(
       ? allBarbers.filter((barber) => barber.id === barberId)
       : allBarbers;
     const servicePrices = new Map(allServices.map((service) => [service.id, service.price]));
-    const servicesById = new Map(allServices.map((service) => [service.id, service]));
+    const serviceNames = new Map(allServices.map((service) => [service.id, service.name]));
     const barbersById = new Map(visibleBarbers.map((barber) => [barber.id, barber]));
     const now = new Date();
 
@@ -4511,12 +4507,12 @@ export async function registerRoutes(
     const revenueCents = completedAppointments.reduce(
       (total, appointment) => total + getCollectedCents(
         appointment,
-        getServicePriceCents(appointment.serviceId, servicePrices),
+        resolveAppointmentPriceCents(appointment, servicePrices),
       ),
       0,
     );
     const projectedRevenueCents = bookedAppointments.reduce(
-      (total, appointment) => total + getServicePriceCents(appointment.serviceId, servicePrices),
+      (total, appointment) => total + resolveAppointmentPriceCents(appointment, servicePrices),
       0,
     );
     const riskCount = noShowAppointments.length + lateCancelledAppointments.length;
@@ -4552,8 +4548,9 @@ export async function registerRoutes(
         },
       ]),
     );
-    const serviceMap = new Map<number, {
-      id: number;
+    const serviceMap = new Map<string, {
+      key: string;
+      id: number | null;
       name: string;
       count: number;
       revenueCents: number;
@@ -4564,7 +4561,7 @@ export async function registerRoutes(
       const date = new Date(appointment.startTime);
       const shopDateParts = getShopDateParts(date);
       const day = dailyMap.get(shopDateParts.dateKey);
-      const price = getServicePriceCents(appointment.serviceId, servicePrices);
+      const price = resolveAppointmentPriceCents(appointment, servicePrices);
       const collectedCents = getCollectedCents(appointment, price);
 
       if (day) {
@@ -4589,17 +4586,19 @@ export async function registerRoutes(
         if (appointment.status === "no_show" || appointment.status === "late_cancelled") barber.noShows += 1;
       }
 
-      if (appointment.serviceId) {
-        const service = servicesById.get(appointment.serviceId);
-        const serviceSummary = serviceMap.get(appointment.serviceId) || {
+      if (appointment.serviceId || hasAppointmentServiceTermsSnapshot(appointment)) {
+        const serviceName = resolveAppointmentServiceName(appointment, serviceNames);
+        const serviceKey = JSON.stringify([appointment.serviceId, serviceName]);
+        const serviceSummary = serviceMap.get(serviceKey) || {
+          key: serviceKey,
           id: appointment.serviceId,
-          name: service?.name || "Serviço indisponível",
+          name: serviceName,
           count: 0,
           revenueCents: 0,
         };
         serviceSummary.count += 1;
         if (appointment.status === "completed") serviceSummary.revenueCents += collectedCents;
-        serviceMap.set(appointment.serviceId, serviceSummary);
+        serviceMap.set(serviceKey, serviceSummary);
       }
 
       if (appointment.status === "completed" || appointment.status === "booked") {
@@ -5004,7 +5003,7 @@ export async function registerRoutes(
       const allServices = rawServices.filter((service) => !allowedServices || allowedServices.has(service.id));
 
       const barbersById = new Map(allBarbers.map((barber) => [barber.id, barber]));
-      const servicesById = new Map(allServices.map((service) => [service.id, service]));
+      const serviceNames = new Map(allServices.map((service) => [service.id, service.name]));
       const servicePrices = new Map(allServices.map((service) => [service.id, service.price]));
       const selectedBarber = selectedBarberId ? barbersById.get(selectedBarberId) : undefined;
 
@@ -5080,7 +5079,7 @@ export async function registerRoutes(
 
       const totalSummary = createSummaryRow("Total geral");
       const barberSummaryMap = new Map<number, ExportSummaryRow>();
-      const serviceSummaryMap = new Map<number | "unknown", ExportSummaryRow>();
+      const serviceSummaryMap = new Map<string, ExportSummaryRow>();
       const dailySummaryMap = new Map<string, ExportDailyRow>();
       const compensationSummaryMap = new Map<number, {
         barberName: string;
@@ -5103,13 +5102,13 @@ export async function registerRoutes(
       });
 
       rangeAppointments.forEach((appointment) => {
-        const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
+        const priceCents = resolveAppointmentPriceCents(appointment, servicePrices);
         const barber = barbersById.get(appointment.barberId);
-        const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-        const serviceKey = appointment.serviceId ?? "unknown";
+        const serviceName = resolveAppointmentServiceName(appointment, serviceNames, "Serviço desconhecido");
+        const serviceKey = JSON.stringify([appointment.serviceId, serviceName]);
         const dateKey = getShopDateParts(new Date(appointment.startTime)).dateKey;
         const barberSummary = barberSummaryMap.get(appointment.barberId) || createSummaryRow(barber?.name || "Barbeiro desconhecido");
-        const serviceSummary = serviceSummaryMap.get(serviceKey) || createSummaryRow(service?.name || "Serviço desconhecido");
+        const serviceSummary = serviceSummaryMap.get(serviceKey) || createSummaryRow(serviceName);
         const dailySummary = dailySummaryMap.get(dateKey);
 
         addAppointmentToSummary(totalSummary, appointment, priceCents);
@@ -5384,8 +5383,7 @@ export async function registerRoutes(
           rangeAppointments.map((appointment) => {
             const startTime = new Date(appointment.startTime);
             const endTime = new Date(startTime.getTime() + appointment.durationMinutes * 60000);
-            const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-            const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
+            const priceCents = resolveAppointmentPriceCents(appointment, servicePrices);
             const realizedCents = getCollectedCents(appointment, priceCents);
             const projectedCents = appointment.status === "booked" ? priceCents : 0;
 
@@ -5395,7 +5393,7 @@ export async function registerRoutes(
               formatShopTime(startTime),
               formatShopTime(endTime),
               appointment.customerName,
-              service?.name || "Serviço desconhecido",
+              resolveAppointmentServiceName(appointment, serviceNames, "Serviço desconhecido"),
               appointment.durationMinutes,
               getAppointmentStatusLabel(appointment.status),
               getAppointmentPaymentMethodLabel(appointment.paymentMethod),
@@ -5818,9 +5816,8 @@ export async function registerRoutes(
         rangeAppointments.map((appointment) => {
           const startTime = new Date(appointment.startTime);
           const endTime = new Date(startTime.getTime() + appointment.durationMinutes * 60000);
-          const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
           const barber = barbersById.get(appointment.barberId);
-          const priceCents = getServicePriceCents(appointment.serviceId, servicePrices);
+          const priceCents = resolveAppointmentPriceCents(appointment, servicePrices);
           const realizedCents = getCollectedCents(appointment, priceCents);
           const projectedCents = appointment.status === "booked" ? priceCents : 0;
           const compensationRule = getRuleForDate(compensationRules, appointment.barberId, startTime);
@@ -5850,7 +5847,7 @@ export async function registerRoutes(
             formatShopTime(endTime),
             barber?.name || "Barbeiro desconhecido",
             appointment.customerName,
-            service?.name || "Serviço desconhecido",
+            resolveAppointmentServiceName(appointment, serviceNames, "Serviço desconhecido"),
             appointment.durationMinutes,
             getAppointmentStatusLabel(appointment.status),
             getAppointmentPaymentMethodLabel(appointment.paymentMethod),

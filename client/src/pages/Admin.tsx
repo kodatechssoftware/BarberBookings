@@ -185,7 +185,8 @@ type DashboardData = {
     revenueCents: number;
   }>;
   services: Array<{
-    id: number;
+    key: string;
+    id: number | null;
     name: string;
     count: number;
     revenueCents: number;
@@ -626,7 +627,7 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
                 {topServices.map((service) => {
                   const maxCount = Math.max(...topServices.map((item) => item.count), 1);
                   return (
-                    <div key={service.id} className="space-y-2">
+                    <div key={service.key || service.id || service.name} className="space-y-2">
                       <div className="flex items-center justify-between gap-3 text-sm">
                         <span className="min-w-0 truncate font-medium text-white">{service.name}</span>
                         <span className="shrink-0 text-gray-400">{service.count} marcações</span>
