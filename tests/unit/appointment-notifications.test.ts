@@ -226,6 +226,43 @@ test("appointment notifications keep the service name agreed when the catalogue 
   assert.equal(emailServiceName, "Agreed one-off service");
 });
 
+test("custom appointment notifications use the snapshot without a catalogue service", async () => {
+  const storage = new MemoryStorage();
+  await storage.createBarber({ name: "Barber", specialty: "Cuts", isVisible: true });
+  const appointment = await storage.createAppointment({
+    locationId: 1,
+    barberId: 1,
+    serviceId: null,
+    startTime: starts[0],
+    customerName: "Client",
+    customerEmail: "client@example.com",
+    customerPhone: "+351910000000",
+    whatsappOptIn: true,
+    durationMinutes: 45,
+    serviceNameSnapshot: "Lavar e pentear – casamento",
+    servicePriceCentsSnapshot: 3000,
+    manualOutsideHours: true,
+    cancelToken: token,
+    notificationEventType: "appointment_confirmation",
+  });
+  const [event] = await storage.getAppointmentNotificationEvents(appointment.id);
+  let whatsappServiceName = "";
+  let emailServiceName = "";
+  const dependencies = deps(storage, failed);
+  dependencies.sendWhatsApp = async (params) => {
+    whatsappServiceName = params.serviceName;
+    return failed;
+  };
+  dependencies.sendConfirmationEmail = async (params) => {
+    emailServiceName = params.serviceName;
+    return { sent: true, providerMessageId: "email.custom", errorCode: null };
+  };
+
+  assert.equal(await processAppointmentNotification(event.id, dependencies), "email");
+  assert.equal(whatsappServiceName, "Lavar e pentear – casamento");
+  assert.equal(emailServiceName, "Lavar e pentear – casamento");
+});
+
 test("accepted appointment_updated is idempotent and does not send email", async () => {
   const { storage, appointment } = await fixture(true, "client@example.com", false);
   await storage.createService({ name: "Updated service", price: 2000, duration: 45, isVisible: true });

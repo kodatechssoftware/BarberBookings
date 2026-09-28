@@ -80,6 +80,7 @@ import {
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
 import {
+  getEffectiveAppointmentDurationMinutes as resolveAppointmentDurationMinutes,
   getAppointmentPriceCents as resolveAppointmentPriceCents,
   getAppointmentServiceName as resolveAppointmentServiceName,
   MAX_APPOINTMENT_DURATION_MINUTES,
@@ -306,23 +307,15 @@ function getAdminAppointmentEnd(appointment: AdminAppointment) {
 }
 
 function getAdminAppointmentDurationMinutes(
-  appointment: Pick<AdminAppointment, "serviceId" | "durationMinutes">,
+  appointment: Pick<AdminAppointment, "serviceId" | "durationMinutes" | "serviceNameSnapshot" | "servicePriceCentsSnapshot">,
   services?: Array<{ id: number; duration?: number | null }>,
 ) {
-  const serviceDuration = appointment.serviceId
-    ? services?.find((service) => service.id === appointment.serviceId)?.duration
-    : undefined;
-  const storedDuration = appointment.durationMinutes;
-
-  if (typeof storedDuration !== "number" || !Number.isFinite(storedDuration) || storedDuration <= 0) {
-    return serviceDuration || 30;
-  }
-
-  if (appointment.serviceId && storedDuration === 30 && serviceDuration && serviceDuration !== 30) {
-    return serviceDuration;
-  }
-
-  return storedDuration;
+  return resolveAppointmentDurationMinutes(
+    appointment,
+    new Map((services || []).flatMap((service) => typeof service.duration === "number"
+      ? [[service.id, service.duration] as const]
+      : [])),
+  );
 }
 
 function hasAdminAppointmentConflict({
@@ -364,7 +357,7 @@ function getAppointmentServicePriceCents(
 ) {
   return resolveAppointmentPriceCents(
     appointment,
-    new Map((services || []).map((service) => [service.id, service.price || 0])),
+    new Map((services || []).map((service) => [service.id, service.price ?? 0])),
   );
 }
 

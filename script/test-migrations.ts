@@ -28,6 +28,7 @@ assert.equal(migrationChecksum("SELECT 1;\nSELECT 2;\n"), migrationChecksum("SEL
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
 const preCategoriesMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-categories-"));
 const preCustomerNotesMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-notes-"));
+const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-terms-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -37,11 +38,15 @@ for (const file of [
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preCategoriesMigrationsDirectory, file));
   await copyFile(path.join(migrationsDirectory, file), path.join(preCustomerNotesMigrationsDirectory, file));
+  await copyFile(path.join(migrationsDirectory, file), path.join(preServiceTermsMigrationsDirectory, file));
 }
 await copyFile(
   path.join(migrationsDirectory, "0005_service_categories.sql"),
   path.join(preCustomerNotesMigrationsDirectory, "0005_service_categories.sql"),
 );
+for (const file of ["0005_service_categories.sql", "0006_customer_notes_location.sql"]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preServiceTermsMigrationsDirectory, file));
+}
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -354,7 +359,11 @@ try {
     )
   `);
   const releaseDataBeforeCustomerNotesMigration = await captureReleaseData();
-  const customerNotesRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const customerNotesRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preServiceTermsMigrationsDirectory,
+  });
   assert.deepEqual(customerNotesRun.applied, ["0006_customer_notes_location.sql"]);
   assert.equal(customerNotesRun.alreadyApplied, 5);
   const releaseDataAfterCustomerNotesMigration = await captureReleaseData();
@@ -370,7 +379,11 @@ try {
     customerNotesBefore,
     "migration 0006 must preserve customer note contents and timestamps byte-for-byte",
   );
-  const secondCustomerNotesRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondCustomerNotesRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preServiceTermsMigrationsDirectory,
+  });
   assert.equal(secondCustomerNotesRun.applied.length, 0);
   assert.equal(secondCustomerNotesRun.alreadyApplied, 6);
   assert.deepEqual(
@@ -421,6 +434,94 @@ try {
     whatsapp_opt_in_at: null, series_id: null, series_occurrence_index: null,
   });
 
+  const releaseDataBeforeServiceTermsMigration = await captureReleaseData();
+  const serviceTermsRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(serviceTermsRun.applied, ["0007_appointment_service_snapshots.sql"]);
+  assert.equal(serviceTermsRun.alreadyApplied, 6);
+  const releaseDataAfterServiceTermsMigration = await captureReleaseData();
+  const {
+    appointments: appointmentsBeforeServiceTermsMigration,
+    ...unrelatedDataBeforeServiceTermsMigration
+  } = releaseDataBeforeServiceTermsMigration;
+  const {
+    appointments: appointmentsAfterServiceTermsMigration,
+    ...unrelatedDataAfterServiceTermsMigration
+  } = releaseDataAfterServiceTermsMigration;
+  assert.deepEqual(
+    unrelatedDataAfterServiceTermsMigration,
+    unrelatedDataBeforeServiceTermsMigration,
+    "migration 0007 must not alter any unrelated operational entity",
+  );
+  assert.deepEqual(
+    appointmentsAfterServiceTermsMigration.map((appointment) => {
+      const {
+        service_name_snapshot: _serviceNameSnapshot,
+        service_price_cents_snapshot: _servicePriceSnapshot,
+        manual_outside_hours: _manualOutsideHours,
+        ...legacyFields
+      } = appointment;
+      return legacyFields;
+    }),
+    appointmentsBeforeServiceTermsMigration,
+    "migration 0007 must preserve every legacy appointment value byte-for-byte",
+  );
+  for (const appointment of appointmentsAfterServiceTermsMigration) {
+    assert.equal(appointment.service_name_snapshot, null);
+    assert.equal(appointment.service_price_cents_snapshot, null);
+    assert.equal(appointment.manual_outside_hours, false);
+  }
+  const legacyAppointmentsReadAfterServiceTerms = await drizzle(pool).select()
+    .from(rollbackAppointmentsTable).orderBy(asc(rollbackAppointmentsTable.id));
+  assert.deepEqual(
+    legacyAppointmentsReadAfterServiceTerms,
+    rollbackAppointmentsBeforeCategoryMigration,
+    "the previous appointment model must remain readable after migration 0007",
+  );
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot
+    ) VALUES (1, 1, '2032-01-01 10:00:00', 'Par inválido', '910000001', 'invalid-pair', $1, 'Corte', NULL)
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot
+    ) VALUES (1, 1, '2032-01-01 11:00:00', 'Nome inválido', '910000002', 'invalid-name', $1, '   ', 1000)
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot
+    ) VALUES (1, 1, '2032-01-01 12:00:00', 'Preço inválido', '910000003', 'invalid-price', $1, 'Corte', -1)
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      barber_id, service_id, start_time, customer_name, customer_phone, cancel_token, location_id,
+      service_name_snapshot, service_price_cents_snapshot, manual_outside_hours
+    ) VALUES (1, 1, '2032-01-01 13:00:00', 'Preço zero', '910000004', 'valid-zero-price', $1, 'Corte oferta', 0, true)
+  `, [defaultLocation.id]);
+  const zeroPriceSnapshot = (await pool.query(`
+    SELECT service_name_snapshot, service_price_cents_snapshot, manual_outside_hours
+    FROM ${table("appointments")} WHERE cancel_token = 'valid-zero-price'
+  `)).rows[0];
+  assert.deepEqual(zeroPriceSnapshot, {
+    service_name_snapshot: "Corte oferta",
+    service_price_cents_snapshot: 0,
+    manual_outside_hours: true,
+  });
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE cancel_token = 'valid-zero-price'`);
+  const releaseDataAfterConstraintChecks = await captureReleaseData();
+  assert.deepEqual(releaseDataAfterConstraintChecks, releaseDataAfterServiceTermsMigration);
+  const secondServiceTermsRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondServiceTermsRun.applied.length, 0);
+  assert.equal(secondServiceTermsRun.alreadyApplied, 7);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataAfterServiceTermsMigration,
+    "controlled migration 0007 re-execution must not mutate operational data",
+  );
+
   process.env.DATABASE_URL = databaseUrl;
   process.env.DATABASE_SCHEMA = schema;
   process.env.DATABASE_POOL_MAX = "4";
@@ -448,7 +549,7 @@ try {
   ]);
   assert.deepEqual(
     await captureReleaseData(),
-    releaseDataAfterCustomerNotesMigration,
+    releaseDataAfterServiceTermsMigration,
     "startup database guards and representative application reads must not mutate operational data",
   );
 
@@ -609,7 +710,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: representative main data was preserved/backfilled; revisions, opt-in, outbox, series, constraints, indexes and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: representative main data and legacy appointments were preserved; service snapshots, constraints, rollback compatibility and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -617,4 +718,5 @@ try {
   await rm(databaseDir, { recursive: true, force: true });
   await rm(preCategoriesMigrationsDirectory, { recursive: true, force: true });
   await rm(preCustomerNotesMigrationsDirectory, { recursive: true, force: true });
+  await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
 }
