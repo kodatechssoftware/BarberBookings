@@ -33,6 +33,16 @@ import {
   isMinuteOfDayAligned,
 } from "@shared/booking-slot-interval";
 import {
+  DEFAULT_APPOINTMENT_DURATION_MINUTES,
+  getAppointmentServiceName as resolveAppointmentServiceName,
+  getEffectiveAppointmentDurationMinutes as resolveAppointmentDurationMinutes,
+  getAppointmentPriceCents as resolveAppointmentPriceCents,
+  MAX_APPOINTMENT_DURATION_MINUTES,
+  MAX_APPOINTMENT_SERVICE_NAME_LENGTH,
+  MAX_APPOINTMENT_SERVICE_PRICE_CENTS,
+  type AppointmentServiceTermsLike,
+} from "@shared/appointment-service-terms";
+import {
   isMetaWebhookEnabled,
   recordMetaWebhookStatuses,
   verifyMetaWebhookChallenge,
@@ -95,7 +105,6 @@ import { getPublicBaseUrl } from "./public-url";
 
 const PostgresSessionStore = connectPg(session);
 
-const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY = process.env.PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY;
 const PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED = process.env.PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED === "true";
@@ -1309,7 +1318,7 @@ function getScheduleValidationError(
   return null;
 }
 
-type AppointmentLike = {
+type AppointmentLike = AppointmentServiceTermsLike & {
   id?: number;
   barberId: number;
   serviceId?: number | null;
@@ -1334,25 +1343,11 @@ function getAppointmentDurationMinutes(
 }
 
 function getEffectiveAppointmentDurationMinutes(
-  appointment: Pick<AppointmentLike, "serviceId" | "durationMinutes">,
+  appointment: Pick<AppointmentLike,
+    "serviceId" | "durationMinutes" | "serviceNameSnapshot" | "servicePriceCentsSnapshot">,
   serviceDurations: Map<number, number>,
 ) {
-  const serviceDuration = getAppointmentDurationMinutes(appointment.serviceId, serviceDurations);
-  const storedDuration = appointment.durationMinutes;
-
-  if (typeof storedDuration !== "number" || !Number.isFinite(storedDuration) || storedDuration <= 0) {
-    return serviceDuration;
-  }
-
-  if (
-    appointment.serviceId &&
-    storedDuration === DEFAULT_APPOINTMENT_DURATION_MINUTES &&
-    serviceDuration !== DEFAULT_APPOINTMENT_DURATION_MINUTES
-  ) {
-    return serviceDuration;
-  }
-
-  return storedDuration;
+  return resolveAppointmentDurationMinutes(appointment, serviceDurations);
 }
 
 function getAppointmentEndTime(

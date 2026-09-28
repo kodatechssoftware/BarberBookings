@@ -77,6 +77,9 @@ type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappO
   locationId?: number;
   cancelToken: string;
   durationMinutes: number;
+  serviceNameSnapshot?: string | null;
+  servicePriceCentsSnapshot?: number | null;
+  manualOutsideHours?: boolean;
   status?: AppointmentStatus;
   paymentMethod?: AppointmentPaymentMethod;
   depositRequired?: boolean;
@@ -2278,6 +2281,9 @@ export class MemoryStorage implements IStorage {
           customerEmail: appointment.customerEmail ?? null,
           customerPhone: appointment.customerPhone,
           durationMinutes: appointment.durationMinutes,
+          serviceNameSnapshot: appointment.serviceNameSnapshot ?? null,
+          servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot ?? null,
+          manualOutsideHours: appointment.manualOutsideHours ?? false,
           status: appointment.status ?? "booked",
           paymentMethod: appointment.paymentMethod ?? "pending",
           cancelToken: appointment.cancelToken,
@@ -2355,6 +2361,9 @@ export class MemoryStorage implements IStorage {
           startTime: appointment.startTime, customerName: appointment.customerName,
           customerEmail: appointment.customerEmail ?? null, customerPhone: appointment.customerPhone,
           durationMinutes: appointment.durationMinutes, status: appointment.status ?? "booked",
+          serviceNameSnapshot: appointment.serviceNameSnapshot ?? null,
+          servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot ?? null,
+          manualOutsideHours: appointment.manualOutsideHours ?? false,
           paymentMethod: appointment.paymentMethod ?? "pending", cancelToken: appointment.cancelToken,
           cancelledAt: null, depositRequired: appointment.depositRequired ?? false,
           depositReason: appointment.depositReason ?? null, rescheduleRevision: 0, notificationRevision: 0,
