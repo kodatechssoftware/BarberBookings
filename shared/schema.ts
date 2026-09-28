@@ -200,6 +200,9 @@ export const appointments = appPgTable("appointments", {
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone").notNull(),
   durationMinutes: integer("duration_minutes").default(30).notNull(),
+  serviceNameSnapshot: text("service_name_snapshot"),
+  servicePriceCentsSnapshot: integer("service_price_cents_snapshot"),
+  manualOutsideHours: boolean("manual_outside_hours").default(false).notNull(),
   status: text("status", { enum: appointmentStatuses }).default("booked").notNull(),
   cancelToken: text("cancel_token").notNull(),
   cancelledAt: timestamp("cancelled_at"),
@@ -215,6 +218,18 @@ export const appointments = appPgTable("appointments", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   seriesOccurrenceIdx: uniqueIndex("appointments_series_occurrence_idx").on(table.seriesId, table.seriesOccurrenceIndex),
+  serviceSnapshotPairCheck: check("appointments_service_snapshot_pair_check", sql`
+    (${table.serviceNameSnapshot} IS NULL AND ${table.servicePriceCentsSnapshot} IS NULL)
+    OR (${table.serviceNameSnapshot} IS NOT NULL AND ${table.servicePriceCentsSnapshot} IS NOT NULL)
+  `),
+  serviceNameSnapshotCheck: check("appointments_service_name_snapshot_check", sql`
+    ${table.serviceNameSnapshot} IS NULL
+    OR (btrim(${table.serviceNameSnapshot}) <> '' AND char_length(${table.serviceNameSnapshot}) <= 100)
+  `),
+  servicePriceSnapshotCheck: check("appointments_service_price_snapshot_check", sql`
+    ${table.servicePriceCentsSnapshot} IS NULL
+    OR (${table.servicePriceCentsSnapshot} >= 0 AND ${table.servicePriceCentsSnapshot} <= 1000000)
+  `),
 }));
 
 export const admins = appPgTable("admins", {
@@ -512,6 +527,9 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   cancelledAt: true,
   paymentMethod: true,
   durationMinutes: true,
+  serviceNameSnapshot: true,
+  servicePriceCentsSnapshot: true,
+  manualOutsideHours: true,
   depositRequired: true,
   depositReason: true,
   rescheduleRevision: true,
