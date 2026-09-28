@@ -151,6 +151,22 @@ export default function Reschedule() {
     );
   }
 
+  if (appointment.manualOutsideHours && appointment.status === "booked") {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
+        <div className="max-w-md">
+          <Clock className="mx-auto mb-4 h-16 w-16 text-primary" />
+          <h1 className="mb-4 text-3xl font-display">Reagendamento assistido</h1>
+          <p className="mb-6 text-gray-400">Para reagendar esta marcação, contacte a barbearia.</p>
+          <div className="flex flex-col justify-center gap-3 sm:flex-row">
+            <Link href={`/cancel/${token}`}><Button variant="outline">Cancelar marcação</Button></Link>
+            <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (appointment.status !== "booked" || success) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
