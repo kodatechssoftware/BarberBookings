@@ -278,7 +278,9 @@ export function AppointmentsTab({
                         </div>
                         <div className="min-w-0">
                           <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Serviço</p>
-                          <p className="truncate text-sm text-gray-300">{getServiceName(appointment.serviceId)}</p>
+                          <p className="truncate text-sm text-gray-300">
+                            {appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId)}
+                          </p>
                         </div>
                         <div className="flex md:justify-end">
                           <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", getStatusClass(appointment.status))}>

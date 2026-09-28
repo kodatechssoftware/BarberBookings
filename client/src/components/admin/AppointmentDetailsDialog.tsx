@@ -675,6 +675,8 @@ export function AppointmentDetailsDialog({
   const start = parseISO(appointment.startTime);
   const end = getWeeklyAppointmentEnd(appointment);
   const contactLinks = getAppointmentContactLinks(appointment.customerPhone);
+  const serviceName = appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId);
+  const finalPrice = appointment.servicePriceCentsSnapshot;
   const completeDisabledMessage = getStatusTimingMessage(appointment, "completed");
   const noShowDisabledMessage = getStatusTimingMessage(appointment, "no_show");
 
@@ -736,7 +738,17 @@ export function AppointmentDetailsDialog({
               </div>
               <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
                 <p className="text-xs uppercase tracking-widest text-gray-500">Serviço</p>
-                <p className="mt-1 font-semibold text-white">{getServiceName(appointment.serviceId)}</p>
+                <p className="mt-1 font-semibold text-white">{serviceName}</p>
+                {finalPrice !== null && finalPrice !== undefined && (
+                  <p className="mt-1 text-xs text-gray-400">
+                    Preço final: {(finalPrice / 100).toFixed(2).replace(".", ",")} €
+                  </p>
+                )}
+                {appointment.manualOutsideHours && (
+                  <span className="mt-2 inline-flex rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200">
+                    Marcação fora do horário
+                  </span>
+                )}
               </div>
               {canManageAppointment && appointment.status === "completed" && (
                 <div className="rounded-xl border border-white/10 bg-card px-3 py-2 sm:col-span-2">

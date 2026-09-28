@@ -705,16 +705,18 @@ async function getBlacklistAppointmentSummaries(appointments: Appointment[]) {
     storage.getServices(),
   ]);
   const barbersById = new Map(barbers.map((barber) => [barber.id, barber]));
-  const servicesById = new Map(services.map((service) => [service.id, service]));
+  const serviceNamesById = new Map(services.map((service) => [service.id, service.name]));
 
   return appointments.map((appointment) => ({
     id: appointment.id,
     barberId: appointment.barberId,
     barberName: barbersById.get(appointment.barberId)?.name || "Barbeiro desconhecido",
     serviceId: appointment.serviceId,
-    serviceName: appointment.serviceId
-      ? servicesById.get(appointment.serviceId)?.name || "Serviço indisponível"
-      : "Sem serviço",
+    serviceName: resolveAppointmentServiceName(
+      appointment,
+      serviceNamesById,
+      appointment.serviceId === null ? "Sem serviço" : "Serviço indisponível",
+    ),
     startTime: appointment.startTime,
     durationMinutes: appointment.durationMinutes,
     customerName: appointment.customerName,
@@ -3360,7 +3362,10 @@ export async function registerRoutes(
           customerName: input.customerName,
           customerEmail: normalizedCustomerEmail || null,
           barberName: barber?.name,
-          serviceName: service?.name || "Serviço indisponível",
+          serviceName: resolveAppointmentServiceName(
+            appointment,
+            new Map(service ? [[service.id, service.name]] : []),
+          ),
           startTime: input.startTime,
           cancelToken,
           durationMinutes: appointment.durationMinutes,
@@ -3794,7 +3799,7 @@ export async function registerRoutes(
         },
       });
 
-      if (!appointmentNotificationEventsEnabled && isManualBooking && normalizedCustomerEmail && selectedService) {
+      if (!appointmentNotificationEventsEnabled && isManualBooking && normalizedCustomerEmail) {
         const appointmentsToNotify = isRecurring
           ? createdAppointments.slice(0, 1)
           : createdAppointments;
@@ -3804,7 +3809,12 @@ export async function registerRoutes(
             customerName: appointment.customerName,
             customerEmail: appointment.customerEmail,
             barberName: selectedBarber.name,
-            serviceName: isRecurring ? `${selectedService.name} (marcação recorrente)` : selectedService.name,
+            serviceName: isRecurring && selectedService
+              ? `${selectedService.name} (marcação recorrente)`
+              : resolveAppointmentServiceName(
+                  appointment,
+                  new Map(selectedService ? [[selectedService.id, selectedService.name]] : []),
+                ),
             startTime: new Date(appointment.startTime),
             cancelToken: appointment.cancelToken,
             durationMinutes: appointment.durationMinutes,
@@ -4433,7 +4443,10 @@ export async function registerRoutes(
         customerName: appointment.customerName,
         customerEmail: appointment.customerEmail,
         barberName: barber?.name,
-        serviceName: service?.name || "Serviço indisponível",
+        serviceName: resolveAppointmentServiceName(
+          appointment,
+          new Map(service ? [[service.id, service.name]] : []),
+        ),
         startTime: toDate(appointment.startTime),
         lateCancellation,
         locationId: appointment.locationId,
@@ -4841,6 +4854,8 @@ export async function registerRoutes(
     ]);
     const locationBarbers = allBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
     const locationServices = allServices.filter((service) => !allowedServices || allowedServices.has(service.id));
+    const locationServiceNames = new Map(locationServices.map((service) => [service.id, service.name]));
+    const locationServicePrices = new Map(locationServices.map((service) => [service.id, service.price]));
 
     const matchingAppointments = allAppointments
       .filter((appointment) => customerIdentityMatches(appointment, phone, email, customerNameKey))
@@ -4848,13 +4863,12 @@ export async function registerRoutes(
 
     const appointmentsWithDetails = matchingAppointments.map((appointment) => {
       const barber = locationBarbers.find((item) => item.id === appointment.barberId);
-      const service = locationServices.find((item) => item.id === appointment.serviceId);
 
       return {
         ...appointment,
         barberName: barber?.name || "Desconhecido",
-        serviceName: service?.name || "Serviço indisponível",
-        servicePrice: service?.price || 0,
+        serviceName: resolveAppointmentServiceName(appointment, locationServiceNames),
+        servicePrice: resolveAppointmentPriceCents(appointment, locationServicePrices),
       };
     });
     const metrics = getCustomerMetrics(matchingAppointments, req.params.phone, email);

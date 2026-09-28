@@ -80,6 +80,8 @@ import {
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
 import {
+  getAppointmentPriceCents as resolveAppointmentPriceCents,
+  getAppointmentServiceName as resolveAppointmentServiceName,
   MAX_APPOINTMENT_DURATION_MINUTES,
   MAX_APPOINTMENT_SERVICE_NAME_LENGTH,
   MAX_APPOINTMENT_SERVICE_PRICE_CENTS,
@@ -100,6 +102,9 @@ type AdminAppointment = {
   serviceId: number | null;
   startTime: string;
   durationMinutes: number;
+  serviceNameSnapshot?: string | null;
+  servicePriceCentsSnapshot?: number | null;
+  manualOutsideHours?: boolean;
   status: AppointmentStatus;
   customerName: string;
   customerPhone: string;
@@ -355,8 +360,10 @@ function getAppointmentServicePriceCents(
   appointment: AdminAppointment,
   services?: Array<{ id: number; price?: number | null }>,
 ) {
-  if (!appointment.serviceId) return 0;
-  return services?.find((service) => service.id === appointment.serviceId)?.price || 0;
+  return resolveAppointmentPriceCents(
+    appointment,
+    new Map((services || []).map((service) => [service.id, service.price || 0])),
+  );
 }
 
 function formatAuditTimestamp(value: string) {
@@ -490,7 +497,7 @@ function TodayOverviewPanel({
 }: {
   summary: TodaySummary;
   getBarberName: (id: number) => string;
-  getServiceName: (id?: number | null) => string;
+  getServiceName: (appointment: AdminAppointment) => string;
   showFinancialSummary?: boolean;
 }) {
   const next = summary.nextAppointment;
@@ -526,7 +533,7 @@ function TodayOverviewPanel({
           {next && nextStart ? (
             <div className="mt-2 min-w-0">
               <p className="truncate text-lg font-bold text-white">{next.customerName}</p>
-              <p className="mt-1 text-sm text-primary">{format(nextStart, "HH:mm")} · {getServiceName(next.serviceId)}</p>
+              <p className="mt-1 text-sm text-primary">{format(nextStart, "HH:mm")} · {getServiceName(next)}</p>
               <p className="mt-1 truncate text-xs text-gray-400">{getBarberName(next.barberId)}</p>
             </div>
           ) : (
@@ -2718,6 +2725,10 @@ export default function Admin() {
     startTime.setHours(hours, minutes, 0, 0);
     return startTime;
   };
+  const getAppointmentServiceName = (appointment: AdminAppointment) => resolveAppointmentServiceName(
+    appointment,
+    new Map((services || []).map((service) => [service.id, service.name])),
+  );
 
   const selectedOutsideHoursCount = blockData.isManualBooking && blockData.barberId
     ? blockData.times.filter((time) =>
@@ -3239,7 +3250,7 @@ export default function Admin() {
                       <div>
                         <p className="font-semibold text-white">{appointment.customerName}</p>
                         <p className="mt-1 text-sm text-gray-300">
-                          {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getServiceName(appointment.serviceId)}
+                          {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getAppointmentServiceName(appointment)}
                         </p>
                         <p className="mt-1 text-xs text-gray-500">{getAppointmentContactLinks(appointment.customerPhone).displayPhone}</p>
                       </div>
@@ -3319,7 +3330,7 @@ export default function Admin() {
                       <div>
                         <p className="font-semibold text-white">{appointment.customerName}</p>
                         <p className="mt-1 text-sm text-gray-300">
-                          {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getServiceName(appointment.serviceId)}
+                          {format(parseISO(appointment.startTime), "dd/MM/yyyy 'às' HH:mm")} · {getAppointmentServiceName(appointment)}
                         </p>
                         <p className="mt-1 text-xs text-gray-500">{getAppointmentContactLinks(appointment.customerPhone).displayPhone}</p>
                       </div>
@@ -3551,7 +3562,7 @@ export default function Admin() {
             <TodayOverviewPanel
               summary={todaySummary}
               getBarberName={getBarberName}
-              getServiceName={getServiceName}
+              getServiceName={getAppointmentServiceName}
               showFinancialSummary={user.role === "admin"}
             />
 
