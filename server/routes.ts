@@ -34,6 +34,7 @@ import {
 } from "@shared/booking-slot-interval";
 import {
   DEFAULT_APPOINTMENT_DURATION_MINUTES,
+  hasAppointmentServiceTermsSnapshot,
   getAppointmentServiceName as resolveAppointmentServiceName,
   getEffectiveAppointmentDurationMinutes as resolveAppointmentDurationMinutes,
   getAppointmentPriceCents as resolveAppointmentPriceCents,
@@ -3855,11 +3856,31 @@ export async function registerRoutes(
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
-      const { startTime, barberId, status } = req.body;
+      const {
+        startTime,
+        barberId,
+        status,
+        serviceMode,
+        customServiceName,
+        customDurationMinutes,
+        servicePriceCents,
+        allowOutsideHours,
+      } = req.body;
       const hasStartTimePatch = Object.prototype.hasOwnProperty.call(req.body, "startTime");
       const hasBarberPatch = Object.prototype.hasOwnProperty.call(req.body, "barberId");
       const hasStatusPatch = Object.prototype.hasOwnProperty.call(req.body, "status");
       const hasServicePatch = Object.prototype.hasOwnProperty.call(req.body, "serviceId");
+      const hasServiceModePatch = Object.prototype.hasOwnProperty.call(req.body, "serviceMode");
+      const hasCustomNamePatch = Object.prototype.hasOwnProperty.call(req.body, "customServiceName");
+      const hasCustomDurationPatch = Object.prototype.hasOwnProperty.call(req.body, "customDurationMinutes");
+      const hasServicePricePatch = Object.prototype.hasOwnProperty.call(req.body, "servicePriceCents");
+      const hasAllowOutsideHoursPatch = Object.prototype.hasOwnProperty.call(req.body, "allowOutsideHours");
+      if (
+        (hasServiceModePatch && serviceMode !== "existing" && serviceMode !== "custom")
+        || (hasAllowOutsideHoursPatch && typeof allowOutsideHours !== "boolean")
+      ) {
+        return res.status(400).json({ message: "Pedido de marcação inválido." });
+      }
       const appointmentId = parsePositiveInteger(req.params.id);
       if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
       const currentApp = await storage.getAppointment(appointmentId);
@@ -3875,9 +3896,20 @@ export async function registerRoutes(
       const allowedServiceIds = locationServiceIds === undefined ? null : new Set(locationServiceIds);
       const services = (await storage.getServices()).filter((service) => !allowedServiceIds || allowedServiceIds.has(service.id));
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
+      const serviceNames = new Map(services.map((service) => [service.id, service.name]));
+      const servicePrices = new Map(services.map((service) => [service.id, service.price]));
       const newServiceId = hasServicePatch
         ? req.body.serviceId === null || req.body.serviceId === "" ? null : Number(req.body.serviceId)
         : currentApp.serviceId;
+      const currentIsCustomService = currentApp.serviceId === null
+        && hasAppointmentServiceTermsSnapshot(currentApp);
+      const requestedServiceMode = hasServiceModePatch
+        ? serviceMode as "existing" | "custom"
+        : currentIsCustomService ? "custom" : "existing";
+      const hasAppointmentTermsPatch = hasServicePatch || hasServiceModePatch || hasCustomNamePatch
+        || hasCustomDurationPatch || hasServicePricePatch;
+      const hasScheduleOrTermsPatch = hasStartTimePatch || hasBarberPatch || hasAppointmentTermsPatch
+        || hasAllowOutsideHoursPatch;
 
       if (Number.isNaN(newStartTime.getTime())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
@@ -3916,6 +3948,16 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Serviço inválido." });
       }
 
+      if (requestedServiceMode === "custom" && newServiceId !== null) {
+        return res.status(400).json({ message: "Um serviço personalizado não pode referenciar o catálogo." });
+      }
+      if (requestedServiceMode === "existing" && (hasCustomNamePatch || hasCustomDurationPatch)) {
+        return res.status(400).json({ message: "Os campos personalizados só podem ser usados num serviço personalizado." });
+      }
+      if (requestedServiceMode === "custom" && currentApp.seriesId) {
+        return res.status(400).json({ message: "Serviços personalizados não podem ser recorrentes." });
+      }
+
       if (newServiceId !== null && !services.some((service) => service.id === newServiceId)) {
         return res.status(400).json({ message: "Serviço não encontrado." });
       }
@@ -3928,48 +3970,130 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Serviço indisponível para novas marcações." });
       }
 
-      // Conflict check for re-scheduling or service changes
-      if (hasStartTimePatch || hasBarberPatch || hasServicePatch) {
-        const duration = hasServicePatch
-          ? getAppointmentDurationMinutes(newServiceId, serviceDurations)
-          : getEffectiveAppointmentDurationMinutes(currentApp, serviceDurations);
-        if (newServiceId) {
-          const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
-          if (!barberCanPerformService(barberServiceMap, newBarberId, newServiceId)) {
-            return res.status(400).json({ message: "Este barbeiro não executa o serviço desta marcação." });
-          }
-        }
-
-        const workingPeriods = await getBarberWorkingPeriods(newBarberId, getShopDateParts(newStartTime).weekday, locationId);
-        const scheduleError = getScheduleValidationError(newStartTime, duration, workingPeriods);
-        if (scheduleError) {
-          return res.status(400).json({ message: scheduleError });
-        }
-
-        const dateStr = getShopDateParts(newStartTime).dateKey;
-        const existingAppointments = await storage.getAppointments(newBarberId, dateStr);
-        const newEndTime = new Date(newStartTime.getTime() + duration * 60000);
-
-        if (
-          hasAppointmentConflict(
-            existingAppointments,
-            newBarberId,
-            newStartTime,
-            newEndTime,
-            serviceDurations,
-            appointmentId,
-          )
-        ) {
-          return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
+      const selectedService = newServiceId === null
+        ? null
+        : services.find((service) => service.id === newServiceId) || null;
+      if (selectedService) {
+        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
+        if (!barberCanPerformService(barberServiceMap, newBarberId, selectedService.id)) {
+          return res.status(400).json({ message: "Este barbeiro não executa o serviço desta marcação." });
         }
       }
 
       const updateData: any = {};
       if (hasStartTimePatch) updateData.startTime = newStartTime;
       if (hasBarberPatch) updateData.barberId = newBarberId;
-      if (hasServicePatch) {
-        updateData.serviceId = newServiceId;
-        updateData.durationMinutes = getAppointmentDurationMinutes(newServiceId, serviceDurations);
+      if (hasScheduleOrTermsPatch) {
+        const switchingCatalogueService = requestedServiceMode === "existing"
+          && newServiceId !== null
+          && (currentIsCustomService || newServiceId !== currentApp.serviceId);
+        let finalServiceId = newServiceId;
+        let finalServiceName = currentApp.serviceNameSnapshot;
+        let finalServicePrice = currentApp.servicePriceCentsSnapshot;
+        let finalDuration = getEffectiveAppointmentDurationMinutes(currentApp, serviceDurations);
+
+        if (requestedServiceMode === "custom") {
+          const customName = hasCustomNamePatch
+            ? typeof customServiceName === "string" ? customServiceName.trim() : ""
+            : currentApp.serviceNameSnapshot?.trim() || "";
+          const customDuration = hasCustomDurationPatch
+            ? parseCustomAppointmentDuration(customDurationMinutes)
+            : parseCustomAppointmentDuration(currentApp.durationMinutes);
+          const customPrice = hasServicePricePatch
+            ? parseAppointmentPriceCents(servicePriceCents)
+            : parseAppointmentPriceCents(currentApp.servicePriceCentsSnapshot);
+          if (!customName || customName.length > MAX_APPOINTMENT_SERVICE_NAME_LENGTH) {
+            return res.status(400).json({ message: "O nome do serviço personalizado deve ter entre 1 e 100 caracteres." });
+          }
+          if (customDuration === null) {
+            return res.status(400).json({ message: "A duração do serviço personalizado deve ser um número inteiro entre 1 e 720 minutos." });
+          }
+          if (customPrice === null) {
+            return res.status(400).json({ message: "O preço do serviço personalizado é inválido." });
+          }
+          finalServiceId = null;
+          finalServiceName = customName;
+          finalServicePrice = customPrice;
+          finalDuration = customDuration;
+        } else if (selectedService) {
+          const terms = resolveEffectiveServiceTerms(locationId, selectedService);
+          if (switchingCatalogueService || !hasAppointmentServiceTermsSnapshot(currentApp)) {
+            finalServiceName = terms.name;
+            finalServicePrice = terms.priceCents;
+            finalDuration = terms.durationMinutes;
+          } else {
+            finalServiceName = resolveAppointmentServiceName(currentApp, serviceNames);
+            finalServicePrice = resolveAppointmentPriceCents(currentApp, servicePrices);
+            finalDuration = getEffectiveAppointmentDurationMinutes(currentApp, serviceDurations);
+          }
+          if (hasServicePricePatch) {
+            const parsedPrice = parseAppointmentPriceCents(servicePriceCents);
+            if (parsedPrice === null) {
+              return res.status(400).json({ message: "O preço desta marcação é inválido." });
+            }
+            finalServicePrice = parsedPrice;
+          }
+        } else if (currentIsCustomService || hasAppointmentTermsPatch) {
+          return res.status(400).json({ message: "Selecione um serviço do catálogo ou mantenha o serviço personalizado." });
+        }
+
+        if (crossesShopCalendarDay(newStartTime, finalDuration)) {
+          return res.status(400).json({ message: "A marcação não pode atravessar a meia-noite." });
+        }
+        const workingPeriods = await getBarberWorkingPeriods(
+          newBarberId,
+          getShopDateParts(newStartTime).weekday,
+          locationId,
+        );
+        let scheduleError = getScheduleValidationError(newStartTime, finalDuration, workingPeriods);
+        let isOutsideHours = Boolean(scheduleError);
+
+        if (!isOutsideHours && currentApp.manualOutsideHours && requestedServiceMode === "existing" && selectedService) {
+          const normalTerms = resolveEffectiveServiceTerms(locationId, selectedService);
+          finalServiceName = normalTerms.name;
+          finalServicePrice = normalTerms.priceCents;
+          finalDuration = normalTerms.durationMinutes;
+          scheduleError = getScheduleValidationError(newStartTime, finalDuration, workingPeriods);
+          isOutsideHours = Boolean(scheduleError);
+        }
+
+        if (crossesShopCalendarDay(newStartTime, finalDuration)) {
+          return res.status(400).json({ message: "A marcação não pode atravessar a meia-noite." });
+        }
+
+        if (isOutsideHours && !currentApp.manualOutsideHours && allowOutsideHours !== true) {
+          return res.status(400).json({ message: scheduleError || "A marcação está fora do horário." });
+        }
+        if (!isOutsideHours && requestedServiceMode === "custom") {
+          return res.status(400).json({
+            message: "Para colocar esta marcação num horário normal, converta-a primeiro para um serviço do catálogo.",
+          });
+        }
+        if (!isOutsideHours && hasServicePricePatch && requestedServiceMode === "existing") {
+          return res.status(400).json({ message: "O preço manual só está disponível fora do horário." });
+        }
+
+        if (finalServiceId !== null || requestedServiceMode === "custom") {
+          updateData.serviceId = finalServiceId;
+          updateData.serviceNameSnapshot = finalServiceName;
+          updateData.servicePriceCentsSnapshot = finalServicePrice;
+          updateData.durationMinutes = finalDuration;
+          updateData.manualOutsideHours = isOutsideHours;
+        }
+
+        const dateStr = getShopDateParts(newStartTime).dateKey;
+        const existingAppointments = await storage.getAppointments(newBarberId, dateStr);
+        const newEndTime = new Date(newStartTime.getTime() + finalDuration * 60000);
+        if (hasAppointmentConflict(
+          existingAppointments,
+          newBarberId,
+          newStartTime,
+          newEndTime,
+          serviceDurations,
+          appointmentId,
+        )) {
+          return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
+        }
       }
       if (hasStatusPatch) {
         if (!isKnownAppointmentStatus(status)) {
@@ -4125,12 +4249,19 @@ export async function registerRoutes(
       cancellationPolicyHours: CANCELLATION_POLICY_HOURS,
       isLateCancellation: isLateCancellation(appointment.startTime),
       barberName: barber?.name || "Desconhecido",
-      serviceName: service?.name || "Serviço indisponível",
+      serviceName: resolveAppointmentServiceName(
+        appointment,
+        new Map(service ? [[service.id, service.name]] : []),
+      ),
       duration: getEffectiveAppointmentDurationMinutes(
         appointment,
         new Map(service ? [[service.id, service.duration]] : []),
       ),
-      price: service?.price || 0,
+      price: resolveAppointmentPriceCents(
+        appointment,
+        new Map(service ? [[service.id, service.price]] : []),
+      ),
+      manualOutsideHours: appointment.manualOutsideHours,
     });
   });
 
@@ -4143,6 +4274,12 @@ export async function registerRoutes(
 
       if (appointment.status !== "booked") {
         return res.status(409).json({ message: "Esta marcação já não pode ser reagendada." });
+      }
+      if (appointment.manualOutsideHours) {
+        return res.status(409).json({
+          code: "MANUAL_OUTSIDE_HOURS_RESCHEDULE_UNAVAILABLE",
+          message: "Para reagendar esta marcação, contacte a barbearia.",
+        });
       }
       const location = await getLocation(appointment.locationId);
       if (!location || !await isBarberAssignedToLocation(appointment.barberId, appointment.locationId)) {

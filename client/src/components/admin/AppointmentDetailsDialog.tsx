@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   canBarberPerformService,
@@ -44,6 +45,9 @@ type AdminAppointment = {
   serviceId: number | null;
   startTime: string;
   durationMinutes: number;
+  serviceNameSnapshot?: string | null;
+  servicePriceCentsSnapshot?: number | null;
+  manualOutsideHours?: boolean;
   status: AppointmentStatus;
   paymentMethod?: AppointmentPaymentMethod;
   customerName: string;
@@ -58,8 +62,17 @@ type ServiceListItem = {
   id: number;
   name: string;
   duration?: number;
+  price?: number;
   isVisible?: boolean | null;
 };
+
+function parseAppointmentPriceInput(value: string) {
+  const normalized = value.trim().replace(",", ".");
+  if (!normalized || !/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  const cents = Math.round(parsed * 100);
+  return Number.isFinite(parsed) && cents >= 0 && cents <= 1_000_000 ? cents : null;
+}
 
 function EditAppointmentDialog({
   appointment,
@@ -80,11 +93,22 @@ function EditAppointmentDialog({
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   toast: ReturnType<typeof useToast>["toast"];
 }) {
+  const isCustomAppointment = appointment.serviceId === null
+    && appointment.serviceNameSnapshot != null
+    && appointment.servicePriceCentsSnapshot != null;
   const [open, setOpen] = useState(false);
   const [dateValue, setDateValue] = useState(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
   const [timeValue, setTimeValue] = useState(format(parseISO(appointment.startTime), "HH:mm"));
   const [barberId, setBarberId] = useState(String(appointment.barberId));
-  const [serviceId, setServiceId] = useState(appointment.serviceId ? String(appointment.serviceId) : "none");
+  const [serviceId, setServiceId] = useState(
+    isCustomAppointment ? "custom" : appointment.serviceId ? String(appointment.serviceId) : "none",
+  );
+  const [customServiceName, setCustomServiceName] = useState(appointment.serviceNameSnapshot || "");
+  const [customDuration, setCustomDuration] = useState(String(appointment.durationMinutes || 30));
+  const [priceValue, setPriceValue] = useState(
+    String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","),
+  );
+  const [allowOutsideHours, setAllowOutsideHours] = useState(Boolean(appointment.manualOutsideHours));
   const [isSaving, setIsSaving] = useState(false);
   const originalTime = format(parseISO(appointment.startTime), "HH:mm");
   const timeOptions = useMemo(() => createAppointmentTimeOptions({
@@ -97,30 +121,31 @@ function EditAppointmentDialog({
   const activeBarbers = (barbers || []).filter((barber) =>
     barber.isVisible !== false || barber.id === appointment.barberId,
   );
-  const selectedService = serviceId === "none"
+  const selectedService = serviceId === "none" || serviceId === "custom"
     ? null
     : serviceList.find((service) => String(service.id) === serviceId) || null;
-  const selectedDuration = selectedService?.duration || appointment.durationMinutes || 30;
+  const parsedCustomDuration = Number(customDuration);
+  const selectedDuration = serviceId === "custom"
+    ? Number.isInteger(parsedCustomDuration) && parsedCustomDuration > 0 ? parsedCustomDuration : 30
+    : selectedService?.duration || appointment.durationMinutes || 30;
   const requestedStartTime = useMemo(() => new Date(`${dateValue}T${timeValue}`), [dateValue, timeValue]);
   const availableBarbers = useMemo(() => {
     if (Number.isNaN(requestedStartTime.getTime())) return [];
 
-    const startMinutes = timeToMinutes(timeValue);
-    const endMinutes = startMinutes + selectedDuration;
     const requestedEndTime = new Date(requestedStartTime.getTime() + selectedDuration * 60000);
-    const dayOfWeek = requestedStartTime.getDay();
     const appointmentList = appointments ?? [];
 
     return activeBarbers.filter((barber) => {
       if (!canBarberPerformService(barber, selectedService?.id ?? null)) return false;
 
+      const startMinutes = timeToMinutes(timeValue);
       const fitsSchedule = getEffectivePeriodsForBarber({
         barberId: barber.id,
-        dayOfWeek,
+        dayOfWeek: requestedStartTime.getDay(),
         shopAvailabilityRows: shopAvailabilityRows ?? [],
         availabilityRows: availabilityRows ?? [],
-      }).some((period) => startMinutes >= period.start && endMinutes <= period.end);
-      if (!fitsSchedule) return false;
+      }).some((period) => startMinutes >= period.start && startMinutes + selectedDuration <= period.end);
+      if (!fitsSchedule && !allowOutsideHours) return false;
 
       return !appointmentList.some((candidate) => {
         if (candidate.id === appointment.id) return false;
@@ -135,6 +160,7 @@ function EditAppointmentDialog({
     });
   }, [
     activeBarbers,
+    allowOutsideHours,
     appointment.id,
     appointments,
     availabilityRows,
@@ -149,8 +175,18 @@ function EditAppointmentDialog({
     () => serviceList.filter((service) => canBarberPerformService(selectedBarber, service.id)),
     [selectedBarber, serviceList],
   );
-  const canUseNoService = appointment.serviceId === null;
+  const canUseNoService = appointment.serviceId === null && !isCustomAppointment;
   const hasCompatibleService = serviceId !== "none" || canUseNoService;
+  const selectedStartMinutes = timeToMinutes(timeValue);
+  const selectedFitsSchedule = selectedBarber ? getEffectivePeriodsForBarber({
+    barberId: selectedBarber.id,
+    dayOfWeek: requestedStartTime.getDay(),
+    shopAvailabilityRows: shopAvailabilityRows ?? [],
+    availabilityRows: availabilityRows ?? [],
+  }).some((period) =>
+    selectedStartMinutes >= period.start && selectedStartMinutes + selectedDuration <= period.end,
+  ) : false;
+  const selectedIsOutsideHours = Boolean(selectedBarber && !selectedFitsSchedule);
 
   useEffect(() => {
     if (!open) return;
@@ -159,9 +195,9 @@ function EditAppointmentDialog({
       return;
     }
 
-    if (serviceId === "none") {
+    if (serviceId === "none" || serviceId === "custom") {
       if (!canUseNoService && compatibleServices.length > 0) {
-        setServiceId(String(compatibleServices[0].id));
+        if (serviceId !== "custom") setServiceId(String(compatibleServices[0].id));
       }
       return;
     }
@@ -175,7 +211,11 @@ function EditAppointmentDialog({
     setDateValue(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
     setTimeValue(format(parseISO(appointment.startTime), "HH:mm"));
     setBarberId(String(appointment.barberId));
-    setServiceId(appointment.serviceId ? String(appointment.serviceId) : "none");
+    setServiceId(isCustomAppointment ? "custom" : appointment.serviceId ? String(appointment.serviceId) : "none");
+    setCustomServiceName(appointment.serviceNameSnapshot || "");
+    setCustomDuration(String(appointment.durationMinutes || 30));
+    setPriceValue(String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","));
+    setAllowOutsideHours(Boolean(appointment.manualOutsideHours));
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -186,7 +226,8 @@ function EditAppointmentDialog({
   const handleSave = async () => {
     const newStartTime = new Date(`${dateValue}T${timeValue}`);
     const parsedBarberId = Number(barberId);
-    const parsedServiceId = serviceId === "none" ? null : Number(serviceId);
+    const parsedServiceId = serviceId === "none" || serviceId === "custom" ? null : Number(serviceId);
+    const priceCents = parseAppointmentPriceInput(priceValue);
 
     if (Number.isNaN(newStartTime.getTime()) || !Number.isFinite(parsedBarberId)) {
       toast({ title: "Erro", description: "Verifique a data, hora e barbeiro.", variant: "destructive" });
@@ -210,6 +251,36 @@ function EditAppointmentDialog({
       toast({ title: "Serviço inválido", description: "Escolha um serviço compatível com o barbeiro.", variant: "destructive" });
       return;
     }
+    if (serviceId === "custom") {
+      if (!selectedIsOutsideHours) {
+        toast({
+          title: "Conversão necessária",
+          description: "Para colocar esta marcação num horário normal, escolha um serviço do catálogo.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (!customServiceName.trim() || customServiceName.trim().length > 100) {
+        toast({ title: "Serviço inválido", description: "Indique uma descrição até 100 caracteres.", variant: "destructive" });
+        return;
+      }
+      if (!Number.isInteger(parsedCustomDuration) || parsedCustomDuration < 1 || parsedCustomDuration > 720) {
+        toast({ title: "Duração inválida", description: "Indique uma duração entre 1 e 720 minutos.", variant: "destructive" });
+        return;
+      }
+    }
+    if (selectedIsOutsideHours && serviceId !== "none" && priceCents === null) {
+      toast({ title: "Preço inválido", description: "Indique o preço final desta marcação.", variant: "destructive" });
+      return;
+    }
+    if (
+      appointment.manualOutsideHours
+      && !selectedIsOutsideHours
+      && serviceId !== "custom"
+      && !window.confirm("Esta marcação passará para o horário normal. O preço especial será substituído pelo preço atual do serviço. Continuar?")
+    ) {
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -217,6 +288,15 @@ function EditAppointmentDialog({
         startTime: newStartTime,
         barberId: parsedBarberId,
         serviceId: parsedServiceId,
+        serviceMode: serviceId === "custom" ? "custom" : "existing",
+        allowOutsideHours: allowOutsideHours && selectedIsOutsideHours,
+        ...(serviceId === "custom" ? {
+          customServiceName: customServiceName.trim(),
+          customDurationMinutes: parsedCustomDuration,
+          servicePriceCents: priceCents,
+        } : selectedIsOutsideHours && serviceId !== "none" ? {
+          servicePriceCents: priceCents,
+        } : {}),
       });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
@@ -268,6 +348,13 @@ function EditAppointmentDialog({
               </Select>
             </div>
           </div>
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
+            <div>
+              <Label htmlFor="edit-outside-hours" className="cursor-pointer text-sm font-medium">Permitir horário extraordinário</Label>
+              <p className="text-xs text-gray-500">Ative apenas para mover esta marcação para fora do horário efetivo.</p>
+            </div>
+            <Switch id="edit-outside-hours" checked={allowOutsideHours} onCheckedChange={setAllowOutsideHours} />
+          </div>
           <div className="space-y-2">
             <Label>Barbeiro</Label>
             <Select value={barberId} onValueChange={setBarberId}>
@@ -282,10 +369,22 @@ function EditAppointmentDialog({
           </div>
           <div className="space-y-2">
             <Label>Serviço</Label>
-            <Select value={serviceId} onValueChange={setServiceId}>
+            <Select
+              value={serviceId}
+              onValueChange={(value) => {
+                setServiceId(value);
+                if (value === "custom") {
+                  setPriceValue(String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","));
+                  return;
+                }
+                const service = serviceList.find((candidate) => String(candidate.id) === value);
+                if (service?.price != null) setPriceValue(String(service.price / 100).replace(".", ","));
+              }}
+            >
               <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-card border-white/10 text-white">
                 {canUseNoService && <SelectItem value="none">Sem serviço</SelectItem>}
+                {isCustomAppointment && <SelectItem value="custom">{appointment.serviceNameSnapshot || "Serviço personalizado"}</SelectItem>}
                 {compatibleServices.map((service) => (
                   <SelectItem key={service.id} value={String(service.id)}>
                     {service.name}{service.duration ? ` · ${service.duration} min` : ""}
@@ -297,6 +396,67 @@ function EditAppointmentDialog({
               <p className="text-xs text-red-300">Este barbeiro não tem serviços compatíveis.</p>
             )}
           </div>
+          {serviceId === "custom" && (
+            <div className="grid gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 sm:grid-cols-2">
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Descrição do serviço</Label>
+                <Input
+                  value={customServiceName}
+                  maxLength={100}
+                  onChange={(event) => setCustomServiceName(event.target.value)}
+                  className="border-white/10 bg-background text-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Duração (min)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="720"
+                  value={customDuration}
+                  onChange={(event) => setCustomDuration(event.target.value)}
+                  className="border-white/10 bg-background text-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Preço (€)</Label>
+                <Input
+                  inputMode="decimal"
+                  value={priceValue}
+                  onChange={(event) => setPriceValue(event.target.value)}
+                  className="border-white/10 bg-background text-white"
+                />
+              </div>
+            </div>
+          )}
+          {serviceId !== "custom" && serviceId !== "none" && selectedIsOutsideHours && (
+            <div className="space-y-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3">
+              <div>
+                <p className="font-semibold text-amber-100">Marcação fora do horário</p>
+                <p className="text-xs text-amber-100/75">O servidor voltará a validar o horário e os conflitos ao guardar.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-white/10 bg-background/40 p-3 text-sm">
+                  <p className="text-xs text-gray-400">Preço habitual</p>
+                  <p className="mt-1 font-semibold">{selectedService?.price != null ? `${(selectedService.price / 100).toFixed(2).replace(".", ",")} €` : "—"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Preço desta marcação (€)</Label>
+                  <Input
+                    inputMode="decimal"
+                    value={priceValue}
+                    onChange={(event) => setPriceValue(event.target.value)}
+                    className="border-white/10 bg-background text-white"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          {appointment.manualOutsideHours && !selectedIsOutsideHours && serviceId !== "custom" && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+              Ao guardar no horário normal, o nome, a duração e o preço voltam aos termos atuais do serviço.
+            </div>
+          )}
           <Button
             variant="gold"
             className="w-full"
