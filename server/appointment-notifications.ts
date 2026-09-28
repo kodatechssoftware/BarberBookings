@@ -1,4 +1,5 @@
 import type { Appointment, AppointmentNotificationEvent, RecurringNotificationSnapshot } from "@shared/schema";
+import { getAppointmentServiceName } from "@shared/appointment-service-terms";
 import {
   sendBookingCancellationConfirmation,
   sendBookingConfirmation,
@@ -302,7 +303,10 @@ export async function processMetaLateFailureEmailFallback(
       ]);
       channel = await emailFallback(appointment, claimed, {
         barberName: barber?.name || "Barbeiro indisponível",
-        serviceName: service?.name || "Serviço indisponível",
+        serviceName: getAppointmentServiceName(
+          appointment,
+          new Map(service ? [[service.id, service.name]] : []),
+        ),
         locationName: location?.name || process.env.SHOP_NAME || "Barbearia",
         locationAddress: location?.address || process.env.SHOP_ADDRESS || "",
         locationTimeZone: location?.timezone || process.env.SHOP_TIME_ZONE || "Europe/Lisbon",
@@ -349,7 +353,10 @@ async function processClaimedCore(
   ]);
   const details = {
     barberName: barber?.name || "Barbeiro indisponível",
-    serviceName: service?.name || "Serviço indisponível",
+    serviceName: getAppointmentServiceName(
+      appointment!,
+      new Map(service ? [[service.id, service.name]] : []),
+    ),
     locationName: location?.name || process.env.SHOP_NAME || "Barbearia",
     locationAddress: location?.address || process.env.SHOP_ADDRESS || "",
     locationTimeZone: location?.timezone || process.env.SHOP_TIME_ZONE || "Europe/Lisbon",
