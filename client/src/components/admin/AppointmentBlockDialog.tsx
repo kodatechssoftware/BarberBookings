@@ -34,6 +34,8 @@ type AppointmentBlockBarberOption = {
 type AppointmentBlockServiceOption = {
   id: number;
   name: string;
+  duration: number;
+  price: number;
 };
 
 type AppointmentBlockDialogProps = {
@@ -47,6 +49,8 @@ type AppointmentBlockDialogProps = {
   onCalendarOpenChange: (open: boolean) => void;
   availableBlockTimes: string[];
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
+  isSelectedOutsideHours: boolean;
+  hasMixedScheduleContext: boolean;
   isCheckingAvailability?: boolean;
   onSubmit: () => void;
 };
@@ -62,6 +66,8 @@ export function AppointmentBlockDialog({
   onCalendarOpenChange,
   availableBlockTimes,
   bookingSlotIntervalMinutes,
+  isSelectedOutsideHours,
+  hasMixedScheduleContext,
   isCheckingAvailability = false,
   onSubmit,
 }: AppointmentBlockDialogProps) {
@@ -95,6 +101,10 @@ export function AppointmentBlockDialog({
   const manualPhoneParts = splitStoredPhone(blockData.phone);
   const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
+  const selectedService = manualBookingServices.find((service) => String(service.id) === blockData.serviceId);
+  const showExtraordinaryTerms = blockData.isManualBooking && isSelectedOutsideHours && !blockData.isRecurring;
+
+  const formatPrice = (priceCents: number) => `${(priceCents / 100).toFixed(2).replace(".", ",")} €`;
 
   useEffect(() => {
     if (!open) setIsEmailTouched(false);
@@ -181,6 +191,10 @@ export function AppointmentBlockDialog({
                       onCheckedChange={(checked) => onBlockDataChange({
                         ...blockData,
                         allowOutsideHours: checked,
+                        serviceMode: "existing",
+                        customServiceName: "",
+                        customDurationMinutes: "30",
+                        servicePrice: "",
                         times: [],
                       })}
                     />
@@ -200,6 +214,10 @@ export function AppointmentBlockDialog({
                         endDate: checked && blockData.endDate < today ? today : blockData.endDate,
                         isRecurring: checked,
                         isMultiDay: false,
+                        serviceMode: "existing",
+                        customServiceName: "",
+                        customDurationMinutes: "30",
+                        servicePrice: checked ? "" : blockData.servicePrice,
                         times: checked ? blockData.times.slice(0, 1) : blockData.times,
                       })}
                     />
@@ -313,16 +331,32 @@ export function AppointmentBlockDialog({
               {blockData.isManualBooking && (
                 <div className="space-y-3">
                   <Label className="text-sm font-medium text-gray-300">Serviço</Label>
-                  <Select value={blockData.serviceId} onValueChange={(value) => onBlockDataChange({ ...blockData, serviceId: value })}>
-                    <SelectTrigger className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
-                      <SelectValue placeholder="Selecione" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-card border-white/10 text-white">
-                      {manualBookingServices.map((service) => (
-                        <SelectItem key={service.id} value={String(service.id)}>{service.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {blockData.serviceMode === "existing" ? (
+                    <Select
+                      value={blockData.serviceId}
+                      onValueChange={(value) => {
+                        const service = manualBookingServices.find((candidate) => String(candidate.id) === value);
+                        onBlockDataChange({
+                          ...blockData,
+                          serviceId: value,
+                          servicePrice: service ? String(service.price / 100).replace(".", ",") : "",
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
+                        <SelectValue placeholder="Selecione" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-card border-white/10 text-white">
+                        {manualBookingServices.map((service) => (
+                          <SelectItem key={service.id} value={String(service.id)}>{service.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="flex h-12 items-center rounded-xl border border-primary/20 bg-primary/5 px-4 text-sm font-semibold text-primary">
+                      Serviço personalizado desta marcação
+                    </div>
+                  )}
                   {blockData.barberId && manualBookingServices.length === 0 && (
                     <p className="text-xs text-red-300">Este barbeiro não tem serviços associados.</p>
                   )}
@@ -396,6 +430,119 @@ export function AppointmentBlockDialog({
                 </div>
               )}
             </div>
+
+            {blockData.isManualBooking && hasMixedScheduleContext && (
+              <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                A seleção mistura horários habituais e extraordinários. Separe-os para definir termos especiais.
+              </div>
+            )}
+
+            {showExtraordinaryTerms && (
+              <div className="space-y-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4" data-testid="outside-hours-terms">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
+                  <div>
+                    <p className="font-bold text-amber-100">Marcação fora do horário</p>
+                    <p className="mt-1 text-xs text-amber-100/75">Esta marcação está fora do horário habitual.</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-background/40 p-1">
+                  <Button
+                    type="button"
+                    variant={blockData.serviceMode === "existing" ? "gold" : "ghost"}
+                    className="h-10 text-xs"
+                    onClick={() => onBlockDataChange({
+                      ...blockData,
+                      serviceMode: "existing",
+                      customServiceName: "",
+                      customDurationMinutes: "30",
+                      servicePrice: selectedService ? String(selectedService.price / 100).replace(".", ",") : "",
+                    })}
+                  >
+                    Serviço existente
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={blockData.serviceMode === "custom" ? "gold" : "ghost"}
+                    className="h-10 text-xs"
+                    onClick={() => onBlockDataChange({
+                      ...blockData,
+                      serviceMode: "custom",
+                      serviceId: "",
+                      customDurationMinutes: selectedService
+                        ? String(selectedService.duration)
+                        : blockData.customDurationMinutes || "30",
+                      servicePrice: blockData.servicePrice || "0",
+                    })}
+                  >
+                    Serviço personalizado
+                  </Button>
+                </div>
+
+                {blockData.serviceMode === "existing" ? (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-white/10 bg-background/40 p-3">
+                      <p className="text-xs text-gray-400">Duração habitual</p>
+                      <p className="mt-1 font-semibold text-white">{selectedService ? `${selectedService.duration} min` : "—"}</p>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-background/40 p-3">
+                      <p className="text-xs text-gray-400">Preço habitual</p>
+                      <p className="mt-1 font-semibold text-white">{selectedService ? formatPrice(selectedService.price) : "—"}</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="manual-booking-special-price" className="text-xs text-gray-300">Preço desta marcação (€)</Label>
+                      <Input
+                        id="manual-booking-special-price"
+                        inputMode="decimal"
+                        value={blockData.servicePrice}
+                        onChange={(event) => onBlockDataChange({ ...blockData, servicePrice: event.target.value })}
+                        className="h-11 border-white/10 bg-background/50 text-white"
+                        placeholder="Ex.: 25,00"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-2 sm:col-span-3">
+                      <Label htmlFor="manual-booking-custom-service" className="text-xs text-gray-300">Descrição do serviço</Label>
+                      <Input
+                        id="manual-booking-custom-service"
+                        value={blockData.customServiceName}
+                        maxLength={100}
+                        onChange={(event) => onBlockDataChange({ ...blockData, customServiceName: event.target.value })}
+                        className="h-11 border-white/10 bg-background/50 text-white"
+                        placeholder="Ex.: Lavar e pentear – casamento"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="manual-booking-custom-duration" className="text-xs text-gray-300">Duração (min)</Label>
+                      <Input
+                        id="manual-booking-custom-duration"
+                        type="number"
+                        min="1"
+                        max="720"
+                        step="1"
+                        value={blockData.customDurationMinutes}
+                        onChange={(event) => onBlockDataChange({ ...blockData, customDurationMinutes: event.target.value })}
+                        className="h-11 border-white/10 bg-background/50 text-white"
+                      />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="manual-booking-custom-price" className="text-xs text-gray-300">Preço (€)</Label>
+                      <Input
+                        id="manual-booking-custom-price"
+                        inputMode="decimal"
+                        value={blockData.servicePrice}
+                        onChange={(event) => onBlockDataChange({ ...blockData, servicePrice: event.target.value })}
+                        className="h-11 border-white/10 bg-background/50 text-white"
+                        placeholder="Ex.: 30,00"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-3">
@@ -500,7 +647,12 @@ export function AppointmentBlockDialog({
             type="button"
             variant="gold"
             className="h-12 w-full rounded-xl text-base font-bold"
-            disabled={!blockData.barberId || blockData.times.length === 0 || (blockData.isManualBooking && !blockData.serviceId)}
+            disabled={
+              !blockData.barberId ||
+              blockData.times.length === 0 ||
+              (blockData.isManualBooking && blockData.serviceMode === "existing" && !blockData.serviceId) ||
+              (blockData.isManualBooking && blockData.serviceMode === "custom" && !blockData.customServiceName.trim())
+            }
             onClick={() => {
               if (blockData.isManualBooking) setIsEmailTouched(true);
               onSubmit();

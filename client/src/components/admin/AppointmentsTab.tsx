@@ -16,6 +16,10 @@ export type AppointmentViewMode = "day" | "upcoming";
 export type AppointmentBlockData = {
   barberId: string;
   serviceId: string;
+  serviceMode: "existing" | "custom";
+  customServiceName: string;
+  customDurationMinutes: string;
+  servicePrice: string;
   times: string[];
   name: string;
   phone: string;
