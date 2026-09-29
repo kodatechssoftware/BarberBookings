@@ -99,6 +99,7 @@ type AdminUser = {
 };
 type AdminAppointment = {
   id: number;
+  locationId?: number;
   barberId: number;
   serviceId: number | null;
   startTime: string;
@@ -1687,10 +1688,13 @@ export default function Admin() {
   const [shopAvailabilityForm, setShopAvailabilityForm] = useState<AvailabilityForm>(() => createDefaultAvailabilityForm());
   const [isSavingShopAvailability, setIsSavingShopAvailability] = useState(false);
   const [customerHistory, setCustomerHistory] = useState<any | null>(null);
+  const [historyAppointment, setHistoryAppointment] = useState<AdminAppointment | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [customerNotes, setCustomerNotes] = useState("");
   const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
+  const historyRequestIdRef = useRef(0);
 
   useEffect(() => {
     // Never carry an unfinished operation into another shop, including a change in another tab.
@@ -1703,7 +1707,10 @@ export default function Admin() {
     setIsAddingBarber(false);
     setIsAddingService(false);
     setIsBlocking(false);
+    historyRequestIdRef.current += 1;
     setIsHistoryOpen(false);
+    setHistoryAppointment(null);
+    setHistoryError(null);
     setBarberRemovalCandidate(null);
     setAbsenceConflict(null);
     setBarberServiceDrafts({});
@@ -2158,38 +2165,61 @@ export default function Admin() {
     }
   };
 
-  const openCustomerHistory = async (appointment: any) => {
-    setIsHistoryOpen(true);
+  const loadCustomerHistory = async (appointment: AdminAppointment) => {
+    const requestId = ++historyRequestIdRef.current;
     setIsLoadingHistory(true);
+    setHistoryError(null);
     setCustomerHistory(null);
     setCustomerNotes("");
     try {
-      const params = new URLSearchParams();
-      if (appointment.customerEmail) params.set("email", appointment.customerEmail);
-      if (appointment.customerName) params.set("name", appointment.customerName);
-      const query = params.toString() ? `?${params.toString()}` : "";
-      const res = await apiFetch(`/api/admin/customers/${encodeURIComponent(appointment.customerPhone)}/history${query}`);
-      if (!res.ok) throw new Error("Não foi possível carregar o histórico do cliente.");
+      const locationId = appointment.locationId ?? activeLocationId;
+      const res = await apiFetch(
+        `/api/admin/customers/history?appointmentId=${appointment.id}`,
+        locationId ? { headers: locationHeaders(locationId) } : undefined,
+      );
+      if (!res.ok) {
+        const responseBody = await res.json().catch(() => null);
+        const requestError = new Error(responseBody?.message || "Não foi possível carregar o histórico do cliente.") as Error & {
+          status?: number;
+          code?: unknown;
+        };
+        requestError.status = res.status;
+        requestError.code = responseBody?.code;
+        throw requestError;
+      }
       const data = await res.json();
+      if (historyRequestIdRef.current !== requestId) return;
       setCustomerHistory(data);
       setCustomerNotes(data.notes?.notes || "");
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message, variant: "destructive" });
-      setIsHistoryOpen(false);
+      if (historyRequestIdRef.current !== requestId) return;
+      console.error("Customer history request failed", {
+        status: err?.status,
+        code: err?.code,
+        message: err?.message,
+      });
+      setHistoryError("Não foi possível carregar o histórico.");
     } finally {
-      setIsLoadingHistory(false);
+      if (historyRequestIdRef.current === requestId) setIsLoadingHistory(false);
     }
+  };
+
+  const openCustomerHistory = (appointment: AdminAppointment) => {
+    setHistoryAppointment(appointment);
+    setIsHistoryOpen(true);
+    void loadCustomerHistory(appointment);
   };
 
   const handleSaveCustomerNotes = async () => {
     if (!customerHistory?.customer?.phone) return;
     setIsSavingCustomerNotes(true);
     try {
+      const locationId = historyAppointment?.locationId ?? activeLocationId;
       const res = await apiRequest("PATCH", `/api/admin/customers/${encodeURIComponent(customerHistory.customer.phone)}/notes`, {
         customerName: customerHistory.customer.name || "",
         email: customerHistory.customer.email || "",
         notes: customerNotes,
-      });
+      }, locationId ? { headers: locationHeaders(locationId) } : undefined);
       const savedNote = await res.json();
       setCustomerHistory({
         ...customerHistory,
@@ -3115,19 +3145,56 @@ export default function Admin() {
           )}
         </div>
 
-        <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
-          <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
+        <Dialog
+          open={isHistoryOpen}
+          onOpenChange={(open) => {
+            setIsHistoryOpen(open);
+            if (!open) {
+              historyRequestIdRef.current += 1;
+              setIsLoadingHistory(false);
+              setHistoryError(null);
+              setHistoryAppointment(null);
+            }
+          }}
+        >
+          <DialogContent
+            mobileViewportAware
+            className="w-[calc(100vw-1rem)] max-w-2xl overflow-y-auto border-white/10 bg-card text-white"
+          >
             <DialogHeader>
               <DialogTitle>Histórico do cliente</DialogTitle>
             </DialogHeader>
             {isLoadingHistory ? (
               <div className="py-12 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
+            ) : historyError ? (
+              <div role="alert" className="space-y-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
+                <div>
+                  <p className="font-semibold text-red-200">{historyError}</p>
+                  <p className="mt-1 text-sm text-gray-300">A Agenda continua disponível. Confirme a ligação e tente novamente.</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => historyAppointment && void loadCustomerHistory(historyAppointment)}
+                  disabled={!historyAppointment}
+                >
+                  Tentar novamente
+                </Button>
+              </div>
             ) : customerHistory ? (
               <div className="space-y-5">
                 <div>
                   <h3 className="text-xl font-bold">{customerHistory.customer.name || "Cliente"}</h3>
-                  <p className="text-sm text-gray-400">{customerHistory.customer.phone} {customerHistory.customer.email ? `· ${customerHistory.customer.email}` : ""}</p>
+                  <p className="text-sm text-gray-400">
+                    {[customerHistory.customer.phone, customerHistory.customer.email].filter(Boolean).join(" · ") || "Sem telemóvel ou email associado"}
+                  </p>
                 </div>
+                {!customerHistory.customer.phone && !customerHistory.customer.email && (
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    Sem um contacto que identifique o cliente, o histórico apresenta apenas esta marcação.
+                  </div>
+                )}
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                   <div className="rounded-xl bg-white/5 p-3"><p className="text-xs text-gray-400">Total</p><p className="text-xl font-bold">{customerHistory.stats.total}</p></div>
                   <div className="rounded-xl bg-blue-500/10 p-3"><p className="text-xs text-gray-400">Marcadas</p><p className="text-xl font-bold text-blue-300">{customerHistory.stats.booked}</p></div>
@@ -3139,41 +3206,47 @@ export default function Admin() {
                 <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
                   Última presença: {customerHistory.stats.lastPresence ? format(parseISO(customerHistory.stats.lastPresence), "dd/MM/yyyy HH:mm") : "sem presença registada"}
                 </div>
-                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div>
-                      <Label className="text-sm font-semibold text-white">Notas do cliente</Label>
-                      <p className="text-xs text-gray-400">
-                        Preferências de corte, hábitos de visita, barbeiro preferido ou cuidados a lembrar.
-                      </p>
+                {customerHistory.customer.phone ? (
+                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <Label className="text-sm font-semibold text-white">Notas do cliente</Label>
+                        <p className="text-xs text-gray-400">
+                          Preferências de corte, hábitos de visita, barbeiro preferido ou cuidados a lembrar.
+                        </p>
+                      </div>
+                      {customerHistory.notes?.updatedAt && (
+                        <span className="text-[11px] text-gray-500">
+                          Atualizado em {format(parseISO(customerHistory.notes.updatedAt), "dd/MM/yyyy HH:mm")}
+                        </span>
+                      )}
                     </div>
-                    {customerHistory.notes?.updatedAt && (
-                      <span className="text-[11px] text-gray-500">
-                        Atualizado em {format(parseISO(customerHistory.notes.updatedAt), "dd/MM/yyyy HH:mm")}
-                      </span>
-                    )}
+                    <Textarea
+                      value={customerNotes}
+                      onChange={(e) => setCustomerNotes(e.target.value)}
+                      maxLength={1200}
+                      placeholder="Ex.: Degradê médio, máquina 0.5 dos lados, prefere Bruno, costuma vir a cada 3 semanas."
+                      className="min-h-[110px] scroll-mb-24 resize-y border-white/10 bg-background text-white placeholder:text-gray-600"
+                    />
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <span className="text-xs text-gray-500">{customerNotes.length}/1200</span>
+                      <Button
+                        variant="gold"
+                        size="sm"
+                        onClick={handleSaveCustomerNotes}
+                        disabled={isSavingCustomerNotes}
+                        className="w-full sm:w-auto"
+                      >
+                        {isSavingCustomerNotes ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Guardar notas
+                      </Button>
+                    </div>
                   </div>
-                  <Textarea
-                    value={customerNotes}
-                    onChange={(e) => setCustomerNotes(e.target.value)}
-                    maxLength={1200}
-                    placeholder="Ex.: Degradê médio, máquina 0.5 dos lados, prefere Bruno, costuma vir a cada 3 semanas."
-                    className="min-h-[110px] resize-y border-white/10 bg-background text-white placeholder:text-gray-600"
-                  />
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <span className="text-xs text-gray-500">{customerNotes.length}/1200</span>
-                    <Button
-                      variant="gold"
-                      size="sm"
-                      onClick={handleSaveCustomerNotes}
-                      disabled={isSavingCustomerNotes}
-                      className="w-full sm:w-auto"
-                    >
-                      {isSavingCustomerNotes ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Guardar notas
-                    </Button>
+                ) : (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-gray-400">
+                    As notas do cliente precisam de um telemóvel associado à marcação.
                   </div>
-                </div>
+                )}
                 <div className="space-y-2">
                   {customerHistory.appointments.map((appointment: any) => (
                     <div key={appointment.id} className="rounded-xl border border-white/10 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">

@@ -326,6 +326,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     expect((await request.patch(`${customerPath}/notes`, { headers: primaryHeaders, data: {
       customerName, email: "multi@example.test", notes: primaryNote,
     } })).ok()).toBe(true);
+    expect((await (await request.get(`${customerPath}/history${customerQuery}`, { headers: primaryHeaders })).json()).notes.notes).toBe(primaryNote);
     expect((await request.get(`${customerPath}/history${customerQuery}`, { headers: portoHeaders })).status()).toBe(200);
     expect((await (await request.get(`${customerPath}/history${customerQuery}`, { headers: portoHeaders })).json()).notes.notes).toBe("");
     expect((await request.patch(`${customerPath}/notes`, { headers: portoHeaders, data: {
@@ -333,14 +334,23 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     } })).ok()).toBe(true);
     expect((await (await request.get(`${customerPath}/history${customerQuery}`, { headers: primaryHeaders })).json()).notes.notes).toBe(primaryNote);
     expect((await (await request.get(`${customerPath}/history${customerQuery}`, { headers: portoHeaders })).json()).notes.notes).toBe(portoNote);
+    expect((await (await request.get(`${customerPath}/history${customerQuery}`, { headers: primaryHeaders })).json()).notes.notes).toBe(primaryNote);
+    const customerAppointmentIds: number[] = [];
     for (const headers of [primaryHeaders, portoHeaders]) {
       const appointments = await (await request.get("/api/appointments", { headers })).json();
       const customerAppointment = appointments.find((appointment: any) => appointment.customerName === customerName);
       expect(customerAppointment).toBeTruthy();
+      customerAppointmentIds.push(customerAppointment.id);
       expect((await request.patch(`/api/appointments/${customerAppointment.id}`, {
         headers, data: { status: "cancelled" },
       })).ok()).toBe(true);
     }
+    expect((await request.get(`/api/admin/customers/history?appointmentId=${customerAppointmentIds[0]}`, {
+      headers: primaryHeaders,
+    })).status()).toBe(200);
+    expect((await request.get(`/api/admin/customers/history?appointmentId=${customerAppointmentIds[0]}`, {
+      headers: portoHeaders,
+    })).status()).toBe(404);
 
     monday.setUTCHours(14, 0, 0, 0);
     // Same barber, same instant, different shops and different booking entry points.
@@ -441,6 +451,11 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     expect((await (await page.request.get(`${customerPath}/history${customerQuery}`, { headers: primaryHeaders })).json()).notes.notes).toBe(primaryNote);
     expect((await (await page.request.get(`${customerPath}/history${customerQuery}`, { headers: portoHeaders })).json()).notes.notes).toBe(portoNote);
     expect((await page.request.get("/api/appointments", { headers: { "X-Location-Id": String(created[1].id) } })).status()).toBe(403);
+    const forbiddenHistory = await page.request.get(`${customerPath}/history${customerQuery}`, {
+      headers: { "X-Location-Id": String(created[1].id) },
+    });
+    expect(forbiddenHistory.status()).toBe(403);
+    expect(await forbiddenHistory.json()).toEqual({ message: "Não tem acesso a esta localização." });
     expect((await page.request.patch(`${customerPath}/notes`, {
       headers: { "X-Location-Id": String(created[1].id) },
       data: { customerName, email: "multi@example.test", notes: "Sem acesso" },
