@@ -1072,6 +1072,23 @@ function isLateCancellation(startTime: Date | string) {
   return millisecondsUntilAppointment < CANCELLATION_POLICY_HOURS * 60 * 60 * 1000;
 }
 
+function summarizeCustomerAppointments(appointments: Appointment[]) {
+  const sortedDesc = [...appointments].sort(
+    (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime(),
+  );
+
+  return {
+    total: appointments.length,
+    booked: appointments.filter((appointment) => appointment.status === "booked").length,
+    completed: appointments.filter((appointment) => appointment.status === "completed").length,
+    cancelled: appointments.filter((appointment) => appointment.status === "cancelled").length,
+    lateCancelled: appointments.filter((appointment) => appointment.status === "late_cancelled").length,
+    noShows: appointments.filter((appointment) => appointment.status === "no_show").length,
+    lastPresence:
+      sortedDesc.find((appointment) => appointment.status === "completed")?.startTime || null,
+  };
+}
+
 function getCustomerMetrics(
   appointments: Appointment[],
   phone?: string | null,
@@ -1079,27 +1096,12 @@ function getCustomerMetrics(
 ) {
   const normalizedPhone = normalizePhone(phone);
   const normalizedEmail = (email || "").trim().toLowerCase();
-
   const matches = appointments.filter((appointment) => {
     const samePhone = normalizedPhone && normalizePhone(appointment.customerPhone) === normalizedPhone;
     const sameEmail = normalizedEmail && appointment.customerEmail?.toLowerCase() === normalizedEmail;
     return samePhone || sameEmail;
   });
-
-  const sortedDesc = [...matches].sort(
-    (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime(),
-  );
-
-  return {
-    total: matches.length,
-    booked: matches.filter((appointment) => appointment.status === "booked").length,
-    completed: matches.filter((appointment) => appointment.status === "completed").length,
-    cancelled: matches.filter((appointment) => appointment.status === "cancelled").length,
-    lateCancelled: matches.filter((appointment) => appointment.status === "late_cancelled").length,
-    noShows: matches.filter((appointment) => appointment.status === "no_show").length,
-    lastPresence:
-      sortedDesc.find((appointment) => appointment.status === "completed")?.startTime || null,
-  };
+  return summarizeCustomerAppointments(matches);
 }
 
 function getDepositRecommendation(params: {
@@ -4556,15 +4558,12 @@ export async function registerRoutes(
     );
   };
 
-  app.get("/api/admin/customers/:phone/history", requireAuth, async (req, res) => {
-    const phone = normalizePhone(req.params.phone);
-    const email = String(req.query.email || "").trim().toLowerCase();
-    const requestedCustomerName = String(req.query.name || "").trim();
-    const customerNameKey = normalizeCustomerName(requestedCustomerName);
-    if (!phone && !email) {
-      return res.status(400).json({ message: "Indique um telemóvel ou email." });
-    }
-
+  const sendCustomerHistory = async (req: Request, res: Response, options: {
+    phone?: string;
+    email?: string;
+    customerName?: string;
+    appointmentId?: number;
+  }) => {
     const appSession = getAppSession(req);
     const barberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
     const locationId = Number(res.locals.locationId);
@@ -4579,11 +4578,26 @@ export async function registerRoutes(
       storage.getBarbers(),
       storage.getServices(),
     ]);
+    const anchorAppointment = options.appointmentId === undefined
+      ? undefined
+      : allAppointments.find((appointment) => appointment.id === options.appointmentId);
+    if (options.appointmentId !== undefined && !anchorAppointment) {
+      return res.status(404).json({ message: "Marcação não encontrada." });
+    }
+
+    const phone = normalizePhone(options.phone || anchorAppointment?.customerPhone);
+    const email = (options.email || anchorAppointment?.customerEmail || "").trim().toLowerCase();
+    const requestedCustomerName = (options.customerName || anchorAppointment?.customerName || "").trim();
+    const customerNameKey = normalizeCustomerName(requestedCustomerName);
+    if (!phone && !email && !anchorAppointment) {
+      return res.status(400).json({ message: "Indique um telemóvel ou email." });
+    }
     const locationBarbers = allBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
     const locationServices = allServices.filter((service) => !allowedServices || allowedServices.has(service.id));
 
-    const matchingAppointments = allAppointments
-      .filter((appointment) => customerIdentityMatches(appointment, phone, email, customerNameKey))
+    const matchingAppointments = (phone || email
+      ? allAppointments.filter((appointment) => customerIdentityMatches(appointment, phone, email, customerNameKey))
+      : [anchorAppointment!])
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
 
     const appointmentsWithDetails = matchingAppointments.map((appointment) => {
@@ -4597,7 +4611,7 @@ export async function registerRoutes(
         servicePrice: service?.price || 0,
       };
     });
-    const metrics = getCustomerMetrics(matchingAppointments, req.params.phone, email);
+    const metrics = summarizeCustomerAppointments(matchingAppointments);
     const customerNote = phone && (appSession.role === "admin" || matchingAppointments.length > 0)
       ? await storage.getCustomerNoteByIdentity(locationId, phone, customerNameKey) ??
         (customerNameKey ? await storage.getCustomerNoteByIdentity(locationId, phone, "") : undefined)
@@ -4606,7 +4620,7 @@ export async function registerRoutes(
     res.json({
       customer: {
         name: matchingAppointments[0]?.customerName || requestedCustomerName,
-        phone: matchingAppointments[0]?.customerPhone || req.params.phone,
+        phone: matchingAppointments[0]?.customerPhone || options.phone || "",
         email: matchingAppointments.find((appointment) => appointment.customerEmail)?.customerEmail || email,
       },
       notes: customerNote
@@ -4630,6 +4644,22 @@ export async function registerRoutes(
         depositRecommended: false,
       },
       appointments: appointmentsWithDetails,
+    });
+  };
+
+  app.get("/api/admin/customers/history", requireAuth, async (req, res) => {
+    const appointmentId = Number(req.query.appointmentId);
+    if (!Number.isInteger(appointmentId) || appointmentId <= 0) {
+      return res.status(400).json({ message: "Indique uma marcação válida." });
+    }
+    return sendCustomerHistory(req, res, { appointmentId });
+  });
+
+  app.get("/api/admin/customers/:phone/history", requireAuth, async (req, res) => {
+    return sendCustomerHistory(req, res, {
+      phone: req.params.phone,
+      email: String(req.query.email || ""),
+      customerName: String(req.query.name || ""),
     });
   });
 

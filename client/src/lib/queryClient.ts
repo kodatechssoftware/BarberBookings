@@ -38,11 +38,15 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  init?: RequestInit,
 ): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (data) headers.set("Content-Type", "application/json");
   const res = await apiFetch(url, {
+    ...init,
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
+    headers,
+    body: data ? JSON.stringify(data) : init?.body,
   });
 
   await throwIfResNotOk(res);

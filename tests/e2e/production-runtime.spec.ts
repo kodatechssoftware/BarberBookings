@@ -110,6 +110,19 @@ test("Production-equivalent runtime remains single-location and keeps external f
     customerEmail: "runtime-public@example.test",
     canManage: true,
   });
+  const publicCustomerHistory = await request.get(
+    `/api/admin/customers/history?appointmentId=${appointment.id}`,
+    { headers: authHeaders },
+  );
+  expect(publicCustomerHistory.status(), await publicCustomerHistory.text()).toBe(200);
+  const publicCustomerHistoryBody = await publicCustomerHistory.json();
+  expect(publicCustomerHistoryBody.customer).toMatchObject({
+    name: "Production Runtime Public",
+    phone: "+351912000001",
+    email: "runtime-public@example.test",
+  });
+  expect(publicCustomerHistoryBody.appointments).toHaveLength(1);
+  expect(publicCustomerHistoryBody.notes.notes).toBe("");
 
   const rescheduledStart = futureThursday(31, 15);
   const reschedule = await request.post(`/api/appointments/reschedule/${appointment.cancelToken}`, {
@@ -132,6 +145,15 @@ test("Production-equivalent runtime remains single-location and keeps external f
   const recurringAppointments = (await appointments.json()).filter((item: any) => item.customerName === recurringName);
   expect(recurringAppointments.length).toBeGreaterThan(1);
   expect(recurringAppointments.every((item: any) => item.locationId === 1)).toBe(true);
+  const recurringHistory = await request.get(
+    `/api/admin/customers/history?appointmentId=${recurringAppointments[0].id}`,
+    { headers: authHeaders },
+  );
+  expect(recurringHistory.status(), await recurringHistory.text()).toBe(200);
+  const recurringHistoryBody = await recurringHistory.json();
+  expect(recurringHistoryBody.appointments).toHaveLength(recurringAppointments.length);
+  expect(recurringHistoryBody.appointments.every((item: any) => item.serviceName === service.name)).toBe(true);
+  expect(recurringHistoryBody.notes.notes).toBe("");
 
   const notePhone = "+351912000003";
   const noteUpdate = await request.patch(`/api/admin/customers/${encodeURIComponent(notePhone)}/notes`, {
@@ -144,7 +166,9 @@ test("Production-equivalent runtime remains single-location and keeps external f
     { headers: authHeaders },
   );
   expect(noteHistory.ok(), await noteHistory.text()).toBe(true);
-  expect((await noteHistory.json()).notes.notes).toBe("Nota single-location");
+  const noteHistoryBody = await noteHistory.json();
+  expect(noteHistoryBody.notes.notes).toBe("Nota single-location");
+  expect(noteHistoryBody.appointments).toHaveLength(0);
 
   const bookingWindow = await request.get("/api/public-booking-window");
   expect((await bookingWindow.json()).enabled).toBe(false);
