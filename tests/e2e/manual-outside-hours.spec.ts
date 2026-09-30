@@ -21,6 +21,15 @@ function dateKey(iso: string) {
   ].join("-");
 }
 
+function getHeaderRow(sheet: ExcelJS.Worksheet, firstHeader: string) {
+  let headerRow: ExcelJS.Row | undefined;
+  sheet.eachRow((row) => {
+    if (!headerRow && row.getCell(1).value === firstHeader) headerRow = row;
+  });
+  if (!headerRow) throw new Error(`Header ${firstHeader} not found in ${sheet.name}`);
+  return headerRow;
+}
+
 const standardShopHours = () => Array.from({ length: 7 }, (_, dayOfWeek) => ({
   dayOfWeek,
   startTime: "09:00",
@@ -539,43 +548,42 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(exportResponse.status(), await exportResponse.text()).toBe(200);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exportResponse.body());
-    const detail = workbook.getWorksheet("Detalhe Completo");
+    const detail = workbook.getWorksheet("Detalhe dos Movimentos");
     expect(detail).toBeTruthy();
-    const headers = detail!.getRow(1).values as unknown[];
-    const customerColumn = headers.indexOf("Cliente");
-    const serviceColumn = headers.indexOf("Serviço");
+    const detailHeaderRow = getHeaderRow(detail!, "Data do serviço");
+    const headers = detailHeaderRow.values as unknown[];
+    const appointmentIdColumn = headers.indexOf("ID da marcação");
+    const serviceColumn = headers.indexOf("Serviço efetivo");
     const durationColumn = headers.indexOf("Duração (min)");
-    const valueColumn = headers.indexOf("Valor serviço (€)");
+    const valueColumn = headers.indexOf("Valor final (€)");
     const rows: Record<string, unknown>[] = [];
     detail!.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
+      if (rowNumber <= detailHeaderRow.number) return;
       rows.push({
-        customer: row.getCell(customerColumn).value,
+        appointmentId: row.getCell(appointmentIdColumn).value,
         service: row.getCell(serviceColumn).value,
         duration: row.getCell(durationColumn).value,
         value: row.getCell(valueColumn).value,
       });
     });
     expect(rows).toEqual(expect.arrayContaining([
-      { customer: customCustomer, service: "Lavar e pentear – casamento", duration: 45, value: 30 },
-      { customer: existingCustomer, service: service.name, duration: 60, value: 25 },
+      { appointmentId: custom.id, service: "Lavar e pentear – casamento", duration: 45, value: 30 },
+      { appointmentId: existing.id, service: service.name, duration: 60, value: 25 },
     ]));
-    const serviceSummary = workbook.getWorksheet("Resumo por Serviço");
-    const serviceSummaryText = JSON.stringify(serviceSummary?.getSheetValues());
-    expect(serviceSummaryText).toContain("Lavar e pentear – casamento");
-    expect(serviceSummaryText).not.toContain("Serviço desconhecido");
+    expect(JSON.stringify(detail!.getSheetValues())).not.toContain("Serviço desconhecido");
 
-    const compensation = workbook.getWorksheet("Acertos Barbeiros");
+    const compensation = workbook.getWorksheet("Acertos com Barbeiros");
     expect(compensation).toBeTruthy();
-    const compensationHeaders = compensation!.getRow(1).values as unknown[];
+    const compensationHeaderRow = getHeaderRow(compensation!, "Barbeiro");
+    const compensationHeaders = compensationHeaderRow.values as unknown[];
     const barberColumn = compensationHeaders.indexOf("Barbeiro");
-    const revenueColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Receita concluída"));
+    const revenueColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Base de acerto"));
     const commissionColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Comissões do barbeiro"));
-    const barberValueColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Valor líquido estimado do barbeiro"));
-    const shopValueColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Valor estimado da barbearia"));
+    const barberValueColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Valor do barbeiro"));
+    const shopValueColumn = compensationHeaders.findIndex((value) => String(value).startsWith("Valor da barbearia"));
     let compensationRow: ExcelJS.Row | undefined;
     compensation!.eachRow((row, rowNumber) => {
-      if (rowNumber > 1 && row.getCell(barberColumn).value === barber.name) compensationRow = row;
+      if (rowNumber > compensationHeaderRow.number && row.getCell(barberColumn).value === barber.name) compensationRow = row;
     });
     expect(compensationRow).toBeTruthy();
     expect(compensationRow!.getCell(revenueColumn).value).toBe(55);

@@ -4981,6 +4981,48 @@ export async function registerRoutes(
   });
 
   // === EXPORT RELATÓRIOS ===
+  app.get("/api/admin/export/barbers", requireAdmin, async (req, res) => {
+    const startDateKey = String(req.query.startDate || "");
+    const endDateKey = String(req.query.endDate || "");
+    if (!isCalendarDate(startDateKey) || !isCalendarDate(endDateKey) || startDateKey > endDateKey) {
+      return res.status(400).json({ message: "Intervalo de datas inválido." });
+    }
+
+    const locationId = Number(res.locals.locationId);
+    const { start } = getShopDateBounds(startDateKey);
+    const { endExclusive } = getShopDateBounds(endDateKey);
+    const [barbers, appointments, activeLocationBarberIds] = await Promise.all([
+      storage.getBarbers({ avatarReferences: true }),
+      storage.getAppointments(undefined, undefined, locationId),
+      getBarberIdsForLocation(locationId),
+    ]);
+    const activeLocationIds = new Set(activeLocationBarberIds);
+    const barbersById = new Map(barbers.map((barber) => [barber.id, barber]));
+    const active = barbers
+      .filter((barber) => barber.isVisible !== false && activeLocationIds.has(barber.id))
+      .map(({ id, name }) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name, "pt"));
+    const activeIds = new Set(active.map((barber) => barber.id));
+    const historicalIds = new Set(
+      appointments
+        .filter(isOperationalAppointment)
+        .filter((appointment) => {
+          const appointmentDate = new Date(appointment.startTime);
+          return appointmentDate >= start && appointmentDate < endExclusive;
+        })
+        .map((appointment) => appointment.barberId)
+        .filter((barberId) => !activeIds.has(barberId)),
+    );
+    const historical = Array.from(historicalIds)
+      .map((barberId) => {
+        const barber = barbersById.get(barberId);
+        return { id: barberId, name: barber?.name || `Barbeiro #${barberId}` };
+      })
+      .sort((left, right) => left.name.localeCompare(right.name, "pt"));
+
+    res.json({ active, historical });
+  });
+
   app.get("/api/admin/export", requireAuth, async (req, res) => {
     const { startDate, endDate, barberId } = req.query;
     const appSession = getAppSession(req);
@@ -5019,23 +5061,19 @@ export async function registerRoutes(
 
     try {
       const locationId = Number(res.locals.locationId);
-      const [rawBarbers, rawServices, allAppointments, compensationRules, businessExpenses, locationBarberIds, locationServiceIds] = await Promise.all([
+      const [rawBarbers, rawServices, allAppointments, compensationRules, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
         storage.getBarbers(),
         storage.getServices(),
         storage.getAppointments(selectedBarberId, undefined, locationId),
         storage.getBarberCompensationRules(selectedBarberId),
         storage.getBusinessExpenses({ startDate: startDateKey, endDate: endDateKey, locationId }),
-        getBarberIdsForLocation(locationId, true),
-        getServiceIdsForLocation(locationId),
+        getBarberIdsForLocation(locationId),
+        getLocation(locationId, true),
       ]);
-      const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
-      const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-      const allBarbers = rawBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
-      const allServices = rawServices.filter((service) => !allowedServices || allowedServices.has(service.id));
-
-      const barbersById = new Map(allBarbers.map((barber) => [barber.id, barber]));
-      const serviceNames = new Map(allServices.map((service) => [service.id, service.name]));
-      const servicePrices = new Map(allServices.map((service) => [service.id, service.price]));
+      const activeLocationBarberIdSet = new Set(activeLocationBarberIds);
+      const barbersById = new Map(rawBarbers.map((barber) => [barber.id, barber]));
+      const serviceNames = new Map(rawServices.map((service) => [service.id, service.name]));
+      const servicePrices = new Map(rawServices.map((service) => [service.id, service.price]));
       const selectedBarber = selectedBarberId ? barbersById.get(selectedBarberId) : undefined;
 
       type ExportSummaryRow = {
@@ -5046,6 +5084,8 @@ export async function registerRoutes(
         cancelled: number;
         lateCancelled: number;
         noShows: number;
+        earnedCents: number;
+        confirmedPaymentCents: number;
         realizedCents: number;
         cashCents: number;
         cardCents: number;
@@ -5067,6 +5107,8 @@ export async function registerRoutes(
         cancelled: 0,
         lateCancelled: 0,
         noShows: 0,
+        earnedCents: 0,
+        confirmedPaymentCents: 0,
         realizedCents: 0,
         cashCents: 0,
         cardCents: 0,
@@ -5085,9 +5127,15 @@ export async function registerRoutes(
           const collectedCents = getCollectedCents(appointment, priceCents);
           const paymentMethod = appointment.paymentMethod || "pending";
           summary.completed += 1;
+          summary.earnedCents += priceCents;
           summary.realizedCents += collectedCents;
-          if (paymentMethod === "cash") summary.cashCents += priceCents;
-          else if (paymentMethod === "card") summary.cardCents += priceCents;
+          if (paymentMethod === "cash") {
+            summary.cashCents += priceCents;
+            summary.confirmedPaymentCents += priceCents;
+          } else if (paymentMethod === "card") {
+            summary.cardCents += priceCents;
+            summary.confirmedPaymentCents += priceCents;
+          }
           else if (paymentMethod === "gift") summary.giftCents += priceCents;
           else summary.pendingPaymentCents += priceCents;
         }
@@ -5107,6 +5155,16 @@ export async function registerRoutes(
           return appointmentDate >= start && appointmentDate < endExclusive;
         })
         .sort((left, right) => new Date(left.startTime).getTime() - new Date(right.startTime).getTime());
+
+      if (!isBarberSession && selectedBarberId) {
+        const isActiveAtLocation = activeLocationBarberIdSet.has(selectedBarberId)
+          && selectedBarber?.isVisible !== false;
+        if (!isActiveAtLocation && rangeAppointments.length === 0) {
+          return res.status(400).json({
+            message: "Este barbeiro não está ativo nesta loja nem tem movimentos no período selecionado.",
+          });
+        }
+      }
 
       const totalSummary = createSummaryRow("Total geral");
       const barberSummaryMap = new Map<number, ExportSummaryRow>();
@@ -5903,6 +5961,269 @@ export async function registerRoutes(
         17: currencyFormat,
         18: dateTimeFormat,
       });
+
+      // The accounting export deliberately replaces the former multi-sheet
+      // management workbook with three traceable views. Clearing the draft
+      // sheets also prevents empty strings from being serialized as shared
+      // string indexes (the source of the stray numeric values in some readers).
+      [...workbook.worksheets].forEach((sheet) => workbook.removeWorksheet(sheet.id));
+
+      const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
+      const reportPeriod = `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`;
+      const reportFilter = selectedBarber?.name
+        || (selectedBarberId ? `Barbeiro #${selectedBarberId}` : "Todos os barbeiros");
+      const includesShopExpenses = selectedBarberId === undefined;
+      const cashBalanceAfterExpensesCents = totalSummary.confirmedPaymentCents - businessExpensesCents;
+      const styleReportTitle = (sheet: ExcelJS.Worksheet, range: string, title: string) => {
+        sheet.mergeCells(range);
+        const titleCell = sheet.getCell(range.split(":")[0]);
+        titleCell.value = title;
+        titleCell.font = { bold: true, size: 16, color: { argb: "FF111827" } };
+        titleCell.alignment = { vertical: "middle" };
+        titleCell.border = { bottom: { style: "medium", color: { argb: "FFC8A34E" } } };
+        titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+        sheet.getRow(Number(titleCell.row)).height = 28;
+      };
+      const styleSection = (sheet: ExcelJS.Worksheet, rowNumber: number, lastColumn: number) => {
+        const row = sheet.getRow(rowNumber);
+        row.font = { bold: true, color: { argb: "FF111827" } };
+        row.height = 22;
+        for (let column = 1; column <= lastColumn; column += 1) {
+          row.getCell(column).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+          row.getCell(column).border = { bottom: { style: "thin", color: { argb: "FFD1D5DB" } } };
+        }
+      };
+      const styleReportTable = (
+        sheet: ExcelJS.Worksheet,
+        headerRow: number,
+        widths: number[],
+        numberFormats: Record<number, string> = {},
+      ) => {
+        sheet.views = [{ state: "frozen", ySplit: headerRow, showGridLines: false }];
+        styleHeaderRow(sheet, headerRow);
+        widths.forEach((width, index) => {
+          sheet.getColumn(index + 1).width = width;
+        });
+        Object.entries(numberFormats).forEach(([columnIndex, numberFormat]) => {
+          sheet.getColumn(Number(columnIndex)).numFmt = numberFormat;
+        });
+        sheet.eachRow((row, rowNumber) => {
+          if (rowNumber < headerRow) return;
+          row.eachCell((cell) => {
+            cell.alignment = { vertical: "middle", wrapText: rowNumber === headerRow };
+            cell.border = {
+              bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+            };
+          });
+        });
+      };
+
+      const accountingSummarySheet = workbook.addWorksheet("Resumo Financeiro", {
+        views: [{ showGridLines: false }],
+        pageSetup: { orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+      styleReportTitle(accountingSummarySheet, "A2:D2", "Resumo financeiro");
+      const summaryMetadata: Array<[string, string]> = [
+        ["Barbearia", shopName],
+        ...(MULTI_LOCATION_CONFIG.enabled && location ? [["Localização", location.name] as [string, string]] : []),
+        ["Período", reportPeriod],
+        ["Filtro", reportFilter],
+      ];
+      summaryMetadata.forEach(([label, value], index) => {
+        const row = accountingSummarySheet.getRow(4 + index);
+        row.getCell(1).value = label;
+        row.getCell(2).value = value;
+        row.getCell(1).font = { bold: true, color: { argb: "FF374151" } };
+      });
+      const summarySectionRow = 5 + summaryMetadata.length;
+      accountingSummarySheet.getCell(summarySectionRow, 1).value = "Receitas e recebimentos";
+      styleSection(accountingSummarySheet, summarySectionRow, 2);
+      const financialRows: Array<[string, number]> = [
+        ["Receita de serviços concluídos", centsToEuros(totalSummary.earnedCents)],
+        ["Recebimentos confirmados", centsToEuros(totalSummary.confirmedPaymentCents)],
+        ["Recebimentos em dinheiro", centsToEuros(totalSummary.cashCents)],
+        ["Recebimentos em multibanco", centsToEuros(totalSummary.cardCents)],
+        ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
+        ["Ofertas (valor dos serviços, sem recebimento)", centsToEuros(totalSummary.giftCents)],
+        ...(includesShopExpenses ? [
+          ["Despesas registadas", centsToEuros(businessExpensesCents)] as [string, number],
+          ["Saldo de recebimentos após despesas registadas", centsToEuros(cashBalanceAfterExpensesCents)] as [string, number],
+        ] : []),
+      ];
+      financialRows.forEach(([label, value], index) => {
+        const row = accountingSummarySheet.getRow(summarySectionRow + index + 1);
+        row.getCell(1).value = label;
+        row.getCell(2).value = value;
+        row.getCell(2).numFmt = currencyFormat;
+        row.getCell(2).alignment = { horizontal: "right", vertical: "middle" };
+        if (index === 0 || index === 1 || index === financialRows.length - 1) {
+          row.font = { bold: true };
+        }
+        row.eachCell((cell) => {
+          cell.border = { bottom: { style: "thin", color: { argb: "FFE5E7EB" } } };
+        });
+      });
+      const accountingNoteRow = summarySectionRow + financialRows.length + 2;
+      accountingSummarySheet.mergeCells(accountingNoteRow, 1, accountingNoteRow, 4);
+      accountingSummarySheet.getCell(accountingNoteRow, 1).value =
+        "A receita inclui todos os serviços concluídos. Os recebimentos confirmados incluem apenas dinheiro e multibanco; ofertas e pagamentos por confirmar aparecem em separado.";
+      accountingSummarySheet.getCell(accountingNoteRow, 1).font = { italic: true, color: { argb: "FF4B5563" } };
+      accountingSummarySheet.getCell(accountingNoteRow, 1).alignment = { wrapText: true, vertical: "top" };
+      accountingSummarySheet.getRow(accountingNoteRow).height = 34;
+      accountingSummarySheet.getColumn(1).width = 52;
+      accountingSummarySheet.getColumn(2).width = 28;
+      accountingSummarySheet.getColumn(3).width = 34;
+      accountingSummarySheet.getColumn(4).width = 20;
+
+      if (includesShopExpenses && businessExpenses.length > 0) {
+        const expenseTitleRow = accountingNoteRow + 2;
+        accountingSummarySheet.getCell(expenseTitleRow, 1).value = "Despesas incluídas no período";
+        styleSection(accountingSummarySheet, expenseTitleRow, 4);
+        const expenseHeaderRow = expenseTitleRow + 1;
+        accountingSummarySheet.addTable({
+          name: "DespesasDoPeriodo",
+          ref: `A${expenseHeaderRow}`,
+          headerRow: true,
+          totalsRow: false,
+          style: { theme: "TableStyleMedium2", showRowStripes: true },
+          columns: ["Data", "Categoria", "Descrição", "Valor (€)"].map((name) => ({ name, filterButton: true })),
+          rows: [...businessExpenses]
+            .sort((left, right) => new Date(left.expenseDate).getTime() - new Date(right.expenseDate).getTime())
+            .map((expense) => [
+              toExcelShopDateTime(new Date(expense.expenseDate)),
+              getBusinessExpenseCategoryLabel(expense.category),
+              expense.description,
+              centsToEuros(expense.amountCents),
+            ]),
+        });
+        styleHeaderRow(accountingSummarySheet, expenseHeaderRow);
+        accountingSummarySheet.getColumn(1).numFmt = dateFormat;
+        accountingSummarySheet.getColumn(4).numFmt = currencyFormat;
+        for (let rowNumber = expenseHeaderRow + 1; rowNumber <= accountingSummarySheet.rowCount; rowNumber += 1) {
+          accountingSummarySheet.getCell(rowNumber, 1).alignment = { horizontal: "center", vertical: "middle" };
+        }
+      }
+
+      const movementsSheet = workbook.addWorksheet("Detalhe dos Movimentos", {
+        views: [{ showGridLines: false }],
+        pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      });
+      styleReportTitle(movementsSheet, "A2:J2", "Detalhe dos movimentos");
+      movementsSheet.getCell("A4").value = "Período";
+      movementsSheet.getCell("B4").value = reportPeriod;
+      movementsSheet.getCell("D4").value = "Filtro";
+      movementsSheet.getCell("E4").value = reportFilter;
+      movementsSheet.getCell("A4").font = { bold: true };
+      movementsSheet.getCell("D4").font = { bold: true };
+      const movementHeaderRow = 6;
+      movementsSheet.addTable({
+        name: "MovimentosDoPeriodo",
+        ref: `A${movementHeaderRow}`,
+        headerRow: true,
+        totalsRow: false,
+        style: { theme: "TableStyleMedium2", showRowStripes: true },
+        columns: [
+          "Data do serviço",
+          "ID da marcação",
+          "Barbeiro",
+          "Serviço efetivo",
+          "Duração (min)",
+          "Valor final (€)",
+          "Estado",
+          "Método de pagamento",
+          "Confirmação do pagamento",
+          "Valor recebido (€)",
+        ].map((name) => ({ name, filterButton: true })),
+        rows: rangeAppointments.map((appointment) => {
+          const priceCents = resolveAppointmentPriceCents(appointment, servicePrices);
+          const paymentMethod = appointment.paymentMethod || "pending";
+          const receivedCents = appointment.status === "completed"
+            && (paymentMethod === "cash" || paymentMethod === "card")
+            ? priceCents
+            : 0;
+          const paymentConfirmation = appointment.status !== "completed"
+            ? "Não aplicável"
+            : paymentMethod === "gift"
+              ? "Oferta (sem recebimento)"
+              : paymentMethod === "cash" || paymentMethod === "card"
+                ? "Confirmado"
+                : "Por confirmar";
+          return [
+            toExcelShopDateTime(new Date(appointment.startTime)),
+            appointment.id,
+            barbersById.get(appointment.barberId)?.name || `Barbeiro #${appointment.barberId}`,
+            resolveAppointmentServiceName(appointment, serviceNames, "Serviço desconhecido"),
+            appointment.durationMinutes,
+            centsToEuros(priceCents),
+            getAppointmentStatusLabel(appointment.status),
+            paymentMethod === "pending" ? null : getAppointmentPaymentMethodLabel(paymentMethod),
+            paymentConfirmation,
+            centsToEuros(receivedCents),
+          ];
+        }),
+      });
+      styleReportTable(movementsSheet, movementHeaderRow, [20, 17, 46, 42, 16, 18, 22, 26, 30, 20], {
+        1: dateTimeFormat,
+        6: currencyFormat,
+        10: currencyFormat,
+      });
+
+      const compensationRows = Array.from(compensationSummaryMap.values())
+        .filter((item) => item.models.size > 0 && (
+          !item.models.has(getCompensationModelLabel("none"))
+          || item.commissionCents !== 0
+          || item.chairRentCents !== 0
+          || item.barberEstimatedCents !== 0
+        ))
+        .sort((left, right) => left.barberName.localeCompare(right.barberName, "pt"));
+      if (compensationRows.length > 0) {
+        const settlementsSheet = workbook.addWorksheet("Acertos com Barbeiros", {
+          views: [{ showGridLines: false }],
+          pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+        });
+        styleReportTitle(settlementsSheet, "A2:H2", "Acertos com barbeiros");
+        settlementsSheet.getCell("A4").value = "Período";
+        settlementsSheet.getCell("B4").value = reportPeriod;
+        settlementsSheet.getCell("D4").value = "Filtro";
+        settlementsSheet.getCell("E4").value = reportFilter;
+        settlementsSheet.getCell("A4").font = { bold: true };
+        settlementsSheet.getCell("D4").font = { bold: true };
+        const settlementHeaderRow = 6;
+        settlementsSheet.addTable({
+          name: "AcertosDoPeriodo",
+          ref: `A${settlementHeaderRow}`,
+          headerRow: true,
+          totalsRow: false,
+          style: { theme: "TableStyleMedium2", showRowStripes: true },
+          columns: [
+            "Barbeiro",
+            "Modelo aplicado",
+            "Serviços concluídos",
+            "Base de acerto (€)",
+            "Comissões do barbeiro (€)",
+            "Aluguer de cadeira (€)",
+            "Valor do barbeiro (€)",
+            "Valor da barbearia (€)",
+          ].map((name) => ({ name, filterButton: true })),
+          rows: compensationRows.map((item) => [
+            item.barberName,
+            Array.from(item.models).join(" + "),
+            item.completed,
+            centsToEuros(item.realizedCents),
+            centsToEuros(item.commissionCents),
+            centsToEuros(item.chairRentCents),
+            centsToEuros(item.barberEstimatedCents),
+            centsToEuros(item.shopEstimatedCents),
+          ]),
+        });
+        styleReportTable(settlementsSheet, settlementHeaderRow, [46, 30, 22, 20, 26, 23, 22, 24], {
+          4: currencyFormat,
+          5: currencyFormat,
+          6: currencyFormat,
+          7: currencyFormat,
+          8: currencyFormat,
+        });
+      }
 
       const fileName = `Relatório_de_${formatCalendarDateKey(startDateKey, "-")}_a_${formatCalendarDateKey(endDateKey, "-")}.xlsx`;
       const fallbackFileName = fileName.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
