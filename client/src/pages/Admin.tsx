@@ -1450,7 +1450,7 @@ export default function Admin() {
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
   const [selectedBarberFilter, setSelectedBarberFilter] = useState<string>("all");
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<AppointmentStatusFilter>("all");
-  const [selectedAgendaStatusFilter, setSelectedAgendaStatusFilter] = useState<AppointmentStatusFilter>("all");
+  const [selectedAgendaStatusFilter, setSelectedAgendaStatusFilter] = useState<AppointmentStatusFilter>("booked");
   const [appointmentViewMode, setAppointmentViewMode] = useState<AppointmentViewMode>("day");
   const [dashboardDays, setDashboardDays] = useState("30");
   const [dashboardBarberFilter, setDashboardBarberFilter] = useState("all");
@@ -1631,8 +1631,7 @@ export default function Admin() {
     return agendaAppointmentList.filter((appointment) => {
       const matchesBarber = selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       const matchesStatus = selectedAgendaStatusFilter === "all"
-        ? appointment.status === "booked"
-        : appointment.status === selectedAgendaStatusFilter;
+        || appointment.status === selectedAgendaStatusFilter;
       return matchesBarber && matchesStatus;
     });
   }, [agendaAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter]);
