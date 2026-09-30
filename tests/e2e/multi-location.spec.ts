@@ -279,6 +279,21 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   expect(inPorto.serviceIds).toContain(portoService.id);
   expect(inPrimary.serviceIds).toContain(primaryService.id);
   expect(inPrimary.serviceIds).not.toContain(portoService.id);
+  const barberFilterDate = new Date().toISOString().slice(0, 10);
+  const primaryExportBarbers = await (await request.get(
+    `/api/admin/export/barbers?startDate=${barberFilterDate}&endDate=${barberFilterDate}`,
+    { headers: primaryHeaders },
+  )).json();
+  const portoExportBarbers = await (await request.get(
+    `/api/admin/export/barbers?startDate=${barberFilterDate}&endDate=${barberFilterDate}`,
+    { headers: portoHeaders },
+  )).json();
+  expect(primaryExportBarbers.active.map((item: any) => item.id)).toContain(sharedBarber.id);
+  expect(primaryExportBarbers.active.map((item: any) => item.id)).not.toContain(portoBarber.id);
+  expect(portoExportBarbers.active.map((item: any) => item.id)).toEqual(expect.arrayContaining([
+    sharedBarber.id,
+    portoBarber.id,
+  ]));
   expect((await request.patch(`/api/barbers/${sharedBarber.id}/services`, {
     headers: portoHeaders, data: { serviceIds: [primaryService.id] },
   })).status()).toBe(400);
@@ -425,7 +440,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
       expect(exported.ok(), await exported.text()).toBe(true);
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(await exported.body());
-      expect(JSON.stringify(workbook.getWorksheet("Despesas")?.getSheetValues()).includes("Material apenas Porto")).toBe(hasExpense);
+      expect(JSON.stringify(workbook.getWorksheet("Resumo Financeiro")?.getSheetValues()).includes("Material apenas Porto")).toBe(hasExpense);
     }
     await page.reload();
     await page.getByRole("tab", { name: "Relatórios" }).click();
@@ -494,6 +509,79 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   } finally {
     await guest.dispose();
   }
+});
+
+test("[multi-location] exporta movimentos históricos após retirar o barbeiro da loja", async ({ request }) => {
+  const locations = await ensureLocations(request, 2);
+  if (!locations[1].isActive) {
+    const activateResponse = await request.patch(`/api/admin/locations/${locations[1].id}`, {
+      data: { isActive: true },
+    });
+    expect(activateResponse.ok(), await activateResponse.text()).toBe(true);
+  }
+  const primaryHeaders = { "X-Location-Id": String(locations[0].id) };
+  const secondaryHeaders = { "X-Location-Id": String(locations[1].id) };
+  const services = await (await request.get("/api/services", { headers: primaryHeaders })).json();
+  const service = services[0];
+  expect(service).toBeTruthy();
+  const suffix = Date.now();
+  const barberResponse = await request.post("/api/barbers", { headers: primaryHeaders, data: {
+    name: `Historico removido ${suffix}`,
+    specialty: "Historico",
+    color: "#475569",
+    isVisible: true,
+    serviceIds: [service.id],
+  } });
+  expect(barberResponse.status(), await barberResponse.text()).toBe(201);
+  const barber = await barberResponse.json();
+  const startTime = new Date(Date.now() - 14 * 86400000);
+  startTime.setUTCHours(10, 0, 0, 0);
+  const reportDate = startTime.toISOString().slice(0, 10);
+  const customerName = `Historico removido ${suffix}`;
+  const appointmentResponse = await request.post("/api/appointments/block", { headers: primaryHeaders, data: {
+    barberId: barber.id,
+    serviceId: service.id,
+    startTime: startTime.toISOString(),
+    name: customerName,
+    phone: "+351912697230",
+    isManualBooking: true,
+    allowOutsideHours: true,
+  } });
+  expect(appointmentResponse.status(), await appointmentResponse.text()).toBe(201);
+  const appointments = await (await request.get(
+    `/api/appointments?barberId=${barber.id}&date=${reportDate}`,
+    { headers: primaryHeaders },
+  )).json();
+  const appointment = appointments.find((item: any) => item.customerName === customerName);
+  expect(appointment).toBeTruthy();
+
+  const removeResponse = await request.delete(`/api/barbers/${barber.id}`, { headers: primaryHeaders });
+  expect(removeResponse.ok(), await removeResponse.text()).toBe(true);
+  const options = await (await request.get(
+    `/api/admin/export/barbers?startDate=${reportDate}&endDate=${reportDate}`,
+    { headers: primaryHeaders },
+  )).json();
+  expect(options.active.map((item: any) => item.id)).not.toContain(barber.id);
+  expect(options.historical).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: barber.id, name: barber.name }),
+  ]));
+  const secondaryOptions = await (await request.get(
+    `/api/admin/export/barbers?startDate=${reportDate}&endDate=${reportDate}`,
+    { headers: secondaryHeaders },
+  )).json();
+  expect(secondaryOptions.historical.map((item: any) => item.id)).not.toContain(barber.id);
+
+  const exportResponse = await request.get(
+    `/api/admin/export?startDate=${reportDate}&endDate=${reportDate}&barberId=${barber.id}`,
+    { headers: primaryHeaders },
+  );
+  expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await exportResponse.body());
+  const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
+  const headers = detail.getRow(6).values as unknown[];
+  const appointmentIdColumn = headers.indexOf("ID da marcação");
+  expect(detail.getColumn(appointmentIdColumn).values).toContain(appointment.id);
 });
 
 test("[multi-location] dropdown opaco sobre os tabs, viewport e nomes longos com 1/2/3 lojas", async ({ page, request }, testInfo) => {

@@ -237,6 +237,14 @@ type BusinessExpense = {
   createdAt: string;
   updatedAt: string;
 };
+type ExportBarberOption = {
+  id: number;
+  name: string;
+};
+type ExportBarberOptions = {
+  active: ExportBarberOption[];
+  historical: ExportBarberOption[];
+};
 type BusinessExpenseForm = {
   category: BusinessExpenseCategory;
   description: string;
@@ -1557,6 +1565,31 @@ export default function Admin() {
     queryKey: [expensesUrl, { locationId: activeLocationId }],
     enabled: user?.authorized === true && user.role === "admin" && activeTab === "reports",
   });
+  const exportBarberOptionsUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      startDate: format(exportDates.start, "yyyy-MM-dd"),
+      endDate: format(exportDates.end, "yyyy-MM-dd"),
+    });
+    return `/api/admin/export/barbers?${params.toString()}`;
+  }, [exportDates.start, exportDates.end]);
+  const { data: exportBarberOptions } = useQuery<ExportBarberOptions>({
+    queryKey: [exportBarberOptionsUrl, { locationId: activeLocationId }],
+    enabled: user?.authorized === true && user.role === "admin" && activeTab === "reports",
+    queryFn: async () => {
+      const response = await apiFetch(exportBarberOptionsUrl);
+      if (!response.ok) throw new Error("Não foi possível carregar os barbeiros do relatório.");
+      return response.json();
+    },
+  });
+  useEffect(() => {
+    if (!exportBarberOptions || exportDates.barberId === "all") return;
+    const selectedBarberId = Number(exportDates.barberId);
+    const isAvailable = [...exportBarberOptions.active, ...exportBarberOptions.historical]
+      .some((barber) => barber.id === selectedBarberId);
+    if (!isAvailable) {
+      setExportDates((current) => ({ ...current, barberId: "all" }));
+    }
+  }, [exportBarberOptions, exportDates.barberId]);
   const businessExpensesTotalCents = useMemo(
     () => businessExpenses.reduce((total, expense) => total + expense.amountCents, 0),
     [businessExpenses],
@@ -4773,9 +4806,26 @@ export default function Admin() {
                       </SelectTrigger>
                       <SelectContent className="bg-card border-white/10 text-white">
                         <SelectItem value="all">Todos os barbeiros</SelectItem>
-                        {barbers?.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
+                        {(exportBarberOptions?.active || []).map((barber) => (
+                          <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>
+                        ))}
+                        {(exportBarberOptions?.historical.length || 0) > 0 && (
+                          <div className="px-2 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                            Com movimentos no período
+                          </div>
+                        )}
+                        {exportBarberOptions?.historical.map((barber) => (
+                          <SelectItem key={barber.id} value={String(barber.id)}>
+                            {barber.name} (histórico)
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
+                    {(exportBarberOptions?.historical.length || 0) > 0 && (
+                      <p className="text-xs text-gray-400">
+                        Os perfis antigos aparecem apenas quando têm movimentos no período selecionado.
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-2">

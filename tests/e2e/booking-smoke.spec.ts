@@ -156,6 +156,18 @@ function getCellValueByFirstColumnLabel(sheet: ExcelJS.Worksheet, label: string,
   return foundValue;
 }
 
+function getHeaderRow(sheet: ExcelJS.Worksheet, firstHeader: string) {
+  const expectedHeader = normalizedCellText(firstHeader);
+  let headerRow: ExcelJS.Row | undefined;
+  sheet.eachRow((row) => {
+    if (!headerRow && normalizedCellText(row.getCell(1).value) === expectedHeader) {
+      headerRow = row;
+    }
+  });
+  if (!headerRow) throw new Error(`Header ${firstHeader} not found in ${sheet.name}`);
+  return headerRow;
+}
+
 function getCompatibleBarberAndService(barbers: any[], services: any[]) {
   for (const barber of barbers) {
     const service = services.find((item: any) =>
@@ -2828,45 +2840,45 @@ test.describe("booking rules", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exportResponse.body());
 
-    for (const sheetName of ["Resumo Geral", "Resumo por Barbeiro", "Resumo por Serviço", "Resumo diário", "Detalhe Completo"]) {
+    for (const sheetName of ["Resumo Financeiro", "Detalhe dos Movimentos"]) {
       expect(workbook.getWorksheet(sheetName), `${sheetName} sheet`).toBeTruthy();
+    }
+    for (const removedSheetName of ["Resumo Geral", "Resumo por Barbeiro", "Resumo por Serviço", "Resumo diário", "Despesas", "Detalhe Completo"]) {
+      expect(workbook.getWorksheet(removedSheetName), `${removedSheetName} removed`).toBeUndefined();
     }
 
     const completedServiceValue = completed.service.price / 100;
     const bookedServiceValue = booked.service.price / 100;
-    const summarySheet = workbook.getWorksheet("Resumo Geral");
+    const summarySheet = workbook.getWorksheet("Resumo Financeiro");
     const summaryValues = new Map<string, unknown>();
-    summarySheet?.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
+    summarySheet?.eachRow((row) => {
+      summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
     });
-    expect(Number(summaryValues.get("Receita realizada"))).toBeGreaterThanOrEqual(completedServiceValue);
-    expect(Number(summaryValues.get("Receita em multibanco"))).toBeGreaterThanOrEqual(completedServiceValue);
-    expect(Number(summaryValues.get("Receita prevista em agenda"))).toBeGreaterThanOrEqual(bookedServiceValue);
+    expect(Number(summaryValues.get("Receita de serviços concluídos"))).toBeGreaterThanOrEqual(completedServiceValue);
+    expect(Number(summaryValues.get("Recebimentos confirmados"))).toBeGreaterThanOrEqual(completedServiceValue);
+    expect(Number(summaryValues.get("Recebimentos em multibanco"))).toBeGreaterThanOrEqual(completedServiceValue);
 
-    const detailSheet = workbook.getWorksheet("Detalhe Completo");
+    const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos");
     expect(detailSheet).toBeTruthy();
-    const headers = detailSheet!.getRow(1).values as unknown[];
-    const customerCol = headers.indexOf("Cliente");
-    const phoneCol = headers.indexOf("Telemóvel");
-    const emailCol = headers.indexOf("Email");
+    const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
+    const headers = detailHeaderRow.values as unknown[];
+    const appointmentIdCol = headers.indexOf("ID da marcação");
     const statusCol = headers.indexOf("Estado");
     const paymentMethodCol = headers.indexOf("Método de pagamento");
     const realizedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
-    const projectedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("receita prevista"));
-    expect(customerCol).toBeGreaterThan(0);
-    expect(phoneCol).toBe(-1);
-    expect(emailCol).toBe(-1);
+    const finalValueCol = headers.findIndex((value) => normalizedCellText(value).startsWith("valor final"));
+    expect(appointmentIdCol).toBeGreaterThan(0);
     expect(statusCol).toBeGreaterThan(0);
     expect(paymentMethodCol).toBeGreaterThan(0);
     expect(realizedCol).toBeGreaterThan(0);
-    expect(projectedCol).toBeGreaterThan(0);
+    expect(finalValueCol).toBeGreaterThan(0);
 
     let completedRow: ExcelJS.Row | undefined;
     let bookedRow: ExcelJS.Row | undefined;
     detailSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      if (row.getCell(customerCol).value === "Excel Completed QA") completedRow = row;
-      if (row.getCell(customerCol).value === "Excel Booked QA") bookedRow = row;
+      if (rowNumber <= detailHeaderRow.number) return;
+      if (row.getCell(appointmentIdCol).value === completed.appointment.id) completedRow = row;
+      if (row.getCell(appointmentIdCol).value === booked.appointment.id) bookedRow = row;
     });
 
     expect(completedRow).toBeTruthy();
@@ -2874,11 +2886,47 @@ test.describe("booking rules", () => {
     expect(completedRow!.getCell(statusCol).value).toBe("Concluída");
     expect(completedRow!.getCell(paymentMethodCol).value).toBe("Multibanco");
     expect(completedRow!.getCell(realizedCol).value).toBe(completedServiceValue);
-    expect(completedRow!.getCell(projectedCol).value).toBe(0);
+    expect(completedRow!.getCell(finalValueCol).value).toBe(completedServiceValue);
     expect(bookedRow!.getCell(statusCol).value).toBe("Marcada");
-    expect(bookedRow!.getCell(paymentMethodCol).value).toBe("Por confirmar");
+    expect(bookedRow!.getCell(paymentMethodCol).value).toBeNull();
     expect(bookedRow!.getCell(realizedCol).value).toBe(0);
-    expect(bookedRow!.getCell(projectedCol).value).toBe(bookedServiceValue);
+    expect(bookedRow!.getCell(finalValueCol).value).toBe(bookedServiceValue);
+
+    workbook.eachSheet((sheet) => {
+      sheet.eachRow({ includeEmpty: true }, (row) => {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          expect(cell.value, `${sheet.name}!${cell.address} must not contain a serialized empty string`).not.toBe("");
+        });
+      });
+    });
+    expect(summarySheet!.getCell("A1").value).toBeNull();
+    expect(summarySheet!.getCell("A3").value).toBeNull();
+    expect(summarySheet!.getCell("B8").value).toBeNull();
+  });
+
+  test("exports a readable accounting workbook when the period has no movements", async ({ request }) => {
+    await loginAdminRequest(request);
+    const response = await request.get(
+      "/api/admin/export?startDate=2045-01-02&endDate=2045-01-02&barberId=all",
+    );
+    expect(response.ok(), await response.text()).toBe(true);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await response.body());
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+      "Resumo Financeiro",
+      "Detalhe dos Movimentos",
+    ]);
+    const summary = workbook.getWorksheet("Resumo Financeiro")!;
+    expect(getCellValueByFirstColumnLabel(summary, "Receita de servicos concluidos")).toBe(0);
+    expect(getCellValueByFirstColumnLabel(summary, "Recebimentos confirmados")).toBe(0);
+    expect(getCellValueByFirstColumnLabel(summary, "Pagamentos por confirmar")).toBe(0);
+    const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
+    const headerRow = getHeaderRow(detail, "Data do serviço");
+    let movementRows = 0;
+    detail.eachRow((row, rowNumber) => {
+      if (rowNumber > headerRow.number && row.cellCount > 0) movementRows += 1;
+    });
+    expect(movementRows).toBe(0);
   });
 
   test("exports completed appointments by payment method for accounting filters", async ({ request }) => {
@@ -2924,40 +2972,206 @@ test.describe("booking rules", () => {
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exportResponse.body());
-    const detailSheet = workbook.getWorksheet("Detalhe Completo");
+    const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos");
     expect(detailSheet).toBeTruthy();
 
-    const headers = detailSheet!.getRow(1).values as unknown[];
-    const customerCol = headers.indexOf("Cliente");
+    const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
+    const headers = detailHeaderRow.values as unknown[];
+    const appointmentIdCol = headers.indexOf("ID da marcação");
     const paymentCol = headers.indexOf("Método de pagamento");
     const receivedCol = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
-    expect(customerCol).toBeGreaterThan(0);
+    expect(appointmentIdCol).toBeGreaterThan(0);
     expect(paymentCol).toBeGreaterThan(0);
     expect(receivedCol).toBeGreaterThan(0);
 
-    const rowsByCustomer = new Map<string, ExcelJS.Row>();
+    const rowsByAppointmentId = new Map<number, ExcelJS.Row>();
     detailSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) rowsByCustomer.set(String(row.getCell(customerCol).value), row);
+      if (rowNumber > detailHeaderRow.number) {
+        rowsByAppointmentId.set(Number(row.getCell(appointmentIdCol).value), row);
+      }
     });
 
-    expect(rowsByCustomer.get("Excel Dinheiro QA")?.getCell(paymentCol).value).toBe("Dinheiro");
-    expect(rowsByCustomer.get("Excel Multibanco QA")?.getCell(paymentCol).value).toBe("Multibanco");
-    expect(rowsByCustomer.get("Excel Oferta QA")?.getCell(paymentCol).value).toBe("Oferta");
-    expect(Number(rowsByCustomer.get("Excel Dinheiro QA")?.getCell(receivedCol).value)).toBeGreaterThan(0);
-    expect(Number(rowsByCustomer.get("Excel Multibanco QA")?.getCell(receivedCol).value)).toBeGreaterThan(0);
-    expect(rowsByCustomer.get("Excel Oferta QA")?.getCell(receivedCol).value).toBe(0);
+    expect(rowsByAppointmentId.get(cash.appointment.id)?.getCell(paymentCol).value).toBe("Dinheiro");
+    expect(rowsByAppointmentId.get(card.appointment.id)?.getCell(paymentCol).value).toBe("Multibanco");
+    expect(rowsByAppointmentId.get(gift.appointment.id)?.getCell(paymentCol).value).toBe("Oferta");
+    expect(Number(rowsByAppointmentId.get(cash.appointment.id)?.getCell(receivedCol).value)).toBeGreaterThan(0);
+    expect(Number(rowsByAppointmentId.get(card.appointment.id)?.getCell(receivedCol).value)).toBeGreaterThan(0);
+    expect(rowsByAppointmentId.get(gift.appointment.id)?.getCell(receivedCol).value).toBe(0);
 
-    const summarySheet = workbook.getWorksheet("Resumo Geral");
+    const summarySheet = workbook.getWorksheet("Resumo Financeiro");
     const summaryValues = new Map<string, unknown>();
-    summarySheet?.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
+    summarySheet?.eachRow((row) => {
+      summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
     });
-    expect(Number(summaryValues.get("Receita em dinheiro"))).toBeGreaterThan(0);
-    expect(Number(summaryValues.get("Receita em multibanco"))).toBeGreaterThan(0);
-    expect(Number(summaryValues.get("Ofertas (valor de tabela)"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Receita de serviços concluídos"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Recebimentos confirmados"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Recebimentos em dinheiro"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Recebimentos em multibanco"))).toBeGreaterThan(0);
+    expect(Number(summaryValues.get("Ofertas (valor dos serviços, sem recebimento)"))).toBeGreaterThan(0);
   });
 
-  test("includes business expenses and historical barber payouts in the Excel finance report", async ({ request }) => {
+  test("keeps archived barbers out of the normal export filter while preserving their historical movements", async ({ request }) => {
+    await loginAdminRequest(request);
+    const suffix = Date.now();
+    const serviceResponse = await request.post("/api/services", { data: {
+      name: `Historico export ${suffix}`,
+      agendaLabel: "Historico",
+      description: "Servico para filtro historico",
+      price: 1500,
+      duration: 30,
+    } });
+    expect(serviceResponse.ok(), await serviceResponse.text()).toBe(true);
+    const service = await serviceResponse.json();
+    const barberResponse = await request.post("/api/barbers", { data: {
+      name: `Barbeiro historico ${suffix}`,
+      specialty: "Historico",
+      color: "#64748B",
+      isVisible: true,
+      serviceIds: [service.id],
+    } });
+    expect(barberResponse.ok(), await barberResponse.text()).toBe(true);
+    const barber = await barberResponse.json();
+    const startTime = futureThursdayIso(-(110 + (suffix % 10)), 10, 0);
+    const reportDate = dateKeyFromIso(startTime);
+    const customerName = `Movimento historico ${suffix}`;
+
+    try {
+      const createResponse = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime,
+        name: customerName,
+        phone: "+351912697210",
+        isManualBooking: true,
+      } });
+      expect(createResponse.status(), await createResponse.text()).toBe(201);
+      const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${reportDate}`);
+      expect(appointmentsResponse.ok(), await appointmentsResponse.text()).toBe(true);
+      const appointment = (await appointmentsResponse.json()).find((item: any) => item.customerName === customerName);
+      expect(appointment).toBeTruthy();
+
+      const archiveResponse = await request.patch(`/api/barbers/${barber.id}`, {
+        data: { isVisible: false },
+      });
+      expect(archiveResponse.ok(), await archiveResponse.text()).toBe(true);
+
+      const optionsResponse = await request.get(
+        `/api/admin/export/barbers?startDate=${reportDate}&endDate=${reportDate}`,
+      );
+      expect(optionsResponse.ok(), await optionsResponse.text()).toBe(true);
+      const options = await optionsResponse.json();
+      expect(options.active.map((item: any) => item.id)).not.toContain(barber.id);
+      expect(options.historical).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: barber.id, name: barber.name }),
+      ]));
+
+      const unrelatedDate = new Date().toISOString().slice(0, 10);
+      const unrelatedOptions = await (await request.get(
+        `/api/admin/export/barbers?startDate=${unrelatedDate}&endDate=${unrelatedDate}`,
+      )).json();
+      expect(unrelatedOptions.historical.map((item: any) => item.id)).not.toContain(barber.id);
+
+      for (const barberId of ["all", String(barber.id)]) {
+        const exportResponse = await request.get(
+          `/api/admin/export?startDate=${reportDate}&endDate=${reportDate}&barberId=${barberId}`,
+        );
+        expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(await exportResponse.body());
+        const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos")!;
+        const headerRow = getHeaderRow(detailSheet, "Data do serviço");
+        const appointmentIdColumn = (headerRow.values as unknown[]).indexOf("ID da marcação");
+        const appointmentIds: number[] = [];
+        detailSheet.eachRow((row, rowNumber) => {
+          if (rowNumber > headerRow.number) appointmentIds.push(Number(row.getCell(appointmentIdColumn).value));
+        });
+        expect(appointmentIds).toContain(appointment.id);
+      }
+    } finally {
+      await request.patch(`/api/barbers/${barber.id}`, { data: { isVisible: true } });
+    }
+  });
+
+  test("keeps cancelled appointments and no-shows out of accounting revenue", async ({ request }) => {
+    await loginAdminRequest(request);
+    const services = await (await request.get("/api/services")).json();
+    const service = services[0];
+    const suffix = Date.now();
+    const barberResponse = await request.post("/api/barbers", { data: {
+      name: `Estados Excel ${suffix}`,
+      specialty: "Estados",
+      color: "#0F766E",
+      isVisible: true,
+      serviceIds: [service.id],
+    } });
+    expect(barberResponse.ok(), await barberResponse.text()).toBe(true);
+    const barber = await barberResponse.json();
+    const starts = [9, 11, 13].map((hour) => futureThursdayIso(-130, hour, 0));
+    const names = ["Concluida", "Cancelada", "Falta"].map((status) => `${status} ${suffix}`);
+    for (let index = 0; index < starts.length; index += 1) {
+      const response = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: starts[index],
+        name: names[index],
+        phone: `+35191269724${index}`,
+        isManualBooking: true,
+        allowOutsideHours: true,
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+    }
+    const reportDate = dateKeyFromIso(starts[0]);
+    const appointments = await (await request.get(
+      `/api/appointments?barberId=${barber.id}&date=${reportDate}`,
+    )).json();
+    const byName = new Map(appointments.map((appointment: any) => [appointment.customerName, appointment]));
+    const completed = byName.get(names[0]) as any;
+    const cancelled = byName.get(names[1]) as any;
+    const noShow = byName.get(names[2]) as any;
+    expect(completed).toBeTruthy();
+    expect(cancelled).toBeTruthy();
+    expect(noShow).toBeTruthy();
+    expect((await request.patch(`/api/appointments/${completed.id}/status`, {
+      data: { status: "completed", paymentMethod: "cash" },
+    })).ok()).toBe(true);
+    expect((await request.patch(`/api/appointments/${cancelled.id}`, {
+      data: { status: "cancelled" },
+    })).ok()).toBe(true);
+    expect((await request.patch(`/api/appointments/${noShow.id}`, {
+      data: { status: "no_show" },
+    })).ok()).toBe(true);
+
+    const exportResponse = await request.get(
+      `/api/admin/export?startDate=${reportDate}&endDate=${reportDate}&barberId=${barber.id}`,
+    );
+    expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+    const summary = workbook.getWorksheet("Resumo Financeiro")!;
+    expect(getCellValueByFirstColumnLabel(summary, "Receita de servicos concluidos")).toBe(service.price / 100);
+    expect(getCellValueByFirstColumnLabel(summary, "Recebimentos confirmados")).toBe(service.price / 100);
+    const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
+    const headerRow = getHeaderRow(detail, "Data do serviço");
+    const headers = headerRow.values as unknown[];
+    const idColumn = headers.indexOf("ID da marcação");
+    const statusColumn = headers.indexOf("Estado");
+    const valueColumn = headers.indexOf("Valor final (€)");
+    const receivedColumn = headers.indexOf("Valor recebido (€)");
+    const rowsById = new Map<number, ExcelJS.Row>();
+    detail.eachRow((row, rowNumber) => {
+      if (rowNumber > headerRow.number) rowsById.set(Number(row.getCell(idColumn).value), row);
+    });
+    expect(rowsById.get(completed.id)?.getCell(statusColumn).value).toBe("Concluída");
+    expect(rowsById.get(completed.id)?.getCell(receivedColumn).value).toBe(service.price / 100);
+    expect(rowsById.get(cancelled.id)?.getCell(statusColumn).value).toBe("Cancelada");
+    expect(rowsById.get(cancelled.id)?.getCell(valueColumn).value).toBe(service.price / 100);
+    expect(rowsById.get(cancelled.id)?.getCell(receivedColumn).value).toBe(0);
+    expect(rowsById.get(noShow.id)?.getCell(statusColumn).value).toBe("Falta");
+    expect(rowsById.get(noShow.id)?.getCell(valueColumn).value).toBe(service.price / 100);
+    expect(rowsById.get(noShow.id)?.getCell(receivedColumn).value).toBe(0);
+  });
+
+  test("keeps historical barber payouts in the separate settlement sheet", async ({ request }) => {
     test.setTimeout(120000);
     await loginAdminRequest(request);
 
@@ -2998,7 +3212,6 @@ test.describe("booking rules", () => {
     const currentRuleStart = currentRuleStartDate.toISOString();
     const startDateKey = dateKeyFromIso(historicalStart);
     const endDateKey = dateKeyFromIso(currentRuleStart);
-    const expenseDescription = `Renda teste financeiro ${suffix}`;
 
     const historicalAppointmentResponse = await request.post("/api/appointments/block", {
       data: {
@@ -3044,29 +3257,6 @@ test.describe("booking rules", () => {
     });
     expect(completeCurrentResponse.ok(), await completeCurrentResponse.text()).toBe(true);
 
-    const createExpenseResponse = await request.post("/api/admin/expenses", {
-      data: {
-        category: "rent",
-        description: expenseDescription,
-        amountCents: 3000,
-        expenseDate: endDateKey,
-        recurrence: "once",
-        notes: "Despesa controlada pelo teste financeiro",
-      },
-    });
-    expect(createExpenseResponse.status(), await createExpenseResponse.text()).toBe(201);
-
-    const expensesResponse = await request.get(`/api/admin/expenses?startDate=${endDateKey}&endDate=${endDateKey}`);
-    expect(expensesResponse.ok(), await expensesResponse.text()).toBe(true);
-    const expenses = await expensesResponse.json();
-    expect(expenses).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        description: expenseDescription,
-        amountCents: 3000,
-        category: "rent",
-      }),
-    ]));
-
     const exportResponse = await request.get(
       `/api/admin/export?startDate=${startDateKey}&endDate=${endDateKey}&barberId=${barber.id}`,
     );
@@ -3075,48 +3265,37 @@ test.describe("booking rules", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exportResponse.body());
 
-    const summarySheet = workbook.getWorksheet("Resumo Geral");
     const financialSheet = workbook.getWorksheet("Resumo Financeiro");
-    const compensationSheet = workbook.getWorksheet("Acertos Barbeiros");
-    const expensesSheet = workbook.getWorksheet("Despesas");
-    const detailSheet = workbook.getWorksheet("Detalhe Completo");
-    expect(summarySheet).toBeTruthy();
+    const compensationSheet = workbook.getWorksheet("Acertos com Barbeiros");
+    const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos");
     expect(financialSheet).toBeTruthy();
     expect(compensationSheet).toBeTruthy();
-    expect(expensesSheet).toBeTruthy();
     expect(detailSheet).toBeTruthy();
 
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Receita concluida")).toBe(200);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Aluguer de cadeira recebido pela barbearia")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor liquido estimado dos barbeiros")).toBe(90);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor estimado da barbearia antes de despesas")).toBe(110);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBe(30);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Resultado estimado após despesas")).toBe(80);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Receita de servicos concluidos")).toBe(200);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Recebimentos confirmados")).toBe(0);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Pagamentos por confirmar")).toBe(200);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBeUndefined();
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Saldo de recebimentos apos despesas registadas")).toBeUndefined();
 
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Receita realizada")).toBe(200);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Aluguer de cadeira recebido pela barbearia")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Valor liquido estimado dos barbeiros")).toBe(90);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Valor estimado da barbearia antes de despesas")).toBe(110);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Despesas operacionais")).toBe(30);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Resultado estimado")).toBe(80);
-
-    const compensationHeaders = compensationSheet!.getRow(1).values as unknown[];
+    const compensationHeaderRow = getHeaderRow(compensationSheet!, "Barbeiro");
+    const compensationHeaders = compensationHeaderRow.values as unknown[];
     const compensationBarberCol = compensationHeaders.indexOf("Barbeiro");
     const compensationRevenueCol = compensationHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("receita concluida"),
+      normalizedCellText(value).startsWith("base de acerto"),
     );
     const commissionCol = compensationHeaders.findIndex((value) =>
       normalizedCellText(value).startsWith("comissoes do barbeiro"),
     );
     const barberValueCol = compensationHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor liquido estimado do barbeiro"),
+      normalizedCellText(value).startsWith("valor do barbeiro"),
     );
     const shopValueCol = compensationHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor estimado da barbearia antes de despesas"),
+      normalizedCellText(value).startsWith("valor da barbearia"),
     );
     let compensationRow: ExcelJS.Row | undefined;
     compensationSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber > 1 && row.getCell(compensationBarberCol).value === barber.name) compensationRow = row;
+      if (rowNumber > compensationHeaderRow.number && row.getCell(compensationBarberCol).value === barber.name) compensationRow = row;
     });
     expect(compensationRow).toBeTruthy();
     expect(compensationRow!.getCell(compensationRevenueCol).value).toBe(200);
@@ -3124,42 +3303,16 @@ test.describe("booking rules", () => {
     expect(compensationRow!.getCell(barberValueCol).value).toBe(90);
     expect(compensationRow!.getCell(shopValueCol).value).toBe(110);
 
-    const expenseHeaders = expensesSheet!.getRow(1).values as unknown[];
-    const expenseDescriptionCol = expenseHeaders.findIndex((value) => normalizedCellText(value) === "descricao");
-    const expenseValueCol = expenseHeaders.findIndex((value) => normalizedCellText(value).startsWith("valor"));
-    let expenseRow: ExcelJS.Row | undefined;
-    expensesSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber > 1 && row.getCell(expenseDescriptionCol).value === expenseDescription) expenseRow = row;
-    });
-    expect(expenseRow).toBeTruthy();
-    expect(expenseRow!.getCell(expenseValueCol).value).toBe(30);
-
-    const detailHeaders = detailSheet!.getRow(1).values as unknown[];
-    const detailCustomerCol = detailHeaders.indexOf("Cliente");
-    const detailCommissionCol = detailHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("comissao"),
-    );
-    const detailBarberValueCol = detailHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor barbeiro"),
-    );
-    const detailShopValueCol = detailHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor barbearia"),
-    );
-    let historicalRow: ExcelJS.Row | undefined;
-    let currentRow: ExcelJS.Row | undefined;
+    const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
+    const detailHeaders = detailHeaderRow.values as unknown[];
+    const detailBarberCol = detailHeaders.indexOf("Barbeiro");
+    const detailValueCol = detailHeaders.findIndex((value) => normalizedCellText(value).startsWith("valor final"));
+    const detailRows: ExcelJS.Row[] = [];
     detailSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      if (row.getCell(detailCustomerCol).value === `Cliente historico financeiro ${suffix}`) historicalRow = row;
-      if (row.getCell(detailCustomerCol).value === `Cliente atual financeiro ${suffix}`) currentRow = row;
+      if (rowNumber > detailHeaderRow.number && row.getCell(detailBarberCol).value === barber.name) detailRows.push(row);
     });
-    expect(historicalRow).toBeTruthy();
-    expect(currentRow).toBeTruthy();
-    expect(historicalRow!.getCell(detailCommissionCol).value).toBe(0.4);
-    expect(historicalRow!.getCell(detailBarberValueCol).value).toBe(40);
-    expect(historicalRow!.getCell(detailShopValueCol).value).toBe(60);
-    expect(currentRow!.getCell(detailCommissionCol).value).toBe(0.5);
-    expect(currentRow!.getCell(detailBarberValueCol).value).toBe(50);
-    expect(currentRow!.getCell(detailShopValueCol).value).toBe(50);
+    expect(detailRows).toHaveLength(2);
+    expect(detailRows.map((row) => row.getCell(detailValueCol).value)).toEqual([100, 100]);
   });
 
   test("shows chair rent as barber adjustment and shop income in the Excel finance report", async ({ request }) => {
@@ -3216,65 +3369,32 @@ test.describe("booking rules", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exportResponse.body());
 
-    const summarySheet = workbook.getWorksheet("Resumo Geral");
-    const barberSheet = workbook.getWorksheet("Resumo por Barbeiro");
     const financialSheet = workbook.getWorksheet("Resumo Financeiro");
-    const compensationSheet = workbook.getWorksheet("Acertos Barbeiros");
-    expect(summarySheet).toBeTruthy();
-    expect(barberSheet).toBeTruthy();
+    const compensationSheet = workbook.getWorksheet("Acertos com Barbeiros");
     expect(financialSheet).toBeTruthy();
     expect(compensationSheet).toBeTruthy();
 
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Receita concluida")).toBe(100);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Aluguer de cadeira recebido pela barbearia")).toBe(25);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor liquido estimado dos barbeiros")).toBe(75);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Valor estimado da barbearia antes de despesas")).toBe(25);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Resultado estimado após despesas")).toBe(25);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Receita de servicos concluidos")).toBe(100);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Recebimentos confirmados")).toBe(0);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Pagamentos por confirmar")).toBe(100);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBeUndefined();
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Saldo de recebimentos apos despesas registadas")).toBeUndefined();
 
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Receita realizada")).toBe(100);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Aluguer de cadeira recebido pela barbearia")).toBe(25);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Valor liquido estimado dos barbeiros")).toBe(75);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Valor estimado da barbearia antes de despesas")).toBe(25);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Despesas operacionais")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(summarySheet!, "Resultado estimado")).toBe(25);
-
-    const barberHeaders = barberSheet!.getRow(1).values as unknown[];
-    const barberNameCol = barberHeaders.indexOf("Barbeiro");
-    const barberModelCol = barberHeaders.findIndex((value) => normalizedCellText(value) === "modelo financeiro");
-    const barberNetCol = barberHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor liquido estimado do barbeiro"),
-    );
-    const barberRentCol = barberHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("aluguer de cadeira"),
-    );
-    const barberShopCol = barberHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor estimado da barbearia antes de despesas"),
-    );
-    let barberRow: ExcelJS.Row | undefined;
-    barberSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber > 1 && row.getCell(barberNameCol).value === barber.name) barberRow = row;
-    });
-    expect(barberRow).toBeTruthy();
-    expect(barberRow!.getCell(barberModelCol).value).toBe("Aluguer fixo de cadeira");
-    expect(barberRow!.getCell(barberNetCol).value).toBe(75);
-    expect(barberRow!.getCell(barberRentCol).value).toBe(25);
-    expect(barberRow!.getCell(barberShopCol).value).toBe(25);
-
-    const compensationHeaders = compensationSheet!.getRow(1).values as unknown[];
+    const compensationHeaderRow = getHeaderRow(compensationSheet!, "Barbeiro");
+    const compensationHeaders = compensationHeaderRow.values as unknown[];
     const compensationBarberCol = compensationHeaders.indexOf("Barbeiro");
     const rentCol = compensationHeaders.findIndex((value) =>
       normalizedCellText(value).startsWith("aluguer de cadeira"),
     );
     const barberValueCol = compensationHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor liquido estimado do barbeiro"),
+      normalizedCellText(value).startsWith("valor do barbeiro"),
     );
     const shopValueCol = compensationHeaders.findIndex((value) =>
-      normalizedCellText(value).startsWith("valor estimado da barbearia antes de despesas"),
+      normalizedCellText(value).startsWith("valor da barbearia"),
     );
     let compensationRow: ExcelJS.Row | undefined;
     compensationSheet!.eachRow((row, rowNumber) => {
-      if (rowNumber > 1 && row.getCell(compensationBarberCol).value === barber.name) compensationRow = row;
+      if (rowNumber > compensationHeaderRow.number && row.getCell(compensationBarberCol).value === barber.name) compensationRow = row;
     });
     expect(compensationRow).toBeTruthy();
     expect(compensationRow!.getCell(rentCol).value).toBe(25);
@@ -3315,11 +3435,13 @@ test.describe("booking rules", () => {
       expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(await exportResponse.body());
-      const expensesSheet = workbook.getWorksheet("Despesas");
+      const expensesSheet = workbook.getWorksheet("Resumo Financeiro");
       expect(expensesSheet).toBeTruthy();
+      expect(Number(getCellValueByFirstColumnLabel(expensesSheet!, "Despesas registadas"))).toBeGreaterThanOrEqual(42.75);
+      const expenseHeaderRow = getHeaderRow(expensesSheet!, "Data");
       const exportedDescriptions: string[] = [];
       expensesSheet!.eachRow((row, rowNumber) => {
-        if (rowNumber > 1) exportedDescriptions.push(String(row.getCell(3).value || ""));
+        if (rowNumber > expenseHeaderRow.number) exportedDescriptions.push(String(row.getCell(3).value || ""));
       });
       expect(exportedDescriptions).toContain(expenseDescription);
 
@@ -3817,23 +3939,26 @@ test.describe("booking rules", () => {
       expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(await exportResponse.body());
-      const detailSheet = workbook.getWorksheet("Detalhe Completo");
+      const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos");
       expect(detailSheet).toBeTruthy();
 
-      const headers = detailSheet!.getRow(1).values as unknown[];
-      const customerColumn = headers.indexOf("Cliente");
+      const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
+      const headers = detailHeaderRow.values as unknown[];
+      const appointmentIdColumn = headers.indexOf("ID da marcação");
       const paymentColumn = headers.findIndex((value) => normalizedCellText(value).startsWith("metodo de pagamento"));
+      const confirmationColumn = headers.findIndex((value) => normalizedCellText(value).startsWith("confirmacao do pagamento"));
       const receivedColumn = headers.findIndex((value) => normalizedCellText(value).startsWith("valor recebido"));
       expect(paymentColumn).toBeGreaterThan(0);
       expect(receivedColumn).toBeGreaterThan(0);
       let detailRow: ExcelJS.Row | undefined;
       detailSheet!.eachRow((row, rowNumber) => {
-        if (rowNumber > 1 && row.getCell(customerColumn).value === customerName) detailRow = row;
+        if (rowNumber > detailHeaderRow.number && row.getCell(appointmentIdColumn).value === createdAppointments[0].id) detailRow = row;
       });
 
       expect(detailRow).toBeTruthy();
-      expect(detailRow!.getCell(paymentColumn).value).toBe("Por confirmar");
-      expect(detailRow!.getCell(receivedColumn).value).toBe(service.price / 100);
+      expect(detailRow!.getCell(paymentColumn).value).toBeNull();
+      expect(detailRow!.getCell(confirmationColumn).value).toBe("Por confirmar");
+      expect(detailRow!.getCell(receivedColumn).value).toBe(0);
     } finally {
       if (createdAppointments.length === 0) {
         const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
@@ -4567,21 +4692,21 @@ test.describe("booking rules", () => {
       expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(await exportResponse.body());
-      const detailSheet = workbook.getWorksheet("Detalhe Completo");
+      const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos");
       expect(detailSheet).toBeTruthy();
-      const headers = detailSheet!.getRow(1).values as unknown[];
-      const customerColumn = headers.indexOf("Cliente");
-      const dateColumn = headers.indexOf("Data");
-      const timeColumn = headers.indexOf("Hora");
+      const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
+      const headers = detailHeaderRow.values as unknown[];
+      const appointmentIdColumn = headers.indexOf("ID da marcação");
+      const dateColumn = headers.indexOf("Data do serviço");
       let detailRow: ExcelJS.Row | undefined;
       detailSheet!.eachRow((row, rowNumber) => {
-        if (rowNumber > 1 && row.getCell(customerColumn).value === customerName) detailRow = row;
+        if (rowNumber > detailHeaderRow.number && row.getCell(appointmentIdColumn).value === appointmentId) detailRow = row;
       });
       expect(detailRow).toBeTruthy();
-      expect(detailRow!.getCell(timeColumn).value).toBe("00:30");
       const exportedDate = detailRow!.getCell(dateColumn).value;
       expect(exportedDate).toBeInstanceOf(Date);
       expect((exportedDate as Date).toISOString().slice(0, 10)).toBe(shopDate);
+      expect((exportedDate as Date).toISOString().slice(11, 16)).toBe("00:30");
     } finally {
       if (appointmentId) {
         await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
@@ -6355,6 +6480,7 @@ test.describe("booking rules", () => {
         expect(workbook.getWorksheet("Resumo Geral")).toBeUndefined();
         expect(workbook.getWorksheet("Resumo Financeiro")).toBeUndefined();
         expect(workbook.getWorksheet("Acertos Barbeiros")).toBeUndefined();
+        expect(workbook.getWorksheet("Acertos com Barbeiros")).toBeUndefined();
         expect(workbook.getWorksheet("Despesas")).toBeUndefined();
         const detailSheet = workbook.getWorksheet("Detalhe");
         const exportedCustomers: string[] = [];
