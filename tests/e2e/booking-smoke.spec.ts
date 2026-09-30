@@ -2728,6 +2728,154 @@ test.describe("admin navigation", () => {
 });
 
 test.describe("agenda interaction", () => {
+  test("filters every agenda status explicitly and keeps daily counts aligned on desktop and mobile", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers?includeHidden=true"),
+      request.get("/api/services?includeHidden=true"),
+    ]);
+    expect(barbersResponse.ok(), await barbersResponse.text()).toBe(true);
+    expect(servicesResponse.ok(), await servicesResponse.text()).toBe(true);
+
+    const visibleBarbers = (await barbersResponse.json()).filter((barber: any) => barber.isVisible !== false);
+    const [service] = await servicesResponse.json();
+    expect(visibleBarbers.length).toBeGreaterThanOrEqual(2);
+    expect(service).toBeTruthy();
+
+    const [primaryBarber, secondaryBarber] = visibleBarbers;
+    const targetStarts = [
+      futureThursdayIso(1, 9, 0),
+      futureThursdayIso(1, 9, 30),
+      futureThursdayIso(1, 10, 0),
+      futureThursdayIso(1, 10, 30),
+      futureThursdayIso(1, 21, 0),
+      futureThursdayIso(1, 11, 30),
+    ];
+    const targetDayKey = localDateKey(new Date(targetStarts[0]));
+    const targetDateLabel = dateLabelFromIso(targetStarts[0]);
+    const fixtureAppointments = [
+      { id: 90001, barberId: primaryBarber.id, status: "booked", customerName: "Filtro Marcada Principal" },
+      { id: 90002, barberId: primaryBarber.id, status: "completed", customerName: "Filtro Concluída" },
+      { id: 90003, barberId: primaryBarber.id, status: "cancelled", customerName: "Filtro Cancelada" },
+      { id: 90004, barberId: primaryBarber.id, status: "late_cancelled", customerName: "Filtro Cancelamento Tardio" },
+      { id: 90005, barberId: primaryBarber.id, status: "no_show", customerName: "Filtro No-show Fora Horas" },
+      { id: 90006, barberId: secondaryBarber.id, status: "booked", customerName: "Filtro Marcada Secundária" },
+    ].map((appointment, index) => ({
+      ...appointment,
+      locationId: 1,
+      serviceId: service.id,
+      startTime: targetStarts[index],
+      customerEmail: null,
+      customerPhone: "900000000",
+      durationMinutes: 30,
+      serviceNameSnapshot: service.name,
+      servicePriceCentsSnapshot: service.price,
+      manualOutsideHours: false,
+      paymentMethod: appointment.status === "completed" ? "cash" : "pending",
+      cancelToken: `agenda-filter-${appointment.id}`,
+      cancelledAt: null,
+      depositRequired: false,
+      depositReason: null,
+      rescheduleRevision: 0,
+      notificationRevision: 0,
+      whatsappOptIn: false,
+      whatsappOptInAt: null,
+      seriesId: null,
+      seriesOccurrenceIndex: null,
+      createdAt: targetStarts[index],
+      canManage: true,
+    }));
+
+    const appointmentMutationRequests: string[] = [];
+    page.on("request", (requestEvent) => {
+      const url = new URL(requestEvent.url());
+      if (url.pathname.startsWith("/api/appointments") && !["GET", "HEAD"].includes(requestEvent.method())) {
+        appointmentMutationRequests.push(`${requestEvent.method()} ${url.pathname}`);
+      }
+    });
+    await page.route("**/api/appointments*", async (route) => {
+      const requestEvent = route.request();
+      const url = new URL(requestEvent.url());
+      if (requestEvent.method() === "GET" && url.pathname === "/api/appointments") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(fixtureAppointments),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    const weeklyAgenda = page.getByTestId("weekly-agenda");
+    const selectStatus = async (currentLabel: string, nextLabel: string) => {
+      await weeklyAgenda.getByRole("combobox").filter({ hasText: currentLabel }).click();
+      await page.getByRole("option", { name: nextLabel, exact: true }).click();
+    };
+    const desktopDayCount = weeklyAgenda.getByTestId(`weekly-agenda-day-count-${targetDayKey}`).filter({ visible: true });
+    const appointmentButton = (name: string) => weeklyAgenda.getByRole("button", {
+      name: new RegExp(`Abrir detalhes da marcação de ${name}`),
+    }).filter({ visible: true });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdmin(page);
+    await selectAgendaDay(page, targetStarts[0]);
+
+    await expect(weeklyAgenda.getByRole("combobox").filter({ hasText: "Marcadas" })).toBeVisible();
+    await expect(desktopDayCount).toHaveText("2");
+    await expect(appointmentButton("Filtro Marcada Principal")).toBeVisible();
+    await expect(appointmentButton("Filtro Marcada Secundária")).toBeVisible();
+    await expect(appointmentButton("Filtro Concluída")).toHaveCount(0);
+
+    await selectStatus("Marcadas", "Todas");
+    await expect(desktopDayCount).toHaveText("6");
+    for (const appointment of fixtureAppointments) {
+      await expect(appointmentButton(appointment.customerName)).toBeVisible();
+    }
+
+    await selectStatus("Todas", "Concluídas");
+    await expect(desktopDayCount).toHaveText("1");
+    await expect(appointmentButton("Filtro Concluída")).toBeVisible();
+    await expect(appointmentButton("Filtro Marcada Principal")).toHaveCount(0);
+
+    await selectStatus("Concluídas", "Canceladas");
+    await expect(desktopDayCount).toHaveText("1");
+    await expect(appointmentButton("Filtro Cancelada")).toBeVisible();
+
+    await selectStatus("Canceladas", "Cancelamentos tardios");
+    await expect(desktopDayCount).toHaveText("1");
+    await expect(appointmentButton("Filtro Cancelamento Tardio")).toBeVisible();
+
+    await selectStatus("Cancelamentos tardios", "No-show");
+    await expect(desktopDayCount).toHaveText("1");
+    await expect(appointmentButton("Filtro No-show Fora Horas")).toBeVisible();
+
+    await selectStatus("No-show", "Todas");
+    await weeklyAgenda.getByRole("combobox").filter({ hasText: "Todos os barbeiros" }).click();
+    await page.getByRole("option", { name: primaryBarber.name, exact: true }).click();
+    await expect(desktopDayCount).toHaveText("5");
+    await expect(appointmentButton("Filtro Marcada Secundária")).toHaveCount(0);
+
+    await selectStatus("Todas", "Marcadas");
+    await expect(desktopDayCount).toHaveText("1");
+    await expect(appointmentButton("Filtro Marcada Principal")).toBeVisible();
+
+    await weeklyAgenda.getByRole("combobox").filter({ hasText: primaryBarber.name }).click();
+    await page.getByRole("option", { name: "Todos os barbeiros", exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileDay = weeklyAgenda.getByTestId("day-agenda-mobile-barber")
+      .filter({ hasText: targetDateLabel })
+      .filter({ visible: true });
+    await expect(mobileDay.getByText("2 no dia", { exact: true })).toBeVisible();
+    await expect(mobileDay.getByRole("button", { name: /Filtro Marcada Principal/ })).toBeVisible();
+    await expect(mobileDay.getByRole("button", { name: /Filtro Marcada Secundária/ })).toBeVisible();
+
+    await selectStatus("Marcadas", "Todas");
+    await expect(mobileDay.getByText("6 no dia", { exact: true })).toBeVisible();
+    await expect(mobileDay.getByRole("button", { name: /Filtro No-show Fora Horas/ })).toBeVisible();
+    expect(appointmentMutationRequests).toEqual([]);
+  });
+
   test("locks the admin navigation tabs to horizontal panning", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await loginAdmin(page);

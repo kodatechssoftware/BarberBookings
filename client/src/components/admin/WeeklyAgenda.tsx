@@ -39,11 +39,12 @@ type WeeklyAgendaService = {
 };
 
 const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; label: string }> = [
-  { value: "all", label: "Marcadas" },
+  { value: "all", label: "Todas" },
+  { value: "booked", label: "Marcadas" },
   { value: "completed", label: "Concluídas" },
   { value: "cancelled", label: "Canceladas" },
   { value: "late_cancelled", label: "Cancelamentos tardios" },
-  { value: "no_show", label: "Faltas" },
+  { value: "no_show", label: "No-show" },
 ];
 
 const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#9F2638" : "#D4AF37";
@@ -122,9 +123,7 @@ function createAgendaSlots(startMinutes: number, endMinutes: number) {
 }
 
 function getDayAgendaWindow(appointments: WeeklyAgendaAppointment[]) {
-  const activeAppointments = appointments.filter((appointment) => appointment.status === "booked");
-
-  if (activeAppointments.length === 0) {
+  if (appointments.length === 0) {
     return {
       startMinutes: weeklyAgendaStartMinutes,
       endMinutes: weeklyAgendaEndMinutes,
@@ -132,8 +131,8 @@ function getDayAgendaWindow(appointments: WeeklyAgendaAppointment[]) {
     };
   }
 
-  const appointmentStartMinutes = activeAppointments.map((appointment) => getAgendaMinutes(parseISO(appointment.startTime)));
-  const appointmentEndMinutes = activeAppointments.map((appointment) => {
+  const appointmentStartMinutes = appointments.map((appointment) => getAgendaMinutes(parseISO(appointment.startTime)));
+  const appointmentEndMinutes = appointments.map((appointment) => {
     const start = parseISO(appointment.startTime);
     const end = getWeeklyAppointmentEnd(appointment);
     const endMinutes = getAgendaMinutes(end);
@@ -752,7 +751,7 @@ export function WeeklyAgenda({
 
   return (
     <>
-      <Card className="border-white/10 bg-card text-white">
+      <Card className="border-white/10 bg-card text-white" data-testid="weekly-agenda">
         <CardHeader className="gap-4">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -907,7 +906,6 @@ export function WeeklyAgenda({
                   {calendarDays.map((day) => {
                     const key = getDateKey(day);
                     const dayAppointments = appointmentsByDay.get(key) || [];
-                    const bookedAppointments = dayAppointments.filter((appointment) => appointment.status === "booked");
                     const isSelected = key === getDateKey(selectedDay);
 
                     return (
@@ -928,16 +926,19 @@ export function WeeklyAgenda({
                             <p className="truncate text-sm font-bold text-white">{format(day, "EEE", { locale: pt })}</p>
                             <p className="text-xs text-gray-500">{format(day, "dd/MM")}</p>
                           </div>
-                          <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase text-gray-200">
-                            {bookedAppointments.length}
+                          <span
+                            className="shrink-0 rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase text-gray-200"
+                            data-testid={`weekly-agenda-day-count-${key}`}
+                          >
+                            {dayAppointments.length}
                           </span>
                         </div>
                         <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                          {bookedAppointments.length === 0 ? "Livre" : "Marcações"}
+                          {dayAppointments.length === 0 ? "Livre" : "Marcações"}
                         </p>
-                        <div className="mt-2 flex h-3 -space-x-1" aria-hidden={bookedAppointments.length === 0}>
-                          {bookedAppointments.length > 0 &&
-                            bookedAppointments.slice(0, 6).map((appointment) => {
+                        <div className="mt-2 flex h-3 -space-x-1" aria-hidden={dayAppointments.length === 0}>
+                          {dayAppointments.length > 0 &&
+                            dayAppointments.slice(0, 6).map((appointment) => {
                               const barber = barbersById.get(appointment.barberId);
                               return (
                                 <span
