@@ -6000,20 +6000,20 @@ export async function registerRoutes(
         views: [{ showGridLines: false }],
         pageSetup: { orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
       });
-      styleReportTitle(accountingSummarySheet, "A2:D2", "Resumo financeiro");
+      styleReportTitle(accountingSummarySheet, "A1:D1", "Resumo financeiro");
       const summaryMetadata: Array<[string, string]> = [
         ["Barbearia", shopName],
         ...(MULTI_LOCATION_CONFIG.enabled && location ? [["Localização", location.name] as [string, string]] : []),
         ["Período", reportPeriod],
-        ["Filtro", reportFilter],
+        ["Barbeiro", reportFilter],
       ];
       summaryMetadata.forEach(([label, value], index) => {
-        const row = accountingSummarySheet.getRow(4 + index);
+        const row = accountingSummarySheet.getRow(3 + index);
         row.getCell(1).value = label;
         row.getCell(2).value = value;
         row.getCell(1).font = { bold: true, color: { argb: "FF374151" } };
       });
-      const summarySectionRow = 5 + summaryMetadata.length;
+      const summarySectionRow = 4 + summaryMetadata.length;
       accountingSummarySheet.getCell(summarySectionRow, 1).value = "Receitas e recebimentos";
       styleSection(accountingSummarySheet, summarySectionRow, 2);
       const financialRows: Array<[string, number]> = [
@@ -6086,14 +6086,14 @@ export async function registerRoutes(
         views: [{ showGridLines: false }],
         pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
       });
-      styleReportTitle(movementsSheet, "A2:J2", "Detalhe dos movimentos");
-      movementsSheet.getCell("A4").value = "Período";
-      movementsSheet.getCell("B4").value = reportPeriod;
-      movementsSheet.getCell("D4").value = "Filtro";
-      movementsSheet.getCell("E4").value = reportFilter;
-      movementsSheet.getCell("A4").font = { bold: true };
-      movementsSheet.getCell("D4").font = { bold: true };
-      const movementHeaderRow = 6;
+      styleReportTitle(movementsSheet, "A1:J1", "Detalhe dos movimentos");
+      movementsSheet.getCell("A3").value = "Período";
+      movementsSheet.getCell("B3").value = reportPeriod;
+      movementsSheet.getCell("D3").value = "Barbeiro";
+      movementsSheet.getCell("E3").value = reportFilter;
+      movementsSheet.getCell("A3").font = { bold: true };
+      movementsSheet.getCell("D3").font = { bold: true };
+      const movementHeaderRow = 5;
       movementsSheet.addTable({
         name: "MovimentosDoPeriodo",
         ref: `A${movementHeaderRow}`,
@@ -6145,6 +6145,15 @@ export async function registerRoutes(
         6: currencyFormat,
         10: currencyFormat,
       });
+      if (rangeAppointments.length === 0) {
+        const emptyMessageRow = movementHeaderRow + 1;
+        movementsSheet.mergeCells(emptyMessageRow, 1, emptyMessageRow, 10);
+        const emptyMessageCell = movementsSheet.getCell(emptyMessageRow, 1);
+        emptyMessageCell.value = "Sem movimentos no período para o filtro selecionado.";
+        emptyMessageCell.font = { italic: true, color: { argb: "FF4B5563" } };
+        emptyMessageCell.alignment = { vertical: "middle" };
+        movementsSheet.getRow(emptyMessageRow).height = 24;
+      }
 
       const compensationRows = Array.from(compensationSummaryMap.values())
         .filter((item) => item.models.size > 0 && (
@@ -6159,14 +6168,14 @@ export async function registerRoutes(
           views: [{ showGridLines: false }],
           pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
         });
-        styleReportTitle(settlementsSheet, "A2:H2", "Acertos com barbeiros");
-        settlementsSheet.getCell("A4").value = "Período";
-        settlementsSheet.getCell("B4").value = reportPeriod;
-        settlementsSheet.getCell("D4").value = "Filtro";
-        settlementsSheet.getCell("E4").value = reportFilter;
-        settlementsSheet.getCell("A4").font = { bold: true };
-        settlementsSheet.getCell("D4").font = { bold: true };
-        const settlementHeaderRow = 6;
+        styleReportTitle(settlementsSheet, "A1:H1", "Acertos com barbeiros");
+        settlementsSheet.getCell("A3").value = "Período";
+        settlementsSheet.getCell("B3").value = reportPeriod;
+        settlementsSheet.getCell("D3").value = "Barbeiro";
+        settlementsSheet.getCell("E3").value = reportFilter;
+        settlementsSheet.getCell("A3").font = { bold: true };
+        settlementsSheet.getCell("D3").font = { bold: true };
+        const settlementHeaderRow = 5;
         settlementsSheet.addTable({
           name: "AcertosDoPeriodo",
           ref: `A${settlementHeaderRow}`,
