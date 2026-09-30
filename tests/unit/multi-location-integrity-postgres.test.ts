@@ -94,11 +94,9 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
       NODE_ENV: "test",
       APP_ENV: "development",
       USE_MEMORY_STORAGE: "false",
-      DEMO_MODE: "false",
       MULTI_LOCATION_ENABLED: "true",
       MAX_LOCATIONS: "3",
       SHOP_TIME_ZONE: "Europe/Lisbon",
-      PERFORMANCE_TIMINGS_ENABLED: "false",
     } satisfies NodeJS.ProcessEnv;
 
     await runCommand(process.execPath, [path.resolve("node_modules/drizzle-kit/bin.cjs"), "push", "--force"], environment);

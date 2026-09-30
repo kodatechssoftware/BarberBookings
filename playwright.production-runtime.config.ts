@@ -31,7 +31,6 @@ export default defineConfig({
       META_WHATSAPP_WABA_ID: "",
       RESEND_API_KEY: "",
       RESEND_FROM_EMAIL: "",
-      DEMO_MODE: "false",
       PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED: "false",
       PUBLIC_URL: "https://bookings.example.test",
       ALLOWED_ORIGINS: baseURL,

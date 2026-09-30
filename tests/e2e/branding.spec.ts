@@ -53,22 +53,4 @@ test("applies environment-specific branding without leaking production identity"
     await expect(page.getByText("Baptista Barber Shop", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/Rua Comandante Agatão Lança/)).toHaveCount(0);
   }
-
-  if (process.env.DEMO_MODE === "true") {
-    const response = await page.request.get("/api/barbers");
-    expect(response.ok(), await response.text()).toBe(true);
-    const barbers = await response.json();
-    for (const name of ["Tiago Martins", "Miguel Rocha", "Luís Carvalho", "Rafael Mendes"]) {
-      const barber = barbers.find((candidate: any) => candidate.name === name);
-      expect(barber, `Perfil de demonstração em falta: ${name}`).toBeTruthy();
-      expect(barber.avatar).toMatch(/^\/images\/demo-barbers\/.+\.jpg$/);
-    }
-
-    const demoPassword = process.env.DEMO_ADMIN_PASSWORD;
-    expect(demoPassword).toBeTruthy();
-    const loginResponse = await page.request.post("/api/admin/login", {
-      data: { username: "admin", password: demoPassword },
-    });
-    expect(loginResponse.ok(), await loginResponse.text()).toBe(true);
-  }
 });

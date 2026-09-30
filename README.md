@@ -102,8 +102,6 @@ Não requer migration. Pode definir vários períodos por dia e dias em que não
 - Admin inicial: `admin`
 - Password inicial: definida através de `ADMIN_INITIAL_PASSWORD`.
 
-No ambiente de demonstração (`DEMO_MODE=true`), define `DEMO_ADMIN_PASSWORD` com pelo menos 4 caracteres. A conta `admin` existente é sincronizada com esse valor em cada arranque do serviço demo; esta credencial simplificada nunca deve ser reutilizada em produção.
-
 Para enviar notificacoes por email, configura no ambiente de producao:
 
 - `RESEND_API_KEY`: chave da API Resend.

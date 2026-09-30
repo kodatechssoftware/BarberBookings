@@ -48,7 +48,7 @@ test("ordered encoding repair: historical vs optimized on isolated UTF8 PostgreS
     await observer.end();
     observer = new pg.Pool({ connectionString: connectionString + "repair_test", max: 3 });
     Object.assign(process.env, { DATABASE_URL: connectionString + "repair_test", DATABASE_SCHEMA: "optimized",
-      DATABASE_POOL_MAX: "1", USE_MEMORY_STORAGE: "false", PERFORMANCE_TIMINGS_ENABLED: "false" });
+      DATABASE_POOL_MAX: "1", USE_MEMORY_STORAGE: "false" });
     const application = await import("../../server/db");
     applicationPool = application.pool;
     applicationPool.on("connect", (client) => {

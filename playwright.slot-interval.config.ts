@@ -26,7 +26,6 @@ export default defineConfig({
       MESSAGING_PROVIDER: "none",
       RESEND_API_KEY: "",
       RESEND_FROM_EMAIL: "",
-      DEMO_MODE: "false",
       SESSION_SECRET: "playwright-slot-interval-test-secret",
       ADMIN_INITIAL_PASSWORD: "Playwright-Test-Admin-2026!",
       PORT: String(port),

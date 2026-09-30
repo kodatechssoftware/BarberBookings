@@ -6233,13 +6233,7 @@ export async function registerRoutes(
 }
 
 async function seedDatabase() {
-  const isDemoEnvironment = process.env.DEMO_MODE === "true";
-  const configuredAdminPassword = (
-    isDemoEnvironment ? process.env.DEMO_ADMIN_PASSWORD : process.env.ADMIN_INITIAL_PASSWORD
-  )?.trim();
-  if (isDemoEnvironment && (!configuredAdminPassword || configuredAdminPassword.length < 4)) {
-    throw new Error("DEMO_ADMIN_PASSWORD é obrigatória em modo demo e deve ter pelo menos 4 caracteres.");
-  }
+  const configuredAdminPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim();
 
   if (await storage.hasData()) {
     // Check if admin exists, if not create one
@@ -6250,12 +6244,6 @@ async function seedDatabase() {
       }
       const hashedPassword = await bcrypt.hash(configuredAdminPassword, 10);
       await storage.createAdmin({ username: "admin", password: hashedPassword });
-    } else if (isDemoEnvironment && configuredAdminPassword) {
-      const matchesConfiguredPassword = await bcrypt.compare(configuredAdminPassword, admin.password);
-      if (!matchesConfiguredPassword) {
-        await storage.updateAdminPassword(admin.id, await bcrypt.hash(configuredAdminPassword, 10));
-        console.log("Demo administrator password synchronized from DEMO_ADMIN_PASSWORD.");
-      }
     }
     await ensureDefaultShopAvailability();
     return;
@@ -6265,51 +6253,20 @@ async function seedDatabase() {
   const defaultLocation = await getDefaultLocation();
   if (!defaultLocation) throw new Error("Localização principal indisponível durante a inicialização.");
 
-  const seedBarbers = isDemoEnvironment
-    ? [
-        {
-          name: "Tiago Martins",
-          specialty: "Cortes clássicos e barba",
-          bio: "Especialista em cortes clássicos, acabamento à tesoura e cuidado de barba.",
-          avatar: "/images/demo-barbers/tiago-martins.jpg",
-          color: "#38BDF8",
-        },
-        {
-          name: "Miguel Rocha",
-          specialty: "Degradê e freestyle",
-          bio: "Focado em degradês, cortes urbanos e estilos personalizados.",
-          avatar: "/images/demo-barbers/miguel-rocha.jpg",
-          color: "#22C55E",
-        },
-        {
-          name: "Luís Carvalho",
-          specialty: "Corte tradicional",
-          bio: "Experiência em cortes tradicionais, cabelo grisalho e barba clássica.",
-          avatar: "/images/demo-barbers/luis-carvalho.jpg",
-          color: "#A78BFA",
-        },
-        {
-          name: "Rafael Mendes",
-          specialty: "Cortes modernos",
-          bio: "Especialista em cortes modernos, cabelo texturizado e contornos precisos.",
-          avatar: "/images/demo-barbers/rafael-mendes.jpg",
-          color: "#F97316",
-        },
-      ]
-    : [
-        {
-          name: "Fábio Baptista",
-          specialty: "Cortes Clássicos e Barba",
-          bio: "Especialista em cortes tradicionais na Barbearia Baptista.",
-          color: "#38BDF8",
-        },
-        {
-          name: "Bruno Santos",
-          specialty: "Degradê e Freestyle",
-          bio: "Mestre em designs modernos e cortes urbanos.",
-          color: "#22C55E",
-        },
-      ];
+  const seedBarbers = [
+    {
+      name: "Fábio Baptista",
+      specialty: "Cortes Clássicos e Barba",
+      bio: "Especialista em cortes tradicionais na Barbearia Baptista.",
+      color: "#38BDF8",
+    },
+    {
+      name: "Bruno Santos",
+      specialty: "Degradê e Freestyle",
+      bio: "Mestre em designs modernos e cortes urbanos.",
+      color: "#22C55E",
+    },
+  ];
 
   for (const barber of seedBarbers) {
     const createdBarber = await storage.createBarber({ ...barber, isVisible: true });
