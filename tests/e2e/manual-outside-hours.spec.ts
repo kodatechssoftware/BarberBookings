@@ -516,6 +516,15 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     });
     expect(completeExisting.status(), await completeExisting.text()).toBe(200);
 
+    const bookedStart = futureThursdayIso(2, 8);
+    const bookedCustomer = `Finance booked ${Date.now()}`;
+    expect((await createManual(request, bookedCustomer, bookedStart, {
+      allowOutsideHours: true,
+      servicePriceCents: 4000,
+    })).status()).toBe(201);
+    const booked = await listAppointment(request, bookedCustomer, bookedStart);
+    expect(booked.status).toBe("booked");
+
     const day = dateKey(start);
     const dashboardResponse = await request.get(
       `/api/admin/dashboard?startDate=${day}&endDate=${day}&barberId=${barber.id}`,
@@ -548,14 +557,28 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(exportResponse.status(), await exportResponse.text()).toBe(200);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exportResponse.body());
+    const summary = workbook.getWorksheet("Resumo Financeiro");
+    expect(summary).toBeTruthy();
+    expect(summary!.getCell("A1").value).toBe("Resumo financeiro");
+    expect(summary!.getCell("A5").value).toBe("Barbeiro");
+    expect(summary!.getCell("B5").value).toBe(barber.name);
+    const summaryValues = new Map<string, unknown>();
+    summary!.eachRow((row) => summaryValues.set(String(row.getCell(1).value), row.getCell(2).value));
+    expect(summaryValues.get("Receita de serviços concluídos")).toBe(55);
+    expect(summaryValues.get("Recebimentos confirmados")).toBe(55);
     const detail = workbook.getWorksheet("Detalhe dos Movimentos");
     expect(detail).toBeTruthy();
+    expect(detail!.getCell("A1").value).toBe("Detalhe dos movimentos");
+    expect(detail!.getCell("D3").value).toBe("Barbeiro");
+    expect(detail!.getCell("E3").value).toBe(barber.name);
     const detailHeaderRow = getHeaderRow(detail!, "Data do serviço");
     const headers = detailHeaderRow.values as unknown[];
     const appointmentIdColumn = headers.indexOf("ID da marcação");
     const serviceColumn = headers.indexOf("Serviço efetivo");
     const durationColumn = headers.indexOf("Duração (min)");
     const valueColumn = headers.indexOf("Valor final (€)");
+    const statusColumn = headers.indexOf("Estado");
+    const receivedColumn = headers.indexOf("Valor recebido (€)");
     const rows: Record<string, unknown>[] = [];
     detail!.eachRow((row, rowNumber) => {
       if (rowNumber <= detailHeaderRow.number) return;
@@ -564,13 +587,43 @@ test.describe.serial("manual outside-hours appointment terms", () => {
         service: row.getCell(serviceColumn).value,
         duration: row.getCell(durationColumn).value,
         value: row.getCell(valueColumn).value,
+        status: row.getCell(statusColumn).value,
+        received: row.getCell(receivedColumn).value,
       });
     });
     expect(rows).toEqual(expect.arrayContaining([
-      { appointmentId: custom.id, service: "Lavar e pentear – casamento", duration: 45, value: 30 },
-      { appointmentId: existing.id, service: service.name, duration: 60, value: 25 },
+      { appointmentId: custom.id, service: "Lavar e pentear – casamento", duration: 45, value: 30, status: "Concluída", received: 30 },
+      { appointmentId: existing.id, service: service.name, duration: 60, value: 25, status: "Concluída", received: 25 },
     ]));
     expect(JSON.stringify(detail!.getSheetValues())).not.toContain("Serviço desconhecido");
+
+    const bookedDay = dateKey(bookedStart);
+    const bookedExportResponse = await request.get(
+      `/api/admin/export?startDate=${bookedDay}&endDate=${bookedDay}&barberId=${barber.id}`,
+    );
+    expect(bookedExportResponse.status(), await bookedExportResponse.text()).toBe(200);
+    const bookedWorkbook = new ExcelJS.Workbook();
+    await bookedWorkbook.xlsx.load(await bookedExportResponse.body());
+    const bookedSummary = bookedWorkbook.getWorksheet("Resumo Financeiro")!;
+    const bookedSummaryValues = new Map<string, unknown>();
+    bookedSummary.eachRow((row) => bookedSummaryValues.set(String(row.getCell(1).value), row.getCell(2).value));
+    expect(bookedSummaryValues.get("Receita de serviços concluídos")).toBe(0);
+    expect(bookedSummaryValues.get("Recebimentos confirmados")).toBe(0);
+    const bookedDetail = bookedWorkbook.getWorksheet("Detalhe dos Movimentos")!;
+    const bookedHeaderRow = getHeaderRow(bookedDetail, "Data do serviço");
+    const bookedHeaders = bookedHeaderRow.values as unknown[];
+    const bookedIdColumn = bookedHeaders.indexOf("ID da marcação");
+    const bookedStatusColumn = bookedHeaders.indexOf("Estado");
+    const bookedValueColumn = bookedHeaders.indexOf("Valor final (€)");
+    const bookedReceivedColumn = bookedHeaders.indexOf("Valor recebido (€)");
+    let bookedRow: ExcelJS.Row | undefined;
+    bookedDetail.eachRow((row, rowNumber) => {
+      if (rowNumber > bookedHeaderRow.number && row.getCell(bookedIdColumn).value === booked.id) bookedRow = row;
+    });
+    expect(bookedRow).toBeTruthy();
+    expect(bookedRow!.getCell(bookedStatusColumn).value).toBe("Marcada");
+    expect(bookedRow!.getCell(bookedValueColumn).value).toBe(40);
+    expect(bookedRow!.getCell(bookedReceivedColumn).value).toBe(0);
 
     const compensation = workbook.getWorksheet("Acertos com Barbeiros");
     expect(compensation).toBeTruthy();

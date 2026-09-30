@@ -2850,6 +2850,9 @@ test.describe("booking rules", () => {
     const completedServiceValue = completed.service.price / 100;
     const bookedServiceValue = booked.service.price / 100;
     const summarySheet = workbook.getWorksheet("Resumo Financeiro");
+    expect(summarySheet!.getCell("A1").value).toBe("Resumo financeiro");
+    expect(summarySheet!.getCell("A5").value).toBe("Barbeiro");
+    expect(summarySheet!.getCell("B5").value).toBe("Todos os barbeiros");
     const summaryValues = new Map<string, unknown>();
     summarySheet?.eachRow((row) => {
       summaryValues.set(String(row.getCell(1).value), row.getCell(2).value);
@@ -2860,6 +2863,9 @@ test.describe("booking rules", () => {
 
     const detailSheet = workbook.getWorksheet("Detalhe dos Movimentos");
     expect(detailSheet).toBeTruthy();
+    expect(detailSheet!.getCell("A1").value).toBe("Detalhe dos movimentos");
+    expect(detailSheet!.getCell("D3").value).toBe("Barbeiro");
+    expect(detailSheet!.getCell("E3").value).toBe("Todos os barbeiros");
     const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
     const headers = detailHeaderRow.values as unknown[];
     const appointmentIdCol = headers.indexOf("ID da marcação");
@@ -2899,9 +2905,8 @@ test.describe("booking rules", () => {
         });
       });
     });
-    expect(summarySheet!.getCell("A1").value).toBeNull();
-    expect(summarySheet!.getCell("A3").value).toBeNull();
-    expect(summarySheet!.getCell("B8").value).toBeNull();
+    expect(summarySheet!.getCell("A2").value).toBeNull();
+    expect(summarySheet!.getCell("B7").value).toBeNull();
   });
 
   test("exports a readable accounting workbook when the period has no movements", async ({ request }) => {
@@ -2917,16 +2922,20 @@ test.describe("booking rules", () => {
       "Detalhe dos Movimentos",
     ]);
     const summary = workbook.getWorksheet("Resumo Financeiro")!;
+    expect(summary.getCell("A1").value).toBe("Resumo financeiro");
+    expect(summary.getCell("A5").value).toBe("Barbeiro");
+    expect(summary.getCell("B5").value).toBe("Todos os barbeiros");
     expect(getCellValueByFirstColumnLabel(summary, "Receita de servicos concluidos")).toBe(0);
     expect(getCellValueByFirstColumnLabel(summary, "Recebimentos confirmados")).toBe(0);
     expect(getCellValueByFirstColumnLabel(summary, "Pagamentos por confirmar")).toBe(0);
     const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
+    expect(detail.getCell("A1").value).toBe("Detalhe dos movimentos");
+    expect(detail.getCell("D3").value).toBe("Barbeiro");
+    expect(detail.getCell("E3").value).toBe("Todos os barbeiros");
     const headerRow = getHeaderRow(detail, "Data do serviço");
-    let movementRows = 0;
-    detail.eachRow((row, rowNumber) => {
-      if (rowNumber > headerRow.number && row.cellCount > 0) movementRows += 1;
-    });
-    expect(movementRows).toBe(0);
+    expect(detail.getCell(headerRow.number + 1, 1).value)
+      .toBe("Sem movimentos no período para o filtro selecionado.");
+    expect(detail.rowCount).toBe(headerRow.number + 1);
   });
 
   test("exports completed appointments by payment method for accounting filters", async ({ request }) => {

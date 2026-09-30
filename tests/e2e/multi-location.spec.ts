@@ -11,6 +11,15 @@ async function loginAdmin(request: APIRequestContext) {
 
 const embed = (city: string) => `https://www.google.com/maps/embed?pb=${city}`;
 
+function getHeaderRow(sheet: ExcelJS.Worksheet, firstHeader: string) {
+  let headerRow: ExcelJS.Row | undefined;
+  sheet.eachRow((row) => {
+    if (!headerRow && row.getCell(1).value === firstHeader) headerRow = row;
+  });
+  if (!headerRow) throw new Error(`Header ${firstHeader} not found in ${sheet.name}`);
+  return headerRow;
+}
+
 async function ensureLocations(request: APIRequestContext, count: number) {
   await loginAdmin(request);
   const locations = await (await request.get("/api/admin/locations")).json();
@@ -579,7 +588,7 @@ test("[multi-location] exporta movimentos históricos após retirar o barbeiro d
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await exportResponse.body());
   const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
-  const headers = detail.getRow(6).values as unknown[];
+  const headers = getHeaderRow(detail, "Data do serviço").values as unknown[];
   const appointmentIdColumn = headers.indexOf("ID da marcação");
   expect(detail.getColumn(appointmentIdColumn).values).toContain(appointment.id);
 });
