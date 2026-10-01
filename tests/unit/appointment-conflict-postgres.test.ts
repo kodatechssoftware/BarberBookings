@@ -448,6 +448,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
             customServiceName: "Serviço extraordinário concorrente",
             customDurationMinutes: 45,
             servicePriceCents: 2750,
+            hasSpecialTerms: true,
             allowOutsideHours: true,
             startTime,
             name: `${label} ${index + 1}`,

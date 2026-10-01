@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
 
 const adminPassword = "Playwright-Test-Admin-2026!";
@@ -47,6 +47,32 @@ async function loginAdmin(request: APIRequestContext) {
     data: { username: "admin", password: adminPassword },
   });
   expect(response.status(), await response.text()).toBe(200);
+}
+
+async function loginAdminPage(page: Page) {
+  await page.goto("/admin");
+  await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
+  await page.locator('input[type="password"]').fill(adminPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page.getByRole("heading", { name: "Painel Administrativo" })).toBeVisible();
+}
+
+async function selectDialogOption(page: Page, dialog: Locator, index: number, label: string) {
+  await dialog.getByRole("combobox").nth(index).click();
+  await page.getByRole("option", { name: label, exact: true }).click();
+}
+
+async function clickFirstEnabledManualTime(dialog: Locator) {
+  const timeButtons = dialog.getByRole("button", { name: /^\d{2}:\d{2}$/ });
+  await expect.poll(() => timeButtons.count()).toBeGreaterThan(0);
+  for (let index = 0; index < await timeButtons.count(); index += 1) {
+    const button = timeButtons.nth(index);
+    if (await button.isEnabled()) {
+      await button.click();
+      return;
+    }
+  }
+  throw new Error("No enabled manual booking time was found");
 }
 
 test.describe.serial("manual outside-hours appointment terms", () => {
@@ -162,6 +188,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     const outsideName = `Existing override ${Date.now()}`;
     const outsideResponse = await createManual(request, outsideName, outsideStart, {
       allowOutsideHours: true,
+      hasSpecialTerms: true,
       servicePriceCents: 2500,
     });
     expect(outsideResponse.status(), await outsideResponse.text()).toBe(201);
@@ -189,6 +216,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     const customResponse = await createManual(request, customName, customStart, {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Lavar e pentear – casamento",
       customDurationMinutes: 45,
       servicePriceCents: 3000,
@@ -220,6 +248,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     const freeResponse = await createManual(request, freeName, freeStart, {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Corte oferta extraordinária",
       customDurationMinutes: 30,
       servicePriceCents: 0,
@@ -231,9 +260,52 @@ test.describe.serial("manual outside-hours appointment terms", () => {
       servicePriceCentsSnapshot: 0,
       manualOutsideHours: true,
     });
+
+    const insidePriceStart = futureThursdayIso(233, 10);
+    const insidePriceName = `Existing inside override ${Date.now()}`;
+    const insidePriceResponse = await createManual(request, insidePriceName, insidePriceStart, {
+      hasSpecialTerms: true,
+      servicePriceCents: 3000,
+    });
+    expect(insidePriceResponse.status(), await insidePriceResponse.text()).toBe(201);
+    const insidePrice = await listAppointment(request, insidePriceName, insidePriceStart);
+    expect(insidePrice).toMatchObject({
+      serviceId: service.id,
+      serviceNameSnapshot: service.name,
+      servicePriceCentsSnapshot: 3000,
+      durationMinutes: 60,
+      manualOutsideHours: false,
+    });
+    const insidePriceUpdate = await request.patch(`/api/appointments/${insidePrice.id}`, {
+      data: { servicePriceCents: 3100 },
+    });
+    expect(insidePriceUpdate.status(), await insidePriceUpdate.text()).toBe(200);
+    expect(await insidePriceUpdate.json()).toMatchObject({
+      servicePriceCentsSnapshot: 3100,
+      manualOutsideHours: false,
+    });
+
+    const insideCustomStart = futureThursdayIso(234, 14);
+    const insideCustomName = `Custom inside ${Date.now()}`;
+    const insideCustomResponse = await createManual(request, insideCustomName, insideCustomStart, {
+      serviceId: null,
+      serviceMode: "custom",
+      hasSpecialTerms: true,
+      customServiceName: "Corte ao domicílio",
+      customDurationMinutes: 45,
+      servicePriceCents: 3000,
+    });
+    expect(insideCustomResponse.status(), await insideCustomResponse.text()).toBe(201);
+    expect(await listAppointment(request, insideCustomName, insideCustomStart)).toMatchObject({
+      serviceId: null,
+      serviceNameSnapshot: "Corte ao domicílio",
+      servicePriceCentsSnapshot: 3000,
+      durationMinutes: 45,
+      manualOutsideHours: false,
+    });
   });
 
-  test("rejects fake exception privileges, partial schedule overlaps and recurring specials", async ({ request }) => {
+  test("requires explicit special terms and rejects fake schedule privileges, overlaps and recurring specials", async ({ request }) => {
     const insideStart = futureThursdayIso(215, 10);
     const customInside = await createManual(request, `Custom inside ${Date.now()}`, insideStart, {
       serviceId: null,
@@ -244,7 +316,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
       allowOutsideHours: true,
     });
     expect(customInside.status()).toBe(400);
-    expect(await customInside.text()).toMatch(/realmente fora do horário/i);
+    expect(await customInside.text()).toMatch(/ative as condições especiais/i);
 
     const priceInside = await createManual(request, `Price inside ${Date.now()}`, futureThursdayIso(216, 14), {
       servicePriceCents: 2200,
@@ -316,6 +388,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     const customRecurring = await createManual(request, `Custom recurring ${Date.now()}`, futureThursdayIso(219, 6), {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Recorrente custom",
       customDurationMinutes: 30,
       servicePriceCents: 1000,
@@ -328,6 +401,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(await customRecurring.text()).toMatch(/recorrente/i);
 
     const pricedRecurring = await createManual(request, `Priced recurring ${Date.now()}`, futureThursdayIso(220, 6), {
+      hasSpecialTerms: true,
       servicePriceCents: 2200,
       allowOutsideHours: true,
       isRecurring: true,
@@ -342,6 +416,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect((await createManual(request, overlapBaseName, overlapStart, {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Serviço base",
       customDurationMinutes: 45,
       servicePriceCents: 1000,
@@ -355,6 +430,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
       {
         serviceId: null,
         serviceMode: "custom",
+        hasSpecialTerms: true,
         customServiceName: "Serviço sobreposto",
         customDurationMinutes: 60,
         servicePriceCents: 1000,
@@ -364,11 +440,44 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(overlapByDuration.status()).toBe(409);
   });
 
+  test("applies one set of special terms to mixed schedule batches and marks each interval independently", async ({ request }) => {
+    const normalStart = futureThursdayIso(235, 10);
+    const outsideStart = futureThursdayIso(235, 13);
+    const name = `Mixed schedule terms ${Date.now()}`;
+    const response = await createManual(request, name, normalStart, {
+      startTimes: [normalStart, outsideStart],
+      allowOutsideHours: true,
+      hasSpecialTerms: true,
+      servicePriceCents: 2800,
+    });
+    expect(response.status(), await response.text()).toBe(201);
+
+    const listResponse = await request.get(
+      `/api/appointments?barberId=${barber.id}&date=${dateKey(normalStart)}`,
+    );
+    expect(listResponse.status(), await listResponse.text()).toBe(200);
+    const appointments = (await listResponse.json())
+      .filter((appointment: any) => appointment.customerName === name)
+      .sort((left: any, right: any) => left.startTime.localeCompare(right.startTime));
+    expect(appointments).toHaveLength(2);
+    appointments.forEach((appointment: any) => {
+      if (!createdAppointmentIds.includes(appointment.id)) createdAppointmentIds.push(appointment.id);
+      expect(appointment).toMatchObject({
+        serviceId: service.id,
+        serviceNameSnapshot: service.name,
+        servicePriceCentsSnapshot: 2800,
+        durationMinutes: 60,
+      });
+    });
+    expect(appointments.map((appointment: any) => appointment.manualOutsideHours)).toEqual([false, true]);
+  });
+
   test("preserves safe edit and reschedule transitions", async ({ request }) => {
     const start = futureThursdayIso(221, 6);
     const name = `Edit existing ${Date.now()}`;
     expect((await createManual(request, name, start, {
       allowOutsideHours: true,
+      hasSpecialTerms: true,
       servicePriceCents: 2500,
     })).status()).toBe(201);
     let appointment = await listAppointment(request, name, start);
@@ -399,7 +508,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(outsideToNormal.status(), await outsideToNormal.text()).toBe(200);
     expect(await outsideToNormal.json()).toMatchObject({
       serviceNameSnapshot: service.name,
-      servicePriceCentsSnapshot: 1500,
+      servicePriceCentsSnapshot: 2700,
       durationMinutes: 60,
       manualOutsideHours: false,
     });
@@ -415,6 +524,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect((await createManual(request, customCustomer, customStart, {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Penteado inicial",
       customDurationMinutes: 45,
       servicePriceCents: 3000,
@@ -437,15 +547,37 @@ test.describe.serial("manual outside-hours appointment terms", () => {
       manualOutsideHours: true,
     });
 
-    const customToNormalRejected = await request.patch(`/api/appointments/${custom.id}`, {
+    const customToNormal = await request.patch(`/api/appointments/${custom.id}`, {
       data: { startTime: futureThursdayIso(226, 10) },
     });
-    expect(customToNormalRejected.status()).toBe(400);
-    expect(await customToNormalRejected.text()).toMatch(/converta.*serviço do catálogo/i);
+    expect(customToNormal.status(), await customToNormal.text()).toBe(200);
+    expect(await customToNormal.json()).toMatchObject({
+      serviceId: null,
+      serviceNameSnapshot: "Penteado casamento atualizado",
+      servicePriceCentsSnapshot: 3200,
+      durationMinutes: 50,
+      manualOutsideHours: false,
+    });
+
+    const customInsideUpdate = await request.patch(`/api/appointments/${custom.id}`, {
+      data: {
+        serviceMode: "custom",
+        customServiceName: "Penteado dentro do horário",
+        customDurationMinutes: 55,
+        servicePriceCents: 3300,
+      },
+    });
+    expect(customInsideUpdate.status(), await customInsideUpdate.text()).toBe(200);
+    expect(await customInsideUpdate.json()).toMatchObject({
+      serviceId: null,
+      serviceNameSnapshot: "Penteado dentro do horário",
+      servicePriceCentsSnapshot: 3300,
+      durationMinutes: 55,
+      manualOutsideHours: false,
+    });
 
     const customConverted = await request.patch(`/api/appointments/${custom.id}`, {
       data: {
-        startTime: futureThursdayIso(226, 10),
         serviceMode: "existing",
         serviceId: service.id,
       },
@@ -465,6 +597,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     const name = `Self service special ${Date.now()}`;
     expect((await createManual(request, name, start, {
       allowOutsideHours: true,
+      hasSpecialTerms: true,
       servicePriceCents: 2500,
     })).status()).toBe(201);
     const appointment = await listAppointment(request, name, start);
@@ -488,42 +621,50 @@ test.describe.serial("manual outside-hours appointment terms", () => {
   });
 
   test("uses final values in dashboard, customer history and Excel", async ({ request }) => {
-    const start = futureThursdayIso(-2, 6);
+    const start = futureThursdayIso(-2, 10);
     const customCustomer = `Finance custom ${Date.now()}`;
     expect((await createManual(request, customCustomer, start, {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Lavar e pentear – casamento",
       customDurationMinutes: 45,
       servicePriceCents: 3000,
-      allowOutsideHours: true,
     })).status()).toBe(201);
     const custom = await listAppointment(request, customCustomer, start);
+    expect(custom.manualOutsideHours).toBe(false);
     const completeCustom = await request.patch(`/api/appointments/${custom.id}/status`, {
       data: { status: "completed", paymentMethod: "cash" },
     });
     expect(completeCustom.status(), await completeCustom.text()).toBe(200);
 
-    const existingStart = futureThursdayIso(-2, 7);
+    const existingStart = futureThursdayIso(-2, 11);
     const existingCustomer = `Finance existing ${Date.now()}`;
     expect((await createManual(request, existingCustomer, existingStart, {
-      allowOutsideHours: true,
+      hasSpecialTerms: true,
       servicePriceCents: 2500,
     })).status()).toBe(201);
     const existing = await listAppointment(request, existingCustomer, existingStart);
+    expect(existing.manualOutsideHours).toBe(false);
     const completeExisting = await request.patch(`/api/appointments/${existing.id}/status`, {
       data: { status: "completed", paymentMethod: "card" },
     });
     expect(completeExisting.status(), await completeExisting.text()).toBe(200);
 
-    const bookedStart = futureThursdayIso(2, 8);
+    const bookedStart = futureThursdayIso(2, 14);
     const bookedCustomer = `Finance booked ${Date.now()}`;
     expect((await createManual(request, bookedCustomer, bookedStart, {
-      allowOutsideHours: true,
+      hasSpecialTerms: true,
       servicePriceCents: 4000,
     })).status()).toBe(201);
     const booked = await listAppointment(request, bookedCustomer, bookedStart);
     expect(booked.status).toBe("booked");
+    expect(booked.manualOutsideHours).toBe(false);
+
+    const changeBasePrice = await request.patch(`/api/services/${service.id}`, {
+      data: { price: 1800 },
+    });
+    expect(changeBasePrice.status(), await changeBasePrice.text()).toBe(200);
 
     const day = dateKey(start);
     const dashboardResponse = await request.get(
@@ -539,7 +680,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     ]));
 
     const historyResponse = await request.get(
-      `/api/admin/customers/${encodeURIComponent(custom.customerPhone)}/history?name=${encodeURIComponent(customCustomer)}`,
+      `/api/admin/customers/history?appointmentId=${custom.id}`,
     );
     expect(historyResponse.status(), await historyResponse.text()).toBe(200);
     expect((await historyResponse.json()).appointments).toEqual(expect.arrayContaining([
@@ -643,6 +784,75 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(compensationRow!.getCell(commissionColumn).value).toBe(22);
     expect(compensationRow!.getCell(barberValueColumn).value).toBe(22);
     expect(compensationRow!.getCell(shopValueColumn).value).toBe(33);
+
+    const restoreBasePrice = await request.patch(`/api/services/${service.id}`, {
+      data: { price: 1500 },
+    });
+    expect(restoreBasePrice.status(), await restoreBasePrice.text()).toBe(200);
+  });
+
+  test("keeps schedule access and special terms independent on mobile and clears hidden payload", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginAdminPage(page);
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    const outsideHoursSwitch = dialog.getByLabel("Permitir horários fora do horário normal");
+    const specialTermsSwitch = dialog.getByLabel("Condições especiais desta marcação");
+    await expect(dialog.getByText("Ative apenas quando precisar de registar uma marcação num horário em que o barbeiro normalmente não trabalha.")).toBeVisible();
+    await expect(dialog.getByText("Ajuste o serviço, a duração ou o preço apenas para esta marcação.")).toBeVisible();
+    await expect(outsideHoursSwitch).not.toBeChecked();
+    await expect(specialTermsSwitch).not.toBeChecked();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "06:00", exact: true })).toHaveCount(0);
+
+    await specialTermsSwitch.click();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "06:00", exact: true })).toHaveCount(0);
+
+    await outsideHoursSwitch.click();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "06:00", exact: true })).toBeVisible();
+    await outsideHoursSwitch.click();
+    await expect(dialog.getByRole("button", { name: "06:00", exact: true })).toHaveCount(0);
+
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+    await dialog.locator("#manual-booking-special-price").fill("30,00");
+    await specialTermsSwitch.click();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toHaveCount(0);
+    await expect(specialTermsSwitch).not.toBeChecked();
+
+    let submittedPayload: Record<string, unknown> | undefined;
+    await page.route("**/api/appointments/block", async (route) => {
+      submittedPayload = route.request().postDataJSON();
+      await route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+    });
+    await dialog.getByLabel("Nome do cliente", { exact: true }).fill(`Normal mobile ${Date.now()}`);
+    await clickFirstEnabledManualTime(dialog);
+    await dialog.getByRole("button", { name: "Criar marcação" }).click();
+    await expect(dialog).not.toBeVisible();
+    expect(submittedPayload).toMatchObject({
+      serviceId: service.id,
+      serviceMode: "existing",
+      hasSpecialTerms: false,
+      allowOutsideHours: false,
+    });
+    expect(submittedPayload).not.toHaveProperty("servicePriceCents");
+    expect(submittedPayload).not.toHaveProperty("customServiceName");
+    expect(submittedPayload).not.toHaveProperty("customDurationMinutes");
+
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+    await expect(specialTermsSwitch).not.toBeChecked();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toHaveCount(0);
+    await specialTermsSwitch.click();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toBeVisible();
+    await dialog.getByLabel("Repetir marcação").click();
+    await expect(specialTermsSwitch).not.toBeChecked();
+    await expect(specialTermsSwitch).toBeDisabled();
+    await expect(dialog.getByTestId("manual-booking-special-terms")).toHaveCount(0);
+    await expect(dialog.getByText("Não disponível em marcações recorrentes.")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
   test("shows the agreed custom terms and extraordinary marker in Admin", async ({ page, request }) => {
@@ -651,6 +861,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect((await createManual(request, customer, start, {
       serviceId: null,
       serviceMode: "custom",
+      hasSpecialTerms: true,
       customServiceName: "Produção editorial personalizada",
       customDurationMinutes: 45,
       servicePriceCents: 3000,
@@ -673,5 +884,55 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     await expect(dialog.getByText("Preço final: 30,00 €")).toBeVisible();
     await expect(dialog.getByText("Marcação fora do horário")).toBeVisible();
     await page.keyboard.press("Escape");
+  });
+
+  test("reopens and edits a custom appointment inside normal hours without losing its terms", async ({ page, request }) => {
+    const start = futureThursdayIso(236, 10);
+    const customer = `Admin inside custom ${Date.now()}`;
+    expect((await createManual(request, customer, start, {
+      serviceId: null,
+      serviceMode: "custom",
+      hasSpecialTerms: true,
+      customServiceName: "Corte ao domicílio",
+      customDurationMinutes: 45,
+      servicePriceCents: 3000,
+    })).status()).toBe(201);
+    const appointment = await listAppointment(request, customer, start);
+    expect(appointment.manualOutsideHours).toBe(false);
+
+    await loginAdminPage(page);
+    await page.getByRole("tab", { name: "Marcações" }).click();
+    await page.getByRole("button", { name: "Próximas" }).click();
+    const appointmentRow = page.getByRole("button", { name: new RegExp(customer) });
+    await expect(appointmentRow).toBeVisible();
+    await appointmentRow.click();
+
+    const detailsDialog = page.getByRole("dialog", { name: "Detalhes da marcação" });
+    await expect(detailsDialog.getByText("Corte ao domicílio")).toBeVisible();
+    await expect(detailsDialog.getByText("Preço final: 30,00 €")).toBeVisible();
+    await expect(detailsDialog.getByText("Marcação fora do horário")).toHaveCount(0);
+    await detailsDialog.getByRole("button", { name: "Editar" }).click();
+
+    const editDialog = page.getByRole("dialog", { name: "Editar marcação" });
+    await expect(editDialog.locator("#edit-custom-service-name")).toHaveValue("Corte ao domicílio");
+    await expect(editDialog.locator("#edit-custom-duration")).toHaveValue("45");
+    const priceInput = editDialog.locator("#edit-custom-price");
+    await expect(priceInput).toHaveValue("30");
+    await expect(priceInput).toBeVisible();
+    await priceInput.fill("31,00");
+    await editDialog.getByRole("button", { name: "Guardar alterações" }).click();
+    await expect(editDialog).not.toBeVisible();
+
+    const updatedResponse = await request.get(
+      `/api/appointments?barberId=${barber.id}&date=${dateKey(start)}`,
+    );
+    expect(updatedResponse.status(), await updatedResponse.text()).toBe(200);
+    expect((await updatedResponse.json()).find((item: any) => item.id === appointment.id)).toMatchObject({
+      serviceId: null,
+      serviceNameSnapshot: "Corte ao domicílio",
+      durationMinutes: 45,
+      servicePriceCentsSnapshot: 3100,
+      manualOutsideHours: false,
+    });
   });
 });

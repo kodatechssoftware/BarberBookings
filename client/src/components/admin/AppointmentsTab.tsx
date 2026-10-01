@@ -29,6 +29,7 @@ export type AppointmentBlockData = {
   isMultiDay: boolean;
   isManualBooking: boolean;
   allowOutsideHours: boolean;
+  hasSpecialTerms: boolean;
   isRecurring: boolean;
   recurringWeeks: string;
   recurringMonths: string;
