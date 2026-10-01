@@ -5,6 +5,7 @@ import { AlertTriangle, Calendar as CalendarIcon, User } from "lucide-react";
 import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +26,7 @@ import {
   toStoredPhone,
   type PhoneCountryCode,
 } from "@shared/phone-countries";
+import type { ExtraDefinition } from "@shared/schema";
 
 type AppointmentBlockBarberOption = {
   id: number;
@@ -43,6 +45,8 @@ type AppointmentBlockDialogProps = {
   onOpenChange: (open: boolean) => void;
   barbers?: AppointmentBlockBarberOption[];
   manualBookingServices: AppointmentBlockServiceOption[];
+  extras: ExtraDefinition[];
+  isLoadingExtras?: boolean;
   blockData: AppointmentBlockData;
   onBlockDataChange: Dispatch<SetStateAction<AppointmentBlockData>>;
   isCalendarOpen: boolean;
@@ -58,6 +62,8 @@ export function AppointmentBlockDialog({
   onOpenChange,
   barbers,
   manualBookingServices,
+  extras,
+  isLoadingExtras = false,
   blockData,
   onBlockDataChange,
   isCalendarOpen,
@@ -99,8 +105,22 @@ export function AppointmentBlockDialog({
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
   const selectedService = manualBookingServices.find((service) => String(service.id) === blockData.serviceId);
   const showSpecialTerms = blockData.isManualBooking && blockData.hasSpecialTerms && !blockData.isRecurring;
+  const selectedExtras = extras.filter((extra) => blockData.extraIds.includes(extra.id));
 
   const formatPrice = (priceCents: number) => `${(priceCents / 100).toFixed(2).replace(".", ",")} €`;
+  const parsePriceCents = (value: string) => {
+    const normalized = value.trim().replace(",", ".");
+    if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+    const cents = Math.round(Number(normalized) * 100);
+    return Number.isSafeInteger(cents) && cents >= 0 ? cents : null;
+  };
+  const effectiveServicePriceCents = showSpecialTerms
+    ? parsePriceCents(blockData.servicePrice)
+    : selectedService?.price ?? null;
+  const effectiveServiceName = showSpecialTerms && blockData.serviceMode === "custom"
+    ? blockData.customServiceName.trim()
+    : selectedService?.name ?? "";
+  const extrasTotalCents = selectedExtras.reduce((total, extra) => total + extra.amountCents, 0);
 
   useEffect(() => {
     if (!open) setIsEmailTouched(false);
@@ -237,6 +257,7 @@ export function AppointmentBlockDialog({
                         customServiceName: "",
                         customDurationMinutes: "30",
                         servicePrice: "",
+                        extraIds: [],
                         times: checked ? blockData.times.slice(0, 1) : blockData.times,
                       })}
                     />
@@ -556,6 +577,74 @@ export function AppointmentBlockDialog({
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {blockData.isManualBooking && !blockData.isRecurring && (isLoadingExtras || extras.length > 0) && (
+              <div className="space-y-3 rounded-xl border border-white/10 bg-background/30 p-4" data-testid="manual-booking-extras">
+                <div>
+                  <p className="font-bold text-white">Extras</p>
+                  <p className="mt-1 text-xs text-gray-400">Opcional. Selecione um ou vários Extras para esta marcação.</p>
+                </div>
+                {isLoadingExtras ? (
+                  <p className="text-xs text-gray-500">A carregar Extras...</p>
+                ) : (
+                  <div className="space-y-2">
+                    {extras.map((extra) => {
+                      const checkboxId = `manual-booking-extra-${extra.id}`;
+                      return (
+                        <label
+                          key={extra.id}
+                          htmlFor={checkboxId}
+                          className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-card/60 px-3 py-2.5 hover:border-primary/30"
+                        >
+                          <Checkbox
+                            id={checkboxId}
+                            checked={blockData.extraIds.includes(extra.id)}
+                            onCheckedChange={(checked) => onBlockDataChange((current) => ({
+                              ...current,
+                              extraIds: checked
+                                ? current.extraIds.includes(extra.id)
+                                  ? current.extraIds
+                                  : [...current.extraIds, extra.id]
+                                : current.extraIds.filter((id) => id !== extra.id),
+                            }))}
+                            aria-label={`Selecionar Extra ${extra.name}`}
+                          />
+                          <span className="min-w-0 flex-1 break-words text-sm text-gray-200">{extra.name}</span>
+                          <span className="shrink-0 text-sm font-semibold text-primary">+{formatPrice(extra.amountCents)}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {blockData.isManualBooking && effectiveServicePriceCents !== null && effectiveServiceName && (
+              <div className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-4" data-testid="manual-booking-summary">
+                <div>
+                  <p className="font-bold text-white">Resumo da marcação</p>
+                  {showSpecialTerms && <p className="mt-1 text-xs text-gray-400">{effectiveServiceName}</p>}
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="min-w-0 break-words text-gray-300">
+                      {showSpecialTerms ? "Preço especial" : "Serviço"}
+                    </span>
+                    <span className="shrink-0 font-medium text-white">{formatPrice(effectiveServicePriceCents)}</span>
+                  </div>
+                  {selectedExtras.map((extra) => (
+                    <div key={extra.id} className="flex items-start justify-between gap-4">
+                      <span className="min-w-0 break-words text-gray-300">{extra.name}</span>
+                      <span className="shrink-0 font-medium text-white">{formatPrice(extra.amountCents)}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-3 font-bold">
+                    <span className="text-white">Total</span>
+                    <span className="shrink-0 text-primary">{formatPrice(effectiveServicePriceCents + extrasTotalCents)}</span>
+                  </div>
+                </div>
               </div>
             )}
 

@@ -997,6 +997,95 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await expect(extrasManager.getByText("Extra Loja B QA", { exact: true })).toBeVisible();
   await expect(extrasManager.getByText("Extra Loja A QA", { exact: true })).toHaveCount(0);
 
+  const serviceBResponse = await request.post("/api/services", {
+    headers: headersB,
+    data: {
+      name: "Serviço Extra Loja B QA",
+      description: "Validação de isolamento de Extras",
+      price: 1800,
+      duration: 30,
+      isVisible: true,
+    },
+  });
+  expect(serviceBResponse.status(), await serviceBResponse.text()).toBe(201);
+  const serviceB = await serviceBResponse.json();
+  const barberBResponse = await request.post("/api/barbers", {
+    headers: headersB,
+    data: {
+      name: "Barbeiro Extra Loja B QA",
+      specialty: "Isolamento de Extras",
+      isVisible: true,
+      serviceIds: [serviceB.id],
+    },
+  });
+  expect(barberBResponse.status(), await barberBResponse.text()).toBe(201);
+  const barberB = await barberBResponse.json();
+  const bookingStart = new Date(Date.now() + 300 * 86400000);
+  bookingStart.setUTCHours(11, 0, 0, 0);
+  const bookingData = {
+    barberId: barberB.id,
+    serviceId: serviceB.id,
+    serviceMode: "existing",
+    startTime: bookingStart.toISOString(),
+    name: "Cliente isolamento Extra",
+    phone: "+351912650101",
+    customerEmail: "extras-location@example.test",
+    isManualBooking: true,
+    isRecurring: false,
+    allowOutsideHours: true,
+  };
+  const crossLocationBooking = await request.post("/api/appointments/block", {
+    headers: headersB,
+    data: { ...bookingData, extraIds: [extraA.id] },
+  });
+  expect(crossLocationBooking.status(), await crossLocationBooking.text()).toBe(409);
+  expect(await crossLocationBooking.json()).toMatchObject({ code: "APPOINTMENT_EXTRA_UNAVAILABLE" });
+
+  const localBooking = await request.post("/api/appointments/block", {
+    headers: headersB,
+    data: { ...bookingData, extraIds: [extraB.id] },
+  });
+  expect(localBooking.status(), await localBooking.text()).toBe(201);
+  const localBookingBody = await localBooking.json();
+  expect(localBookingBody.appointments[0].extras).toEqual([
+    expect.objectContaining({ extraDefinitionId: extraB.id, nameSnapshot: extraB.name }),
+  ]);
+
+  await page.getByRole("tab", { name: "Agenda" }).click();
+  await page.getByRole("button", { name: "Marcação manual" }).click();
+  const bookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
+  await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeVisible();
+  await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toHaveCount(0);
+  await bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`).click();
+  await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeChecked();
+  await page.evaluate((id) => {
+    localStorage.setItem("barberbookings:location-id", String(id));
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "barberbookings:location-id",
+      newValue: String(id),
+    }));
+  }, shopA.id);
+  await expect(bookingDialog).toHaveCount(0);
+  await page.getByRole("button", { name: "Marcação manual" }).click();
+  const reopenedBookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
+  await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
+  await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).not.toBeChecked();
+  await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toHaveCount(0);
+  await reopenedBookingDialog.getByRole("button", { name: "Close" }).click();
+
+  expect((await request.patch(`/api/appointments/${localBookingBody.appointments[0].id}/status`, {
+    headers: headersB,
+    data: { status: "cancelled" },
+  })).ok()).toBe(true);
+  expect((await request.patch(`/api/barbers/${barberB.id}`, {
+    headers: headersB,
+    data: { isVisible: false },
+  })).ok()).toBe(true);
+  expect((await request.patch(`/api/services/${serviceB.id}`, {
+    headers: headersB,
+    data: { isVisible: false },
+  })).ok()).toBe(true);
+
   const deactivateB = await request.patch(`/api/admin/extras/${extraB.id}`, {
     headers: headersB,
     data: { isActive: false },

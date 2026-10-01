@@ -19,6 +19,13 @@ export type AppointmentRecord = {
   serviceNameSnapshot: string | null;
   servicePriceCentsSnapshot: number | null;
   manualOutsideHours: boolean;
+  extras?: Array<{
+    extraDefinitionId: number;
+    nameSnapshot: string;
+    amountCentsSnapshot: number;
+    financialRuleSnapshot: "follow_compensation" | "barber" | "establishment";
+    position: number;
+  }>;
   status: AppointmentStatus;
   paymentMethod: AppointmentPaymentMethod;
   cancelToken: string;
