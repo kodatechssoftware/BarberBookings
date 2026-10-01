@@ -2758,7 +2758,7 @@ test.describe("agenda interaction", () => {
       { id: 90002, barberId: primaryBarber.id, status: "completed", customerName: "Filtro Concluída" },
       { id: 90003, barberId: primaryBarber.id, status: "cancelled", customerName: "Filtro Cancelada" },
       { id: 90004, barberId: primaryBarber.id, status: "late_cancelled", customerName: "Filtro Cancelamento Tardio" },
-      { id: 90005, barberId: primaryBarber.id, status: "no_show", customerName: "Filtro No-show Fora Horas" },
+      { id: 90005, barberId: primaryBarber.id, status: "no_show", customerName: "Filtro Falta Fora Horas" },
       { id: 90006, barberId: secondaryBarber.id, status: "booked", customerName: "Filtro Marcada Secundária" },
     ].map((appointment, index) => ({
       ...appointment,
@@ -2846,11 +2846,11 @@ test.describe("agenda interaction", () => {
     await expect(desktopDayCount).toHaveText("1");
     await expect(appointmentButton("Filtro Cancelamento Tardio")).toBeVisible();
 
-    await selectStatus("Cancelamentos tardios", "No-show");
+    await selectStatus("Cancelamentos tardios", "Faltas");
     await expect(desktopDayCount).toHaveText("1");
-    await expect(appointmentButton("Filtro No-show Fora Horas")).toBeVisible();
+    await expect(appointmentButton("Filtro Falta Fora Horas")).toBeVisible();
 
-    await selectStatus("No-show", "Todas");
+    await selectStatus("Faltas", "Todas");
     await weeklyAgenda.getByRole("combobox").filter({ hasText: "Todos os barbeiros" }).click();
     await page.getByRole("option", { name: primaryBarber.name, exact: true }).click();
     await expect(desktopDayCount).toHaveText("5");
@@ -2872,7 +2872,7 @@ test.describe("agenda interaction", () => {
 
     await selectStatus("Marcadas", "Todas");
     await expect(mobileDay.getByText("6 no dia", { exact: true })).toBeVisible();
-    await expect(mobileDay.getByRole("button", { name: /Filtro No-show Fora Horas/ })).toBeVisible();
+    await expect(mobileDay.getByRole("button", { name: /Filtro Falta Fora Horas/ })).toBeVisible();
     expect(appointmentMutationRequests).toEqual([]);
   });
 

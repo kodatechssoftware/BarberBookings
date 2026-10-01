@@ -44,7 +44,7 @@ const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; la
   { value: "completed", label: "Concluídas" },
   { value: "cancelled", label: "Canceladas" },
   { value: "late_cancelled", label: "Cancelamentos tardios" },
-  { value: "no_show", label: "No-show" },
+  { value: "no_show", label: "Faltas" },
 ];
 
 const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#2F91E8" : "#D4AF37";
