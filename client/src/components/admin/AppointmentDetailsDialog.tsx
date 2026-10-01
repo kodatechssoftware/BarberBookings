@@ -189,6 +189,15 @@ function EditAppointmentDialog({
     selectedStartMinutes >= period.start && selectedStartMinutes + selectedDuration <= period.end,
   ) : false;
   const selectedIsOutsideHours = Boolean(selectedBarber && !selectedFitsSchedule);
+  const hasExistingSpecificPrice = serviceId !== "custom"
+    && serviceId !== "none"
+    && appointment.serviceId === Number(serviceId)
+    && appointment.servicePriceCentsSnapshot != null
+    && selectedService?.price != null
+    && appointment.servicePriceCentsSnapshot !== selectedService.price;
+  const showExistingPriceTerms = serviceId !== "custom"
+    && serviceId !== "none"
+    && (selectedIsOutsideHours || hasExistingSpecificPrice);
 
   useEffect(() => {
     if (!open) return;
@@ -254,14 +263,6 @@ function EditAppointmentDialog({
       return;
     }
     if (serviceId === "custom") {
-      if (!selectedIsOutsideHours) {
-        toast({
-          title: "Conversão necessária",
-          description: "Para colocar esta marcação num horário normal, escolha um serviço do catálogo.",
-          variant: "destructive",
-        });
-        return;
-      }
       if (!customServiceName.trim() || customServiceName.trim().length > 100) {
         toast({ title: "Serviço inválido", description: "Indique uma descrição até 100 caracteres.", variant: "destructive" });
         return;
@@ -271,16 +272,8 @@ function EditAppointmentDialog({
         return;
       }
     }
-    if (selectedIsOutsideHours && serviceId !== "none" && priceCents === null) {
+    if ((serviceId === "custom" || showExistingPriceTerms) && priceCents === null) {
       toast({ title: "Preço inválido", description: "Indique o preço final desta marcação.", variant: "destructive" });
-      return;
-    }
-    if (
-      appointment.manualOutsideHours
-      && !selectedIsOutsideHours
-      && serviceId !== "custom"
-      && !window.confirm("Esta marcação passará para o horário normal. O preço especial será substituído pelo preço atual do serviço. Continuar?")
-    ) {
       return;
     }
 
@@ -296,7 +289,7 @@ function EditAppointmentDialog({
           customServiceName: customServiceName.trim(),
           customDurationMinutes: parsedCustomDuration,
           servicePriceCents: priceCents,
-        } : selectedIsOutsideHours && serviceId !== "none" ? {
+        } : showExistingPriceTerms ? {
           servicePriceCents: priceCents,
         } : {}),
       });
@@ -352,8 +345,8 @@ function EditAppointmentDialog({
           </div>
           <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
             <div>
-              <Label htmlFor="edit-outside-hours" className="cursor-pointer text-sm font-medium">Permitir horário extraordinário</Label>
-              <p className="text-xs text-gray-500">Ative apenas para mover esta marcação para fora do horário efetivo.</p>
+              <Label htmlFor="edit-outside-hours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
+              <p className="text-xs text-gray-500">Ative apenas quando precisar de mover esta marcação para um horário em que o barbeiro normalmente não trabalha.</p>
             </div>
             <Switch id="edit-outside-hours" checked={allowOutsideHours} onCheckedChange={setAllowOutsideHours} />
           </div>
@@ -401,8 +394,9 @@ function EditAppointmentDialog({
           {serviceId === "custom" && (
             <div className="grid gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 sm:grid-cols-2">
               <div className="space-y-2 sm:col-span-2">
-                <Label>Descrição do serviço</Label>
+                <Label htmlFor="edit-custom-service-name">Descrição do serviço</Label>
                 <Input
+                  id="edit-custom-service-name"
                   value={customServiceName}
                   maxLength={100}
                   onChange={(event) => setCustomServiceName(event.target.value)}
@@ -410,8 +404,9 @@ function EditAppointmentDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label>Duração (min)</Label>
+                <Label htmlFor="edit-custom-duration">Duração (min)</Label>
                 <Input
+                  id="edit-custom-duration"
                   type="number"
                   min="1"
                   max="720"
@@ -421,8 +416,9 @@ function EditAppointmentDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label>Preço (€)</Label>
+                <Label htmlFor="edit-custom-price">Preço (€)</Label>
                 <Input
+                  id="edit-custom-price"
                   inputMode="decimal"
                   value={priceValue}
                   onChange={(event) => setPriceValue(event.target.value)}
@@ -431,11 +427,15 @@ function EditAppointmentDialog({
               </div>
             </div>
           )}
-          {serviceId !== "custom" && serviceId !== "none" && selectedIsOutsideHours && (
+          {showExistingPriceTerms && (
             <div className="space-y-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3">
               <div>
-                <p className="font-semibold text-amber-100">Marcação fora do horário</p>
-                <p className="text-xs text-amber-100/75">O servidor voltará a validar o horário e os conflitos ao guardar.</p>
+                <p className="font-semibold text-amber-100">Preço específico desta marcação</p>
+                <p className="text-xs text-amber-100/75">
+                  {selectedIsOutsideHours
+                    ? "O servidor voltará a validar o horário, o preço e os conflitos ao guardar."
+                    : "Este valor é próprio da marcação e não altera o preço do serviço no catálogo."}
+                </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-lg border border-white/10 bg-background/40 p-3 text-sm">
@@ -452,11 +452,6 @@ function EditAppointmentDialog({
                   />
                 </div>
               </div>
-            </div>
-          )}
-          {appointment.manualOutsideHours && !selectedIsOutsideHours && serviceId !== "custom" && (
-            <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
-              Ao guardar no horário normal, o nome, a duração e o preço voltam aos termos atuais do serviço.
             </div>
           )}
           <Button

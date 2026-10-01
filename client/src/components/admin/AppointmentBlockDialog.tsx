@@ -49,8 +49,6 @@ type AppointmentBlockDialogProps = {
   onCalendarOpenChange: (open: boolean) => void;
   availableBlockTimes: string[];
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
-  isSelectedOutsideHours: boolean;
-  hasMixedScheduleContext: boolean;
   isCheckingAvailability?: boolean;
   onSubmit: () => void;
 };
@@ -66,8 +64,6 @@ export function AppointmentBlockDialog({
   onCalendarOpenChange,
   availableBlockTimes,
   bookingSlotIntervalMinutes,
-  isSelectedOutsideHours,
-  hasMixedScheduleContext,
   isCheckingAvailability = false,
   onSubmit,
 }: AppointmentBlockDialogProps) {
@@ -102,7 +98,7 @@ export function AppointmentBlockDialog({
   const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
   const selectedService = manualBookingServices.find((service) => String(service.id) === blockData.serviceId);
-  const showExtraordinaryTerms = blockData.isManualBooking && isSelectedOutsideHours && !blockData.isRecurring;
+  const showSpecialTerms = blockData.isManualBooking && blockData.hasSpecialTerms && !blockData.isRecurring;
 
   const formatPrice = (priceCents: number) => `${(priceCents / 100).toFixed(2).replace(".", ",")} €`;
 
@@ -182,8 +178,8 @@ export function AppointmentBlockDialog({
                 <div className="mt-4 grid gap-3">
                   <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>
-                      <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Mostrar horários fora do horário normal</Label>
-                      <p className="text-xs text-gray-500">Use apenas quando o cliente combinou uma exceção diretamente com o barbeiro.</p>
+                      <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
+                      <p className="text-xs text-gray-500">Ative apenas quando precisar de registar uma marcação num horário em que o barbeiro normalmente não trabalha.</p>
                     </div>
                     <Switch
                       id="outsideHours"
@@ -191,11 +187,33 @@ export function AppointmentBlockDialog({
                       onCheckedChange={(checked) => onBlockDataChange({
                         ...blockData,
                         allowOutsideHours: checked,
+                        times: [],
+                      })}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
+                    <div>
+                      <Label htmlFor="specialTerms" className="cursor-pointer text-sm font-medium">Condições especiais desta marcação</Label>
+                      <p className="text-xs text-gray-500">
+                        {blockData.isRecurring
+                          ? "Não disponível em marcações recorrentes."
+                          : "Ajuste o serviço, a duração ou o preço apenas para esta marcação."}
+                      </p>
+                    </div>
+                    <Switch
+                      id="specialTerms"
+                      checked={blockData.hasSpecialTerms}
+                      disabled={blockData.isRecurring}
+                      onCheckedChange={(checked) => onBlockDataChange({
+                        ...blockData,
+                        hasSpecialTerms: checked,
                         serviceMode: "existing",
                         customServiceName: "",
                         customDurationMinutes: "30",
-                        servicePrice: "",
-                        times: [],
+                        servicePrice: checked && selectedService
+                          ? String(selectedService.price / 100).replace(".", ",")
+                          : "",
                       })}
                     />
                   </div>
@@ -214,10 +232,11 @@ export function AppointmentBlockDialog({
                         endDate: checked && blockData.endDate < today ? today : blockData.endDate,
                         isRecurring: checked,
                         isMultiDay: false,
+                        hasSpecialTerms: false,
                         serviceMode: "existing",
                         customServiceName: "",
                         customDurationMinutes: "30",
-                        servicePrice: checked ? "" : blockData.servicePrice,
+                        servicePrice: "",
                         times: checked ? blockData.times.slice(0, 1) : blockData.times,
                       })}
                     />
@@ -339,7 +358,9 @@ export function AppointmentBlockDialog({
                         onBlockDataChange({
                           ...blockData,
                           serviceId: value,
-                          servicePrice: service ? String(service.price / 100).replace(".", ",") : "",
+                          servicePrice: blockData.hasSpecialTerms && service
+                            ? String(service.price / 100).replace(".", ",")
+                            : "",
                         });
                       }}
                     >
@@ -431,19 +452,13 @@ export function AppointmentBlockDialog({
               )}
             </div>
 
-            {blockData.isManualBooking && hasMixedScheduleContext && (
-              <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                A seleção mistura horários habituais e extraordinários. Separe-os para definir termos especiais.
-              </div>
-            )}
-
-            {showExtraordinaryTerms && (
-              <div className="space-y-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4" data-testid="outside-hours-terms">
+            {showSpecialTerms && (
+              <div className="space-y-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4" data-testid="manual-booking-special-terms">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
                   <div>
-                    <p className="font-bold text-amber-100">Marcação fora do horário</p>
-                    <p className="mt-1 text-xs text-amber-100/75">Esta marcação está fora do horário habitual.</p>
+                    <p className="font-bold text-amber-100">Condições especiais desta marcação</p>
+                    <p className="mt-1 text-xs text-amber-100/75">Estas alterações aplicam-se apenas a esta marcação e não modificam o catálogo.</p>
                   </div>
                 </div>
 
@@ -650,8 +665,8 @@ export function AppointmentBlockDialog({
             disabled={
               !blockData.barberId ||
               blockData.times.length === 0 ||
-              (blockData.isManualBooking && blockData.serviceMode === "existing" && !blockData.serviceId) ||
-              (blockData.isManualBooking && blockData.serviceMode === "custom" && !blockData.customServiceName.trim())
+              (blockData.isManualBooking && (!blockData.hasSpecialTerms || blockData.serviceMode === "existing") && !blockData.serviceId) ||
+              (blockData.isManualBooking && blockData.hasSpecialTerms && blockData.serviceMode === "custom" && !blockData.customServiceName.trim())
             }
             onClick={() => {
               if (blockData.isManualBooking) setIsEmailTouched(true);

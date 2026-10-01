@@ -3415,6 +3415,7 @@ export async function registerRoutes(
         servicePriceCents,
         isManualBooking,
         allowOutsideHours,
+        hasSpecialTerms,
         isRecurring,
         recurringWeeks,
         recurringMonths,
@@ -3422,6 +3423,7 @@ export async function registerRoutes(
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
+        (hasSpecialTerms !== undefined && typeof hasSpecialTerms !== "boolean") ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
         (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
         (isRecurring && startTimes !== undefined) ||
@@ -3467,6 +3469,9 @@ export async function registerRoutes(
         : Number(serviceId);
       const isCustomService = serviceMode === "custom";
       const hasManualPrice = servicePriceCents !== undefined;
+      const hasCustomName = Object.prototype.hasOwnProperty.call(req.body, "customServiceName");
+      const hasCustomDuration = Object.prototype.hasOwnProperty.call(req.body, "customDurationMinutes");
+      const usesSpecialTerms = Boolean(isManualBooking && hasSpecialTerms);
       if (serviceIdNumber !== null && (!Number.isInteger(serviceIdNumber) || serviceIdNumber <= 0)) {
         return res.status(400).json({ message: "Serviço inválido." });
       }
@@ -3478,6 +3483,15 @@ export async function registerRoutes(
       }
       if (!isManualBooking && (serviceIdNumber !== null || isCustomService || hasManualPrice)) {
         return res.status(400).json({ message: "Uma ausência não pode ter um serviço associado." });
+      }
+      if (hasSpecialTerms && !isManualBooking) {
+        return res.status(400).json({ message: "As condições especiais só estão disponíveis para marcações manuais." });
+      }
+      if (!usesSpecialTerms && (isCustomService || hasManualPrice || hasCustomName || hasCustomDuration)) {
+        return res.status(400).json({ message: "Ative as condições especiais para personalizar o serviço ou o preço desta marcação." });
+      }
+      if (usesSpecialTerms && !isCustomService && !hasManualPrice) {
+        return res.status(400).json({ message: "Indique o preço específico desta marcação." });
       }
 
       const normalizedName = typeof name === "string" ? name.trim() : "";
@@ -3510,11 +3524,8 @@ export async function registerRoutes(
       if (isRecurring && !isManualBooking) {
         return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
       }
-      if (isRecurring && isCustomService) {
-        return res.status(400).json({ message: "Serviços personalizados não podem ser recorrentes." });
-      }
-      if (isRecurring && hasManualPrice) {
-        return res.status(400).json({ message: "Preços extraordinários não podem ser recorrentes." });
+      if (isRecurring && (isCustomService || hasManualPrice || hasSpecialTerms)) {
+        return res.status(400).json({ message: "Condições especiais não podem ser recorrentes." });
       }
       if (allowOutsideHours && !isManualBooking) {
         return res.status(400).json({ message: "A exceção de horário só está disponível para marcações manuais." });
@@ -3631,12 +3642,6 @@ export async function registerRoutes(
             message: `${scheduleError} (${formatShopDateTime(currentStart)}, ${duration} min).`,
           });
         }
-        if (!isActuallyOutsideHours && (isCustomService || hasManualPrice)) {
-          return res.status(400).json({
-            message: "Serviço personalizado e preço manual só estão disponíveis em marcações realmente fora do horário.",
-          });
-        }
-
         let existingAppointments = existingAppointmentsByDate.get(shopDateParts.dateKey);
         if (!existingAppointments) {
           existingAppointments = await storage.getAppointments(barberIdNumber, shopDateParts.dateKey);
@@ -3984,8 +3989,8 @@ export async function registerRoutes(
       if (requestedServiceMode === "existing" && (hasCustomNamePatch || hasCustomDurationPatch)) {
         return res.status(400).json({ message: "Os campos personalizados só podem ser usados num serviço personalizado." });
       }
-      if (requestedServiceMode === "custom" && currentApp.seriesId) {
-        return res.status(400).json({ message: "Serviços personalizados não podem ser recorrentes." });
+      if (currentApp.seriesId && (requestedServiceMode === "custom" || hasServicePricePatch)) {
+        return res.status(400).json({ message: "Condições especiais não podem ser recorrentes." });
       }
 
       if (newServiceId !== null && !services.some((service) => service.id === newServiceId)) {
@@ -4078,15 +4083,6 @@ export async function registerRoutes(
         let scheduleError = getScheduleValidationError(newStartTime, finalDuration, workingPeriods);
         let isOutsideHours = Boolean(scheduleError);
 
-        if (!isOutsideHours && currentApp.manualOutsideHours && requestedServiceMode === "existing" && selectedService) {
-          const normalTerms = resolveEffectiveServiceTerms(locationId, selectedService);
-          finalServiceName = normalTerms.name;
-          finalServicePrice = normalTerms.priceCents;
-          finalDuration = normalTerms.durationMinutes;
-          scheduleError = getScheduleValidationError(newStartTime, finalDuration, workingPeriods);
-          isOutsideHours = Boolean(scheduleError);
-        }
-
         if (crossesShopCalendarDay(newStartTime, finalDuration)) {
           return res.status(400).json({ message: "A marcação não pode atravessar a meia-noite." });
         }
@@ -4094,15 +4090,6 @@ export async function registerRoutes(
         if (isOutsideHours && !currentApp.manualOutsideHours && allowOutsideHours !== true) {
           return res.status(400).json({ message: scheduleError || "A marcação está fora do horário." });
         }
-        if (!isOutsideHours && requestedServiceMode === "custom") {
-          return res.status(400).json({
-            message: "Para colocar esta marcação num horário normal, converta-a primeiro para um serviço do catálogo.",
-          });
-        }
-        if (!isOutsideHours && hasServicePricePatch && requestedServiceMode === "existing") {
-          return res.status(400).json({ message: "O preço manual só está disponível fora do horário." });
-        }
-
         const shouldPersistCatalogueTerms = requestedServiceMode === "existing"
           && finalServiceId !== null
           && (
