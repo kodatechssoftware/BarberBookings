@@ -9,6 +9,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { boolean, integer, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import { asc } from "drizzle-orm";
 import { getMigrationLocationConfig, migrationChecksum, runSchemaMigrations } from "../server/migrations";
+import { calculateAppointmentsFinancials } from "../server/appointment-finance";
 
 async function availablePort() {
   const server = net.createServer();
@@ -1030,6 +1031,29 @@ try {
     ],
   }), (error: any) => error?.code === "APPOINTMENT_EXTRA_IDS_INVALID");
   await databaseStorage.updateAppointmentStatus(appointmentWithExtra.id, "completed", "cash");
+  const completedAppointmentWithExtra = await databaseStorage.getAppointment(appointmentWithExtra.id);
+  assert.ok(completedAppointmentWithExtra);
+  const postgresFinancials = calculateAppointmentsFinancials({
+    appointments: [completedAppointmentWithExtra],
+    appointmentExtras: await databaseStorage.getAppointmentExtras([completedAppointmentWithExtra.id]),
+    servicePrices: new Map([[1, 1500]]),
+    compensationRules: [],
+  });
+  assert.deepEqual({
+    service: postgresFinancials.serviceAmountCents,
+    extras: postgresFinancials.extrasAmountCents,
+    total: postgresFinancials.totalAmountCents,
+    realized: postgresFinancials.realizedAmountCents,
+    barber: postgresFinancials.barberAmountCents,
+    establishment: postgresFinancials.establishmentAmountCents,
+  }, {
+    service: 1500,
+    extras: 1750,
+    total: 3250,
+    realized: 3250,
+    barber: 1000,
+    establishment: 2250,
+  }, "PostgreSQL must feed the same snapshot-only financial engine as MemoryStorage");
   await assert.rejects(
     databaseStorage.updateAppointmentWithNotification(
       appointmentWithExtra.id, {}, false, "completed", [{ extraId: travelExtra.id }],
@@ -1137,7 +1161,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008, Extra constraints, snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
