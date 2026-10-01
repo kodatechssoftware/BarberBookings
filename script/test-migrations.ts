@@ -669,6 +669,36 @@ try {
     ],
     "existing snapshots must be preserved while newly selected Extras are frozen",
   );
+  const successfulExtrasBatch = await databaseStorage.createAppointments([
+    {
+      locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+      startTime: new Date("2035-01-02T11:00:00.000Z"), customerName: "Batch Extra A",
+      customerEmail: null, customerPhone: "910000024", durationMinutes: 30,
+      cancelToken: "extra-storage-batch-a", extraDefinitionIds: [travelExtra.id, productExtra.id],
+    },
+    {
+      locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+      startTime: new Date("2035-01-02T12:00:00.000Z"), customerName: "Batch Extra B",
+      customerEmail: null, customerPhone: "910000025", durationMinutes: 30,
+      cancelToken: "extra-storage-batch-b", extraDefinitionIds: [travelExtra.id, productExtra.id],
+    },
+  ]);
+  assert.equal(successfulExtrasBatch.length, 2);
+  const successfulBatchSnapshots = await databaseStorage.getAppointmentExtras(
+    successfulExtrasBatch.map((appointment) => appointment.id),
+  );
+  for (const appointment of successfulExtrasBatch) {
+    assert.deepEqual(
+      successfulBatchSnapshots
+        .filter((extra) => extra.appointmentId === appointment.id)
+        .map((extra) => ({ definitionId: extra.extraDefinitionId, position: extra.position })),
+      [
+        { definitionId: travelExtra.id, position: 0 },
+        { definitionId: productExtra.id, position: 1 },
+      ],
+      "every appointment in a successful batch must own independent ordered Extra snapshots",
+    );
+  }
   await databaseStorage.updateExtraDefinition(productExtra.id, Number(defaultLocation.id), { isActive: false });
   await databaseStorage.updateAppointmentWithNotification(
     appointmentWithExtra.id, {}, false, "booked", [travelExtra.id, productExtra.id],

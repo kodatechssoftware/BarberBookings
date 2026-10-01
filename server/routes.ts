@@ -2,7 +2,10 @@
 import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import {
+  AppointmentExtrasError,
   appointmentBarberLocationUnavailableCode,
+  appointmentExtraIdsInvalidCode,
+  appointmentExtrasNotAllowedForRecurringCode,
   appointmentLocationInactiveCode,
   getShopDateBounds,
   isAppointmentConflictError,
@@ -885,6 +888,42 @@ function sendAppointmentLocationIntegrityError(res: Response, error: unknown) {
       : error.message;
   res.status(409).json({ code: error.code, message });
   return true;
+}
+
+function sendAppointmentExtrasError(res: Response, error: unknown) {
+  if (!(error instanceof AppointmentExtrasError)) return false;
+  const status = error.code === appointmentExtraIdsInvalidCode
+    || error.code === appointmentExtrasNotAllowedForRecurringCode
+    ? 400
+    : error.status;
+  res.status(status).json({ code: error.code, message: error.message });
+  return true;
+}
+
+async function attachAppointmentExtras<T extends Appointment>(appointments: T[]) {
+  const extras = await storage.getAppointmentExtras(appointments.map((appointment) => appointment.id));
+  const extrasByAppointment = new Map<number, Array<{
+    extraDefinitionId: number;
+    nameSnapshot: string;
+    amountCentsSnapshot: number;
+    financialRuleSnapshot: string;
+    position: number;
+  }>>();
+  for (const extra of extras) {
+    const appointmentExtras = extrasByAppointment.get(extra.appointmentId) ?? [];
+    appointmentExtras.push({
+      extraDefinitionId: extra.extraDefinitionId,
+      nameSnapshot: extra.nameSnapshot,
+      amountCentsSnapshot: extra.amountCentsSnapshot,
+      financialRuleSnapshot: extra.financialRuleSnapshot,
+      position: extra.position,
+    });
+    extrasByAppointment.set(extra.appointmentId, appointmentExtras);
+  }
+  return appointments.map((appointment) => ({
+    ...appointment,
+    extras: extrasByAppointment.get(appointment.id) ?? [],
+  }));
 }
 
 function normalizeBarberCompensationInput(input: BarberCompensationInput) {
@@ -3282,7 +3321,8 @@ export async function registerRoutes(
     const appointments = await storage.getAppointments(effectiveBarberId, date, locationId);
 
     if (appSession.role !== "barber") {
-      return res.json(appointments.map((appointment) => ({ ...appointment, canManage: true })));
+      const appointmentsWithExtras = await attachAppointmentExtras(appointments);
+      return res.json(appointmentsWithExtras.map((appointment) => ({ ...appointment, canManage: true })));
     }
 
     const ownBarberId = Number(appSession.barberId);
@@ -3533,6 +3573,7 @@ export async function registerRoutes(
         isManualBooking,
         allowOutsideHours,
         hasSpecialTerms,
+        extraIds,
         isRecurring,
         recurringWeeks,
         recurringMonths,
@@ -3541,6 +3582,7 @@ export async function registerRoutes(
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
         (hasSpecialTerms !== undefined && typeof hasSpecialTerms !== "boolean") ||
+        (extraIds !== undefined && !Array.isArray(extraIds)) ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
         (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
         (isRecurring && startTimes !== undefined) ||
@@ -3640,6 +3682,19 @@ export async function registerRoutes(
       }
       if (isRecurring && !isManualBooking) {
         return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
+      }
+      const requestedExtraIds: number[] = extraIds ?? [];
+      if (!isManualBooking && requestedExtraIds.length > 0) {
+        return res.status(400).json({
+          code: appointmentExtraIdsInvalidCode,
+          message: "Os Extras só estão disponíveis para marcações manuais.",
+        });
+      }
+      if (isRecurring && requestedExtraIds.length > 0) {
+        return res.status(400).json({
+          code: appointmentExtrasNotAllowedForRecurringCode,
+          message: "As marcações recorrentes não suportam Extras.",
+        });
       }
       if (isRecurring && (isCustomService || hasManualPrice || hasSpecialTerms)) {
         return res.status(400).json({ message: "Condições especiais não podem ser recorrentes." });
@@ -3834,6 +3889,7 @@ export async function registerRoutes(
           notificationEventType: appointmentNotificationEventsEnabled && isManualBooking && !isHistoricalManualBooking && (!isRecurring || occurrences === 1)
             ? "appointment_confirmation"
             : undefined,
+          extraDefinitionIds: isManualBooking && !isRecurring ? requestedExtraIds : undefined,
         });
       }
 
@@ -3914,6 +3970,7 @@ export async function registerRoutes(
           barberId: barberIdNumber,
           serviceId: serviceIdNumber,
           recurring: Boolean(isRecurring),
+          extraIds: requestedExtraIds,
           seriesId: recurringSeriesId,
           whatsappOptInSource: manualWhatsappOptIn ? "admin_manual" : null,
         },
@@ -3945,8 +4002,10 @@ export async function registerRoutes(
         }
       }
 
+      const appointmentsWithExtras = await attachAppointmentExtras(createdAppointments);
       res.status(201).json({
         message: `${appointments.length} marcações criadas.`,
+        appointments: appointmentsWithExtras,
         ...(recurringSeriesId ? { seriesId: recurringSeriesId } : {}),
         ...(recurringNotificationEventId ? { notificationEventId: recurringNotificationEventId } : {}),
       });
@@ -3954,6 +4013,7 @@ export async function registerRoutes(
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Horário indisponível para este barbeiro." });
       }
+      if (sendAppointmentExtrasError(res, error)) return;
       if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Block error:", error);
       res.status(500).json({ message: "Erro ao bloquear horário" });

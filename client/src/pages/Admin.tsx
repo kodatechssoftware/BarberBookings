@@ -8,6 +8,7 @@ import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, U
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
+import { useExtras } from "@/hooks/use-extras";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -108,6 +109,13 @@ type AdminAppointment = {
   serviceNameSnapshot?: string | null;
   servicePriceCentsSnapshot?: number | null;
   manualOutsideHours?: boolean;
+  extras?: Array<{
+    extraDefinitionId: number;
+    nameSnapshot: string;
+    amountCentsSnapshot: number;
+    financialRuleSnapshot: string;
+    position: number;
+  }>;
   status: AppointmentStatus;
   customerName: string;
   customerPhone: string;
@@ -1683,6 +1691,7 @@ export default function Admin() {
     customServiceName: "",
     customDurationMinutes: "30",
     servicePrice: "",
+    extraIds: [],
     times: [],
     name: "",
     phone: "900000000",
@@ -1712,6 +1721,16 @@ export default function Admin() {
     [blockAppointments],
   );
   const hasLoadedBlockAppointments = !blockData.barberId || Array.isArray(blockAppointments);
+  const {
+    data: extraDefinitions = [],
+    isLoading: isLoadingExtraDefinitions,
+  } = useExtras({
+    enabled: user?.role === "admin" && isBlocking && blockData.isManualBooking,
+  });
+  const activeManualBookingExtras = useMemo(
+    () => extraDefinitions.filter((extra) => extra.isActive),
+    [extraDefinitions],
+  );
 
   const [loginData, setLoginData] = useState({ username: "", password: "" });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -1761,6 +1780,7 @@ export default function Admin() {
       customServiceName: "",
       customDurationMinutes: "30",
       servicePrice: "",
+      extraIds: [],
       times: [],
       hasSpecialTerms: false,
     }));
@@ -2115,6 +2135,7 @@ export default function Admin() {
       customServiceName: "",
       customDurationMinutes: "30",
       servicePrice: "",
+      extraIds: [],
       times: initialTimes,
       name: "",
       phone: mode === "manual" ? "" : "900000000",
@@ -2127,6 +2148,9 @@ export default function Admin() {
       hasSpecialTerms: false,
       isRecurring: false,
     }));
+    if (mode === "manual") {
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/extras"] });
+    }
     setIsBlocking(true);
   };
 
@@ -3015,6 +3039,7 @@ export default function Admin() {
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
           isManualBooking: blockData.isManualBooking,
           allowOutsideHours: blockData.allowOutsideHours,
+          ...(blockData.isManualBooking ? { extraIds: blockData.extraIds } : {}),
         });
       }
       
@@ -3031,6 +3056,7 @@ export default function Admin() {
         customServiceName: "",
         customDurationMinutes: "30",
         servicePrice: "",
+        extraIds: [],
         isMultiDay: false,
         isManualBooking: false,
         allowOutsideHours: false,
@@ -3618,9 +3644,16 @@ export default function Admin() {
 
         <AppointmentBlockDialog
           open={isBlocking}
-          onOpenChange={setIsBlocking}
+          onOpenChange={(open) => {
+            setIsBlocking(open);
+            if (!open) {
+              setBlockData((current) => ({ ...current, extraIds: [] }));
+            }
+          }}
           barbers={activeBarbers}
           manualBookingServices={manualBookingServices}
+          extras={activeManualBookingExtras}
+          isLoadingExtras={isLoadingExtraDefinitions}
           blockData={blockData}
           onBlockDataChange={setBlockData}
           isCalendarOpen={isCalendarOpen}
