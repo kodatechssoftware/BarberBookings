@@ -1691,7 +1691,7 @@ export default function Admin() {
     customServiceName: "",
     customDurationMinutes: "30",
     servicePrice: "",
-    extraIds: [],
+    extras: [],
     times: [],
     name: "",
     phone: "900000000",
@@ -1780,7 +1780,7 @@ export default function Admin() {
       customServiceName: "",
       customDurationMinutes: "30",
       servicePrice: "",
-      extraIds: [],
+      extras: [],
       times: [],
       hasSpecialTerms: false,
     }));
@@ -2135,7 +2135,7 @@ export default function Admin() {
       customServiceName: "",
       customDurationMinutes: "30",
       servicePrice: "",
-      extraIds: [],
+      extras: [],
       times: initialTimes,
       name: "",
       phone: mode === "manual" ? "" : "900000000",
@@ -2956,6 +2956,35 @@ export default function Admin() {
       return;
     }
 
+    const appointmentExtraInputs: Array<{ extraId: number; amountCents?: number }> = [];
+    if (blockData.isManualBooking && !blockData.isRecurring) {
+      for (const selection of blockData.extras) {
+        const definition = activeManualBookingExtras.find((extra) => extra.id === selection.extraId);
+        if (!definition) {
+          toast({
+            title: "Extra indisponível",
+            description: "Atualize a seleção de Extras e tente novamente.",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (definition.pricingMode === "variable") {
+          const amountCents = appointmentEurosInputToCents(selection.amountEuros);
+          if (amountCents === null || amountCents <= 0) {
+            toast({
+              title: "Valor inválido",
+              description: `Indique um valor superior a zero para ${definition.name}.`,
+              variant: "destructive",
+            });
+            return;
+          }
+          appointmentExtraInputs.push({ extraId: definition.id, amountCents });
+        } else {
+          appointmentExtraInputs.push({ extraId: definition.id });
+        }
+      }
+    }
+
     if (!options?.skipBlacklistCheck) {
       const blacklistEntry = findManualBookingBlacklistEntry();
       if (blacklistEntry) {
@@ -3039,7 +3068,7 @@ export default function Admin() {
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
           isManualBooking: blockData.isManualBooking,
           allowOutsideHours: blockData.allowOutsideHours,
-          ...(blockData.isManualBooking ? { extraIds: blockData.extraIds } : {}),
+          ...(blockData.isManualBooking ? { extras: appointmentExtraInputs } : {}),
         });
       }
       
@@ -3056,7 +3085,7 @@ export default function Admin() {
         customServiceName: "",
         customDurationMinutes: "30",
         servicePrice: "",
-        extraIds: [],
+        extras: [],
         isMultiDay: false,
         isManualBooking: false,
         allowOutsideHours: false,
@@ -3647,7 +3676,7 @@ export default function Admin() {
           onOpenChange={(open) => {
             setIsBlocking(open);
             if (!open) {
-              setBlockData((current) => ({ ...current, extraIds: [] }));
+              setBlockData((current) => ({ ...current, extras: [] }));
             }
           }}
           barbers={activeBarbers}

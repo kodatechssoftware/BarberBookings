@@ -935,6 +935,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     headers: headersA,
     data: {
       name: "Extra Loja A QA",
+      pricingMode: "fixed",
       amountCents: 400,
       financialRule: "follow_compensation",
       sortOrder: 0,
@@ -944,6 +945,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     headers: headersB,
     data: {
       name: "Extra Loja B QA",
+      pricingMode: "fixed",
       amountCents: 900,
       financialRule: "barber",
       sortOrder: 0,
@@ -1034,14 +1036,14 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   };
   const crossLocationBooking = await request.post("/api/appointments/block", {
     headers: headersB,
-    data: { ...bookingData, extraIds: [extraA.id] },
+    data: { ...bookingData, extras: [{ extraId: extraA.id }] },
   });
   expect(crossLocationBooking.status(), await crossLocationBooking.text()).toBe(409);
   expect(await crossLocationBooking.json()).toMatchObject({ code: "APPOINTMENT_EXTRA_UNAVAILABLE" });
 
   const localBooking = await request.post("/api/appointments/block", {
     headers: headersB,
-    data: { ...bookingData, extraIds: [extraB.id] },
+    data: { ...bookingData, extras: [{ extraId: extraB.id }] },
   });
   expect(localBooking.status(), await localBooking.text()).toBe(201);
   const localBookingBody = await localBooking.json();
@@ -1094,7 +1096,12 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     .find((extra: any) => extra.id === extraB.id)).toMatchObject({ isActive: false });
 
   const missingLocation = await request.post("/api/admin/extras", {
-    data: { name: "Sem localização explícita", amountCents: 100, financialRule: "establishment" },
+    data: {
+      name: "Sem localização explícita",
+      pricingMode: "fixed",
+      amountCents: 100,
+      financialRule: "establishment",
+    },
   });
   expect(missingLocation.status(), await missingLocation.text()).toBe(400);
   expect(await missingLocation.json()).toMatchObject({ code: "LOCATION_REQUIRED" });

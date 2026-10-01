@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Loader2, Pencil, Plus, Sparkles } from "lucide-react";
-import type { ExtraDefinition, ExtraFinancialRule } from "@shared/schema";
+import type { ExtraDefinition, ExtraFinancialRule, ExtraPricingMode } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useExtras } from "@/hooks/use-extras";
@@ -28,6 +29,7 @@ const financialRuleLabels: Record<ExtraFinancialRule, string> = {
 
 type ExtraForm = {
   name: string;
+  pricingMode: ExtraPricingMode;
   amountEuros: string;
   financialRule: ExtraFinancialRule;
   sortOrder: string;
@@ -35,6 +37,7 @@ type ExtraForm = {
 
 const emptyForm: ExtraForm = {
   name: "",
+  pricingMode: "fixed",
   amountEuros: "",
   financialRule: "follow_compensation",
   sortOrder: "0",
@@ -45,7 +48,8 @@ const euroFormatter = new Intl.NumberFormat("pt-PT", {
   currency: "EUR",
 });
 
-function amountInputFromCents(amountCents: number) {
+function amountInputFromCents(amountCents: number | null) {
+  if (amountCents === null) return "";
   return (amountCents / 100).toFixed(2).replace(".", ",");
 }
 
@@ -88,6 +92,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
     setEditingExtra(extra);
     setForm({
       name: extra.name,
+      pricingMode: extra.pricingMode,
       amountEuros: amountInputFromCents(extra.amountCents),
       financialRule: extra.financialRule,
       sortOrder: String(extra.sortOrder),
@@ -105,13 +110,13 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
 
   const saveExtra = async () => {
     const name = form.name.trim();
-    const amountCents = parseAmountCents(form.amountEuros);
+    const amountCents = form.pricingMode === "fixed" ? parseAmountCents(form.amountEuros) : null;
     const sortOrder = Number(form.sortOrder);
     if (!name) {
       setFormError("Indique o nome do Extra.");
       return;
     }
-    if (amountCents === null) {
+    if (form.pricingMode === "fixed" && amountCents === null) {
       setFormError("Indique um valor superior a zero, com no máximo duas casas decimais.");
       return;
     }
@@ -127,6 +132,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
       const path = editingExtra ? `/api/admin/extras/${editingExtra.id}` : "/api/admin/extras";
       await apiRequest(editingExtra ? "PATCH" : "POST", path, {
         name,
+        pricingMode: form.pricingMode,
         amountCents,
         financialRule: form.financialRule,
         sortOrder,
@@ -173,7 +179,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
               <Sparkles className="h-5 w-5 text-primary" /> Catálogo de Extras
             </CardTitle>
             <p className="mt-2 max-w-2xl text-sm text-gray-400">
-              Defina os Extras disponíveis nesta localização, respetivos valores e distribuição financeira.
+              Defina os Extras disponíveis nesta localização, o tipo de valor e a distribuição financeira.
             </p>
           </div>
           <Button variant="gold" className="w-full gap-2 sm:w-auto" onClick={openCreateDialog}>
@@ -221,7 +227,12 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
                     </Badge>
                   </div>
                   <div className="flex flex-col gap-1 text-sm text-gray-300 sm:flex-row sm:flex-wrap sm:gap-x-4">
-                    <span className="font-semibold text-primary">{euroFormatter.format(extra.amountCents / 100)}</span>
+                    <span className="font-semibold text-primary">
+                      {extra.pricingMode === "fixed"
+                        ? euroFormatter.format(extra.amountCents! / 100)
+                        : "Valor definido na marcação"}
+                    </span>
+                    <span>{extra.pricingMode === "fixed" ? "Valor fixo" : "Variável por marcação"}</span>
                     <span data-testid={`extra-financial-rule-${extra.id}`}>
                       {financialRuleLabels[extra.financialRule]}
                     </span>
@@ -290,19 +301,47 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
               />
             </div>
 
+            <div className="space-y-3">
+              <Label>Tipo de valor</Label>
+              <RadioGroup
+                value={form.pricingMode}
+                onValueChange={(pricingMode: ExtraPricingMode) => setForm((current) => ({
+                  ...current,
+                  pricingMode,
+                  amountEuros: "",
+                }))}
+                className="grid gap-3 sm:grid-cols-2"
+              >
+                <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-background px-3 py-2">
+                  <RadioGroupItem value="fixed" id="extra-pricing-fixed" />
+                  <span>Fixo</span>
+                </label>
+                <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-background px-3 py-2">
+                  <RadioGroupItem value="variable" id="extra-pricing-variable" />
+                  <span>Variável por marcação</span>
+                </label>
+              </RadioGroup>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="extra-amount">Valor (€)</Label>
-                <Input
-                  id="extra-amount"
-                  inputMode="decimal"
-                  value={form.amountEuros}
-                  onChange={(event) => setForm((current) => ({ ...current, amountEuros: event.target.value }))}
-                  placeholder="Ex.: 5,00"
-                  required
-                  className="border-white/10 bg-background text-white"
-                />
-              </div>
+              {form.pricingMode === "fixed" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="extra-amount">Valor (€)</Label>
+                  <Input
+                    id="extra-amount"
+                    inputMode="decimal"
+                    value={form.amountEuros}
+                    onChange={(event) => setForm((current) => ({ ...current, amountEuros: event.target.value }))}
+                    placeholder="Ex.: 5,00"
+                    required
+                    className="border-white/10 bg-background text-white"
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-12 items-center rounded-lg border border-white/10 bg-background/50 px-3 text-sm text-gray-300">
+                  Valor definido na marcação
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="extra-sort-order">Ordem</Label>
                 <Input

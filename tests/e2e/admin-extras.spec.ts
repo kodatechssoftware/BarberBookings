@@ -38,7 +38,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     try {
       expect((await anonymous.get("/api/admin/extras")).status()).toBe(401);
       expect((await anonymous.post("/api/admin/extras", {
-        data: { name: "Sem sessão", amountCents: 100, financialRule: "barber", sortOrder: 0 },
+        data: { name: "Sem sessão", pricingMode: "fixed", amountCents: 100, financialRule: "barber", sortOrder: 0 },
       })).status()).toBe(401);
     } finally {
       await anonymous.dispose();
@@ -50,13 +50,15 @@ test.describe.serial("Admin Extras catalogue", () => {
     expect(await emptyCatalogue.json()).toEqual([]);
 
     const invalidPayloads = [
-      { name: "   ", amountCents: 500, financialRule: "follow_compensation", sortOrder: 0 },
-      { name: "Valor zero", amountCents: 0, financialRule: "follow_compensation", sortOrder: 0 },
-      { name: "Valor negativo", amountCents: -100, financialRule: "follow_compensation", sortOrder: 0 },
-      { name: "Regra inválida", amountCents: 500, financialRule: "percentage", sortOrder: 0 },
-      { name: "Ordem negativa", amountCents: 500, financialRule: "barber", sortOrder: -1 },
-      { name: "Ordem decimal", amountCents: 500, financialRule: "barber", sortOrder: 1.5 },
-      { name: "Ordem demasiado elevada", amountCents: 500, financialRule: "barber", sortOrder: 2_147_483_648 },
+      { name: "   ", pricingMode: "fixed", amountCents: 500, financialRule: "follow_compensation", sortOrder: 0 },
+      { name: "Fixo sem valor", pricingMode: "fixed", financialRule: "follow_compensation", sortOrder: 0 },
+      { name: "Valor zero", pricingMode: "fixed", amountCents: 0, financialRule: "follow_compensation", sortOrder: 0 },
+      { name: "Valor negativo", pricingMode: "fixed", amountCents: -100, financialRule: "follow_compensation", sortOrder: 0 },
+      { name: "Modo inválido", pricingMode: "distance", amountCents: 500, financialRule: "barber", sortOrder: 0 },
+      { name: "Regra inválida", pricingMode: "fixed", amountCents: 500, financialRule: "percentage", sortOrder: 0 },
+      { name: "Ordem negativa", pricingMode: "fixed", amountCents: 500, financialRule: "barber", sortOrder: -1 },
+      { name: "Ordem decimal", pricingMode: "fixed", amountCents: 500, financialRule: "barber", sortOrder: 1.5 },
+      { name: "Ordem demasiado elevada", pricingMode: "fixed", amountCents: 500, financialRule: "barber", sortOrder: 2_147_483_648 },
     ];
     for (const payload of invalidPayloads) {
       const response = await request.post("/api/admin/extras", { data: payload });
@@ -67,6 +69,7 @@ test.describe.serial("Admin Extras catalogue", () => {
       data: {
         locationId: 999999,
         name: "  Tratamento premium Extras QA  ",
+        pricingMode: "fixed",
         amountCents: 650,
         financialRule: "follow_compensation",
         sortOrder: 2,
@@ -77,6 +80,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     apiExtraId = created.id;
     expect(created).toMatchObject({
       name: "Tratamento premium Extras QA",
+      pricingMode: "fixed",
       amountCents: 650,
       financialRule: "follow_compensation",
       isActive: true,
@@ -87,6 +91,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     const duplicateResponse = await request.post("/api/admin/extras", {
       data: {
         name: "  TRATAMENTO PREMIUM EXTRAS QA ",
+        pricingMode: "fixed",
         amountCents: 700,
         financialRule: "barber",
       },
@@ -97,6 +102,7 @@ test.describe.serial("Admin Extras catalogue", () => {
       { name: "   " },
       { amountCents: 0 },
       { amountCents: -1 },
+      { pricingMode: "distance" },
       { financialRule: "percentage" },
       { sortOrder: -1 },
       { sortOrder: 1.5 },
@@ -108,6 +114,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     expect((await (await request.get("/api/admin/extras")).json())[0]).toMatchObject({
       id: apiExtraId,
       name: apiExtraName,
+      pricingMode: "fixed",
       amountCents: 650,
       financialRule: "follow_compensation",
       sortOrder: 2,
@@ -119,6 +126,7 @@ test.describe.serial("Admin Extras catalogue", () => {
       extraId: apiExtraId,
       locationId: 1,
       name: apiExtraName,
+      pricingMode: "fixed",
       amountCents: 650,
       financialRule: "follow_compensation",
     });
@@ -126,9 +134,26 @@ test.describe.serial("Admin Extras catalogue", () => {
     const emptyPatch = await request.patch(`/api/admin/extras/${apiExtraId}`, { data: {} });
     expect(emptyPatch.status(), await emptyPatch.text()).toBe(400);
 
+    const variableResponse = await request.patch(`/api/admin/extras/${apiExtraId}`, {
+      data: { pricingMode: "variable", amountCents: 999 },
+    });
+    expect(variableResponse.status(), await variableResponse.text()).toBe(200);
+    expect(await variableResponse.json()).toMatchObject({ pricingMode: "variable", amountCents: null });
+    const variableAudit = await getAuditEvent(request, "extra.updated", apiExtraId);
+    const variableMetadata = JSON.parse(variableAudit.metadata);
+    expect(variableMetadata.changedFields).toEqual(expect.arrayContaining(["pricingMode", "amountCents"]));
+    expect(variableMetadata.changes.pricingMode).toEqual({ previous: "fixed", next: "variable" });
+    expect(variableMetadata.changes.amountCents).toEqual({ previous: 650, next: null });
+
+    const fixedWithoutAmount = await request.patch(`/api/admin/extras/${apiExtraId}`, {
+      data: { pricingMode: "fixed" },
+    });
+    expect(fixedWithoutAmount.status(), await fixedWithoutAmount.text()).toBe(400);
+
     const updateResponse = await request.patch(`/api/admin/extras/${apiExtraId}`, {
       data: {
         name: "  Tratamento premium editado Extras QA  ",
+        pricingMode: "fixed",
         amountCents: 775,
         financialRule: "establishment",
         sortOrder: 3,
@@ -138,6 +163,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     expect(await updateResponse.json()).toMatchObject({
       id: apiExtraId,
       name: "Tratamento premium editado Extras QA",
+      pricingMode: "fixed",
       amountCents: 775,
       financialRule: "establishment",
       sortOrder: 3,
@@ -152,9 +178,10 @@ test.describe.serial("Admin Extras catalogue", () => {
       name: "Tratamento premium editado Extras QA",
     });
     expect(updateMetadata.changedFields).toEqual(expect.arrayContaining([
-      "name", "amountCents", "financialRule", "sortOrder",
+      "name", "pricingMode", "amountCents", "financialRule", "sortOrder",
     ]));
-    expect(updateMetadata.changes.amountCents).toEqual({ previous: 650, next: 775 });
+    expect(updateMetadata.changes.pricingMode).toEqual({ previous: "variable", next: "fixed" });
+    expect(updateMetadata.changes.amountCents).toEqual({ previous: null, next: 775 });
     expect(updateMetadata.changes.financialRule).toEqual({
       previous: "follow_compensation",
       next: "establishment",
@@ -210,7 +237,7 @@ test.describe.serial("Admin Extras catalogue", () => {
         expect(acceptResponse.status(), await acceptResponse.text()).toBe(200);
         expect((await barberContext.get("/api/admin/extras")).status()).toBe(401);
         expect((await barberContext.post("/api/admin/extras", {
-          data: { name: "Extra indevido", amountCents: 100, financialRule: "barber", sortOrder: 0 },
+          data: { name: "Extra indevido", pricingMode: "fixed", amountCents: 100, financialRule: "barber", sortOrder: 0 },
         })).status()).toBe(401);
         expect((await barberContext.patch(`/api/admin/extras/${apiExtraId}`, {
           data: { isActive: false },
@@ -241,6 +268,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     let existingCard = manager.getByTestId(`extra-card-${apiExtraId}`);
     await expect(existingCard.getByText("Tratamento premium editado Extras QA", { exact: true })).toBeVisible();
     await expect(existingCard.getByText("7,75 €", { exact: true })).toBeVisible();
+    await expect(existingCard.getByText("Valor fixo", { exact: true })).toBeVisible();
     await expect(existingCard.getByText("100% para o estabelecimento", { exact: true })).toBeVisible();
     await expect(existingCard.getByText("Inativo", { exact: true }).first()).toBeVisible();
     await expect(existingCard.getByText(/follow_compensation|establishment|barber/, { exact: false })).toHaveCount(0);
@@ -251,6 +279,18 @@ test.describe.serial("Admin Extras catalogue", () => {
     await existingCard.getByRole("button", { name: "Editar Tratamento premium editado Extras QA" }).click();
     let dialog = page.getByRole("dialog", { name: "Editar Extra" });
     await expect(dialog).toBeVisible();
+    await dialog.getByRole("radio", { name: "Variável por marcação" }).click();
+    await expect(dialog.getByLabel("Valor (€)")).toHaveCount(0);
+    await expect(dialog.getByText("Valor definido na marcação", { exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "Guardar alterações" }).click();
+    await expect(dialog).toHaveCount(0);
+    existingCard = manager.getByTestId(`extra-card-${apiExtraId}`);
+    await expect(existingCard.getByText("Variável por marcação", { exact: true })).toBeVisible();
+    await expect(existingCard.getByText("Valor definido na marcação", { exact: true })).toBeVisible();
+
+    await existingCard.getByRole("button", { name: "Editar Tratamento premium editado Extras QA" }).click();
+    dialog = page.getByRole("dialog", { name: "Editar Extra" });
+    await dialog.getByRole("radio", { name: "Fixo", exact: true }).click();
     await dialog.getByLabel("Nome").fill("Tratamento premium UI Extras QA");
     await dialog.getByLabel("Valor (€)").fill("8,75");
     await dialog.getByLabel("Ordem").fill("4");
@@ -262,6 +302,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     existingCard = manager.getByTestId(`extra-card-${apiExtraId}`);
     await expect(existingCard.getByText("Tratamento premium UI Extras QA", { exact: true })).toBeVisible();
     await expect(existingCard.getByText("8,75 €", { exact: true })).toBeVisible();
+    await expect(existingCard.getByText("Valor fixo", { exact: true })).toBeVisible();
     await expect(existingCard.getByText("100% para o barbeiro", { exact: true })).toBeVisible();
     await expect(existingCard.getByText("Ordem: 4", { exact: true })).toBeVisible();
     await manager.screenshot({ path: "test-results/admin-extras-desktop.png" });
@@ -279,7 +320,24 @@ test.describe.serial("Admin Extras catalogue", () => {
     });
     await expect(uiExtraCard).toBeVisible();
     await expect(uiExtraCard.getByText("3,50 €", { exact: true })).toBeVisible();
+    await expect(uiExtraCard.getByText("Valor fixo", { exact: true })).toBeVisible();
     await expect(uiExtraCard.getByText("Segue a regra de compensação do barbeiro", { exact: true })).toBeVisible();
+
+    await manager.getByRole("button", { name: "Novo Extra" }).click();
+    dialog = page.getByRole("dialog", { name: "Novo Extra" });
+    await dialog.getByLabel("Nome").fill("Deslocação variável UI Extras QA");
+    await dialog.getByRole("radio", { name: "Variável por marcação" }).click();
+    await expect(dialog.getByLabel("Valor (€)")).toHaveCount(0);
+    await dialog.getByLabel("Regra financeira").click();
+    await page.getByRole("option", { name: "100% para o barbeiro", exact: true }).click();
+    await dialog.getByRole("button", { name: "Criar Extra" }).click();
+    await expect(dialog).toHaveCount(0);
+    const variableExtraCard = manager.locator('[data-testid^="extra-card-"]').filter({
+      hasText: "Deslocação variável UI Extras QA",
+    });
+    await expect(variableExtraCard.getByText("Valor definido na marcação", { exact: true })).toBeVisible();
+    await expect(variableExtraCard.getByText("Variável por marcação", { exact: true })).toBeVisible();
+    await expect(variableExtraCard.getByText("100% para o barbeiro", { exact: true })).toBeVisible();
 
     await page.setViewportSize({ width: 390, height: 844 });
     const managerBox = await manager.boundingBox();
@@ -288,6 +346,7 @@ test.describe.serial("Admin Extras catalogue", () => {
     expect(managerBox!.x + managerBox!.width).toBeLessThanOrEqual(390);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
     await expect(uiExtraCard.getByRole("button", { name: "Editar Toalha quente UI Extras QA" })).toBeVisible();
+    await expect(variableExtraCard.getByRole("button", { name: "Editar Deslocação variável UI Extras QA" })).toBeVisible();
     await uiExtraCard.getByRole("switch", { name: "Desativar Toalha quente UI Extras QA" }).click();
     await expect(uiExtraCard.getByText("Inativo", { exact: true }).first()).toBeVisible();
     await manager.screenshot({ path: "test-results/admin-extras-mobile.png" });
@@ -295,8 +354,15 @@ test.describe.serial("Admin Extras catalogue", () => {
     const catalogue = await (await page.request.get("/api/admin/extras")).json();
     expect(catalogue.find((extra: any) => extra.name === "Toalha quente UI Extras QA")).toMatchObject({
       amountCents: 350,
+      pricingMode: "fixed",
       financialRule: "follow_compensation",
       isActive: false,
+    });
+    expect(catalogue.find((extra: any) => extra.name === "Deslocação variável UI Extras QA")).toMatchObject({
+      amountCents: null,
+      pricingMode: "variable",
+      financialRule: "barber",
+      isActive: true,
     });
   });
 });

@@ -20,7 +20,7 @@ export type AppointmentBlockData = {
   customServiceName: string;
   customDurationMinutes: string;
   servicePrice: string;
-  extraIds: number[];
+  extras: Array<{ extraId: number; amountEuros: string }>;
   times: string[];
   name: string;
   phone: string;

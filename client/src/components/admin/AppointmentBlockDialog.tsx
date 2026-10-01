@@ -105,7 +105,7 @@ export function AppointmentBlockDialog({
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
   const selectedService = manualBookingServices.find((service) => String(service.id) === blockData.serviceId);
   const showSpecialTerms = blockData.isManualBooking && blockData.hasSpecialTerms && !blockData.isRecurring;
-  const selectedExtras = extras.filter((extra) => blockData.extraIds.includes(extra.id));
+  const selectedExtras = extras.filter((extra) => blockData.extras.some((selection) => selection.extraId === extra.id));
 
   const formatPrice = (priceCents: number) => `${(priceCents / 100).toFixed(2).replace(".", ",")} €`;
   const parsePriceCents = (value: string) => {
@@ -120,11 +120,38 @@ export function AppointmentBlockDialog({
   const effectiveServiceName = showSpecialTerms && blockData.serviceMode === "custom"
     ? blockData.customServiceName.trim()
     : selectedService?.name ?? "";
-  const extrasTotalCents = selectedExtras.reduce((total, extra) => total + extra.amountCents, 0);
+  const selectedExtraRows = selectedExtras.map((extra) => {
+    const selection = blockData.extras.find((candidate) => candidate.extraId === extra.id);
+    return {
+      ...extra,
+      effectiveAmountCents: extra.pricingMode === "fixed"
+        ? extra.amountCents
+        : parsePriceCents(selection?.amountEuros ?? ""),
+    };
+  });
+  const extrasTotalCents = selectedExtraRows.reduce(
+    (total, extra) => total + (extra.effectiveAmountCents ?? 0),
+    0,
+  );
 
   useEffect(() => {
     if (!open) setIsEmailTouched(false);
   }, [open]);
+
+  useEffect(() => {
+    onBlockDataChange((current) => {
+      let changed = false;
+      const normalizedExtras = current.extras.map((selection) => {
+        const definition = extras.find((extra) => extra.id === selection.extraId);
+        if (definition?.pricingMode === "fixed" && selection.amountEuros) {
+          changed = true;
+          return { ...selection, amountEuros: "" };
+        }
+        return selection;
+      });
+      return changed ? { ...current, extras: normalizedExtras } : current;
+    });
+  }, [extras, onBlockDataChange]);
 
   const setQuickBlockTimes = (times: string[]) => {
     const available = times.filter((time) => availableBlockTimes.includes(time));
@@ -257,7 +284,7 @@ export function AppointmentBlockDialog({
                         customServiceName: "",
                         customDurationMinutes: "30",
                         servicePrice: "",
-                        extraIds: [],
+                        extras: [],
                         times: checked ? blockData.times.slice(0, 1) : blockData.times,
                       })}
                     />
@@ -592,28 +619,55 @@ export function AppointmentBlockDialog({
                   <div className="space-y-2">
                     {extras.map((extra) => {
                       const checkboxId = `manual-booking-extra-${extra.id}`;
+                      const amountId = `manual-booking-extra-amount-${extra.id}`;
+                      const selection = blockData.extras.find((candidate) => candidate.extraId === extra.id);
+                      const isSelected = Boolean(selection);
                       return (
-                        <label
+                        <div
                           key={extra.id}
-                          htmlFor={checkboxId}
-                          className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-card/60 px-3 py-2.5 hover:border-primary/30"
+                          className="space-y-3 rounded-lg border border-white/10 bg-card/60 px-3 py-2.5"
                         >
-                          <Checkbox
-                            id={checkboxId}
-                            checked={blockData.extraIds.includes(extra.id)}
-                            onCheckedChange={(checked) => onBlockDataChange((current) => ({
-                              ...current,
-                              extraIds: checked
-                                ? current.extraIds.includes(extra.id)
-                                  ? current.extraIds
-                                  : [...current.extraIds, extra.id]
-                                : current.extraIds.filter((id) => id !== extra.id),
-                            }))}
-                            aria-label={`Selecionar Extra ${extra.name}`}
-                          />
-                          <span className="min-w-0 flex-1 break-words text-sm text-gray-200">{extra.name}</span>
-                          <span className="shrink-0 text-sm font-semibold text-primary">+{formatPrice(extra.amountCents)}</span>
-                        </label>
+                          <label htmlFor={checkboxId} className="flex min-h-6 cursor-pointer items-center gap-3">
+                            <Checkbox
+                              id={checkboxId}
+                              checked={isSelected}
+                              onCheckedChange={(checked) => onBlockDataChange((current) => ({
+                                ...current,
+                                extras: checked
+                                  ? current.extras.some((candidate) => candidate.extraId === extra.id)
+                                    ? current.extras
+                                    : [...current.extras, { extraId: extra.id, amountEuros: "" }]
+                                  : current.extras.filter((candidate) => candidate.extraId !== extra.id),
+                              }))}
+                              aria-label={`Selecionar Extra ${extra.name}`}
+                            />
+                            <span className="min-w-0 flex-1 break-words text-sm text-gray-200">{extra.name}</span>
+                            <span className="shrink-0 text-sm font-semibold text-primary">
+                              {extra.pricingMode === "fixed"
+                                ? `+${formatPrice(extra.amountCents!)}`
+                                : "Valor variável"}
+                            </span>
+                          </label>
+                          {isSelected && extra.pricingMode === "variable" && (
+                            <div className="space-y-2 pl-7">
+                              <Label htmlFor={amountId} className="text-xs text-gray-300">Valor (€)</Label>
+                              <Input
+                                id={amountId}
+                                inputMode="decimal"
+                                value={selection?.amountEuros ?? ""}
+                                onChange={(event) => onBlockDataChange((current) => ({
+                                  ...current,
+                                  extras: current.extras.map((candidate) => candidate.extraId === extra.id
+                                    ? { ...candidate, amountEuros: event.target.value }
+                                    : candidate),
+                                }))}
+                                placeholder="Ex.: 18,00"
+                                aria-label={`Valor do Extra ${extra.name}`}
+                                className="h-11 border-white/10 bg-background text-white"
+                              />
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -634,10 +688,14 @@ export function AppointmentBlockDialog({
                     </span>
                     <span className="shrink-0 font-medium text-white">{formatPrice(effectiveServicePriceCents)}</span>
                   </div>
-                  {selectedExtras.map((extra) => (
+                  {selectedExtraRows.map((extra) => (
                     <div key={extra.id} className="flex items-start justify-between gap-4">
                       <span className="min-w-0 break-words text-gray-300">{extra.name}</span>
-                      <span className="shrink-0 font-medium text-white">{formatPrice(extra.amountCents)}</span>
+                      <span className="shrink-0 font-medium text-white">
+                        {extra.effectiveAmountCents === null
+                          ? "Por definir"
+                          : formatPrice(extra.effectiveAmountCents)}
+                      </span>
                     </div>
                   ))}
                   <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-3 font-bold">

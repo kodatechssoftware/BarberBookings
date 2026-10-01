@@ -141,6 +141,36 @@ try {
     MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
     MIGRATION_DEFAULT_LOCATION_MAP_URL: "https://maps.example.test/shop",
   };
+  const freshSchema = "fresh_fixture";
+  const freshTable = (name: string) => `"${freshSchema}"."${name}"`;
+  await pool.query(`CREATE SCHEMA "${freshSchema}"`);
+  for (const name of preservedTables) {
+    await pool.query(`CREATE TABLE ${freshTable(name)} (LIKE ${table(name)} INCLUDING ALL)`);
+  }
+  const freshRun = await runSchemaMigrations(pool, {
+    schemaName: freshSchema,
+    environment,
+    migrationsDirectory,
+  });
+  assert.equal(freshRun.applied.length, 8, "a fresh empty application schema must apply migrations 0001 through 0008");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
+  const freshExtrasColumns = (await pool.query(`
+    SELECT column_name, is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'extra_definitions'
+  `, [freshSchema])).rows;
+  assert.ok(freshExtrasColumns.some((column) => column.column_name === "pricing_mode" && column.is_nullable === "NO"));
+  assert.ok(freshExtrasColumns.some((column) => column.column_name === "amount_cents" && column.is_nullable === "YES"));
+  const secondFreshRun = await runSchemaMigrations(pool, {
+    schemaName: freshSchema,
+    environment,
+    migrationsDirectory,
+  });
+  assert.equal(secondFreshRun.applied.length, 0);
+  assert.equal(secondFreshRun.alreadyApplied, 8);
+
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
     environment,
@@ -428,36 +458,51 @@ try {
   `, [defaultLocation.id]), (error: any) => error?.code === "23505");
 
   await assert.rejects(
-    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
-      VALUES ($1, '   ', 1000, 'barber')`, [defaultLocation.id]),
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, '   ', 'fixed', 1000, 'barber')`, [defaultLocation.id]),
     (error: any) => error?.code === "23514",
   );
   await assert.rejects(
-    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
-      VALUES ($1, 'Valor zero', 0, 'barber')`, [defaultLocation.id]),
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, 'Fixo sem valor', 'fixed', NULL, 'barber')`, [defaultLocation.id]),
     (error: any) => error?.code === "23514",
   );
   await assert.rejects(
-    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
-      VALUES ($1, 'Regra inválida', 1000, 'custom')`, [defaultLocation.id]),
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, 'Valor zero', 'fixed', 0, 'barber')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, 'Variável residual', 'variable', 1000, 'barber')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, 'Modo inválido', 'distance', NULL, 'barber')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, 'Regra inválida', 'fixed', 1000, 'custom')`, [defaultLocation.id]),
     (error: any) => error?.code === "23514",
   );
   const directExtraId = Number((await pool.query(`
-    INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
-    VALUES ($1, 'Deslocação direta', 1000, 'barber') RETURNING id
+    INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+    VALUES ($1, 'Deslocação direta', 'variable', NULL, 'barber') RETURNING id
   `, [defaultLocation.id])).rows[0].id);
   const directSecondExtraId = Number((await pool.query(`
-    INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule, sort_order)
-    VALUES ($1, 'Produto direto', 750, 'establishment', 1) RETURNING id
+    INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule, sort_order)
+    VALUES ($1, 'Produto direto', 'fixed', 750, 'establishment', 1) RETURNING id
   `, [defaultLocation.id])).rows[0].id);
   await assert.rejects(
-    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
-      VALUES ($1, '  deslocação DIRETA  ', 1200, 'follow_compensation')`, [defaultLocation.id]),
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+      VALUES ($1, '  deslocação DIRETA  ', 'fixed', 1200, 'follow_compensation')`, [defaultLocation.id]),
     (error: any) => error?.code === "23505",
   );
   const secondaryDirectExtraId = Number((await pool.query(`
-    INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
-    VALUES ($1, 'Deslocação direta', 1500, 'follow_compensation') RETURNING id
+    INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
+    VALUES ($1, 'Deslocação direta', 'fixed', 1500, 'follow_compensation') RETURNING id
   `, [secondLocationId])).rows[0].id);
   const directAppointmentId = Number((await pool.query(`
     INSERT INTO ${table("appointments")} (
@@ -484,7 +529,7 @@ try {
     ) VALUES ($1, $2, 'Produto direto', 750, 'establishment', 0)
   `, [directAppointmentId, directSecondExtraId]), (error: any) => error?.code === "23505");
   await pool.query(`UPDATE ${table("extra_definitions")}
-    SET name = 'Deslocação direta atualizada', amount_cents = 1500, financial_rule = 'follow_compensation'
+    SET name = 'Deslocação direta atualizada', financial_rule = 'follow_compensation'
     WHERE id = $1`, [directExtraId]);
   assert.deepEqual((await pool.query(`SELECT name_snapshot, amount_cents_snapshot, financial_rule_snapshot
     FROM ${table("appointment_extras")} WHERE appointment_id = $1`, [directAppointmentId])).rows[0], {
@@ -546,21 +591,48 @@ try {
   const travelExtra = await databaseStorage.createExtraDefinition({
     locationId: Number(defaultLocation.id),
     name: "Deslocação storage",
-    amountCents: 1000,
+    pricingMode: "variable",
+    amountCents: null,
     financialRule: "barber",
   });
   const productExtra = await databaseStorage.createExtraDefinition({
     locationId: Number(defaultLocation.id),
     name: "Produto storage",
+    pricingMode: "fixed",
     amountCents: 750,
     financialRule: "establishment",
   });
   const secondaryExtra = await databaseStorage.createExtraDefinition({
     locationId: secondLocationId,
     name: "Extra secundário storage",
+    pricingMode: "fixed",
     amountCents: 500,
     financialRule: "follow_compensation",
   });
+  assert.equal(travelExtra.amountCents, null);
+  const productAsVariable = await databaseStorage.updateExtraDefinition(
+    productExtra.id,
+    Number(defaultLocation.id),
+    { pricingMode: "variable", amountCents: 999 },
+  );
+  assert.deepEqual(
+    { pricingMode: productAsVariable?.pricingMode, amountCents: productAsVariable?.amountCents },
+    { pricingMode: "variable", amountCents: null },
+    "fixed-to-variable must discard every residual catalogue amount",
+  );
+  await assert.rejects(
+    databaseStorage.updateExtraDefinition(productExtra.id, Number(defaultLocation.id), { pricingMode: "fixed" }),
+    /valor deve ser superior a zero/i,
+  );
+  const productRestoredFixed = await databaseStorage.updateExtraDefinition(
+    productExtra.id,
+    Number(defaultLocation.id),
+    { pricingMode: "fixed", amountCents: 750 },
+  );
+  assert.deepEqual(
+    { pricingMode: productRestoredFixed?.pricingMode, amountCents: productRestoredFixed?.amountCents },
+    { pricingMode: "fixed", amountCents: 750 },
+  );
   assert.deepEqual(
     (await databaseStorage.getExtraDefinitions(Number(defaultLocation.id))).map((extra) => extra.id),
     [travelExtra.id, productExtra.id],
@@ -594,7 +666,7 @@ try {
       whatsappOptIn: false,
       durationMinutes: 30,
       cancelToken: `extras-recurring-rejected-${index}`,
-      extraDefinitionIds: [travelExtra.id],
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
     })),
     notificationSnapshot: {
       schemaVersion: 1,
@@ -625,7 +697,7 @@ try {
     customerPhone: "910000020",
     durationMinutes: 30,
     cancelToken: "extra-storage-one",
-    extraDefinitionIds: [travelExtra.id],
+    extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
   });
   const originalTravelSnapshot = (await databaseStorage.getAppointmentExtras([appointmentWithExtra.id]))[0];
   assert.deepEqual({
@@ -641,17 +713,40 @@ try {
   });
   await databaseStorage.updateExtraDefinition(travelExtra.id, Number(defaultLocation.id), {
     name: "Deslocação storage atualizada",
-    amountCents: 1500,
     financialRule: "follow_compensation",
   });
   assert.deepEqual(await databaseStorage.getAppointmentExtras([appointmentWithExtra.id]), [originalTravelSnapshot],
     "catalogue updates must preserve stored appointment snapshots");
+  await assert.rejects(databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+    startTime: new Date("2035-01-02T08:00:00.000Z"), customerName: "Variable missing",
+    customerEmail: null, customerPhone: "910000026", durationMinutes: 30,
+    cancelToken: "extra-storage-variable-missing", extras: [{ extraId: travelExtra.id }],
+  }), (error: any) => error?.code === "APPOINTMENT_EXTRA_AMOUNT_INVALID");
+  await assert.rejects(databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+    startTime: new Date("2035-01-02T08:30:00.000Z"), customerName: "Variable zero",
+    customerEmail: null, customerPhone: "910000027", durationMinutes: 30,
+    cancelToken: "extra-storage-variable-zero", extras: [{ extraId: travelExtra.id, amountCents: 0 }],
+  }), (error: any) => error?.code === "APPOINTMENT_EXTRA_AMOUNT_INVALID");
+  const fixedAuthoritativeAppointment = await databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+    startTime: new Date("2035-01-02T09:00:00.000Z"), customerName: "Fixed authoritative",
+    customerEmail: null, customerPhone: "910000028", durationMinutes: 30,
+    cancelToken: "extra-storage-fixed-authoritative",
+    extras: [{ extraId: productExtra.id, amountCents: 9999 }],
+  });
+  assert.equal(
+    (await databaseStorage.getAppointmentExtras([fixedAuthoritativeAppointment.id]))[0].amountCentsSnapshot,
+    750,
+    "fixed Extra input must never override the authoritative catalogue amount",
+  );
   const extrasOnlyUpdate = await databaseStorage.updateAppointmentWithNotification(
     appointmentWithExtra.id,
     {},
     true,
     "booked",
-    [travelExtra.id, productExtra.id],
+    [{ extraId: travelExtra.id }, { extraId: productExtra.id }],
   );
   assert.equal(extrasOnlyUpdate?.appointment.notificationRevision, appointmentWithExtra.notificationRevision,
     "Extra-only changes must not create customer notification revisions in V1");
@@ -674,13 +769,19 @@ try {
       locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
       startTime: new Date("2035-01-02T11:00:00.000Z"), customerName: "Batch Extra A",
       customerEmail: null, customerPhone: "910000024", durationMinutes: 30,
-      cancelToken: "extra-storage-batch-a", extraDefinitionIds: [travelExtra.id, productExtra.id],
+      cancelToken: "extra-storage-batch-a", extras: [
+        { extraId: travelExtra.id, amountCents: 1250 },
+        { extraId: productExtra.id },
+      ],
     },
     {
       locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
       startTime: new Date("2035-01-02T12:00:00.000Z"), customerName: "Batch Extra B",
       customerEmail: null, customerPhone: "910000025", durationMinutes: 30,
-      cancelToken: "extra-storage-batch-b", extraDefinitionIds: [travelExtra.id, productExtra.id],
+      cancelToken: "extra-storage-batch-b", extras: [
+        { extraId: travelExtra.id, amountCents: 1250 },
+        { extraId: productExtra.id },
+      ],
     },
   ]);
   assert.equal(successfulExtrasBatch.length, 2);
@@ -691,17 +792,21 @@ try {
     assert.deepEqual(
       successfulBatchSnapshots
         .filter((extra) => extra.appointmentId === appointment.id)
-        .map((extra) => ({ definitionId: extra.extraDefinitionId, position: extra.position })),
+        .map((extra) => ({
+          definitionId: extra.extraDefinitionId,
+          amount: extra.amountCentsSnapshot,
+          position: extra.position,
+        })),
       [
-        { definitionId: travelExtra.id, position: 0 },
-        { definitionId: productExtra.id, position: 1 },
+        { definitionId: travelExtra.id, amount: 1250, position: 0 },
+        { definitionId: productExtra.id, amount: 750, position: 1 },
       ],
       "every appointment in a successful batch must own independent ordered Extra snapshots",
     );
   }
   await databaseStorage.updateExtraDefinition(productExtra.id, Number(defaultLocation.id), { isActive: false });
   await databaseStorage.updateAppointmentWithNotification(
-    appointmentWithExtra.id, {}, false, "booked", [travelExtra.id, productExtra.id],
+    appointmentWithExtra.id, {}, false, "booked", [{ extraId: travelExtra.id }, { extraId: productExtra.id }],
   );
   assert.equal((await databaseStorage.getAppointmentExtras([appointmentWithExtra.id])).length, 2,
     "an inactive Extra already attached to an appointment must remain readable");
@@ -712,13 +817,13 @@ try {
       locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
       startTime: new Date("2035-01-03T10:00:00.000Z"), customerName: "Batch rollback A",
       customerEmail: null, customerPhone: "910000021", durationMinutes: 30,
-      cancelToken: "extra-storage-rollback-a", extraDefinitionIds: [travelExtra.id],
+      cancelToken: "extra-storage-rollback-a", extras: [{ extraId: travelExtra.id, amountCents: 1250 }],
     },
     {
       locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
       startTime: new Date("2035-01-03T11:00:00.000Z"), customerName: "Batch rollback B",
       customerEmail: null, customerPhone: "910000022", durationMinutes: 30,
-      cancelToken: "extra-storage-rollback-b", extraDefinitionIds: [secondaryExtra.id],
+      cancelToken: "extra-storage-rollback-b", extras: [{ extraId: secondaryExtra.id }],
     },
   ]), (error: any) => error?.code === "APPOINTMENT_EXTRA_UNAVAILABLE");
   assert.equal(
@@ -730,12 +835,15 @@ try {
     locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
     startTime: new Date("2035-01-04T10:00:00.000Z"), customerName: "Extra duplicado",
     customerEmail: null, customerPhone: "910000023", durationMinutes: 30,
-    cancelToken: "extra-storage-duplicate", extraDefinitionIds: [travelExtra.id, travelExtra.id],
+    cancelToken: "extra-storage-duplicate", extras: [
+      { extraId: travelExtra.id, amountCents: 1000 },
+      { extraId: travelExtra.id, amountCents: 1000 },
+    ],
   }), (error: any) => error?.code === "APPOINTMENT_EXTRA_IDS_INVALID");
   await databaseStorage.updateAppointmentStatus(appointmentWithExtra.id, "completed", "cash");
   await assert.rejects(
     databaseStorage.updateAppointmentWithNotification(
-      appointmentWithExtra.id, {}, false, "completed", [travelExtra.id],
+      appointmentWithExtra.id, {}, false, "completed", [{ extraId: travelExtra.id }],
     ),
     (error: any) => error?.code === "APPOINTMENT_EXTRAS_NOT_EDITABLE",
   );
