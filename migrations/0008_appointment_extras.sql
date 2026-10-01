@@ -2,7 +2,8 @@ CREATE TABLE IF NOT EXISTS {{schema}}.extra_definitions (
   id serial PRIMARY KEY,
   location_id integer NOT NULL REFERENCES {{schema}}.locations(id) ON DELETE RESTRICT,
   name text NOT NULL,
-  amount_cents integer NOT NULL,
+  pricing_mode text NOT NULL,
+  amount_cents integer,
   financial_rule text NOT NULL,
   is_active boolean NOT NULL DEFAULT true,
   sort_order integer NOT NULL DEFAULT 0,
@@ -10,8 +11,13 @@ CREATE TABLE IF NOT EXISTS {{schema}}.extra_definitions (
   updated_at timestamp NOT NULL DEFAULT now(),
   CONSTRAINT extra_definitions_name_check
     CHECK (btrim(name) <> '' AND char_length(name) <= 100),
-  CONSTRAINT extra_definitions_amount_cents_check
-    CHECK (amount_cents > 0 AND amount_cents <= 1000000),
+  CONSTRAINT extra_definitions_pricing_mode_check
+    CHECK (pricing_mode IN ('fixed', 'variable')),
+  CONSTRAINT extra_definitions_pricing_amount_check
+    CHECK (
+      (pricing_mode = 'fixed' AND amount_cents IS NOT NULL AND amount_cents > 0 AND amount_cents <= 1000000)
+      OR (pricing_mode = 'variable' AND amount_cents IS NULL)
+    ),
   CONSTRAINT extra_definitions_financial_rule_check
     CHECK (financial_rule IN ('follow_compensation', 'barber', 'establishment')),
   CONSTRAINT extra_definitions_sort_order_check CHECK (sort_order >= 0)

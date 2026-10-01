@@ -92,6 +92,11 @@ export const extraFinancialRules = [
   "establishment",
 ] as const;
 
+export const extraPricingModes = [
+  "fixed",
+  "variable",
+] as const;
+
 export const whatsappMessageStatuses = [
   "pending",
   "sent",
@@ -243,7 +248,8 @@ export const extraDefinitions = appPgTable("extra_definitions", {
   id: idColumn("extra_definitions_id_seq"),
   locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
   name: text("name").notNull(),
-  amountCents: integer("amount_cents").notNull(),
+  pricingMode: text("pricing_mode", { enum: extraPricingModes }).notNull(),
+  amountCents: integer("amount_cents"),
   financialRule: text("financial_rule", { enum: extraFinancialRules }).notNull(),
   isActive: boolean("is_active").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -256,8 +262,12 @@ export const extraDefinitions = appPgTable("extra_definitions", {
     .on(table.locationId, table.isActive, table.sortOrder, table.id),
   nameCheck: check("extra_definitions_name_check",
     sql`btrim(${table.name}) <> '' AND char_length(${table.name}) <= 100`),
-  amountCentsCheck: check("extra_definitions_amount_cents_check",
-    sql`${table.amountCents} > 0 AND ${table.amountCents} <= 1000000`),
+  pricingModeCheck: check("extra_definitions_pricing_mode_check",
+    sql`${table.pricingMode} IN ('fixed', 'variable')`),
+  pricingAmountCheck: check("extra_definitions_pricing_amount_check", sql`
+    (${table.pricingMode} = 'fixed' AND ${table.amountCents} IS NOT NULL AND ${table.amountCents} > 0 AND ${table.amountCents} <= 1000000)
+    OR (${table.pricingMode} = 'variable' AND ${table.amountCents} IS NULL)
+  `),
   financialRuleCheck: check("extra_definitions_financial_rule_check",
     sql`${table.financialRule} IN ('follow_compensation', 'barber', 'establishment')`),
   sortOrderCheck: check("extra_definitions_sort_order_check", sql`${table.sortOrder} >= 0`),
@@ -583,21 +593,42 @@ export const insertServiceCategorySchema = createInsertSchema(serviceCategories)
   sortOrder: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
 });
-export const insertExtraDefinitionSchema = createInsertSchema(extraDefinitions).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-}).extend({
+const extraDefinitionInputFields = {
   locationId: z.number().int().positive(),
   name: z.string().trim().min(1, "Indique o nome do Extra.").max(100, "O nome não pode ter mais de 100 caracteres."),
-  amountCents: z.number().int("O valor deve ser indicado em cêntimos.").min(1, "O valor deve ser superior a zero.").max(1_000_000, "O valor indicado é demasiado elevado."),
+  pricingMode: z.enum(extraPricingModes),
+  amountCents: z.number().int("O valor deve ser indicado em cêntimos.").nullable().optional(),
   financialRule: z.enum(extraFinancialRules),
   isActive: z.boolean().optional(),
   sortOrder: z.number().int().min(0).max(2_147_483_647, "A ordem indicada é demasiado elevada.").optional(),
+};
+export const insertExtraDefinitionSchema = z.object(extraDefinitionInputFields).superRefine((input, context) => {
+  if (input.pricingMode !== "fixed") return;
+  if (input.amountCents === undefined || input.amountCents === null || input.amountCents <= 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["amountCents"],
+      message: "O valor deve ser superior a zero para um Extra de valor fixo.",
+    });
+  } else if (input.amountCents > 1_000_000) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["amountCents"],
+      message: "O valor indicado é demasiado elevado.",
+    });
+  }
+}).transform((input) => ({
+  ...input,
+  amountCents: input.pricingMode === "variable" ? null : input.amountCents!,
+}));
+export const updateExtraDefinitionSchema = z.object({
+  name: extraDefinitionInputFields.name.optional(),
+  pricingMode: extraDefinitionInputFields.pricingMode.optional(),
+  amountCents: extraDefinitionInputFields.amountCents,
+  financialRule: extraDefinitionInputFields.financialRule.optional(),
+  isActive: extraDefinitionInputFields.isActive,
+  sortOrder: extraDefinitionInputFields.sortOrder,
 });
-export const updateExtraDefinitionSchema = insertExtraDefinitionSchema
-  .omit({ locationId: true })
-  .partial();
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;
 const internationalZeroPrefixPhonePattern = /^00\d{7,15}$/;
@@ -678,6 +709,7 @@ export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
 export type ExtraDefinition = typeof extraDefinitions.$inferSelect;
 export type AppointmentExtra = typeof appointmentExtras.$inferSelect;
 export type ExtraFinancialRule = typeof extraFinancialRules[number];
+export type ExtraPricingMode = typeof extraPricingModes[number];
 export type AppointmentStatus = typeof appointmentStatuses[number];
 export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;

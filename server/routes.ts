@@ -4,6 +4,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   AppointmentExtrasError,
   appointmentBarberLocationUnavailableCode,
+  appointmentExtraAmountInvalidCode,
   appointmentExtraIdsInvalidCode,
   appointmentExtrasNotAllowedForRecurringCode,
   appointmentLocationInactiveCode,
@@ -11,6 +12,7 @@ import {
   isAppointmentConflictError,
   isAppointmentLocationIntegrityError,
   storage,
+  type AppointmentExtraInput,
 } from "./storage";
 import { barberAvatarVersion, decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
 import {
@@ -886,6 +888,7 @@ function sendAppointmentLocationIntegrityError(res: Response, error: unknown) {
 function sendAppointmentExtrasError(res: Response, error: unknown) {
   if (!(error instanceof AppointmentExtrasError)) return false;
   const status = error.code === appointmentExtraIdsInvalidCode
+    || error.code === appointmentExtraAmountInvalidCode
     || error.code === appointmentExtrasNotAllowedForRecurringCode
     ? 400
     : error.status;
@@ -2114,6 +2117,7 @@ export async function registerRoutes(
           extraId: extra.id,
           locationId: extra.locationId,
           name: extra.name,
+          pricingMode: extra.pricingMode,
           amountCents: extra.amountCents,
           financialRule: extra.financialRule,
           sortOrder: extra.sortOrder,
@@ -2145,16 +2149,22 @@ export async function registerRoutes(
       const existing = await storage.getExtraDefinition(extraId, locationId);
       if (!existing) return res.status(404).json({ message: "Extra não encontrado." });
 
-      const input = updateExtraDefinitionSchema.parse(req.body);
-      if (Object.keys(input).length === 0) {
+      const patch = updateExtraDefinitionSchema.parse(req.body);
+      if (Object.keys(patch).length === 0) {
         return res.status(400).json({ message: "Indique uma alteração." });
       }
+      const input = insertExtraDefinitionSchema.parse({
+        ...existing,
+        ...patch,
+        locationId,
+      });
       const updated = await storage.updateExtraDefinition(extraId, locationId, input);
       if (!updated) return res.status(404).json({ message: "Extra não encontrado." });
 
       const comparableFields: Array<keyof Pick<ExtraDefinition,
-        "name" | "amountCents" | "financialRule" | "isActive" | "sortOrder">> = [
+        "name" | "pricingMode" | "amountCents" | "financialRule" | "isActive" | "sortOrder">> = [
         "name",
+        "pricingMode",
         "amountCents",
         "financialRule",
         "isActive",
@@ -3551,7 +3561,7 @@ export async function registerRoutes(
         isManualBooking,
         allowOutsideHours,
         hasSpecialTerms,
-        extraIds,
+        extras,
         isRecurring,
         recurringWeeks,
         recurringMonths,
@@ -3560,7 +3570,8 @@ export async function registerRoutes(
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
         (hasSpecialTerms !== undefined && typeof hasSpecialTerms !== "boolean") ||
-        (extraIds !== undefined && !Array.isArray(extraIds)) ||
+        (extras !== undefined && !Array.isArray(extras)) ||
+        Object.prototype.hasOwnProperty.call(req.body, "extraIds") ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
         (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
         (isRecurring && startTimes !== undefined) ||
@@ -3661,14 +3672,14 @@ export async function registerRoutes(
       if (isRecurring && !isManualBooking) {
         return res.status(400).json({ message: "A repetição só está disponível para marcações manuais." });
       }
-      const requestedExtraIds: number[] = extraIds ?? [];
-      if (!isManualBooking && requestedExtraIds.length > 0) {
+      const requestedExtras: AppointmentExtraInput[] = extras ?? [];
+      if (!isManualBooking && requestedExtras.length > 0) {
         return res.status(400).json({
           code: appointmentExtraIdsInvalidCode,
           message: "Os Extras só estão disponíveis para marcações manuais.",
         });
       }
-      if (isRecurring && requestedExtraIds.length > 0) {
+      if (isRecurring && requestedExtras.length > 0) {
         return res.status(400).json({
           code: appointmentExtrasNotAllowedForRecurringCode,
           message: "As marcações recorrentes não suportam Extras.",
@@ -3867,7 +3878,7 @@ export async function registerRoutes(
           notificationEventType: appointmentNotificationEventsEnabled && isManualBooking && !isHistoricalManualBooking && (!isRecurring || occurrences === 1)
             ? "appointment_confirmation"
             : undefined,
-          extraDefinitionIds: isManualBooking && !isRecurring ? requestedExtraIds : undefined,
+          extras: isManualBooking && !isRecurring ? requestedExtras : undefined,
         });
       }
 
@@ -3948,7 +3959,7 @@ export async function registerRoutes(
           barberId: barberIdNumber,
           serviceId: serviceIdNumber,
           recurring: Boolean(isRecurring),
-          extraIds: requestedExtraIds,
+          extraIds: requestedExtras.map((extra) => extra.extraId),
           seriesId: recurringSeriesId,
           whatsappOptInSource: manualWhatsappOptIn ? "admin_manual" : null,
         },

@@ -31,18 +31,22 @@ test("memory storage preserves Extra snapshots and enforces transactional select
   const travel = await storage.createExtraDefinition({
     locationId: 1,
     name: "Deslocação",
-    amountCents: 1000,
+    pricingMode: "variable",
+    amountCents: 999,
     financialRule: "barber",
   });
+  assert.equal(travel.amountCents, null);
   const product = await storage.createExtraDefinition({
     locationId: 1,
     name: "Produto",
+    pricingMode: "fixed",
     amountCents: 750,
     financialRule: "establishment",
   });
   const otherLocation = await storage.createExtraDefinition({
     locationId: 2,
     name: "Deslocação",
+    pricingMode: "fixed",
     amountCents: 1200,
     financialRule: "follow_compensation",
   });
@@ -53,6 +57,7 @@ test("memory storage preserves Extra snapshots and enforces transactional select
     storage.createExtraDefinition({
       locationId: 1,
       name: "Inválido",
+      pricingMode: "fixed",
       amountCents: 0,
       financialRule: "barber",
     }),
@@ -65,7 +70,7 @@ test("memory storage preserves Extra snapshots and enforces transactional select
   assert.deepEqual(await storage.getAppointmentExtras([legacy.id]), []);
 
   const appointment = await storage.createAppointment(appointmentInput({
-    extraDefinitionIds: [travel.id],
+    extras: [{ extraId: travel.id, amountCents: 1000 }],
   }));
   const originalSnapshot = (await storage.getAppointmentExtras([appointment.id]))[0];
   assert.deepEqual({
@@ -76,7 +81,6 @@ test("memory storage preserves Extra snapshots and enforces transactional select
 
   await storage.updateExtraDefinition(travel.id, 1, {
     name: "Deslocação atualizada",
-    amountCents: 1500,
     financialRule: "follow_compensation",
   });
   assert.deepEqual(await storage.getAppointmentExtras([appointment.id]), [originalSnapshot]);
@@ -86,7 +90,7 @@ test("memory storage preserves Extra snapshots and enforces transactional select
     {},
     true,
     "booked",
-    [travel.id, product.id],
+    [{ extraId: travel.id }, { extraId: product.id }],
   );
   assert.equal(result?.notificationEvent, null);
   assert.equal(result?.appointment.notificationRevision, appointment.notificationRevision);
@@ -103,9 +107,16 @@ test("memory storage preserves Extra snapshots and enforces transactional select
     ],
   );
 
+  const fixedOverride = await storage.createAppointment(appointmentInput({
+    startTime: new Date("2036-01-02T11:00:00.000Z"),
+    cancelToken: "extra-memory-fixed-authoritative",
+    extras: [{ extraId: product.id, amountCents: 9999 }],
+  }));
+  assert.equal((await storage.getAppointmentExtras([fixedOverride.id]))[0].amountCentsSnapshot, 750);
+
   await storage.updateExtraDefinition(product.id, 1, { isActive: false });
   await storage.updateAppointmentWithNotification(
-    appointment.id, {}, false, "booked", [travel.id, product.id],
+    appointment.id, {}, false, "booked", [{ extraId: travel.id }, { extraId: product.id }],
   );
   assert.equal((await storage.getAppointmentExtras([appointment.id])).length, 2);
 
@@ -114,19 +125,29 @@ test("memory storage preserves Extra snapshots and enforces transactional select
     appointmentInput({
       startTime: new Date("2036-01-03T10:00:00.000Z"),
       cancelToken: "extra-memory-rollback-a",
-      extraDefinitionIds: [travel.id],
+      extras: [{ extraId: travel.id, amountCents: 1250 }],
     }),
     appointmentInput({
       startTime: new Date("2036-01-03T11:00:00.000Z"),
       cancelToken: "extra-memory-rollback-b",
-      extraDefinitionIds: [otherLocation.id],
+      extras: [{ extraId: otherLocation.id }],
     }),
   ]), (error: any) => error?.code === "APPOINTMENT_EXTRA_UNAVAILABLE");
   assert.equal((await storage.getAppointments()).length, appointmentCount);
 
+  await assert.rejects(storage.createAppointment(appointmentInput({
+    startTime: new Date("2036-01-04T10:00:00.000Z"),
+    cancelToken: "extra-memory-variable-missing",
+    extras: [{ extraId: travel.id }],
+  })), (error: any) => error?.code === "APPOINTMENT_EXTRA_AMOUNT_INVALID");
+  await assert.rejects(storage.createAppointment(appointmentInput({
+    startTime: new Date("2036-01-04T11:00:00.000Z"),
+    cancelToken: "extra-memory-variable-zero",
+    extras: [{ extraId: travel.id, amountCents: 0 }],
+  })), (error: any) => error?.code === "APPOINTMENT_EXTRA_AMOUNT_INVALID");
   await storage.updateAppointmentStatus(appointment.id, "completed", "cash");
   await assert.rejects(
-    storage.updateAppointmentWithNotification(appointment.id, {}, false, "completed", [travel.id]),
+    storage.updateAppointmentWithNotification(appointment.id, {}, false, "completed", [{ extraId: travel.id }]),
     (error: any) => error?.code === "APPOINTMENT_EXTRAS_NOT_EDITABLE",
   );
 });
@@ -136,6 +157,7 @@ test("recurring storage rejects Extras before persisting the series", async () =
   const extra = await storage.createExtraDefinition({
     locationId: 1,
     name: "Recorrência proibida",
+    pricingMode: "fixed",
     amountCents: 500,
     financialRule: "follow_compensation",
   });
@@ -162,7 +184,7 @@ test("recurring storage rejects Extras before persisting the series", async () =
         customerName: "Cliente recorrente",
         customerPhone: "910000031",
         cancelToken: `memory-extra-series-${index}`,
-        extraDefinitionIds: [extra.id],
+        extras: [{ extraId: extra.id }],
       })),
     notificationSnapshot: {
       schemaVersion: 1 as const,

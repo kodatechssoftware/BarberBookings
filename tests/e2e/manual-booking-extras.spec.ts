@@ -147,18 +147,24 @@ test.describe.serial("manual booking Extras", () => {
     barber = await barberResponse.json();
     expect((await request.patch(`/api/barbers/${barber.id}/availability`, { data: barberHours() })).ok()).toBe(true);
 
-    const createExtra = async (name: string, amountCents: number, financialRule: string) => {
+    const createExtra = async (
+      name: string,
+      pricingMode: "fixed" | "variable",
+      amountCents: number | null,
+      financialRule: string,
+    ) => {
       const response = await request.post("/api/admin/extras", { data: {
         name: `${name} ${suffix}`,
+        pricingMode,
         amountCents,
         financialRule,
       } });
       expect(response.status(), await response.text()).toBe(201);
       return response.json();
     };
-    travelExtra = await createExtra("Deslocação Extras booking QA", 1000, "barber");
-    specialExtra = await createExtra("Atendimento especial Extras booking QA", 500, "establishment");
-    inactiveExtra = await createExtra("Extra inativo booking QA", 300, "follow_compensation");
+    travelExtra = await createExtra("Deslocação Extras booking QA", "variable", null, "barber");
+    specialExtra = await createExtra("Atendimento especial Extras booking QA", "fixed", 500, "establishment");
+    inactiveExtra = await createExtra("Extra inativo booking QA", "fixed", 300, "follow_compensation");
     expect((await request.patch(`/api/admin/extras/${inactiveExtra.id}`, { data: { isActive: false } })).ok()).toBe(true);
   });
 
@@ -190,7 +196,9 @@ test.describe.serial("manual booking Extras", () => {
 
     const oneExtraStart = futureThursdayIso(241, 10);
     const oneExtraName = `Manual um Extra ${Date.now()}`;
-    const oneExtra = await createManual(request, oneExtraName, oneExtraStart, { extraIds: [travelExtra.id] });
+    const oneExtra = await createManual(request, oneExtraName, oneExtraStart, {
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
+    });
     expect(oneExtra.response.status(), JSON.stringify(oneExtra.body)).toBe(201);
     expect(oneExtra.body.appointments[0].extras).toEqual([expect.objectContaining({
       extraDefinitionId: travelExtra.id,
@@ -203,7 +211,10 @@ test.describe.serial("manual booking Extras", () => {
     const multipleStart = futureThursdayIso(242, 10);
     const multipleName = `Manual vários Extras ${Date.now()}`;
     const multiple = await createManual(request, multipleName, multipleStart, {
-      extraIds: [specialExtra.id, travelExtra.id],
+      extras: [
+        { extraId: specialExtra.id },
+        { extraId: travelExtra.id, amountCents: 1750 },
+      ],
     });
     expect(multiple.response.status(), JSON.stringify(multiple.body)).toBe(201);
     expect(multiple.body.appointments[0].extras).toEqual([
@@ -217,7 +228,7 @@ test.describe.serial("manual booking Extras", () => {
       expect.objectContaining({
         extraDefinitionId: travelExtra.id,
         nameSnapshot: travelExtra.name,
-        amountCentsSnapshot: 1000,
+        amountCentsSnapshot: 1750,
         financialRuleSnapshot: "barber",
         position: 1,
       }),
@@ -232,7 +243,7 @@ test.describe.serial("manual booking Extras", () => {
     const special = await createManual(request, specialName, specialStart, {
       hasSpecialTerms: true,
       servicePriceCents: 2000,
-      extraIds: [travelExtra.id],
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
     });
     expect(special.response.status(), JSON.stringify(special.body)).toBe(201);
     expect(special.body.appointments[0]).toMatchObject({
@@ -251,7 +262,7 @@ test.describe.serial("manual booking Extras", () => {
       customServiceName: "Produção personalizada com Extra",
       customDurationMinutes: 45,
       servicePriceCents: 3000,
-      extraIds: [specialExtra.id],
+      extras: [{ extraId: specialExtra.id, amountCents: 9999 }],
     });
     expect(custom.response.status(), JSON.stringify(custom.body)).toBe(201);
     expect(custom.body.appointments[0]).toMatchObject({
@@ -261,13 +272,16 @@ test.describe.serial("manual booking Extras", () => {
       servicePriceCentsSnapshot: 3000,
       manualOutsideHours: false,
     });
-    expect(custom.body.appointments[0].extras[0]).toMatchObject({ extraDefinitionId: specialExtra.id });
+    expect(custom.body.appointments[0].extras[0]).toMatchObject({
+      extraDefinitionId: specialExtra.id,
+      amountCentsSnapshot: 500,
+    });
 
     const outsideStart = futureThursdayIso(245, 18);
     const outsideName = `Fora do horário com Extra ${Date.now()}`;
     const outside = await createManual(request, outsideName, outsideStart, {
       allowOutsideHours: true,
-      extraIds: [travelExtra.id],
+      extras: [{ extraId: travelExtra.id, amountCents: 1700 }],
     });
     expect(outside.response.status(), JSON.stringify(outside.body)).toBe(201);
     expect(outside.body.appointments[0]).toMatchObject({ manualOutsideHours: true });
@@ -280,12 +294,14 @@ test.describe.serial("manual booking Extras", () => {
     const batchName = `Batch um Extra ${Date.now()}`;
     const batch = await createManual(request, batchName, batchStart, {
       startTimes: [batchStart, batchSecond],
-      extraIds: [travelExtra.id],
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
     });
     expect(batch.response.status(), JSON.stringify(batch.body)).toBe(201);
     expect(batch.body.appointments).toHaveLength(2);
     expect(batch.body.appointments.map((appointment: any) => appointment.extras.map((extra: any) => extra.extraDefinitionId)))
       .toEqual([[travelExtra.id], [travelExtra.id]]);
+    expect(batch.body.appointments.map((appointment: any) => appointment.extras[0].amountCentsSnapshot))
+      .toEqual([1000, 1000]);
     expect(batch.body.appointments[0].extras[0].appointmentId).toBeUndefined();
 
     const multipleStart = futureThursdayIso(247, 10);
@@ -293,13 +309,22 @@ test.describe.serial("manual booking Extras", () => {
     const multipleName = `Batch vários Extras ${Date.now()}`;
     const multiple = await createManual(request, multipleName, multipleStart, {
       startTimes: [multipleStart, multipleSecond],
-      extraIds: [travelExtra.id, specialExtra.id],
+      extras: [
+        { extraId: travelExtra.id, amountCents: 1750 },
+        { extraId: specialExtra.id },
+      ],
     });
     expect(multiple.response.status(), JSON.stringify(multiple.body)).toBe(201);
     expect(multiple.body.appointments.map((appointment: any) => appointment.extras.map((extra: any) => extra.extraDefinitionId)))
       .toEqual([
         [travelExtra.id, specialExtra.id],
         [travelExtra.id, specialExtra.id],
+      ]);
+    expect(multiple.body.appointments.map((appointment: any) =>
+      appointment.extras.map((extra: any) => extra.amountCentsSnapshot)))
+      .toEqual([
+        [1750, 500],
+        [1750, 500],
       ]);
 
     const mixedInside = futureThursdayIso(248, 10);
@@ -308,12 +333,21 @@ test.describe.serial("manual booking Extras", () => {
     const mixed = await createManual(request, mixedName, mixedInside, {
       startTimes: [mixedInside, mixedOutside],
       allowOutsideHours: true,
-      extraIds: [specialExtra.id],
+      extras: [
+        { extraId: travelExtra.id, amountCents: 1850 },
+        { extraId: specialExtra.id },
+      ],
     });
     expect(mixed.response.status(), JSON.stringify(mixed.body)).toBe(201);
     expect(mixed.body.appointments.map((appointment: any) => appointment.manualOutsideHours)).toEqual([false, true]);
-    expect(mixed.body.appointments.map((appointment: any) => appointment.extras.map((extra: any) => extra.extraDefinitionId)))
-      .toEqual([[specialExtra.id], [specialExtra.id]]);
+    expect(mixed.body.appointments.map((appointment: any) => appointment.extras.map((extra: any) => ({
+      id: extra.extraDefinitionId,
+      amount: extra.amountCentsSnapshot,
+    }))))
+      .toEqual([
+        [{ id: travelExtra.id, amount: 1850 }, { id: specialExtra.id, amount: 500 }],
+        [{ id: travelExtra.id, amount: 1850 }, { id: specialExtra.id, amount: 500 }],
+      ]);
   });
 
   test("rejects invalid, duplicate, inactive and recurring Extra selections without partial writes", async ({ request }) => {
@@ -322,37 +356,76 @@ test.describe.serial("manual booking Extras", () => {
     const invalidName = `Batch rollback Extra inválido ${Date.now()}`;
     const invalid = await createManual(request, invalidName, invalidStart, {
       startTimes: [invalidStart, invalidSecond],
-      extraIds: [999_999_999],
+      extras: [{ extraId: 999_999_999 }],
     });
     expect(invalid.response.status(), JSON.stringify(invalid.body)).toBe(409);
     expect(invalid.body.code).toBe("APPOINTMENT_EXTRA_UNAVAILABLE");
     expect(await findAppointments(request, invalidName, invalidStart)).toHaveLength(0);
 
     const duplicate = await createManual(request, `Extra duplicado ${Date.now()}`, futureThursdayIso(250, 10), {
-      extraIds: [travelExtra.id, travelExtra.id],
+      extras: [
+        { extraId: travelExtra.id, amountCents: 1000 },
+        { extraId: travelExtra.id, amountCents: 1500 },
+      ],
     });
     expect(duplicate.response.status(), JSON.stringify(duplicate.body)).toBe(400);
     expect(duplicate.body.code).toBe("APPOINTMENT_EXTRA_IDS_INVALID");
 
     const inactive = await createManual(request, `Extra inativo ${Date.now()}`, futureThursdayIso(251, 10), {
-      extraIds: [inactiveExtra.id],
+      extras: [{ extraId: inactiveExtra.id }],
     });
     expect(inactive.response.status(), JSON.stringify(inactive.body)).toBe(409);
     expect(inactive.body.code).toBe("APPOINTMENT_EXTRA_UNAVAILABLE");
+
+    const modalRaceCreate = await request.post("/api/admin/extras", { data: {
+      name: `Extra desativado durante modal ${Date.now()}`,
+      pricingMode: "fixed",
+      amountCents: 425,
+      financialRule: "establishment",
+    } });
+    expect(modalRaceCreate.status(), await modalRaceCreate.text()).toBe(201);
+    const modalRaceExtra = await modalRaceCreate.json();
+    const modalRaceDeactivate = await request.patch(`/api/admin/extras/${modalRaceExtra.id}`, {
+      data: { isActive: false },
+    });
+    expect(modalRaceDeactivate.status(), await modalRaceDeactivate.text()).toBe(200);
+    const modalRace = await createManual(
+      request,
+      `Extra desativado no submit ${Date.now()}`,
+      futureThursdayIso(251, 16),
+      { extras: [{ extraId: modalRaceExtra.id }] },
+    );
+    expect(modalRace.response.status(), JSON.stringify(modalRace.body)).toBe(409);
+    expect(modalRace.body.code).toBe("APPOINTMENT_EXTRA_UNAVAILABLE");
+
+    for (const [label, extra] of [
+      ["ausente", { extraId: travelExtra.id }],
+      ["zero", { extraId: travelExtra.id, amountCents: 0 }],
+      ["negativo", { extraId: travelExtra.id, amountCents: -100 }],
+    ] as const) {
+      const invalidVariable = await createManual(
+        request,
+        `Extra variável ${label} ${Date.now()}`,
+        futureThursdayIso(251, label === "ausente" ? 11 : label === "zero" ? 14 : 15),
+        { extras: [extra] },
+      );
+      expect(invalidVariable.response.status(), JSON.stringify(invalidVariable.body)).toBe(400);
+      expect(invalidVariable.body.code).toBe("APPOINTMENT_EXTRA_AMOUNT_INVALID");
+    }
 
     const recurringName = `Recorrência com Extra ${Date.now()}`;
     const recurring = await createManual(request, recurringName, futureThursdayIso(252, 10), {
       isRecurring: true,
       recurringWeeks: 1,
       recurringMonths: 1,
-      extraIds: [travelExtra.id],
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
     });
     expect(recurring.response.status(), JSON.stringify(recurring.body)).toBe(400);
     expect(recurring.body.code).toBe("APPOINTMENT_EXTRAS_NOT_ALLOWED_FOR_RECURRING");
     expect(await findAppointments(request, recurringName, futureThursdayIso(252, 10))).toHaveLength(0);
   });
 
-  test("keeps public booking unaware of injected extraIds", async ({ request }) => {
+  test("keeps public booking unaware of injected Extras", async ({ request }) => {
     const startTime = futureThursdayIso(253, 10);
     const customerName = `Public sem Extras ${Date.now()}`;
     const response = await request.post("/api/appointments", { data: {
@@ -362,7 +435,7 @@ test.describe.serial("manual booking Extras", () => {
       customerName,
       customerPhone: "+351912650002",
       customerEmail: "public-extras@example.test",
-      extraIds: [travelExtra.id],
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
     } });
     expect(response.status(), await response.text()).toBe(201);
     const publicAppointment = await response.json();
@@ -388,6 +461,8 @@ test.describe.serial("manual booking Extras", () => {
     await selectDialogOption(page, dialog, 1, service.name);
     await extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
     await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
+    await extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`).fill("10,00");
+    await expect(extrasSection.getByLabel(`Valor do Extra ${specialExtra.name}`)).toHaveCount(0);
 
     let summary = dialog.getByTestId("manual-booking-summary");
     await expect(summary.getByText("Serviço", { exact: true })).toBeVisible();
@@ -399,6 +474,7 @@ test.describe.serial("manual booking Extras", () => {
     await selectDialogOption(page, dialog, 1, alternateService.name);
     await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
     await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`)).toHaveValue("10,00");
     await expect(summary.getByText("35,00 €", { exact: true })).toBeVisible();
 
     const specialTermsSwitch = dialog.getByLabel("Condições especiais desta marcação");
@@ -436,6 +512,7 @@ test.describe.serial("manual booking Extras", () => {
     await selectDialogOption(page, dialog, 1, service.name);
     await dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
     await dialog.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
+    await dialog.getByLabel(`Valor do Extra ${travelExtra.name}`).fill("10,00");
     await dialog.getByLabel("Nome do cliente", { exact: true }).fill(`Payload Extras UI ${Date.now()}`);
     await clickFirstEnabledManualTime(dialog);
 
@@ -458,7 +535,10 @@ test.describe.serial("manual booking Extras", () => {
     expect(submittedPayload).toMatchObject({
       isManualBooking: true,
       serviceId: service.id,
-      extraIds: [travelExtra.id, specialExtra.id],
+      extras: [
+        { extraId: travelExtra.id, amountCents: 1000 },
+        { extraId: specialExtra.id },
+      ],
     });
   });
 });

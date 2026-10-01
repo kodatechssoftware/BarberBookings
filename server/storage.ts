@@ -80,6 +80,11 @@ export type AppointmentNotificationEventType =
   | "appointment_cancelled"
   | "appointment_recurring_confirmation";
 
+export type AppointmentExtraInput = {
+  extraId: number;
+  amountCents?: number;
+};
+
 export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappOptIn"> & {
   whatsappOptIn?: boolean;
   locationId?: number;
@@ -96,7 +101,7 @@ export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "wh
   notificationEventType?: "appointment_confirmation";
   seriesId?: string | null;
   seriesOccurrenceIndex?: number | null;
-  extraDefinitionIds?: number[];
+  extras?: AppointmentExtraInput[];
 };
 
 type AppointmentExtraSnapshotInput = Omit<AppointmentExtra, "appointmentId">;
@@ -142,7 +147,7 @@ function validateRecurringAppointmentSeriesRequest(request: CreateRecurringAppoi
     || snapshot.recurrence.occurrenceCount !== series.occurrenceCount) {
     throw new Error("Recurring notification snapshot does not match its series.");
   }
-  if (occurrences.some((occurrence) => (occurrence.extraDefinitionIds?.length ?? 0) > 0)) {
+  if (occurrences.some((occurrence) => (occurrence.extras?.length ?? 0) > 0)) {
     throw new AppointmentExtrasError(appointmentExtrasNotAllowedForRecurringCode);
   }
   let previousStart = -Infinity;
@@ -285,12 +290,14 @@ export class AppointmentConflictError extends Error {
 export const appointmentLocationInactiveCode = "APPOINTMENT_LOCATION_INACTIVE";
 export const appointmentBarberLocationUnavailableCode = "APPOINTMENT_BARBER_LOCATION_UNAVAILABLE";
 export const appointmentExtraIdsInvalidCode = "APPOINTMENT_EXTRA_IDS_INVALID";
+export const appointmentExtraAmountInvalidCode = "APPOINTMENT_EXTRA_AMOUNT_INVALID";
 export const appointmentExtraUnavailableCode = "APPOINTMENT_EXTRA_UNAVAILABLE";
 export const appointmentExtrasNotEditableCode = "APPOINTMENT_EXTRAS_NOT_EDITABLE";
 export const appointmentExtrasNotAllowedForRecurringCode = "APPOINTMENT_EXTRAS_NOT_ALLOWED_FOR_RECURRING";
 
 type AppointmentExtrasErrorCode =
   | typeof appointmentExtraIdsInvalidCode
+  | typeof appointmentExtraAmountInvalidCode
   | typeof appointmentExtraUnavailableCode
   | typeof appointmentExtrasNotEditableCode
   | typeof appointmentExtrasNotAllowedForRecurringCode;
@@ -301,6 +308,8 @@ export class AppointmentExtrasError extends Error {
   constructor(public code: AppointmentExtrasErrorCode) {
     super(code === appointmentExtraIdsInvalidCode
       ? "A seleção de Extras é inválida."
+      : code === appointmentExtraAmountInvalidCode
+        ? "Indique um valor válido, superior a zero, para cada Extra variável."
       : code === appointmentExtraUnavailableCode
         ? "Um dos Extras selecionados já não está disponível nesta localização."
         : code === appointmentExtrasNotAllowedForRecurringCode
@@ -310,12 +319,17 @@ export class AppointmentExtrasError extends Error {
   }
 }
 
-function validateExtraDefinitionIds(extraDefinitionIds: number[]) {
-  if (extraDefinitionIds.some((id) => !Number.isInteger(id) || id <= 0)
-    || new Set(extraDefinitionIds).size !== extraDefinitionIds.length) {
+function validateAppointmentExtraInputs(extras: AppointmentExtraInput[]) {
+  if (extras.some((extra) => !extra || typeof extra !== "object"
+      || !Number.isInteger(extra.extraId) || extra.extraId <= 0)
+    || new Set(extras.map((extra) => extra.extraId)).size !== extras.length) {
     throw new AppointmentExtrasError(appointmentExtraIdsInvalidCode);
   }
-  return extraDefinitionIds;
+  if (extras.some((extra) => extra.amountCents !== undefined
+    && (!Number.isInteger(extra.amountCents) || extra.amountCents <= 0 || extra.amountCents > 1_000_000))) {
+    throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
+  }
+  return extras;
 }
 
 export class AppointmentLocationIntegrityError extends Error {
@@ -493,7 +507,7 @@ export interface IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
-    extraDefinitionIds?: number[],
+    extras?: AppointmentExtraInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined>;
   rescheduleAppointment(
     id: number,
@@ -609,17 +623,19 @@ export class DatabaseStorage implements IStorage {
   private async resolveAppointmentExtraSnapshots(
     tx: Pick<typeof db, "select">,
     locationId: number | undefined,
-    rawExtraDefinitionIds: number[],
+    rawExtras: AppointmentExtraInput[],
     existingExtras: AppointmentExtra[] = [],
   ): Promise<AppointmentExtraSnapshotInput[]> {
-    const extraDefinitionIds = validateExtraDefinitionIds(rawExtraDefinitionIds);
-    if (extraDefinitionIds.length === 0) return [];
+    const selectedExtras = validateAppointmentExtraInputs(rawExtras);
+    if (selectedExtras.length === 0) return [];
     if (!Number.isInteger(locationId) || Number(locationId) <= 0) {
       throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
     }
 
     const existingByDefinitionId = new Map(existingExtras.map((extra) => [extra.extraDefinitionId, extra]));
-    const newDefinitionIds = extraDefinitionIds.filter((id) => !existingByDefinitionId.has(id));
+    const newDefinitionIds = selectedExtras
+      .map((extra) => extra.extraId)
+      .filter((id) => !existingByDefinitionId.has(id));
     const selectedDefinitions = newDefinitionIds.length === 0
       ? []
       : await tx.select().from(extraDefinitions).where(and(
@@ -632,17 +648,24 @@ export class DatabaseStorage implements IStorage {
     }
     const definitionsById = new Map(selectedDefinitions.map((definition) => [definition.id, definition]));
 
-    return extraDefinitionIds.map((extraDefinitionId, position) => {
+    return selectedExtras.map((selectedExtra, position) => {
+      const extraDefinitionId = selectedExtra.extraId;
       const existing = existingByDefinitionId.get(extraDefinitionId);
       if (existing) {
         const { appointmentId: _appointmentId, ...snapshot } = existing;
         return { ...snapshot, position };
       }
       const definition = definitionsById.get(extraDefinitionId)!;
+      const amountCentsSnapshot = definition.pricingMode === "fixed"
+        ? definition.amountCents
+        : selectedExtra.amountCents;
+      if (!amountCentsSnapshot) {
+        throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
+      }
       return {
         extraDefinitionId,
         nameSnapshot: definition.name,
-        amountCentsSnapshot: definition.amountCents,
+        amountCentsSnapshot,
         financialRuleSnapshot: definition.financialRule,
         position,
         createdAt: new Date(),
@@ -1021,10 +1044,12 @@ export class DatabaseStorage implements IStorage {
     locationId: number,
     extra: UpdateExtraDefinitionRequest,
   ): Promise<ExtraDefinition | undefined> {
-    const parsed = updateExtraDefinitionSchema.parse(extra);
+    const existing = await this.getExtraDefinition(id, locationId);
+    if (!existing) return undefined;
+    const parsed = insertExtraDefinitionSchema.parse({ ...existing, ...updateExtraDefinitionSchema.parse(extra), locationId });
     const [updated] = await db.update(extraDefinitions).set({
       ...parsed,
-      ...(parsed.name !== undefined ? { name: parsed.name.trim() } : {}),
+      name: parsed.name.trim(),
       updatedAt: new Date(),
     }).where(and(eq(extraDefinitions.id, id), eq(extraDefinitions.locationId, locationId))).returning();
     return updated;
@@ -1126,16 +1151,16 @@ export class DatabaseStorage implements IStorage {
 
         const createdAppointments: Appointment[] = [];
         for (const appointment of appointmentInputs) {
-          if (appointment.seriesId && (appointment.extraDefinitionIds?.length ?? 0) > 0) {
+          if (appointment.seriesId && (appointment.extras?.length ?? 0) > 0) {
             throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
           }
           const extraSnapshots = await this.resolveAppointmentExtraSnapshots(
             tx,
             appointment.locationId,
-            appointment.extraDefinitionIds ?? [],
+            appointment.extras ?? [],
           );
           await this.assertNoAppointmentConflict(tx, appointment);
-          const { notificationEventType, extraDefinitionIds: _extraDefinitionIds, ...appointmentValues } = appointment;
+          const { notificationEventType, extras: _extras, ...appointmentValues } = appointment;
           const notificationRevision = notificationEventType ? 1 : 0;
           const [newAppointment] = await tx.insert(appointments).values({
             ...appointmentValues,
@@ -1234,7 +1259,7 @@ export class DatabaseStorage implements IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
-    extraDefinitionIds?: number[],
+    extras?: AppointmentExtraInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1247,18 +1272,18 @@ export class DatabaseStorage implements IStorage {
 
         const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
         const changes = getAppointmentUpdateChanges(current, safePatch);
-        const currentExtras = extraDefinitionIds === undefined
+        const currentExtras = extras === undefined
           ? []
           : await tx.select().from(appointmentExtras)
               .where(eq(appointmentExtras.appointmentId, id))
               .orderBy(appointmentExtras.position);
-        const requestedExtraDefinitionIds = extraDefinitionIds === undefined
+        const requestedExtras = extras === undefined
           ? undefined
-          : validateExtraDefinitionIds(extraDefinitionIds);
-        const extrasChanged = requestedExtraDefinitionIds !== undefined
-          && (requestedExtraDefinitionIds.length !== currentExtras.length
-            || requestedExtraDefinitionIds.some((definitionId, index) =>
-              definitionId !== currentExtras[index]?.extraDefinitionId));
+          : validateAppointmentExtraInputs(extras);
+        const extrasChanged = requestedExtras !== undefined
+          && (requestedExtras.length !== currentExtras.length
+            || requestedExtras.some((selectedExtra, index) =>
+              selectedExtra.extraId !== currentExtras[index]?.extraDefinitionId));
         let replacementExtras: AppointmentExtraSnapshotInput[] = [];
         if (extrasChanged) {
           if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
@@ -1267,7 +1292,7 @@ export class DatabaseStorage implements IStorage {
           replacementExtras = await this.resolveAppointmentExtraSnapshots(
             tx,
             current.locationId,
-            requestedExtraDefinitionIds,
+            requestedExtras,
             currentExtras,
           );
         }
@@ -2181,16 +2206,17 @@ export class MemoryStorage implements IStorage {
 
   private resolveAppointmentExtraSnapshots(
     locationId: number | undefined,
-    rawExtraDefinitionIds: number[],
+    rawExtras: AppointmentExtraInput[],
     existingExtras: AppointmentExtra[] = [],
   ): AppointmentExtraSnapshotInput[] {
-    const extraDefinitionIds = validateExtraDefinitionIds(rawExtraDefinitionIds);
-    if (extraDefinitionIds.length === 0) return [];
+    const selectedExtras = validateAppointmentExtraInputs(rawExtras);
+    if (selectedExtras.length === 0) return [];
     if (!Number.isInteger(locationId) || Number(locationId) <= 0) {
       throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
     }
     const existingByDefinitionId = new Map(existingExtras.map((extra) => [extra.extraDefinitionId, extra]));
-    return extraDefinitionIds.map((extraDefinitionId, position) => {
+    return selectedExtras.map((selectedExtra, position) => {
+      const extraDefinitionId = selectedExtra.extraId;
       const existing = existingByDefinitionId.get(extraDefinitionId);
       if (existing) {
         const { appointmentId: _appointmentId, ...snapshot } = existing;
@@ -2201,10 +2227,16 @@ export class MemoryStorage implements IStorage {
         && candidate.locationId === locationId
         && candidate.isActive);
       if (!definition) throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+      const amountCentsSnapshot = definition.pricingMode === "fixed"
+        ? definition.amountCents
+        : selectedExtra.amountCents;
+      if (!amountCentsSnapshot) {
+        throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
+      }
       return {
         extraDefinitionId,
         nameSnapshot: definition.name,
-        amountCentsSnapshot: definition.amountCents,
+        amountCentsSnapshot,
         financialRuleSnapshot: definition.financialRule,
         position,
         createdAt: new Date(),
@@ -2505,6 +2537,7 @@ export class MemoryStorage implements IStorage {
       id: this.nextIds.extraDefinition++,
       locationId: parsed.locationId,
       name,
+      pricingMode: parsed.pricingMode,
       amountCents: parsed.amountCents,
       financialRule: parsed.financialRule,
       isActive: parsed.isActive ?? true,
@@ -2523,11 +2556,15 @@ export class MemoryStorage implements IStorage {
     locationId: number,
     extra: UpdateExtraDefinitionRequest,
   ): Promise<ExtraDefinition | undefined> {
-    const parsed = updateExtraDefinitionSchema.parse(extra);
     const index = this.extraDefinitions.findIndex((definition) =>
       definition.id === id && definition.locationId === locationId);
     if (index === -1) return undefined;
-    const name = parsed.name?.trim();
+    const parsed = insertExtraDefinitionSchema.parse({
+      ...this.extraDefinitions[index],
+      ...updateExtraDefinitionSchema.parse(extra),
+      locationId,
+    });
+    const name = parsed.name.trim();
     if (name && this.extraDefinitions.some((definition) =>
       definition.id !== id
       && definition.locationId === this.extraDefinitions[index].locationId
@@ -2539,7 +2576,7 @@ export class MemoryStorage implements IStorage {
     this.extraDefinitions[index] = {
       ...this.extraDefinitions[index],
       ...parsed,
-      ...(name !== undefined ? { name } : {}),
+      name,
       updatedAt: new Date(),
     };
     return { ...this.extraDefinitions[index] };
@@ -2606,12 +2643,12 @@ export class MemoryStorage implements IStorage {
 
     try {
       for (const appointment of appointmentInputs) {
-        if (appointment.seriesId && (appointment.extraDefinitionIds?.length ?? 0) > 0) {
+        if (appointment.seriesId && (appointment.extras?.length ?? 0) > 0) {
           throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
         }
         const extraSnapshots = this.resolveAppointmentExtraSnapshots(
           appointment.locationId,
-          appointment.extraDefinitionIds ?? [],
+          appointment.extras ?? [],
         );
         const notificationRevision = appointment.notificationEventType ? 1 : 0;
         const newAppointment: Appointment = {
@@ -2781,7 +2818,7 @@ export class MemoryStorage implements IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
-    extraDefinitionIds?: number[],
+    extras?: AppointmentExtraInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
@@ -2789,18 +2826,18 @@ export class MemoryStorage implements IStorage {
     if (expectedStatus && current.status !== expectedStatus) return undefined;
     const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
     const changes = getAppointmentUpdateChanges(current, safePatch);
-    const currentExtras = extraDefinitionIds === undefined
+    const currentExtras = extras === undefined
       ? []
       : this.appointmentExtras
           .filter((extra) => extra.appointmentId === id)
           .sort((left, right) => left.position - right.position);
-    const requestedExtraDefinitionIds = extraDefinitionIds === undefined
+    const requestedExtras = extras === undefined
       ? undefined
-      : validateExtraDefinitionIds(extraDefinitionIds);
-    const extrasChanged = requestedExtraDefinitionIds !== undefined
-      && (requestedExtraDefinitionIds.length !== currentExtras.length
-        || requestedExtraDefinitionIds.some((definitionId, extraIndex) =>
-          definitionId !== currentExtras[extraIndex]?.extraDefinitionId));
+      : validateAppointmentExtraInputs(extras);
+    const extrasChanged = requestedExtras !== undefined
+      && (requestedExtras.length !== currentExtras.length
+        || requestedExtras.some((selectedExtra, extraIndex) =>
+          selectedExtra.extraId !== currentExtras[extraIndex]?.extraDefinitionId));
     let replacementExtras: AppointmentExtraSnapshotInput[] = [];
     if (extrasChanged) {
       if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
@@ -2808,7 +2845,7 @@ export class MemoryStorage implements IStorage {
       }
       replacementExtras = this.resolveAppointmentExtraSnapshots(
         current.locationId,
-        requestedExtraDefinitionIds,
+        requestedExtras,
         currentExtras,
       );
     }
