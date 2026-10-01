@@ -919,3 +919,94 @@ test("[multi-location] photo references carry shop context and enforce visibilit
     await anonymous.dispose();
   }
 });
+
+test("[multi-location] isolates the Extras catalogue and rejects cross-location updates", async ({ page, request }) => {
+  const [shopA, shopB] = await ensureLocations(request, 2);
+  for (const shop of [shopA, shopB]) {
+    if (!shop.isActive) {
+      const activate = await request.patch(`/api/admin/locations/${shop.id}`, { data: { isActive: true } });
+      expect(activate.ok(), await activate.text()).toBe(true);
+    }
+  }
+
+  const headersA = { "X-Location-Id": String(shopA.id) };
+  const headersB = { "X-Location-Id": String(shopB.id) };
+  const createA = await request.post("/api/admin/extras", {
+    headers: headersA,
+    data: {
+      name: "Extra Loja A QA",
+      amountCents: 400,
+      financialRule: "follow_compensation",
+      sortOrder: 0,
+    },
+  });
+  const createB = await request.post("/api/admin/extras", {
+    headers: headersB,
+    data: {
+      name: "Extra Loja B QA",
+      amountCents: 900,
+      financialRule: "barber",
+      sortOrder: 0,
+    },
+  });
+  expect(createA.status(), await createA.text()).toBe(201);
+  expect(createB.status(), await createB.text()).toBe(201);
+  const extraA = await createA.json();
+  const extraB = await createB.json();
+  expect(extraA).toMatchObject({ locationId: shopA.id, amountCents: 400 });
+  expect(extraB).toMatchObject({ locationId: shopB.id, amountCents: 900 });
+
+  const catalogueA = await (await request.get("/api/admin/extras", { headers: headersA })).json();
+  const catalogueB = await (await request.get("/api/admin/extras", { headers: headersB })).json();
+  expect(catalogueA.some((extra: any) => extra.id === extraA.id)).toBe(true);
+  expect(catalogueA.some((extra: any) => extra.id === extraB.id)).toBe(false);
+  expect(catalogueB.some((extra: any) => extra.id === extraB.id)).toBe(true);
+  expect(catalogueB.some((extra: any) => extra.id === extraA.id)).toBe(false);
+
+  const crossLocationEdit = await request.patch(`/api/admin/extras/${extraA.id}`, {
+    headers: headersB,
+    data: { amountCents: 999 },
+  });
+  expect(crossLocationEdit.status(), await crossLocationEdit.text()).toBe(404);
+  const crossLocationToggle = await request.patch(`/api/admin/extras/${extraA.id}`, {
+    headers: headersB,
+    data: { isActive: false },
+  });
+  expect(crossLocationToggle.status(), await crossLocationToggle.text()).toBe(404);
+
+  const unchangedA = (await (await request.get("/api/admin/extras", { headers: headersA })).json())
+    .find((extra: any) => extra.id === extraA.id);
+  expect(unchangedA).toMatchObject({ amountCents: 400, isActive: true });
+
+  await page.goto("/admin");
+  await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
+  await page.locator('input[type="password"]').fill("Playwright-Test-Admin-2026!");
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+  await page.getByLabel("Loja em gestão").click();
+  await page.getByRole("option", { name: shopA.name, exact: true }).click();
+  await page.getByRole("tab", { name: "Extras", exact: true }).click();
+  const extrasManager = page.getByTestId("extras-manager");
+  await expect(extrasManager.getByText("Extra Loja A QA", { exact: true })).toBeVisible();
+  await expect(extrasManager.getByText("Extra Loja B QA", { exact: true })).toHaveCount(0);
+
+  await page.getByLabel("Loja em gestão").click();
+  await page.getByRole("option", { name: shopB.name, exact: true }).click();
+  await expect(extrasManager.getByText("Extra Loja B QA", { exact: true })).toBeVisible();
+  await expect(extrasManager.getByText("Extra Loja A QA", { exact: true })).toHaveCount(0);
+
+  const deactivateB = await request.patch(`/api/admin/extras/${extraB.id}`, {
+    headers: headersB,
+    data: { isActive: false },
+  });
+  expect(deactivateB.status(), await deactivateB.text()).toBe(200);
+  expect((await deactivateB.json()).isActive).toBe(false);
+  expect((await (await request.get("/api/admin/extras", { headers: headersB })).json())
+    .find((extra: any) => extra.id === extraB.id)).toMatchObject({ isActive: false });
+
+  const missingLocation = await request.post("/api/admin/extras", {
+    data: { name: "Sem localização explícita", amountCents: 100, financialRule: "establishment" },
+  });
+  expect(missingLocation.status(), await missingLocation.text()).toBe(400);
+  expect(await missingLocation.json()).toMatchObject({ code: "LOCATION_REQUIRED" });
+});

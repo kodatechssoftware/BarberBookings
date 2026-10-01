@@ -4,7 +4,7 @@ import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments,
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -39,6 +39,7 @@ import { LocationsTab } from "@/components/admin/LocationsTab";
 import { AssociateBarberDialog } from "@/components/admin/AssociateBarberDialog";
 import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
 import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesManager";
+import { ExtrasManager } from "@/components/admin/ExtrasManager";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
@@ -390,6 +391,10 @@ const auditActionLabels: Record<string, string> = {
   "service.created": "Serviço criado",
   "service.updated": "Serviço atualizado",
   "service.deleted": "Serviço removido",
+  "extra.created": "Extra criado",
+  "extra.updated": "Extra atualizado",
+  "extra.activated": "Extra ativado",
+  "extra.deactivated": "Extra desativado",
   "shop_availability.updated": "Horário da barbearia atualizado",
   "barber_availability.updated": "Horário do barbeiro atualizado",
   "customer.blocked": "Cliente bloqueado",
@@ -3635,6 +3640,7 @@ export default function Admin() {
               <>
                 <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>
                 <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
+                <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>
                 <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>
                 {multiLocationConfig?.enabled && (
                   <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
@@ -4568,6 +4574,12 @@ export default function Admin() {
               </div>
             ) : null}
           </TabsContent>
+
+          {user.role === "admin" && (
+            <TabsContent value="extras" className="outline-none">
+              <ExtrasManager enabled={activeTab === "extras"} />
+            </TabsContent>
+          )}
 
           <TabsContent value="settings" className="outline-none">
             <Card className="bg-card border-white/10 text-white">
