@@ -35,6 +35,11 @@ import {
   isDevelopmentDeployment,
 } from "./runtime-environment";
 import {
+  createDefaultCompensationRule as defaultCompensationRule,
+  getChairRentUnitKey,
+  getCompensationRuleForDate as getRuleForDate,
+} from "./appointment-finance";
+import {
   bookingSlotIntervalMessage,
   isMinuteOfDayAligned,
 } from "@shared/booking-slot-interval";
@@ -65,7 +70,6 @@ import {
 import bcrypt from "bcryptjs";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { format, startOfDay } from "date-fns";
 import ExcelJS from 'exceljs';
 import {
   appointmentStatuses,
@@ -251,17 +255,6 @@ type BarberCompensationInput = {
   chairRentCents?: number | null;
   chairRentPeriod?: ChairRentPeriod | null;
 };
-
-const defaultCompensationRule = (barberId: number): BarberCompensationRule => ({
-  id: 0,
-  barberId,
-  model: "none",
-  commissionPercent: null,
-  chairRentCents: null,
-  chairRentPeriod: null,
-  effectiveFrom: new Date(0),
-  createdAt: new Date(0),
-});
 
 const blacklistInputSchema = z.object({
   phone: z
@@ -1568,29 +1561,6 @@ function getBusinessExpenseRecurrenceLabel(recurrence: BusinessExpenseRecurrence
   if (recurrence === "weekly") return "Semanal";
   if (recurrence === "monthly") return "Mensal";
   return "Única";
-}
-
-function getRuleForDate(
-  rules: BarberCompensationRule[],
-  barberId: number,
-  date: Date,
-) {
-  const timestamp = date.getTime();
-  const barberRules = rules
-    .filter((candidate) => candidate.barberId === barberId)
-    .sort((left, right) => new Date(right.effectiveFrom).getTime() - new Date(left.effectiveFrom).getTime());
-  const rule = barberRules.find((candidate) => new Date(candidate.effectiveFrom).getTime() <= timestamp);
-  return rule || barberRules[barberRules.length - 1] || defaultCompensationRule(barberId);
-}
-
-function getChairRentUnitKey(date: Date, period: ChairRentPeriod) {
-  if (period === "day") return format(date, "yyyy-MM-dd");
-  if (period === "week") {
-    const weekStart = startOfDay(date);
-    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
-    return format(weekStart, "yyyy-MM-dd");
-  }
-  return format(date, "yyyy-MM");
 }
 
 function addCalendarDays(date: Date, amount: number) {
