@@ -593,7 +593,7 @@ export const insertExtraDefinitionSchema = createInsertSchema(extraDefinitions).
   amountCents: z.number().int("O valor deve ser indicado em cêntimos.").min(1, "O valor deve ser superior a zero.").max(1_000_000, "O valor indicado é demasiado elevado."),
   financialRule: z.enum(extraFinancialRules),
   isActive: z.boolean().optional(),
-  sortOrder: z.number().int().min(0).optional(),
+  sortOrder: z.number().int().min(0).max(2_147_483_647, "A ordem indicada é demasiado elevada.").optional(),
 });
 export const updateExtraDefinitionSchema = insertExtraDefinitionSchema
   .omit({ locationId: true })

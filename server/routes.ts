@@ -60,7 +60,10 @@ import {
   appointmentPaymentMethods,
   businessExpenseCategories,
   businessExpenseRecurrences,
+  insertExtraDefinitionSchema,
   insertServiceSchema,
+  updateExtraDefinitionSchema,
+  type ExtraDefinition,
   type ServiceCatalogueItem,
   type Appointment,
   type AppointmentPaymentMethod,
@@ -853,6 +856,7 @@ function isLocationSensitiveMutation(req: Request) {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return false;
 
   return [
+    /^\/admin\/extras(?:\/\d+)?$/,
     /^\/admin\/expenses(?:\/\d+)?$/,
     /^\/admin\/location-barbers$/,
     /^\/barbers(?:\/\d+(?:\/(?:services|availability|reset-password|invite))?)?$/,
@@ -2043,6 +2047,119 @@ export async function registerRoutes(
     } catch (error) {
       console.warn("Could not load audit logs:", error instanceof Error ? error.message : error);
       res.json([]);
+    }
+  });
+
+  // === EXTRAS CATALOGUE ===
+  app.get("/api/admin/extras", requireAdmin, async (_req, res) => {
+    const extras = await storage.getExtraDefinitions(Number(res.locals.locationId), {
+      includeInactive: true,
+    });
+    res.json(extras);
+  });
+
+  app.post("/api/admin/extras", requireAdmin, async (req, res) => {
+    try {
+      const locationId = Number(res.locals.locationId);
+      const input = insertExtraDefinitionSchema.parse({
+        ...req.body,
+        locationId,
+      });
+      const extra = await storage.createExtraDefinition(input);
+      recordAuditLog(req, {
+        action: "extra.created",
+        entityType: "extra",
+        entityId: extra.id,
+        summary: `Extra criado: ${extra.name}`,
+        metadata: {
+          extraId: extra.id,
+          locationId: extra.locationId,
+          name: extra.name,
+          amountCents: extra.amountCents,
+          financialRule: extra.financialRule,
+          sortOrder: extra.sortOrder,
+          isActive: extra.isActive,
+        },
+      });
+      res.status(201).json(extra);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0].message,
+          field: error.errors[0].path.join("."),
+        });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe um Extra com este nome nesta localização." });
+      }
+      console.error("Create Extra error:", error);
+      res.status(500).json({ message: "Erro ao criar Extra" });
+    }
+  });
+
+  app.patch("/api/admin/extras/:id", requireAdmin, async (req, res) => {
+    try {
+      const extraId = parsePositiveInteger(req.params.id);
+      if (extraId === null) return res.status(400).json({ message: "Extra inválido." });
+
+      const locationId = Number(res.locals.locationId);
+      const existing = await storage.getExtraDefinition(extraId, locationId);
+      if (!existing) return res.status(404).json({ message: "Extra não encontrado." });
+
+      const input = updateExtraDefinitionSchema.parse(req.body);
+      if (Object.keys(input).length === 0) {
+        return res.status(400).json({ message: "Indique uma alteração." });
+      }
+      const updated = await storage.updateExtraDefinition(extraId, locationId, input);
+      if (!updated) return res.status(404).json({ message: "Extra não encontrado." });
+
+      const comparableFields: Array<keyof Pick<ExtraDefinition,
+        "name" | "amountCents" | "financialRule" | "isActive" | "sortOrder">> = [
+        "name",
+        "amountCents",
+        "financialRule",
+        "isActive",
+        "sortOrder",
+      ];
+      const changedFields = comparableFields.filter((field) => existing[field] !== updated[field]);
+      const changes = Object.fromEntries(changedFields.map((field) => [field, {
+        previous: existing[field],
+        next: updated[field],
+      }]));
+      const action = existing.isActive !== updated.isActive
+        ? updated.isActive ? "extra.activated" : "extra.deactivated"
+        : "extra.updated";
+      const actionLabel = action === "extra.activated"
+        ? "ativado"
+        : action === "extra.deactivated"
+          ? "desativado"
+          : "atualizado";
+      recordAuditLog(req, {
+        action,
+        entityType: "extra",
+        entityId: updated.id,
+        summary: `Extra ${actionLabel}: ${updated.name}`,
+        metadata: {
+          extraId: updated.id,
+          locationId: updated.locationId,
+          name: updated.name,
+          changedFields,
+          changes,
+        },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0].message,
+          field: error.errors[0].path.join("."),
+        });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe um Extra com este nome nesta localização." });
+      }
+      console.error("Update Extra error:", error);
+      res.status(500).json({ message: "Erro ao atualizar Extra" });
     }
   });
 
