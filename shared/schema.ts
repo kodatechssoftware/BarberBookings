@@ -1,4 +1,4 @@
-import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, jsonb, check } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb, check } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
@@ -27,6 +27,7 @@ export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id
 export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
 export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
+export const extraDefinitionsIdSeq = appPgSchema?.sequence("extra_definitions_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -83,6 +84,12 @@ export const businessExpenseRecurrences = [
   "once",
   "weekly",
   "monthly",
+] as const;
+
+export const extraFinancialRules = [
+  "follow_compensation",
+  "barber",
+  "establishment",
 ] as const;
 
 export const whatsappMessageStatuses = [
@@ -230,6 +237,53 @@ export const appointments = appPgTable("appointments", {
     ${table.servicePriceCentsSnapshot} IS NULL
     OR (${table.servicePriceCentsSnapshot} >= 0 AND ${table.servicePriceCentsSnapshot} <= 1000000)
   `),
+}));
+
+export const extraDefinitions = appPgTable("extra_definitions", {
+  id: idColumn("extra_definitions_id_seq"),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
+  name: text("name").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  financialRule: text("financial_rule", { enum: extraFinancialRules }).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  locationNameIdx: uniqueIndex("extra_definitions_location_name_ci_idx")
+    .on(table.locationId, sql`lower(btrim(${table.name}))`),
+  locationActiveOrderIdx: index("extra_definitions_location_active_order_idx")
+    .on(table.locationId, table.isActive, table.sortOrder, table.id),
+  nameCheck: check("extra_definitions_name_check",
+    sql`btrim(${table.name}) <> '' AND char_length(${table.name}) <= 100`),
+  amountCentsCheck: check("extra_definitions_amount_cents_check",
+    sql`${table.amountCents} > 0 AND ${table.amountCents} <= 1000000`),
+  financialRuleCheck: check("extra_definitions_financial_rule_check",
+    sql`${table.financialRule} IN ('follow_compensation', 'barber', 'establishment')`),
+  sortOrderCheck: check("extra_definitions_sort_order_check", sql`${table.sortOrder} >= 0`),
+}));
+
+export const appointmentExtras = appPgTable("appointment_extras", {
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }).notNull(),
+  extraDefinitionId: integer("extra_definition_id").references(() => extraDefinitions.id, { onDelete: "restrict" }).notNull(),
+  nameSnapshot: text("name_snapshot").notNull(),
+  amountCentsSnapshot: integer("amount_cents_snapshot").notNull(),
+  financialRuleSnapshot: text("financial_rule_snapshot", { enum: extraFinancialRules }).notNull(),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.appointmentId, table.extraDefinitionId] }),
+  appointmentPositionIdx: uniqueIndex("appointment_extras_appointment_position_unique")
+    .on(table.appointmentId, table.position),
+  definitionIdx: index("appointment_extras_extra_definition_id_idx")
+    .on(table.extraDefinitionId, table.appointmentId),
+  nameSnapshotCheck: check("appointment_extras_name_snapshot_check",
+    sql`btrim(${table.nameSnapshot}) <> '' AND char_length(${table.nameSnapshot}) <= 100`),
+  amountCentsSnapshotCheck: check("appointment_extras_amount_cents_snapshot_check",
+    sql`${table.amountCentsSnapshot} > 0 AND ${table.amountCentsSnapshot} <= 1000000`),
+  financialRuleSnapshotCheck: check("appointment_extras_financial_rule_snapshot_check",
+    sql`${table.financialRuleSnapshot} IN ('follow_compensation', 'barber', 'establishment')`),
+  positionCheck: check("appointment_extras_position_check", sql`${table.position} >= 0`),
 }));
 
 export const admins = appPgTable("admins", {
@@ -437,7 +491,7 @@ export const metaWebhookReceipts = appPgTable("meta_webhook_receipts", {
 
 // === RELATIONS ===
 
-export const appointmentsRelations = relations(appointments, ({ one }) => ({
+export const appointmentsRelations = relations(appointments, ({ one, many }) => ({
   barber: one(barbers, {
     fields: [appointments.barberId],
     references: [barbers.id],
@@ -449,6 +503,26 @@ export const appointmentsRelations = relations(appointments, ({ one }) => ({
   series: one(appointmentSeries, {
     fields: [appointments.seriesId],
     references: [appointmentSeries.id],
+  }),
+  extras: many(appointmentExtras),
+}));
+
+export const extraDefinitionsRelations = relations(extraDefinitions, ({ one, many }) => ({
+  location: one(locations, {
+    fields: [extraDefinitions.locationId],
+    references: [locations.id],
+  }),
+  appointmentExtras: many(appointmentExtras),
+}));
+
+export const appointmentExtrasRelations = relations(appointmentExtras, ({ one }) => ({
+  appointment: one(appointments, {
+    fields: [appointmentExtras.appointmentId],
+    references: [appointments.id],
+  }),
+  definition: one(extraDefinitions, {
+    fields: [appointmentExtras.extraDefinitionId],
+    references: [extraDefinitions.id],
   }),
 }));
 
@@ -509,6 +583,21 @@ export const insertServiceCategorySchema = createInsertSchema(serviceCategories)
   sortOrder: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
 });
+export const insertExtraDefinitionSchema = createInsertSchema(extraDefinitions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  locationId: z.number().int().positive(),
+  name: z.string().trim().min(1, "Indique o nome do Extra.").max(100, "O nome não pode ter mais de 100 caracteres."),
+  amountCents: z.number().int("O valor deve ser indicado em cêntimos.").min(1, "O valor deve ser superior a zero.").max(1_000_000, "O valor indicado é demasiado elevado."),
+  financialRule: z.enum(extraFinancialRules),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).optional(),
+});
+export const updateExtraDefinitionSchema = insertExtraDefinitionSchema
+  .omit({ locationId: true })
+  .partial();
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;
 const internationalZeroPrefixPhonePattern = /^00\d{7,15}$/;
@@ -586,6 +675,9 @@ export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
 };
 export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
+export type ExtraDefinition = typeof extraDefinitions.$inferSelect;
+export type AppointmentExtra = typeof appointmentExtras.$inferSelect;
+export type ExtraFinancialRule = typeof extraFinancialRules[number];
 export type AppointmentStatus = typeof appointmentStatuses[number];
 export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;
@@ -621,6 +713,8 @@ export type BarberWithServices = Barber & {
 export type CreateBarberRequest = z.infer<typeof insertBarberSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateServiceCategoryRequest = z.infer<typeof insertServiceCategorySchema>;
+export type CreateExtraDefinitionRequest = z.infer<typeof insertExtraDefinitionSchema>;
+export type UpdateExtraDefinitionRequest = z.infer<typeof updateExtraDefinitionSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
 export type CreateAdminRequest = z.infer<typeof insertAdminSchema>;
 export type InsertBlacklist = z.infer<typeof insertBlacklistSchema>;

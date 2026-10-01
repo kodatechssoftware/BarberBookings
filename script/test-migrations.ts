@@ -27,6 +27,7 @@ assert.equal(migrationChecksum("SELECT 1;\nSELECT 2;\n"), migrationChecksum("SEL
 
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
 const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-terms-"));
+const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-extras-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -37,6 +38,17 @@ for (const file of [
   "0006_customer_notes_location.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preServiceTermsMigrationsDirectory, file));
+}
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preExtrasMigrationsDirectory, file));
 }
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -267,7 +279,11 @@ try {
   const legacyAppointmentsBeforeServiceTerms = await drizzle(pool).select()
     .from(legacyAppointmentsTable).orderBy(asc(legacyAppointmentsTable.id));
   const releaseDataBeforeServiceTermsMigration = await captureReleaseData();
-  const serviceTermsRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const serviceTermsRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preExtrasMigrationsDirectory,
+  });
   assert.deepEqual(serviceTermsRun.applied, ["0007_appointment_service_snapshots.sql"]);
   assert.equal(serviceTermsRun.alreadyApplied, 6);
   const releaseDataAfterServiceTermsMigration = await captureReleaseData();
@@ -345,13 +361,37 @@ try {
   await pool.query(`DELETE FROM ${table("appointments")} WHERE cancel_token = 'valid-zero-price'`);
   const releaseDataAfterConstraintChecks = await captureReleaseData();
   assert.deepEqual(releaseDataAfterConstraintChecks, releaseDataAfterServiceTermsMigration);
-  const secondServiceTermsRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondServiceTermsRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preExtrasMigrationsDirectory,
+  });
   assert.equal(secondServiceTermsRun.applied.length, 0);
   assert.equal(secondServiceTermsRun.alreadyApplied, 7);
   assert.deepEqual(
     await captureReleaseData(),
     releaseDataAfterServiceTermsMigration,
     "controlled migration 0007 re-execution must not mutate operational data",
+  );
+  const releaseDataBeforeExtrasMigration = await captureReleaseData();
+  const extrasRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(extrasRun.applied, ["0008_appointment_extras.sql"]);
+  assert.equal(extrasRun.alreadyApplied, 7);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataBeforeExtrasMigration,
+    "migration 0008 must not mutate any legacy operational data",
+  );
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("extra_definitions")}`)).rows[0].count), 0);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_extras")}`)).rows[0].count), 0,
+    "legacy appointments must receive no artificial Extra rows");
+  const secondExtrasRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondExtrasRun.applied.length, 0);
+  assert.equal(secondExtrasRun.alreadyApplied, 8);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataBeforeExtrasMigration,
+    "controlled migration 0008 re-execution must not mutate operational data",
   );
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -362,6 +402,9 @@ try {
     "appointments_series_occurrence_idx", "appointment_notification_events_series_idx",
     "service_categories_name_ci_idx", "service_categories_active_order_idx", "services_category_id_idx",
     "customer_notes_location_id_idx", "customer_notes_location_phone_name_idx",
+    "extra_definitions_location_name_ci_idx", "extra_definitions_location_active_order_idx",
+    "appointment_extras_pkey", "appointment_extras_appointment_position_unique",
+    "appointment_extras_extra_definition_id_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
   assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
     "the legacy global customer-note identity index must be removed");
@@ -383,6 +426,83 @@ try {
     INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, notes)
     VALUES ($1, '910000000', 'cliente original', 'Duplicada A')
   `, [defaultLocation.id]), (error: any) => error?.code === "23505");
+
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
+      VALUES ($1, '   ', 1000, 'barber')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
+      VALUES ($1, 'Valor zero', 0, 'barber')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
+      VALUES ($1, 'Regra inválida', 1000, 'custom')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23514",
+  );
+  const directExtraId = Number((await pool.query(`
+    INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
+    VALUES ($1, 'Deslocação direta', 1000, 'barber') RETURNING id
+  `, [defaultLocation.id])).rows[0].id);
+  const directSecondExtraId = Number((await pool.query(`
+    INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule, sort_order)
+    VALUES ($1, 'Produto direto', 750, 'establishment', 1) RETURNING id
+  `, [defaultLocation.id])).rows[0].id);
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
+      VALUES ($1, '  deslocação DIRETA  ', 1200, 'follow_compensation')`, [defaultLocation.id]),
+    (error: any) => error?.code === "23505",
+  );
+  const secondaryDirectExtraId = Number((await pool.query(`
+    INSERT INTO ${table("extra_definitions")} (location_id, name, amount_cents, financial_rule)
+    VALUES ($1, 'Deslocação direta', 1500, 'follow_compensation') RETURNING id
+  `, [secondLocationId])).rows[0].id);
+  const directAppointmentId = Number((await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      location_id, barber_id, service_id, start_time, customer_name, customer_phone, cancel_token
+    ) VALUES ($1, 1, 1, '2034-01-02 10:00:00', 'Teste Extra direto', '910000010', 'extra-direct')
+    RETURNING id
+  `, [defaultLocation.id])).rows[0].id);
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointment_extras")} (
+      appointment_id, extra_definition_id, name_snapshot, amount_cents_snapshot,
+      financial_rule_snapshot, position
+    ) VALUES ($1, $2, 'Deslocação direta', 0, 'barber', 0)
+  `, [directAppointmentId, directExtraId]), (error: any) => error?.code === "23514");
+  await pool.query(`
+    INSERT INTO ${table("appointment_extras")} (
+      appointment_id, extra_definition_id, name_snapshot, amount_cents_snapshot,
+      financial_rule_snapshot, position
+    ) VALUES ($1, $2, 'Deslocação direta', 1000, 'barber', 0)
+  `, [directAppointmentId, directExtraId]);
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointment_extras")} (
+      appointment_id, extra_definition_id, name_snapshot, amount_cents_snapshot,
+      financial_rule_snapshot, position
+    ) VALUES ($1, $2, 'Produto direto', 750, 'establishment', 0)
+  `, [directAppointmentId, directSecondExtraId]), (error: any) => error?.code === "23505");
+  await pool.query(`UPDATE ${table("extra_definitions")}
+    SET name = 'Deslocação direta atualizada', amount_cents = 1500, financial_rule = 'follow_compensation'
+    WHERE id = $1`, [directExtraId]);
+  assert.deepEqual((await pool.query(`SELECT name_snapshot, amount_cents_snapshot, financial_rule_snapshot
+    FROM ${table("appointment_extras")} WHERE appointment_id = $1`, [directAppointmentId])).rows[0], {
+    name_snapshot: "Deslocação direta",
+    amount_cents_snapshot: 1000,
+    financial_rule_snapshot: "barber",
+  }, "definition changes must never rewrite historical Extra snapshots");
+  await assert.rejects(
+    pool.query(`DELETE FROM ${table("extra_definitions")} WHERE id = $1`, [directExtraId]),
+    (error: any) => error?.code === "23001" || error?.code === "23503",
+  );
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE id = $1`, [directAppointmentId]);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_extras")}
+    WHERE appointment_id = $1`, [directAppointmentId])).rows[0].count), 0,
+    "deleting an appointment must cascade only its Extra snapshots");
+  await pool.query(`DELETE FROM ${table("extra_definitions")} WHERE id = ANY($1::integer[])`, [
+    [directExtraId, directSecondExtraId, secondaryDirectExtraId],
+  ]);
 
   await assert.rejects(
     pool.query(`INSERT INTO ${table("service_categories")} (name, sort_order) VALUES ('   ', 0)`),
@@ -421,6 +541,175 @@ try {
   ]);
   applicationPool = importedApplicationPool;
   const databaseStorage = new DatabaseStorage();
+  assert.deepEqual(await databaseStorage.getAppointmentExtras([1]), [],
+    "legacy appointments must be exposed with an empty Extra collection");
+  const travelExtra = await databaseStorage.createExtraDefinition({
+    locationId: Number(defaultLocation.id),
+    name: "Deslocação storage",
+    amountCents: 1000,
+    financialRule: "barber",
+  });
+  const productExtra = await databaseStorage.createExtraDefinition({
+    locationId: Number(defaultLocation.id),
+    name: "Produto storage",
+    amountCents: 750,
+    financialRule: "establishment",
+  });
+  const secondaryExtra = await databaseStorage.createExtraDefinition({
+    locationId: secondLocationId,
+    name: "Extra secundário storage",
+    amountCents: 500,
+    financialRule: "follow_compensation",
+  });
+  assert.deepEqual(
+    (await databaseStorage.getExtraDefinitions(Number(defaultLocation.id))).map((extra) => extra.id),
+    [travelExtra.id, productExtra.id],
+    "Extra catalogues must be isolated and ordered per location",
+  );
+  const recurringFirstStart = new Date("2035-02-01T10:00:00.000Z");
+  await assert.rejects(databaseStorage.createRecurringAppointmentSeries({
+    series: {
+      id: "extras-recurring-rejected",
+      locationId: Number(defaultLocation.id),
+      barberId: 1,
+      serviceId: 1,
+      customerName: "Cliente recorrente Extra",
+      customerEmail: null,
+      customerPhone: "910000019",
+      whatsappOptIn: false,
+      whatsappOptInAt: null,
+      intervalWeeks: 1,
+      durationMonths: 1,
+      occurrenceCount: 2,
+      firstStartTime: recurringFirstStart,
+    },
+    appointments: [recurringFirstStart, new Date("2035-02-08T10:00:00.000Z")].map((startTime, index) => ({
+      locationId: Number(defaultLocation.id),
+      barberId: 1,
+      serviceId: 1,
+      startTime,
+      customerName: "Cliente recorrente Extra",
+      customerEmail: null,
+      customerPhone: "910000019",
+      whatsappOptIn: false,
+      durationMinutes: 30,
+      cancelToken: `extras-recurring-rejected-${index}`,
+      extraDefinitionIds: [travelExtra.id],
+    })),
+    notificationSnapshot: {
+      schemaVersion: 1,
+      customerName: "Cliente recorrente Extra",
+      customerEmail: null,
+      customerPhone: "910000019",
+      whatsappOptIn: false,
+      location: {
+        id: Number(defaultLocation.id),
+        name: defaultLocation.name,
+        address: defaultLocation.address,
+        timezone: defaultLocation.timezone,
+      },
+      service: { id: 1, name: "Serviço original" },
+      barber: { id: 1, name: "Barbeiro original" },
+      recurrence: { intervalWeeks: 1, durationMonths: 1, occurrenceCount: 2 },
+    },
+  }), (error: any) => error?.code === "APPOINTMENT_EXTRAS_NOT_ALLOWED_FOR_RECURRING");
+  assert.equal(await databaseStorage.getAppointmentSeries("extras-recurring-rejected"), undefined,
+    "a recurring request with Extras must not persist a partial series");
+  const appointmentWithExtra = await databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id),
+    barberId: 1,
+    serviceId: 1,
+    startTime: new Date("2035-01-02T10:00:00.000Z"),
+    customerName: "Cliente Extra storage",
+    customerEmail: null,
+    customerPhone: "910000020",
+    durationMinutes: 30,
+    cancelToken: "extra-storage-one",
+    extraDefinitionIds: [travelExtra.id],
+  });
+  const originalTravelSnapshot = (await databaseStorage.getAppointmentExtras([appointmentWithExtra.id]))[0];
+  assert.deepEqual({
+    name: originalTravelSnapshot.nameSnapshot,
+    amount: originalTravelSnapshot.amountCentsSnapshot,
+    rule: originalTravelSnapshot.financialRuleSnapshot,
+    position: originalTravelSnapshot.position,
+  }, {
+    name: "Deslocação storage",
+    amount: 1000,
+    rule: "barber",
+    position: 0,
+  });
+  await databaseStorage.updateExtraDefinition(travelExtra.id, Number(defaultLocation.id), {
+    name: "Deslocação storage atualizada",
+    amountCents: 1500,
+    financialRule: "follow_compensation",
+  });
+  assert.deepEqual(await databaseStorage.getAppointmentExtras([appointmentWithExtra.id]), [originalTravelSnapshot],
+    "catalogue updates must preserve stored appointment snapshots");
+  const extrasOnlyUpdate = await databaseStorage.updateAppointmentWithNotification(
+    appointmentWithExtra.id,
+    {},
+    true,
+    "booked",
+    [travelExtra.id, productExtra.id],
+  );
+  assert.equal(extrasOnlyUpdate?.appointment.notificationRevision, appointmentWithExtra.notificationRevision,
+    "Extra-only changes must not create customer notification revisions in V1");
+  assert.deepEqual(
+    (await databaseStorage.getAppointmentExtras([appointmentWithExtra.id])).map((extra) => ({
+      definitionId: extra.extraDefinitionId,
+      name: extra.nameSnapshot,
+      amount: extra.amountCentsSnapshot,
+      rule: extra.financialRuleSnapshot,
+      position: extra.position,
+    })),
+    [
+      { definitionId: travelExtra.id, name: "Deslocação storage", amount: 1000, rule: "barber", position: 0 },
+      { definitionId: productExtra.id, name: "Produto storage", amount: 750, rule: "establishment", position: 1 },
+    ],
+    "existing snapshots must be preserved while newly selected Extras are frozen",
+  );
+  await databaseStorage.updateExtraDefinition(productExtra.id, Number(defaultLocation.id), { isActive: false });
+  await databaseStorage.updateAppointmentWithNotification(
+    appointmentWithExtra.id, {}, false, "booked", [travelExtra.id, productExtra.id],
+  );
+  assert.equal((await databaseStorage.getAppointmentExtras([appointmentWithExtra.id])).length, 2,
+    "an inactive Extra already attached to an appointment must remain readable");
+
+  const batchCountBeforeRollback = (await databaseStorage.getAppointments(undefined, undefined, Number(defaultLocation.id))).length;
+  await assert.rejects(databaseStorage.createAppointments([
+    {
+      locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+      startTime: new Date("2035-01-03T10:00:00.000Z"), customerName: "Batch rollback A",
+      customerEmail: null, customerPhone: "910000021", durationMinutes: 30,
+      cancelToken: "extra-storage-rollback-a", extraDefinitionIds: [travelExtra.id],
+    },
+    {
+      locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+      startTime: new Date("2035-01-03T11:00:00.000Z"), customerName: "Batch rollback B",
+      customerEmail: null, customerPhone: "910000022", durationMinutes: 30,
+      cancelToken: "extra-storage-rollback-b", extraDefinitionIds: [secondaryExtra.id],
+    },
+  ]), (error: any) => error?.code === "APPOINTMENT_EXTRA_UNAVAILABLE");
+  assert.equal(
+    (await databaseStorage.getAppointments(undefined, undefined, Number(defaultLocation.id))).length,
+    batchCountBeforeRollback,
+    "an invalid Extra in a batch must roll back every appointment and snapshot",
+  );
+  await assert.rejects(databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id), barberId: 1, serviceId: 1,
+    startTime: new Date("2035-01-04T10:00:00.000Z"), customerName: "Extra duplicado",
+    customerEmail: null, customerPhone: "910000023", durationMinutes: 30,
+    cancelToken: "extra-storage-duplicate", extraDefinitionIds: [travelExtra.id, travelExtra.id],
+  }), (error: any) => error?.code === "APPOINTMENT_EXTRA_IDS_INVALID");
+  await databaseStorage.updateAppointmentStatus(appointmentWithExtra.id, "completed", "cash");
+  await assert.rejects(
+    databaseStorage.updateAppointmentWithNotification(
+      appointmentWithExtra.id, {}, false, "completed", [travelExtra.id],
+    ),
+    (error: any) => error?.code === "APPOINTMENT_EXTRAS_NOT_EDITABLE",
+  );
+
   const cuts = await databaseStorage.createServiceCategory({ name: "Cortes storage" });
   const treatments = await databaseStorage.createServiceCategory({ name: "Tratamentos storage" });
   assert.deepEqual((await databaseStorage.getServiceCategories({ includeInactive: true })).map((category) => category.id), [cuts.id, treatments.id]);
@@ -444,6 +733,9 @@ try {
   assert.equal((await databaseStorage.getService(1))?.categoryId, null);
   await databaseStorage.deleteServiceCategory(treatments.id);
 
+  const nonSeriesAppointmentCountBeforeSeriesFixture = Number((await pool.query(
+    `SELECT count(*) AS count FROM ${table("appointments")} WHERE series_id IS NULL`,
+  )).rows[0].count);
   await pool.query(`
     INSERT INTO ${table("appointment_series")} (
       id, location_id, barber_id, service_id, customer_name, customer_phone,
@@ -471,7 +763,8 @@ try {
       series_id, series_occurrence_index
     ) VALUES (1, 1, '2031-01-16 10:00:00', 'Duplicado', '910000000', 'series-token-3', ${Number(defaultLocation.id)}, 'series-fixture', 1)
   `), (error: any) => error?.code === "23505");
-  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointments")} WHERE series_id IS NULL`)).rows[0].count), 2,
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointments")} WHERE series_id IS NULL`)).rows[0].count),
+    nonSeriesAppointmentCountBeforeSeriesFixture,
     "legacy appointments must not be retroactively grouped");
 
   const lateFallbackEvent = (await pool.query(`
@@ -536,11 +829,12 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: representative main data and legacy appointments were preserved; service snapshots, constraints, rollback compatibility and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008, Extra constraints, snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
   await embedded.stop().catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
   await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
+  await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });
 }

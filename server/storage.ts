@@ -4,6 +4,8 @@ import {
   services,
   serviceCategories,
   appointments,
+  extraDefinitions,
+  appointmentExtras,
   appointmentSeries,
   admins,
   blacklist,
@@ -27,6 +29,8 @@ import {
   type ServiceCatalogueItem,
   type Appointment,
   type AppointmentSeries,
+  type ExtraDefinition,
+  type AppointmentExtra,
   type RecurringNotificationSnapshot,
   type AppointmentPaymentMethod,
   type AppointmentStatus,
@@ -47,6 +51,8 @@ import {
   type CreateBarberRequest,
   type CreateServiceRequest,
   type CreateServiceCategoryRequest,
+  type CreateExtraDefinitionRequest,
+  type UpdateExtraDefinitionRequest,
   type CreateAppointmentRequest,
   type CreateAdminRequest,
   type InsertBlacklist,
@@ -58,7 +64,9 @@ import {
   type CreateAuditLogRequest,
   type CreateBarberCompensationRuleRequest,
   type CreateBusinessExpenseRequest,
-  type CreateWhatsappMessageRequest
+  type CreateWhatsappMessageRequest,
+  insertExtraDefinitionSchema,
+  updateExtraDefinitionSchema,
 } from "@shared/schema";
 import { eq, and, or, inArray, gte, gt, lt, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
 import { barberAvatarReference, INLINE_BARBER_AVATAR_PATTERN } from "./barber-avatars";
@@ -72,7 +80,7 @@ export type AppointmentNotificationEventType =
   | "appointment_cancelled"
   | "appointment_recurring_confirmation";
 
-type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappOptIn"> & {
+export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappOptIn"> & {
   whatsappOptIn?: boolean;
   locationId?: number;
   cancelToken: string;
@@ -88,7 +96,10 @@ type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappO
   notificationEventType?: "appointment_confirmation";
   seriesId?: string | null;
   seriesOccurrenceIndex?: number | null;
+  extraDefinitionIds?: number[];
 };
+
+type AppointmentExtraSnapshotInput = Omit<AppointmentExtra, "appointmentId">;
 
 export type CreateRecurringAppointmentSeriesRequest = {
   series: {
@@ -130,6 +141,9 @@ function validateRecurringAppointmentSeriesRequest(request: CreateRecurringAppoi
     || snapshot.recurrence.durationMonths !== series.durationMonths
     || snapshot.recurrence.occurrenceCount !== series.occurrenceCount) {
     throw new Error("Recurring notification snapshot does not match its series.");
+  }
+  if (occurrences.some((occurrence) => (occurrence.extraDefinitionIds?.length ?? 0) > 0)) {
+    throw new AppointmentExtrasError(appointmentExtrasNotAllowedForRecurringCode);
   }
   let previousStart = -Infinity;
   const cancelTokens = new Set<string>();
@@ -270,6 +284,39 @@ export class AppointmentConflictError extends Error {
 
 export const appointmentLocationInactiveCode = "APPOINTMENT_LOCATION_INACTIVE";
 export const appointmentBarberLocationUnavailableCode = "APPOINTMENT_BARBER_LOCATION_UNAVAILABLE";
+export const appointmentExtraIdsInvalidCode = "APPOINTMENT_EXTRA_IDS_INVALID";
+export const appointmentExtraUnavailableCode = "APPOINTMENT_EXTRA_UNAVAILABLE";
+export const appointmentExtrasNotEditableCode = "APPOINTMENT_EXTRAS_NOT_EDITABLE";
+export const appointmentExtrasNotAllowedForRecurringCode = "APPOINTMENT_EXTRAS_NOT_ALLOWED_FOR_RECURRING";
+
+type AppointmentExtrasErrorCode =
+  | typeof appointmentExtraIdsInvalidCode
+  | typeof appointmentExtraUnavailableCode
+  | typeof appointmentExtrasNotEditableCode
+  | typeof appointmentExtrasNotAllowedForRecurringCode;
+
+export class AppointmentExtrasError extends Error {
+  status = 409;
+
+  constructor(public code: AppointmentExtrasErrorCode) {
+    super(code === appointmentExtraIdsInvalidCode
+      ? "A seleção de Extras é inválida."
+      : code === appointmentExtraUnavailableCode
+        ? "Um dos Extras selecionados já não está disponível nesta localização."
+        : code === appointmentExtrasNotAllowedForRecurringCode
+          ? "As marcações recorrentes não suportam Extras."
+          : "Os Extras desta marcação já não podem ser alterados.");
+    this.name = "AppointmentExtrasError";
+  }
+}
+
+function validateExtraDefinitionIds(extraDefinitionIds: number[]) {
+  if (extraDefinitionIds.some((id) => !Number.isInteger(id) || id <= 0)
+    || new Set(extraDefinitionIds).size !== extraDefinitionIds.length) {
+    throw new AppointmentExtrasError(appointmentExtraIdsInvalidCode);
+  }
+  return extraDefinitionIds;
+}
 
 export class AppointmentLocationIntegrityError extends Error {
   status = 409;
@@ -419,11 +466,18 @@ export interface IStorage {
   deleteServiceCategory(id: number): Promise<boolean>;
   reorderServiceCategories(categoryIds: number[]): Promise<ServiceCategory[]>;
 
+  // Extras
+  getExtraDefinitions(locationId: number, options?: { includeInactive?: boolean }): Promise<ExtraDefinition[]>;
+  getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinition | undefined>;
+  createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinition>;
+  updateExtraDefinition(id: number, locationId: number, extra: UpdateExtraDefinitionRequest): Promise<ExtraDefinition | undefined>;
+
   // Appointments
   getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]>;
   getAppointmentsRange(barberId?: number, startDate?: string, endDate?: string, locationId?: number): Promise<Appointment[]>;
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
+  getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
   createAppointments(appointments: CreateAppointmentStorageRequest[]): Promise<Appointment[]>;
   createRecurringAppointmentSeries(request: CreateRecurringAppointmentSeriesRequest): Promise<CreateRecurringAppointmentSeriesResult>;
@@ -439,6 +493,7 @@ export interface IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
+    extraDefinitionIds?: number[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined>;
   rescheduleAppointment(
     id: number,
@@ -551,6 +606,50 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private async resolveAppointmentExtraSnapshots(
+    tx: Pick<typeof db, "select">,
+    locationId: number | undefined,
+    rawExtraDefinitionIds: number[],
+    existingExtras: AppointmentExtra[] = [],
+  ): Promise<AppointmentExtraSnapshotInput[]> {
+    const extraDefinitionIds = validateExtraDefinitionIds(rawExtraDefinitionIds);
+    if (extraDefinitionIds.length === 0) return [];
+    if (!Number.isInteger(locationId) || Number(locationId) <= 0) {
+      throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+    }
+
+    const existingByDefinitionId = new Map(existingExtras.map((extra) => [extra.extraDefinitionId, extra]));
+    const newDefinitionIds = extraDefinitionIds.filter((id) => !existingByDefinitionId.has(id));
+    const selectedDefinitions = newDefinitionIds.length === 0
+      ? []
+      : await tx.select().from(extraDefinitions).where(and(
+          inArray(extraDefinitions.id, newDefinitionIds),
+          eq(extraDefinitions.locationId, Number(locationId)),
+          eq(extraDefinitions.isActive, true),
+        )).orderBy(extraDefinitions.id).for("share");
+    if (selectedDefinitions.length !== newDefinitionIds.length) {
+      throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+    }
+    const definitionsById = new Map(selectedDefinitions.map((definition) => [definition.id, definition]));
+
+    return extraDefinitionIds.map((extraDefinitionId, position) => {
+      const existing = existingByDefinitionId.get(extraDefinitionId);
+      if (existing) {
+        const { appointmentId: _appointmentId, ...snapshot } = existing;
+        return { ...snapshot, position };
+      }
+      const definition = definitionsById.get(extraDefinitionId)!;
+      return {
+        extraDefinitionId,
+        nameSnapshot: definition.name,
+        amountCentsSnapshot: definition.amountCents,
+        financialRuleSnapshot: definition.financialRule,
+        position,
+        createdAt: new Date(),
+      };
+    });
+  }
+
   private async lockAndValidateAppointmentScopes(
     tx: Pick<typeof db, "select">,
     appointmentInputs: Array<Pick<CreateAppointmentStorageRequest, "locationId" | "barberId">>,
@@ -879,6 +978,58 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async getExtraDefinitions(
+    locationId: number,
+    options?: { includeInactive?: boolean },
+  ): Promise<ExtraDefinition[]> {
+    const conditions = [eq(extraDefinitions.locationId, locationId)];
+    if (!options?.includeInactive) conditions.push(eq(extraDefinitions.isActive, true));
+    return await db.select().from(extraDefinitions)
+      .where(and(...conditions))
+      .orderBy(extraDefinitions.sortOrder, extraDefinitions.id);
+  }
+
+  async getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinition | undefined> {
+    const [definition] = await db.select().from(extraDefinitions).where(and(
+      eq(extraDefinitions.id, id),
+      eq(extraDefinitions.locationId, locationId),
+    ));
+    return definition;
+  }
+
+  async createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinition> {
+    const parsed = insertExtraDefinitionSchema.parse(extra);
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(424242, 1401)`);
+      const [lastDefinition] = await tx.select({ sortOrder: extraDefinitions.sortOrder })
+        .from(extraDefinitions)
+        .where(eq(extraDefinitions.locationId, parsed.locationId))
+        .orderBy(desc(extraDefinitions.sortOrder), desc(extraDefinitions.id))
+        .limit(1);
+      const [created] = await tx.insert(extraDefinitions).values({
+        ...parsed,
+        name: parsed.name.trim(),
+        sortOrder: parsed.sortOrder ?? ((lastDefinition?.sortOrder ?? -1) + 1),
+        isActive: parsed.isActive ?? true,
+      }).returning();
+      return created;
+    });
+  }
+
+  async updateExtraDefinition(
+    id: number,
+    locationId: number,
+    extra: UpdateExtraDefinitionRequest,
+  ): Promise<ExtraDefinition | undefined> {
+    const parsed = updateExtraDefinitionSchema.parse(extra);
+    const [updated] = await db.update(extraDefinitions).set({
+      ...parsed,
+      ...(parsed.name !== undefined ? { name: parsed.name.trim() } : {}),
+      updatedAt: new Date(),
+    }).where(and(eq(extraDefinitions.id, id), eq(extraDefinitions.locationId, locationId))).returning();
+    return updated;
+  }
+
   async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {
     const conditions: SQL[] = [];
     if (barberId !== undefined) {
@@ -940,6 +1091,14 @@ export class DatabaseStorage implements IStorage {
     return appointment;
   }
 
+  async getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]> {
+    const uniqueAppointmentIds = Array.from(new Set(appointmentIds));
+    if (uniqueAppointmentIds.length === 0) return [];
+    return await db.select().from(appointmentExtras)
+      .where(inArray(appointmentExtras.appointmentId, uniqueAppointmentIds))
+      .orderBy(appointmentExtras.appointmentId, appointmentExtras.position);
+  }
+
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
     const [createdAppointment] = await this.createAppointments([appointment]);
     return createdAppointment;
@@ -967,8 +1126,16 @@ export class DatabaseStorage implements IStorage {
 
         const createdAppointments: Appointment[] = [];
         for (const appointment of appointmentInputs) {
+          if (appointment.seriesId && (appointment.extraDefinitionIds?.length ?? 0) > 0) {
+            throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
+          }
+          const extraSnapshots = await this.resolveAppointmentExtraSnapshots(
+            tx,
+            appointment.locationId,
+            appointment.extraDefinitionIds ?? [],
+          );
           await this.assertNoAppointmentConflict(tx, appointment);
-          const { notificationEventType, ...appointmentValues } = appointment;
+          const { notificationEventType, extraDefinitionIds: _extraDefinitionIds, ...appointmentValues } = appointment;
           const notificationRevision = notificationEventType ? 1 : 0;
           const [newAppointment] = await tx.insert(appointments).values({
             ...appointmentValues,
@@ -977,6 +1144,12 @@ export class DatabaseStorage implements IStorage {
               ? appointment.whatsappOptInAt ?? new Date()
               : null,
           }).returning();
+          if (extraSnapshots.length > 0) {
+            await tx.insert(appointmentExtras).values(extraSnapshots.map((snapshot) => ({
+              ...snapshot,
+              appointmentId: newAppointment.id,
+            })));
+          }
           if (notificationEventType) {
             await tx.insert(appointmentNotificationEvents).values({
               appointmentId: newAppointment.id,
@@ -1061,6 +1234,7 @@ export class DatabaseStorage implements IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
+    extraDefinitionIds?: number[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1073,7 +1247,31 @@ export class DatabaseStorage implements IStorage {
 
         const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
         const changes = getAppointmentUpdateChanges(current, safePatch);
-        if (changes.changedFields.length === 0) {
+        const currentExtras = extraDefinitionIds === undefined
+          ? []
+          : await tx.select().from(appointmentExtras)
+              .where(eq(appointmentExtras.appointmentId, id))
+              .orderBy(appointmentExtras.position);
+        const requestedExtraDefinitionIds = extraDefinitionIds === undefined
+          ? undefined
+          : validateExtraDefinitionIds(extraDefinitionIds);
+        const extrasChanged = requestedExtraDefinitionIds !== undefined
+          && (requestedExtraDefinitionIds.length !== currentExtras.length
+            || requestedExtraDefinitionIds.some((definitionId, index) =>
+              definitionId !== currentExtras[index]?.extraDefinitionId));
+        let replacementExtras: AppointmentExtraSnapshotInput[] = [];
+        if (extrasChanged) {
+          if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
+            throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
+          }
+          replacementExtras = await this.resolveAppointmentExtraSnapshots(
+            tx,
+            current.locationId,
+            requestedExtraDefinitionIds,
+            currentExtras,
+          );
+        }
+        if (changes.changedFields.length === 0 && !extrasChanged) {
           return { appointment: current, notificationEvent: null };
         }
 
@@ -1094,11 +1292,24 @@ export class DatabaseStorage implements IStorage {
         const nextRevision = notificationContextChanged
           ? current.notificationRevision + 1
           : current.notificationRevision;
-        const [updated] = await tx.update(appointments).set({
-          ...safePatch,
-          notificationRevision: nextRevision,
-        }).where(and(...appointmentConditions)).returning();
-        if (!updated) return undefined;
+        let updated = current;
+        if (changes.changedFields.length > 0) {
+          const [updatedAppointment] = await tx.update(appointments).set({
+            ...safePatch,
+            notificationRevision: nextRevision,
+          }).where(and(...appointmentConditions)).returning();
+          if (!updatedAppointment) return undefined;
+          updated = updatedAppointment;
+        }
+        if (extrasChanged) {
+          await tx.delete(appointmentExtras).where(eq(appointmentExtras.appointmentId, id));
+          if (replacementExtras.length > 0) {
+            await tx.insert(appointmentExtras).values(replacementExtras.map((snapshot) => ({
+              ...snapshot,
+              appointmentId: id,
+            })));
+          }
+        }
 
         if (current.seriesId && notificationContextChanged) {
           await tx.update(appointmentSeries).set({
@@ -1928,6 +2139,8 @@ export class MemoryStorage implements IStorage {
   private barbers: Barber[] = [];
   private services: Service[] = [];
   private serviceCategories: ServiceCategory[] = [];
+  private extraDefinitions: ExtraDefinition[] = [];
+  private appointmentExtras: AppointmentExtra[] = [];
   private appointments: Appointment[] = [];
   private appointmentSeries: AppointmentSeries[] = [];
   private admins: Admin[] = [];
@@ -1949,6 +2162,7 @@ export class MemoryStorage implements IStorage {
     barber: 1,
     service: 1,
     serviceCategory: 1,
+    extraDefinition: 1,
     appointment: 1,
     admin: 1,
     blacklist: 1,
@@ -1964,6 +2178,39 @@ export class MemoryStorage implements IStorage {
     appointmentNotificationEvent: 1,
     metaWebhookReceipt: 1,
   };
+
+  private resolveAppointmentExtraSnapshots(
+    locationId: number | undefined,
+    rawExtraDefinitionIds: number[],
+    existingExtras: AppointmentExtra[] = [],
+  ): AppointmentExtraSnapshotInput[] {
+    const extraDefinitionIds = validateExtraDefinitionIds(rawExtraDefinitionIds);
+    if (extraDefinitionIds.length === 0) return [];
+    if (!Number.isInteger(locationId) || Number(locationId) <= 0) {
+      throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+    }
+    const existingByDefinitionId = new Map(existingExtras.map((extra) => [extra.extraDefinitionId, extra]));
+    return extraDefinitionIds.map((extraDefinitionId, position) => {
+      const existing = existingByDefinitionId.get(extraDefinitionId);
+      if (existing) {
+        const { appointmentId: _appointmentId, ...snapshot } = existing;
+        return { ...snapshot, position };
+      }
+      const definition = this.extraDefinitions.find((candidate) =>
+        candidate.id === extraDefinitionId
+        && candidate.locationId === locationId
+        && candidate.isActive);
+      if (!definition) throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+      return {
+        extraDefinitionId,
+        nameSnapshot: definition.name,
+        amountCentsSnapshot: definition.amountCents,
+        financialRuleSnapshot: definition.financialRule,
+        position,
+        createdAt: new Date(),
+      };
+    });
+  }
 
   private assertNoAppointmentConflict(
     candidate: {
@@ -2227,6 +2474,77 @@ export class MemoryStorage implements IStorage {
     return this.getServiceCategories({ includeInactive: true });
   }
 
+  async getExtraDefinitions(
+    locationId: number,
+    options?: { includeInactive?: boolean },
+  ): Promise<ExtraDefinition[]> {
+    return this.extraDefinitions
+      .filter((definition) => definition.locationId === locationId)
+      .filter((definition) => options?.includeInactive || definition.isActive)
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id)
+      .map((definition) => ({ ...definition }));
+  }
+
+  async getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinition | undefined> {
+    const definition = this.extraDefinitions.find((item) => item.id === id && item.locationId === locationId);
+    return definition ? { ...definition } : undefined;
+  }
+
+  async createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinition> {
+    const parsed = insertExtraDefinitionSchema.parse(extra);
+    const name = parsed.name.trim();
+    if (this.extraDefinitions.some((definition) =>
+      definition.locationId === parsed.locationId
+      && definition.name.trim().toLocaleLowerCase("pt-PT") === name.toLocaleLowerCase("pt-PT"))) {
+      const error = new Error("Duplicate Extra name") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
+    const now = new Date();
+    const created: ExtraDefinition = {
+      id: this.nextIds.extraDefinition++,
+      locationId: parsed.locationId,
+      name,
+      amountCents: parsed.amountCents,
+      financialRule: parsed.financialRule,
+      isActive: parsed.isActive ?? true,
+      sortOrder: parsed.sortOrder ?? (this.extraDefinitions
+        .filter((definition) => definition.locationId === parsed.locationId)
+        .reduce((maximum, definition) => Math.max(maximum, definition.sortOrder), -1) + 1),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.extraDefinitions.push(created);
+    return { ...created };
+  }
+
+  async updateExtraDefinition(
+    id: number,
+    locationId: number,
+    extra: UpdateExtraDefinitionRequest,
+  ): Promise<ExtraDefinition | undefined> {
+    const parsed = updateExtraDefinitionSchema.parse(extra);
+    const index = this.extraDefinitions.findIndex((definition) =>
+      definition.id === id && definition.locationId === locationId);
+    if (index === -1) return undefined;
+    const name = parsed.name?.trim();
+    if (name && this.extraDefinitions.some((definition) =>
+      definition.id !== id
+      && definition.locationId === this.extraDefinitions[index].locationId
+      && definition.name.trim().toLocaleLowerCase("pt-PT") === name.toLocaleLowerCase("pt-PT"))) {
+      const error = new Error("Duplicate Extra name") as Error & { code?: string };
+      error.code = "23505";
+      throw error;
+    }
+    this.extraDefinitions[index] = {
+      ...this.extraDefinitions[index],
+      ...parsed,
+      ...(name !== undefined ? { name } : {}),
+      updatedAt: new Date(),
+    };
+    return { ...this.extraDefinitions[index] };
+  }
+
   async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {
     const bounds = date ? getShopDateBounds(date) : null;
 
@@ -2259,6 +2577,14 @@ export class MemoryStorage implements IStorage {
     return this.appointments.find((appointment) => appointment.id === id);
   }
 
+  async getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]> {
+    const selectedIds = new Set(appointmentIds);
+    return this.appointmentExtras
+      .filter((extra) => selectedIds.has(extra.appointmentId))
+      .sort((left, right) => left.appointmentId - right.appointmentId || left.position - right.position)
+      .map((extra) => ({ ...extra }));
+  }
+
   async getAppointmentByToken(token: string): Promise<Appointment | undefined> {
     return this.appointments.find((appointment) => appointment.cancelToken === token);
   }
@@ -2272,6 +2598,7 @@ export class MemoryStorage implements IStorage {
     if (appointmentInputs.length === 0) return [];
 
     const originalLength = this.appointments.length;
+    const originalExtrasLength = this.appointmentExtras.length;
     const originalNextId = this.nextIds.appointment;
     const originalEventLength = this.appointmentNotificationEvents.length;
     const originalNextEventId = this.nextIds.appointmentNotificationEvent;
@@ -2279,6 +2606,13 @@ export class MemoryStorage implements IStorage {
 
     try {
       for (const appointment of appointmentInputs) {
+        if (appointment.seriesId && (appointment.extraDefinitionIds?.length ?? 0) > 0) {
+          throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
+        }
+        const extraSnapshots = this.resolveAppointmentExtraSnapshots(
+          appointment.locationId,
+          appointment.extraDefinitionIds ?? [],
+        );
         const notificationRevision = appointment.notificationEventType ? 1 : 0;
         const newAppointment: Appointment = {
           id: this.nextIds.appointment++,
@@ -2311,6 +2645,10 @@ export class MemoryStorage implements IStorage {
         };
         this.assertNoAppointmentConflict(newAppointment);
         this.appointments.push(newAppointment);
+        this.appointmentExtras.push(...extraSnapshots.map((snapshot) => ({
+          ...snapshot,
+          appointmentId: newAppointment.id,
+        })));
         if (appointment.notificationEventType) {
           const now = new Date();
           this.appointmentNotificationEvents.push({
@@ -2338,6 +2676,7 @@ export class MemoryStorage implements IStorage {
       return createdAppointments;
     } catch (error) {
       this.appointments.splice(originalLength);
+      this.appointmentExtras.splice(originalExtrasLength);
       this.nextIds.appointment = originalNextId;
       this.appointmentNotificationEvents.splice(originalEventLength);
       this.nextIds.appointmentNotificationEvent = originalNextEventId;
@@ -2442,6 +2781,7 @@ export class MemoryStorage implements IStorage {
     appointment: Partial<Omit<Appointment, "id">>,
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
+    extraDefinitionIds?: number[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
@@ -2449,21 +2789,53 @@ export class MemoryStorage implements IStorage {
     if (expectedStatus && current.status !== expectedStatus) return undefined;
     const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
     const changes = getAppointmentUpdateChanges(current, safePatch);
-    if (changes.changedFields.length === 0) {
+    const currentExtras = extraDefinitionIds === undefined
+      ? []
+      : this.appointmentExtras
+          .filter((extra) => extra.appointmentId === id)
+          .sort((left, right) => left.position - right.position);
+    const requestedExtraDefinitionIds = extraDefinitionIds === undefined
+      ? undefined
+      : validateExtraDefinitionIds(extraDefinitionIds);
+    const extrasChanged = requestedExtraDefinitionIds !== undefined
+      && (requestedExtraDefinitionIds.length !== currentExtras.length
+        || requestedExtraDefinitionIds.some((definitionId, extraIndex) =>
+          definitionId !== currentExtras[extraIndex]?.extraDefinitionId));
+    let replacementExtras: AppointmentExtraSnapshotInput[] = [];
+    if (extrasChanged) {
+      if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
+        throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
+      }
+      replacementExtras = this.resolveAppointmentExtraSnapshots(
+        current.locationId,
+        requestedExtraDefinitionIds,
+        currentExtras,
+      );
+    }
+    if (changes.changedFields.length === 0 && !extrasChanged) {
       return { appointment: current, notificationEvent: null };
     }
-    this.assertNoAppointmentConflict(changes.candidate, id);
+    if (changes.changedFields.length > 0) this.assertNoAppointmentConflict(changes.candidate, id);
     const notificationContextChanged = changes.startChanged || changes.barberChanged
       || changes.serviceChanged || changes.serviceNameChanged || changes.durationChanged
       || changes.contactChanged || changes.deliveryPreferenceChanged
       || changes.statusChanged;
-    const updated: Appointment = {
-      ...changes.candidate,
-      notificationRevision: notificationContextChanged
-        ? current.notificationRevision + 1
-        : current.notificationRevision,
-    };
-    this.appointments[index] = updated;
+    const updated: Appointment = changes.changedFields.length > 0
+      ? {
+          ...changes.candidate,
+          notificationRevision: notificationContextChanged
+            ? current.notificationRevision + 1
+            : current.notificationRevision,
+        }
+      : current;
+    if (changes.changedFields.length > 0) this.appointments[index] = updated;
+    if (extrasChanged) {
+      this.appointmentExtras = this.appointmentExtras.filter((extra) => extra.appointmentId !== id);
+      this.appointmentExtras.push(...replacementExtras.map((snapshot) => ({
+        ...snapshot,
+        appointmentId: id,
+      })));
+    }
     if (current.seriesId && notificationContextChanged) {
       const series = this.appointmentSeries.find((item) => item.id === current.seriesId);
       if (series) { series.notificationRevision += 1; series.updatedAt = new Date(); }
