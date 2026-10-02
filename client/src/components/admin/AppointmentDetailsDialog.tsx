@@ -456,7 +456,7 @@ function EditAppointmentDialog({
           <div className="space-y-2">
             <Label>Barbeiro</Label>
             <Select value={barberId} onValueChange={setBarberId}>
-              <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Barbeiro" className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-card border-white/10 text-white">
                 {availableBarbers.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
               </SelectContent>

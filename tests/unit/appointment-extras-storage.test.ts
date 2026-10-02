@@ -152,6 +152,62 @@ test("memory storage preserves Extra snapshots and enforces transactional select
   );
 });
 
+test("catalogue changes affect only new fixed Extras and preserve variable snapshots", async () => {
+  const storage = new MemoryStorage();
+  const fixed = await storage.createExtraDefinition({
+    locationId: 1,
+    name: "Produto snapshot",
+    pricingMode: "fixed",
+    amountCents: 1000,
+    financialRule: "establishment",
+  });
+  const variable = await storage.createExtraDefinition({
+    locationId: 1,
+    name: "Deslocação snapshot",
+    pricingMode: "variable",
+    amountCents: null,
+    financialRule: "barber",
+  });
+  const oldAppointment = await storage.createAppointment(appointmentInput({
+    startTime: new Date("2036-01-05T10:00:00.000Z"),
+    cancelToken: "extra-memory-snapshot-old",
+    extras: [
+      { extraId: fixed.id },
+      { extraId: variable.id, amountCents: 1800 },
+    ],
+  }));
+
+  await storage.updateExtraDefinition(fixed.id, 1, { amountCents: 1500 });
+  await storage.updateExtraDefinition(variable.id, 1, {
+    name: "Deslocação atualizada",
+    financialRule: "follow_compensation",
+  });
+  const newAppointment = await storage.createAppointment(appointmentInput({
+    startTime: new Date("2036-01-05T11:00:00.000Z"),
+    cancelToken: "extra-memory-snapshot-new",
+    extras: [{ extraId: fixed.id }],
+  }));
+
+  const snapshots = await storage.getAppointmentExtras([oldAppointment.id, newAppointment.id]);
+  const oldSnapshots = snapshots.filter((extra) => extra.appointmentId === oldAppointment.id);
+  const newSnapshots = snapshots.filter((extra) => extra.appointmentId === newAppointment.id);
+  assert.deepEqual(oldSnapshots.map((extra) => ({
+    name: extra.nameSnapshot,
+    amount: extra.amountCentsSnapshot,
+    rule: extra.financialRuleSnapshot,
+  })), [
+    { name: "Produto snapshot", amount: 1000, rule: "establishment" },
+    { name: "Deslocação snapshot", amount: 1800, rule: "barber" },
+  ]);
+  assert.deepEqual(newSnapshots.map((extra) => ({
+    name: extra.nameSnapshot,
+    amount: extra.amountCentsSnapshot,
+    rule: extra.financialRuleSnapshot,
+  })), [
+    { name: "Produto snapshot", amount: 1500, rule: "establishment" },
+  ]);
+});
+
 test("recurring storage rejects Extras before persisting the series", async () => {
   const storage = new MemoryStorage();
   const extra = await storage.createExtraDefinition({

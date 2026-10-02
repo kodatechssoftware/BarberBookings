@@ -1645,7 +1645,7 @@ test.describe("admin navigation", () => {
 
       const editDialog = page.getByRole("dialog", { name: /Editar marca/ });
       await expect(editDialog).toBeVisible();
-      await editDialog.getByRole("combobox").first().click();
+      await editDialog.getByRole("combobox", { name: "Barbeiro" }).click();
       await expect(page.getByRole("option", { name: sourceBarber.name })).toBeVisible();
       await expect(page.getByRole("option", { name: availableBarber.name })).toBeVisible();
       await expect(page.getByRole("option", { name: busyBarber.name })).toHaveCount(0);
