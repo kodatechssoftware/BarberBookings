@@ -45,6 +45,10 @@
   --card: 0 0% 12%;
   --card-foreground: 45 20% 96%;
 
+  /* Portalled menus must remain opaque above dialogs. */
+  --popover: 0 0% 12%;
+  --popover-foreground: 45 20% 96%;
+
   /* Radius */
   --radius: 0.5rem;
 
@@ -71,6 +75,8 @@
   --ring: 207 82% 53%;
   --card: 218 23% 12%;
   --card-foreground: 210 25% 97%;
+  --popover: 218 23% 12%;
+  --popover-foreground: 210 25% 97%;
   --brand-gradient-from: 207 88% 58%;
   --brand-gradient-to: 216 82% 46%;
   --brand-highlight: 210 100% 82%;
