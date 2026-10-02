@@ -31,6 +31,70 @@ async function getAuditEvent(request: APIRequestContext, action: string, entityI
   return logs.find((log: any) => log.action === action && log.entityId === entityId);
 }
 
+async function expectOpaqueSelectContent(page: Page) {
+  const listbox = page.getByRole("listbox");
+  await expect(listbox).toBeVisible();
+  await expect.poll(async () => listbox.evaluate((element) => {
+    const content = element.closest<HTMLElement>(".bg-popover");
+    return content ? Number(getComputedStyle(content).opacity) : 0;
+  })).toBe(1);
+  const appearance = await listbox.evaluate((element) => {
+    const content = element.closest<HTMLElement>(".bg-popover");
+    if (!content) return null;
+    const styles = getComputedStyle(content);
+    const wrapperStyles = content.parentElement ? getComputedStyle(content.parentElement) : null;
+    const channels = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+    const background = channels(styles.backgroundColor);
+    const foreground = channels(styles.color);
+    const luminance = ([red, green, blue]: number[]) => {
+      const linear = [red, green, blue].map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.03928
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+    };
+    const backgroundLuminance = luminance(background);
+    const foregroundLuminance = luminance(foreground);
+    const contrastRatio = (Math.max(backgroundLuminance, foregroundLuminance) + 0.05)
+      / (Math.min(backgroundLuminance, foregroundLuminance) + 0.05);
+    const rect = content.getBoundingClientRect();
+    const centerElement = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const submitButton = document.querySelector<HTMLElement>('[role="dialog"] button[type="submit"]');
+    const submitRect = submitButton?.getBoundingClientRect();
+    const overlap = submitRect ? {
+      left: Math.max(rect.left, submitRect.left),
+      right: Math.min(rect.right, submitRect.right),
+      top: Math.max(rect.top, submitRect.top),
+      bottom: Math.min(rect.bottom, submitRect.bottom),
+    } : null;
+    const hasSubmitOverlap = Boolean(overlap && overlap.right > overlap.left && overlap.bottom > overlap.top);
+    const overlapElement = hasSubmitOverlap && overlap
+      ? document.elementFromPoint((overlap.left + overlap.right) / 2, (overlap.top + overlap.bottom) / 2)
+      : null;
+    return {
+      backgroundAlpha: background[3] ?? 1,
+      contrastRatio,
+      opacity: Number(styles.opacity),
+      ownsCenterPoint: centerElement === content || (centerElement ? content.contains(centerElement) : false),
+      ownsSubmitOverlap: !hasSubmitOverlap
+        || overlapElement === content
+        || (overlapElement ? content.contains(overlapElement) : false),
+      wrapperZIndex: Number.parseInt(wrapperStyles?.zIndex ?? "", 10),
+      zIndex: Number.parseInt(styles.zIndex, 10),
+    };
+  });
+  expect(appearance).not.toBeNull();
+  expect(appearance!.backgroundAlpha).toBe(1);
+  expect(appearance!.contrastRatio).toBeGreaterThanOrEqual(4.5);
+  expect(appearance!.opacity).toBe(1);
+  expect(appearance!.ownsCenterPoint).toBe(true);
+  expect(appearance!.ownsSubmitOverlap).toBe(true);
+  expect(appearance!.wrapperZIndex).toBeGreaterThan(50);
+  expect(appearance!.zIndex).toBeGreaterThan(50);
+}
+
 test.describe.serial("Admin Extras catalogue", () => {
   test("validates CRUD-without-delete, permissions, lifecycle and audit events", async ({ request, playwright, baseURL }) => {
     test.setTimeout(90_000);
@@ -295,6 +359,8 @@ test.describe.serial("Admin Extras catalogue", () => {
     await dialog.getByLabel("Valor (€)").fill("8,75");
     await dialog.getByLabel("Ordem").fill("4");
     await dialog.getByLabel("Regra financeira").click();
+    await expectOpaqueSelectContent(page);
+    await page.screenshot({ path: "test-results/admin-extras-select-edit-desktop.png" });
     await page.getByRole("option", { name: "100% para o barbeiro", exact: true }).click();
     await dialog.getByRole("button", { name: "Guardar alterações" }).click();
     await expect(dialog).toHaveCount(0);
@@ -312,6 +378,8 @@ test.describe.serial("Admin Extras catalogue", () => {
     await dialog.getByLabel("Nome").fill("Toalha quente UI Extras QA");
     await dialog.getByLabel("Valor (€)").fill("3,50");
     await dialog.getByLabel("Regra financeira").click();
+    await expectOpaqueSelectContent(page);
+    await page.screenshot({ path: "test-results/admin-extras-select-create-desktop.png" });
     await page.getByRole("option", { name: "Segue a regra de compensação do barbeiro", exact: true }).click();
     await dialog.getByRole("button", { name: "Criar Extra" }).click();
     await expect(dialog).toHaveCount(0);
@@ -350,6 +418,19 @@ test.describe.serial("Admin Extras catalogue", () => {
     await uiExtraCard.getByRole("switch", { name: "Desativar Toalha quente UI Extras QA" }).click();
     await expect(uiExtraCard.getByText("Inativo", { exact: true }).first()).toBeVisible();
     await manager.screenshot({ path: "test-results/admin-extras-mobile.png" });
+
+    await uiExtraCard.getByRole("button", { name: "Editar Toalha quente UI Extras QA" }).click();
+    dialog = page.getByRole("dialog", { name: "Editar Extra" });
+    await expect(dialog.getByRole("radio", { name: "Fixo", exact: true })).toBeVisible();
+    await expect(dialog.getByRole("radio", { name: "Variável por marcação" })).toBeVisible();
+    await dialog.getByLabel("Regra financeira").click();
+    await expectOpaqueSelectContent(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+    await page.screenshot({ path: "test-results/admin-extras-select-edit-mobile.png" });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
 
     const catalogue = await (await page.request.get("/api/admin/extras")).json();
     expect(catalogue.find((extra: any) => extra.name === "Toalha quente UI Extras QA")).toMatchObject({
