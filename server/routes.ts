@@ -7,6 +7,7 @@ import {
   appointmentExtraAmountInvalidCode,
   appointmentExtraIdsInvalidCode,
   appointmentExtrasNotAllowedForRecurringCode,
+  appointmentExtrasNotEditableCode,
   appointmentLocationInactiveCode,
   getShopDateBounds,
   isAppointmentConflictError,
@@ -76,6 +77,7 @@ import {
   type ExtraDefinition,
   type ServiceCatalogueItem,
   type Appointment,
+  type AppointmentExtra,
   type AppointmentPaymentMethod,
   type BarberCompensationRule,
   type BarberCompensationModel,
@@ -909,6 +911,33 @@ async function attachAppointmentExtras<T extends Appointment>(appointments: T[])
       position: extra.position,
     });
     extrasByAppointment.set(extra.appointmentId, appointmentExtras);
+  }
+  return appointments.map((appointment) => ({
+    ...appointment,
+    extras: extrasByAppointment.get(appointment.id) ?? [],
+  }));
+}
+
+function commercialAppointmentExtra(extra: AppointmentExtra) {
+  return {
+    extraDefinitionId: extra.extraDefinitionId,
+    nameSnapshot: extra.nameSnapshot,
+    amountCentsSnapshot: extra.amountCentsSnapshot,
+    position: extra.position,
+  };
+}
+
+function sumAppointmentExtras(extras: Array<Pick<AppointmentExtra, "amountCentsSnapshot">>) {
+  return extras.reduce((total, extra) => total + extra.amountCentsSnapshot, 0);
+}
+
+async function attachCommercialAppointmentExtras<T extends Appointment>(appointments: T[]) {
+  const extras = await storage.getAppointmentExtras(appointments.map((appointment) => appointment.id));
+  const extrasByAppointment = new Map<number, ReturnType<typeof commercialAppointmentExtra>[]>();
+  for (const extra of extras) {
+    const values = extrasByAppointment.get(extra.appointmentId) ?? [];
+    values.push(commercialAppointmentExtra(extra));
+    extrasByAppointment.set(extra.appointmentId, values);
   }
   return appointments.map((appointment) => ({
     ...appointment,
@@ -3280,9 +3309,13 @@ export async function registerRoutes(
     }
 
     const ownBarberId = Number(appSession.barberId);
+    const ownAppointments = await attachCommercialAppointmentExtras(
+      appointments.filter((appointment) => appointment.barberId === ownBarberId),
+    );
+    const ownAppointmentsById = new Map(ownAppointments.map((appointment) => [appointment.id, appointment]));
     return res.json(appointments.map((appointment) => {
       const canManage = appointment.barberId === ownBarberId;
-      if (canManage) return { ...appointment, canManage: true };
+      if (canManage) return { ...ownAppointmentsById.get(appointment.id)!, canManage: true };
 
       return {
         ...appointment,
@@ -4032,6 +4065,7 @@ export async function registerRoutes(
         customDurationMinutes,
         servicePriceCents,
         allowOutsideHours,
+        extras,
       } = req.body;
       const hasStartTimePatch = Object.prototype.hasOwnProperty.call(req.body, "startTime");
       const hasBarberPatch = Object.prototype.hasOwnProperty.call(req.body, "barberId");
@@ -4042,9 +4076,11 @@ export async function registerRoutes(
       const hasCustomDurationPatch = Object.prototype.hasOwnProperty.call(req.body, "customDurationMinutes");
       const hasServicePricePatch = Object.prototype.hasOwnProperty.call(req.body, "servicePriceCents");
       const hasAllowOutsideHoursPatch = Object.prototype.hasOwnProperty.call(req.body, "allowOutsideHours");
+      const hasExtrasPatch = Object.prototype.hasOwnProperty.call(req.body, "extras");
       if (
         (hasServiceModePatch && serviceMode !== "existing" && serviceMode !== "custom")
         || (hasAllowOutsideHoursPatch && typeof allowOutsideHours !== "boolean")
+        || (hasExtrasPatch && !Array.isArray(extras))
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
@@ -4054,6 +4090,12 @@ export async function registerRoutes(
 
       const locationId = Number(res.locals.locationId);
       if (!currentApp || currentApp.locationId !== locationId) return res.status(404).json({ message: "Marcação não encontrada" });
+      if (hasExtrasPatch && (currentApp.status !== "booked" || currentApp.seriesId)) {
+        throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
+      }
+      const previousExtras = hasExtrasPatch
+        ? await storage.getAppointmentExtras([appointmentId])
+        : [];
 
       const newStartTime = hasStartTimePatch ? new Date(startTime) : new Date(currentApp.startTime);
       const startTimeChanged = hasStartTimePatch
@@ -4263,9 +4305,22 @@ export async function registerRoutes(
         appointmentId,
         updateData,
         appointmentNotificationEventsEnabled,
+        undefined,
+        hasExtrasPatch ? extras : undefined,
       );
       const updated = updateResult?.appointment;
       if (updated) {
+        const updatedExtras = hasExtrasPatch
+          ? await storage.getAppointmentExtras([appointmentId])
+          : [];
+        const extrasAuditMetadata = hasExtrasPatch ? {
+          previousExtras: previousExtras.map(commercialAppointmentExtra),
+          newExtras: updatedExtras.map(commercialAppointmentExtra),
+          previousTotalCents: resolveAppointmentPriceCents(currentApp, servicePrices)
+            + sumAppointmentExtras(previousExtras),
+          newTotalCents: resolveAppointmentPriceCents(updated, servicePrices)
+            + sumAppointmentExtras(updatedExtras),
+        } : {};
         await recordAuditLog(req, {
           action: status ? "appointment.status_changed" : "appointment.updated",
           entityType: "appointment",
@@ -4274,7 +4329,7 @@ export async function registerRoutes(
             ? `Estado da marcação alterado: ${currentApp.customerName}`
             : `Marcação atualizada: ${currentApp.customerName}`,
           metadata: {
-            fields: Object.keys(updateData),
+            fields: [...Object.keys(updateData), ...(hasExtrasPatch ? ["extras"] : [])],
             previousStartTime: currentApp.startTime,
             newStartTime: updated.startTime,
             previousBarberId: currentApp.barberId,
@@ -4283,15 +4338,20 @@ export async function registerRoutes(
             newServiceId: updated.serviceId,
             previousStatus: currentApp.status,
             newStatus: updated.status,
+            ...extrasAuditMetadata,
           },
         });
       }
 
-      res.json(updated);
+      const responseAppointment = updated
+        ? (await attachAppointmentExtras([updated]))[0]
+        : updated;
+      res.json(responseAppointment);
     } catch (error) {
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
       }
+      if (sendAppointmentExtrasError(res, error)) return;
       if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Update appointment error:", error);
       res.status(500).json({ message: "Erro ao atualizar marcação" });
@@ -4385,11 +4445,16 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Marcação não encontrada" });
     }
 
-    const [barber, service, location] = await Promise.all([
+    const [barber, service, location, appointmentExtras] = await Promise.all([
       storage.getBarber(appointment.barberId),
       appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
       getLocation(appointment.locationId, true),
+      storage.getAppointmentExtras([appointment.id]),
     ]);
+    const price = resolveAppointmentPriceCents(
+      appointment,
+      new Map(service ? [[service.id, service.price]] : []),
+    );
 
     res.json({
       id: appointment.id,
@@ -4415,10 +4480,13 @@ export async function registerRoutes(
         appointment,
         new Map(service ? [[service.id, service.duration]] : []),
       ),
-      price: resolveAppointmentPriceCents(
-        appointment,
-        new Map(service ? [[service.id, service.price]] : []),
-      ),
+      price,
+      extras: appointmentExtras.map((extra) => ({
+        nameSnapshot: extra.nameSnapshot,
+        amountCentsSnapshot: extra.amountCentsSnapshot,
+        position: extra.position,
+      })),
+      totalPrice: price + sumAppointmentExtras(appointmentExtras),
       manualOutsideHours: appointment.manualOutsideHours,
     });
   });
@@ -5006,14 +5074,28 @@ export async function registerRoutes(
       : [anchorAppointment!])
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
 
+    const matchingExtras = await storage.getAppointmentExtras(
+      matchingAppointments.map((appointment) => appointment.id),
+    );
+    const extrasByAppointment = new Map<number, AppointmentExtra[]>();
+    for (const extra of matchingExtras) {
+      const values = extrasByAppointment.get(extra.appointmentId) ?? [];
+      values.push(extra);
+      extrasByAppointment.set(extra.appointmentId, values);
+    }
+
     const appointmentsWithDetails = matchingAppointments.map((appointment) => {
       const barber = locationBarbers.find((item) => item.id === appointment.barberId);
+      const servicePrice = resolveAppointmentPriceCents(appointment, locationServicePrices);
+      const extras = extrasByAppointment.get(appointment.id) ?? [];
 
       return {
         ...appointment,
         barberName: barber?.name || "Desconhecido",
         serviceName: resolveAppointmentServiceName(appointment, locationServiceNames),
-        servicePrice: resolveAppointmentPriceCents(appointment, locationServicePrices),
+        servicePrice,
+        extras: extras.map(commercialAppointmentExtra),
+        totalPrice: servicePrice + sumAppointmentExtras(extras),
       };
     });
     const metrics = summarizeCustomerAppointments(matchingAppointments);

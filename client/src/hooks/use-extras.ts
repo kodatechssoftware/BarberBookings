@@ -3,8 +3,9 @@ import type { ExtraDefinition } from "@shared/schema";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
-export function useExtras(options?: { enabled?: boolean }) {
-  const locationId = useActiveLocationId();
+export function useExtras(options?: { enabled?: boolean; locationId?: number }) {
+  const activeLocationId = useActiveLocationId();
+  const locationId = options?.locationId ?? activeLocationId;
 
   return useQuery<ExtraDefinition[]>({
     queryKey: ["/api/admin/extras", { locationId }],
