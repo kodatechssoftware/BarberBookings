@@ -1051,6 +1051,47 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     expect.objectContaining({ extraDefinitionId: extraB.id, nameSnapshot: extraB.name }),
   ]);
 
+  const bookingDate = bookingStart.toISOString().slice(0, 10);
+  const dashboardBResponse = await request.get(
+    `/api/admin/dashboard?startDate=${bookingDate}&endDate=${bookingDate}&barberId=${barberB.id}`,
+    { headers: headersB },
+  );
+  expect(dashboardBResponse.ok(), await dashboardBResponse.text()).toBe(true);
+  expect((await dashboardBResponse.json()).summary).toMatchObject({
+    appointments: 1,
+    revenueCents: 0,
+    projectedRevenueCents: 2700,
+  });
+  const dashboardAResponse = await request.get(
+    `/api/admin/dashboard?startDate=${bookingDate}&endDate=${bookingDate}&barberId=${barberB.id}`,
+    { headers: headersA },
+  );
+  expect(dashboardAResponse.ok(), await dashboardAResponse.text()).toBe(true);
+  expect((await dashboardAResponse.json()).summary).toMatchObject({ appointments: 0, projectedRevenueCents: 0 });
+
+  const exportBResponse = await request.get(
+    `/api/admin/export?startDate=${bookingDate}&endDate=${bookingDate}&barberId=${barberB.id}`,
+    { headers: headersB },
+  );
+  expect(exportBResponse.ok(), await exportBResponse.text()).toBe(true);
+  const extrasWorkbook = new ExcelJS.Workbook();
+  await extrasWorkbook.xlsx.load(await exportBResponse.body());
+  const movementsSheet = extrasWorkbook.getWorksheet("Detalhe dos Movimentos")!;
+  const movementsHeader = getHeaderRow(movementsSheet, "Data do serviço");
+  const movementHeaders = movementsHeader.values as unknown[];
+  const movementIdColumn = movementHeaders.indexOf("ID da marcação");
+  const movementExtrasColumn = movementHeaders.indexOf("Extras");
+  const movementExtrasValueColumn = movementHeaders.indexOf("Valor extras (€)");
+  const movementTotalColumn = movementHeaders.indexOf("Valor final (€)");
+  let localMovement: ExcelJS.Row | undefined;
+  movementsSheet.eachRow((row, rowNumber) => {
+    if (rowNumber > movementsHeader.number
+      && row.getCell(movementIdColumn).value === localBookingBody.appointments[0].id) localMovement = row;
+  });
+  expect(localMovement?.getCell(movementExtrasColumn).value).toBe(`${extraB.name} (9,00 €)`);
+  expect(localMovement?.getCell(movementExtrasValueColumn).value).toBe(9);
+  expect(localMovement?.getCell(movementTotalColumn).value).toBe(27);
+
   await page.getByRole("tab", { name: "Agenda" }).click();
   await page.getByRole("button", { name: "Marcação manual" }).click();
   const bookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
