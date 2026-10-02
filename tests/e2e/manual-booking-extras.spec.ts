@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import ExcelJS from "exceljs";
 
 const adminPassword = "Playwright-Test-Admin-2026!";
 
@@ -63,6 +64,18 @@ async function clickFirstEnabledManualTime(dialog: Locator) {
     }
   }
   throw new Error("No enabled manual booking time was found");
+}
+
+function getHeaderRow(sheet: ExcelJS.Worksheet, firstHeader: string) {
+  const row = sheet.findRow(sheet.getColumn(1).values.findIndex((value) => value === firstHeader));
+  if (!row) throw new Error(`Header ${firstHeader} not found in ${sheet.name}`);
+  return row;
+}
+
+function getSummaryValues(sheet: ExcelJS.Worksheet) {
+  const values = new Map<string, unknown>();
+  sheet.eachRow((row) => values.set(String(row.getCell(1).value), row.getCell(2).value));
+  return values;
 }
 
 test.describe.serial("manual booking Extras", () => {
@@ -540,5 +553,294 @@ test.describe.serial("manual booking Extras", () => {
         { extraId: specialExtra.id },
       ],
     });
+  });
+
+  test("uses the central finance engine in dashboard, rankings and the accounting workbook", async ({ request }) => {
+    test.setTimeout(120_000);
+    const suffix = Date.now();
+    const financeBarberResponse = await request.post("/api/barbers", { data: {
+      name: `Barbeiro Finance Extras QA ${suffix}`,
+      specialty: "Financeiro de Extras",
+      isVisible: true,
+      serviceIds: [service.id],
+      compensationModel: "commission",
+      commissionPercent: 40,
+    } });
+    expect(financeBarberResponse.status(), await financeBarberResponse.text()).toBe(201);
+    const financeBarber = await financeBarberResponse.json();
+
+    const createFixedExtra = async (name: string, financialRule: "follow_compensation" | "establishment") => {
+      const response = await request.post("/api/admin/extras", { data: {
+        name: `${name} ${suffix}`,
+        pricingMode: "fixed",
+        amountCents: 1000,
+        financialRule,
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+      return response.json();
+    };
+    const followExtra = await createFixedExtra("Extra comissão finance QA", "follow_compensation");
+    const establishmentExtra = await createFixedExtra("Extra estabelecimento finance QA", "establishment");
+
+    const createCompleted = async (
+      weeksAhead: number,
+      extras: Array<{ extraId: number; amountCents?: number }>,
+      paymentMethod: "cash" | "card" | "gift" = "cash",
+    ) => {
+      const startTime = futureThursdayIso(weeksAhead, 10);
+      const created = await createManual(request, `Finance Extras ${weeksAhead} ${suffix}`, startTime, {
+        barberId: financeBarber.id,
+        allowOutsideHours: true,
+        extras,
+      });
+      expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+      const appointment = created.body.appointments[0];
+      const completed = await request.patch(`/api/appointments/${appointment.id}/status`, {
+        data: { status: "completed", paymentMethod },
+      });
+      expect(completed.ok(), await completed.text()).toBe(true);
+      return { appointment, startTime };
+    };
+    const dashboardFor = async (startTime: string, selectedBarberId = financeBarber.id) => {
+      const day = dateKey(startTime);
+      const response = await request.get(
+        `/api/admin/dashboard?startDate=${day}&endDate=${day}&barberId=${selectedBarberId}`,
+      );
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+
+    const barberCase = await createCompleted(-260, [{ extraId: travelExtra.id, amountCents: 1000 }]);
+    const barberDashboard = await dashboardFor(barberCase.startTime);
+    expect(barberDashboard.summary).toMatchObject({
+      revenueCents: 2500,
+      extrasRevenueCents: 1000,
+      barberRevenueCents: 1600,
+      establishmentRevenueCents: 900,
+      commissionCents: 600,
+      chairRentCents: 0,
+    });
+    expect(barberDashboard.daily).toEqual(expect.arrayContaining([
+      expect.objectContaining({ revenueCents: 2500 }),
+    ]));
+    expect(barberDashboard.barbers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: financeBarber.id, revenueCents: 2500 }),
+    ]));
+    expect(barberDashboard.services).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: service.id, count: 1, revenueCents: 1500 }),
+    ]));
+
+    const followCase = await createCompleted(-261, [{ extraId: followExtra.id }], "card");
+    expect((await dashboardFor(followCase.startTime)).summary).toMatchObject({
+      revenueCents: 2500,
+      barberRevenueCents: 1000,
+      establishmentRevenueCents: 1500,
+      commissionCents: 1000,
+    });
+
+    const establishmentCase = await createCompleted(-262, [{ extraId: establishmentExtra.id }]);
+    expect((await dashboardFor(establishmentCase.startTime)).summary).toMatchObject({
+      revenueCents: 2500,
+      barberRevenueCents: 600,
+      establishmentRevenueCents: 1900,
+      commissionCents: 600,
+    });
+
+    const multipleCase = await createCompleted(-263, [
+      { extraId: travelExtra.id, amountCents: 1000 },
+      { extraId: followExtra.id },
+      { extraId: establishmentExtra.id },
+    ]);
+    expect((await dashboardFor(multipleCase.startTime)).summary).toMatchObject({
+      revenueCents: 4500,
+      extrasRevenueCents: 3000,
+      barberRevenueCents: 2000,
+      establishmentRevenueCents: 2500,
+      commissionCents: 1000,
+    });
+
+    const multipleDay = dateKey(multipleCase.startTime);
+    const multipleExportResponse = await request.get(
+      `/api/admin/export?startDate=${multipleDay}&endDate=${multipleDay}&barberId=${financeBarber.id}`,
+    );
+    expect(multipleExportResponse.ok(), await multipleExportResponse.text()).toBe(true);
+    const multipleWorkbook = new ExcelJS.Workbook();
+    await multipleWorkbook.xlsx.load(await multipleExportResponse.body());
+    const multipleDetail = multipleWorkbook.getWorksheet("Detalhe dos Movimentos")!;
+    const multipleHeader = getHeaderRow(multipleDetail, "Data do serviço");
+    const multipleHeaders = multipleHeader.values as unknown[];
+    const multipleIdColumn = multipleHeaders.indexOf("ID da marcação");
+    const multipleExtrasColumn = multipleHeaders.indexOf("Extras");
+    const multipleExtrasValueColumn = multipleHeaders.indexOf("Valor extras (€)");
+    const multipleTotalColumn = multipleHeaders.indexOf("Valor final (€)");
+    let multipleMovement: ExcelJS.Row | undefined;
+    multipleDetail.eachRow((row, rowNumber) => {
+      if (rowNumber > multipleHeader.number
+        && row.getCell(multipleIdColumn).value === multipleCase.appointment.id) multipleMovement = row;
+    });
+    expect(multipleMovement?.getCell(multipleExtrasColumn).value).toBe(
+      `${travelExtra.name} (10,00 €); ${followExtra.name} (10,00 €); ${establishmentExtra.name} (10,00 €)`,
+    );
+    expect(multipleMovement?.getCell(multipleExtrasValueColumn).value).toBe(30);
+    expect(multipleMovement?.getCell(multipleTotalColumn).value).toBe(45);
+
+    const day = dateKey(barberCase.startTime);
+    const exportResponse = await request.get(
+      `/api/admin/export?startDate=${day}&endDate=${day}&barberId=${financeBarber.id}`,
+    );
+    expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+      "Resumo Financeiro",
+      "Detalhe dos Movimentos",
+      "Acertos com Barbeiros",
+    ]);
+
+    const summary = getSummaryValues(workbook.getWorksheet("Resumo Financeiro")!);
+    expect(summary.get("Receita de serviços concluídos")).toBe(15);
+    expect(summary.get("Receita de Extras concluídos")).toBe(10);
+    expect(summary.get("Receita total concluída")).toBe(25);
+    expect(summary.get("Receita realizada")).toBe(25);
+    expect(summary.get("Total atribuído aos barbeiros")).toBe(16);
+    expect(summary.get("Total atribuído ao estabelecimento")).toBe(9);
+
+    const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
+    const detailHeader = getHeaderRow(detail, "Data do serviço");
+    const headers = detailHeader.values as unknown[];
+    const idColumn = headers.indexOf("ID da marcação");
+    const serviceValueColumn = headers.indexOf("Valor serviço (€)");
+    const extrasColumn = headers.indexOf("Extras");
+    const extrasValueColumn = headers.indexOf("Valor extras (€)");
+    const totalColumn = headers.indexOf("Valor final (€)");
+    const receivedColumn = headers.indexOf("Valor recebido (€)");
+    const realizedColumn = headers.indexOf("Valor realizado (€)");
+    const barberColumn = headers.indexOf("Parte barbeiro (€)");
+    const establishmentColumn = headers.indexOf("Parte estabelecimento (€)");
+    let movement: ExcelJS.Row | undefined;
+    detail.eachRow((row, rowNumber) => {
+      if (rowNumber > detailHeader.number && row.getCell(idColumn).value === barberCase.appointment.id) movement = row;
+    });
+    expect(movement).toBeTruthy();
+    expect(movement!.getCell(serviceValueColumn).value).toBe(15);
+    expect(movement!.getCell(extrasColumn).value).toBe(`${travelExtra.name} (10,00 €)`);
+    expect(movement!.getCell(extrasValueColumn).value).toBe(10);
+    expect(movement!.getCell(totalColumn).value).toBe(25);
+    expect(movement!.getCell(receivedColumn).value).toBe(25);
+    expect(movement!.getCell(realizedColumn).value).toBe(25);
+    expect(movement!.getCell(barberColumn).value).toBe(16);
+    expect(movement!.getCell(establishmentColumn).value).toBe(9);
+    for (const column of [serviceValueColumn, extrasValueColumn, totalColumn, receivedColumn, realizedColumn, barberColumn, establishmentColumn]) {
+      expect(typeof movement!.getCell(column).value).toBe("number");
+    }
+
+    const settlements = workbook.getWorksheet("Acertos com Barbeiros")!;
+    const settlementHeader = getHeaderRow(settlements, "Barbeiro");
+    const settlementHeaders = settlementHeader.values as unknown[];
+    const settlementBarberColumn = settlementHeaders.indexOf("Barbeiro");
+    const settlementBaseColumn = settlementHeaders.indexOf("Base de acerto (€)");
+    const settlementCommissionColumn = settlementHeaders.indexOf("Comissões do barbeiro (€)");
+    const settlementBarberValueColumn = settlementHeaders.indexOf("Valor do barbeiro (€)");
+    const settlementShopValueColumn = settlementHeaders.indexOf("Valor da barbearia (€)");
+    let settlement: ExcelJS.Row | undefined;
+    settlements.eachRow((row, rowNumber) => {
+      if (rowNumber > settlementHeader.number && row.getCell(settlementBarberColumn).value === financeBarber.name) settlement = row;
+    });
+    expect(settlement!.getCell(settlementBaseColumn).value).toBe(25);
+    expect(settlement!.getCell(settlementCommissionColumn).value).toBe(6);
+    expect(settlement!.getCell(settlementBarberValueColumn).value).toBe(16);
+    expect(settlement!.getCell(settlementShopValueColumn).value).toBe(9);
+
+    const chairBarberResponse = await request.post("/api/barbers", { data: {
+      name: `Barbeiro Chair Extras QA ${suffix}`,
+      specialty: "Aluguer de cadeira com Extras",
+      isVisible: true,
+      serviceIds: [service.id],
+      compensationModel: "chair_rent",
+      chairRentCents: 2500,
+      chairRentPeriod: "month",
+    } });
+    expect(chairBarberResponse.status(), await chairBarberResponse.text()).toBe(201);
+    const chairBarber = await chairBarberResponse.json();
+    const chairStart = futureThursdayIso(-265, 10);
+    const chairCreated = await createManual(request, `Gift chair Extras ${suffix}`, chairStart, {
+      barberId: chairBarber.id,
+      allowOutsideHours: true,
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
+    });
+    expect(chairCreated.response.status(), JSON.stringify(chairCreated.body)).toBe(201);
+    const chairAppointment = chairCreated.body.appointments[0];
+    const chairGift = await request.patch(`/api/appointments/${chairAppointment.id}/status`, {
+      data: { status: "completed", paymentMethod: "gift" },
+    });
+    expect(chairGift.ok(), await chairGift.text()).toBe(true);
+    expect((await dashboardFor(chairStart, chairBarber.id)).summary).toMatchObject({
+      revenueCents: 0,
+      extrasRevenueCents: 0,
+      barberRevenueCents: -2500,
+      establishmentRevenueCents: 2500,
+      chairRentCents: 2500,
+    });
+    const chairDay = dateKey(chairStart);
+    const chairExportResponse = await request.get(
+      `/api/admin/export?startDate=${chairDay}&endDate=${chairDay}&barberId=${chairBarber.id}`,
+    );
+    expect(chairExportResponse.ok(), await chairExportResponse.text()).toBe(true);
+    const chairWorkbook = new ExcelJS.Workbook();
+    await chairWorkbook.xlsx.load(await chairExportResponse.body());
+    const chairSummary = getSummaryValues(chairWorkbook.getWorksheet("Resumo Financeiro")!);
+    expect(chairSummary.get("Ofertas (valor dos serviços, sem recebimento)")).toBe(15);
+    expect(chairSummary.get("Ofertas (valor dos Extras, sem recebimento)")).toBe(10);
+    expect(chairSummary.get("Ofertas (valor total, sem recebimento)")).toBe(25);
+    expect(chairSummary.get("Receita realizada")).toBe(0);
+    const chairSettlements = chairWorkbook.getWorksheet("Acertos com Barbeiros")!;
+    const chairSettlementHeader = getHeaderRow(chairSettlements, "Barbeiro");
+    const chairHeaders = chairSettlementHeader.values as unknown[];
+    const chairRentColumn = chairHeaders.indexOf("Aluguer de cadeira (€)");
+    const chairBarberValueColumn = chairHeaders.indexOf("Valor do barbeiro (€)");
+    const chairShopValueColumn = chairHeaders.indexOf("Valor da barbearia (€)");
+    const chairSettlement = chairSettlements.getRow(chairSettlementHeader.number + 1);
+    expect(chairSettlement.getCell(chairRentColumn).value).toBe(25);
+    expect(chairSettlement.getCell(chairBarberValueColumn).value).toBe(-25);
+    expect(chairSettlement.getCell(chairShopValueColumn).value).toBe(25);
+
+    const stateDay = futureThursdayIso(-264, 10);
+    const stateAppointments: any[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const startTime = futureThursdayIso(-264, 10 + index);
+      const created = await createManual(request, `Estado finance ${index} ${suffix}`, startTime, {
+        barberId: financeBarber.id,
+        allowOutsideHours: true,
+        extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
+      });
+      expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+      stateAppointments.push(created.body.appointments[0]);
+    }
+    expect((await request.patch(`/api/appointments/${stateAppointments[0].id}`, {
+      data: { status: "booked" },
+    })).ok()).toBe(true);
+    expect((await request.patch(`/api/appointments/${stateAppointments[1].id}/status`, {
+      data: { status: "completed", paymentMethod: "cash" },
+    })).ok()).toBe(true);
+    expect((await request.patch(`/api/appointments/${stateAppointments[2].id}/status`, {
+      data: { status: "completed", paymentMethod: "gift" },
+    })).ok()).toBe(true);
+    for (const [index, status] of [[3, "cancelled"], [4, "late_cancelled"], [5, "no_show"]] as const) {
+      const response = await request.patch(`/api/appointments/${stateAppointments[index].id}`, { data: { status } });
+      expect(response.ok(), await response.text()).toBe(true);
+    }
+    const stateDashboard = await dashboardFor(stateDay);
+    expect(stateDashboard.summary).toMatchObject({
+      revenueCents: 2500,
+      projectedRevenueCents: 2500,
+      extrasRevenueCents: 1000,
+      barberRevenueCents: 1600,
+      establishmentRevenueCents: 900,
+    });
+    expect(stateDashboard.services).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: service.id, count: 6, revenueCents: 1500 }),
+    ]));
+    expect((await request.patch(`/api/barbers/${chairBarber.id}`, { data: { isVisible: false } })).ok()).toBe(true);
+    expect((await request.patch(`/api/barbers/${financeBarber.id}`, { data: { isVisible: false } })).ok()).toBe(true);
   });
 });

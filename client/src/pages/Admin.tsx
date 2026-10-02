@@ -168,6 +168,11 @@ type DashboardData = {
     noShows: number;
     revenueCents: number;
     projectedRevenueCents: number;
+    extrasRevenueCents: number;
+    barberRevenueCents: number;
+    establishmentRevenueCents: number;
+    commissionCents: number;
+    chairRentCents: number;
     averageTicketCents: number;
     completionRate: number;
     noShowRate: number;
