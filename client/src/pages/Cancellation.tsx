@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { shopBranding } from "@/lib/branding";
+import { AppointmentCommercialSummary } from "@/components/AppointmentCommercialSummary";
 
 function formatAppointmentDate(value?: string, timeZone = "Europe/Lisbon") {
   if (!value) return "";
@@ -166,6 +167,15 @@ export default function Cancellation() {
                 </div>
               </div>
             </div>
+            {appointment && (
+              <AppointmentCommercialSummary
+                serviceName={appointment.serviceName}
+                servicePriceCents={appointment.price}
+                extras={appointment.extras ?? []}
+                totalPriceCents={appointment.totalPrice ?? appointment.price}
+                className="mt-4"
+              />
+            )}
           </div>
 
           {appointment?.isLateCancellation && (

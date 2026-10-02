@@ -206,3 +206,110 @@ test("recurring storage rejects Extras before persisting the series", async () =
   assert.equal(await storage.getAppointmentSeries(request.series.id), undefined);
   assert.equal((await storage.getAppointments()).length, 0);
 });
+
+test("appointment Extra replacement preserves untouched snapshots and edits booked variable values", async () => {
+  const storage = new MemoryStorage();
+  const variable = await storage.createExtraDefinition({
+    locationId: 1,
+    name: "Deslocação original",
+    pricingMode: "variable",
+    amountCents: null,
+    financialRule: "barber",
+  });
+  const fixed = await storage.createExtraDefinition({
+    locationId: 1,
+    name: "Produto original",
+    pricingMode: "fixed",
+    amountCents: 500,
+    financialRule: "establishment",
+  });
+  const appointment = await storage.createAppointment(appointmentInput({
+    startTime: new Date("2036-03-01T10:00:00.000Z"),
+    cancelToken: "extra-memory-edit",
+    serviceNameSnapshot: "Corte acordado",
+    servicePriceCentsSnapshot: 1500,
+    extras: [
+      { extraId: variable.id, amountCents: 1000 },
+      { extraId: fixed.id },
+    ],
+  }));
+  const original = await storage.getAppointmentExtras([appointment.id]);
+
+  await storage.updateExtraDefinition(variable.id, 1, {
+    name: "Deslocação atual",
+    financialRule: "follow_compensation",
+  });
+  await storage.updateExtraDefinition(fixed.id, 1, {
+    name: "Produto atual",
+    amountCents: 750,
+  });
+  await storage.updateAppointmentWithNotification(appointment.id, {
+    servicePriceCentsSnapshot: 2000,
+  }, false);
+  assert.deepEqual(await storage.getAppointmentExtras([appointment.id]), original, "an absent extras field must preserve snapshots");
+
+  await storage.updateAppointmentWithNotification(appointment.id, {}, false, undefined, [
+    { extraId: variable.id, amountCents: 1000 },
+    { extraId: fixed.id },
+  ]);
+  assert.deepEqual(await storage.getAppointmentExtras([appointment.id]), original, "an unchanged selection must preserve old catalogue snapshots");
+
+  await storage.updateAppointmentWithNotification(appointment.id, {}, false, undefined, [
+    { extraId: variable.id, amountCents: 1800 },
+    { extraId: fixed.id },
+  ]);
+  const edited = await storage.getAppointmentExtras([appointment.id]);
+  assert.deepEqual({
+    name: edited[0].nameSnapshot,
+    amount: edited[0].amountCentsSnapshot,
+    rule: edited[0].financialRuleSnapshot,
+  }, {
+    name: "Deslocação atual",
+    amount: 1800,
+    rule: "follow_compensation",
+  });
+  assert.deepEqual({
+    name: edited[1].nameSnapshot,
+    amount: edited[1].amountCentsSnapshot,
+  }, {
+    name: "Produto original",
+    amount: 500,
+  });
+
+  await storage.updateExtraDefinition(fixed.id, 1, { isActive: false });
+  await storage.updateAppointmentWithNotification(appointment.id, {}, false, undefined, [
+    { extraId: fixed.id },
+  ]);
+  assert.equal((await storage.getAppointmentExtras([appointment.id]))[0].amountCentsSnapshot, 500);
+  await storage.updateAppointmentWithNotification(appointment.id, {}, false, undefined, []);
+  assert.deepEqual(await storage.getAppointmentExtras([appointment.id]), []);
+  await assert.rejects(
+    storage.updateAppointmentWithNotification(appointment.id, {}, false, undefined, [{ extraId: fixed.id }]),
+    (error: any) => error?.code === "APPOINTMENT_EXTRA_UNAVAILABLE",
+  );
+  assert.deepEqual(await storage.getAppointmentExtras([appointment.id]), []);
+});
+
+test("historical appointment states reject Extra replacement", async () => {
+  for (const status of ["completed", "cancelled", "late_cancelled", "no_show"] as const) {
+    const storage = new MemoryStorage();
+    const extra = await storage.createExtraDefinition({
+      locationId: 1,
+      name: `Extra ${status}`,
+      pricingMode: "fixed",
+      amountCents: 500,
+      financialRule: "follow_compensation",
+    });
+    const appointment = await storage.createAppointment(appointmentInput({
+      startTime: new Date(`2036-04-${status === "completed" ? "01" : status === "cancelled" ? "02" : status === "late_cancelled" ? "03" : "04"}T10:00:00.000Z`),
+      cancelToken: `extra-memory-${status}`,
+      extras: [{ extraId: extra.id }],
+    }));
+    await storage.updateAppointmentStatus(appointment.id, status, status === "completed" ? "cash" : undefined);
+    await assert.rejects(
+      storage.updateAppointmentWithNotification(appointment.id, {}, false, undefined, []),
+      (error: any) => error?.code === "APPOINTMENT_EXTRAS_NOT_EDITABLE",
+    );
+    assert.equal((await storage.getAppointmentExtras([appointment.id]))[0].amountCentsSnapshot, 500);
+  }
+});

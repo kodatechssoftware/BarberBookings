@@ -1051,6 +1051,23 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     expect.objectContaining({ extraDefinitionId: extraB.id, nameSnapshot: extraB.name }),
   ]);
 
+  const crossLocationAppointmentPatch = await request.patch(
+    `/api/appointments/${localBookingBody.appointments[0].id}`,
+    {
+      headers: headersB,
+      data: { extras: [{ extraId: extraA.id }] },
+    },
+  );
+  expect(crossLocationAppointmentPatch.status(), await crossLocationAppointmentPatch.text()).toBe(409);
+  expect(await crossLocationAppointmentPatch.json()).toMatchObject({ code: "APPOINTMENT_EXTRA_UNAVAILABLE" });
+  const unchangedLocalAppointment = (await (await request.get(
+    `/api/appointments?barberId=${barberB.id}&date=${bookingStart.toISOString().slice(0, 10)}`,
+    { headers: headersB },
+  )).json()).find((appointment: any) => appointment.id === localBookingBody.appointments[0].id);
+  expect(unchangedLocalAppointment.extras).toEqual([
+    expect.objectContaining({ extraDefinitionId: extraB.id, amountCentsSnapshot: 900 }),
+  ]);
+
   const bookingDate = bookingStart.toISOString().slice(0, 10);
   const dashboardBResponse = await request.get(
     `/api/admin/dashboard?startDate=${bookingDate}&endDate=${bookingDate}&barberId=${barberB.id}`,

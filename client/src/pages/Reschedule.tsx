@@ -15,6 +15,7 @@ import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow,
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import { DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES } from "@shared/booking-slot-interval";
+import { AppointmentCommercialSummary } from "@/components/AppointmentCommercialSummary";
 import {
   formatPublicBookingMonthOpeningNotice,
   getPublicBookingMonthOpeningNotice,
@@ -158,6 +159,13 @@ export default function Reschedule() {
           <Clock className="mx-auto mb-4 h-16 w-16 text-primary" />
           <h1 className="mb-4 text-3xl font-display">Reagendamento assistido</h1>
           <p className="mb-6 text-gray-400">Para reagendar esta marcação, contacte a barbearia.</p>
+          <AppointmentCommercialSummary
+            serviceName={appointment.serviceName}
+            servicePriceCents={appointment.price}
+            extras={appointment.extras ?? []}
+            totalPriceCents={appointment.totalPrice ?? appointment.price}
+            className="mb-6"
+          />
           <div className="flex flex-col justify-center gap-3 sm:flex-row">
             <Link href={`/cancel/${token}`}><Button variant="outline">Cancelar marcação</Button></Link>
             <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
@@ -201,6 +209,13 @@ export default function Reschedule() {
           <p className="text-sm text-gray-500 mt-2">
             Atual: {formatPublicDateTime(appointment.startTime, appointment.locationTimeZone, "short")}
           </p>
+          <AppointmentCommercialSummary
+            serviceName={appointment.serviceName}
+            servicePriceCents={appointment.price}
+            extras={appointment.extras ?? []}
+            totalPriceCents={appointment.totalPrice ?? appointment.price}
+            className="mx-auto mt-4 max-w-md"
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

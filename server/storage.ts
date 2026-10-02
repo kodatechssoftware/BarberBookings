@@ -332,6 +332,19 @@ function validateAppointmentExtraInputs(extras: AppointmentExtraInput[]) {
   return extras;
 }
 
+function appointmentExtrasSelectionChanged(
+  requestedExtras: AppointmentExtraInput[],
+  currentExtras: AppointmentExtra[],
+) {
+  return requestedExtras.length !== currentExtras.length
+    || requestedExtras.some((selectedExtra, index) => {
+      const currentExtra = currentExtras[index];
+      return selectedExtra.extraId !== currentExtra?.extraDefinitionId
+        || (selectedExtra.amountCents !== undefined
+          && selectedExtra.amountCents !== currentExtra.amountCentsSnapshot);
+    });
+}
+
 export class AppointmentLocationIntegrityError extends Error {
   status = 409;
 
@@ -633,17 +646,21 @@ export class DatabaseStorage implements IStorage {
     }
 
     const existingByDefinitionId = new Map(existingExtras.map((extra) => [extra.extraDefinitionId, extra]));
-    const newDefinitionIds = selectedExtras
-      .map((extra) => extra.extraId)
-      .filter((id) => !existingByDefinitionId.has(id));
-    const selectedDefinitions = newDefinitionIds.length === 0
+    const definitionIdsToResolve = selectedExtras
+      .filter((selectedExtra) => {
+        const existing = existingByDefinitionId.get(selectedExtra.extraId);
+        return !existing || (selectedExtra.amountCents !== undefined
+          && selectedExtra.amountCents !== existing.amountCentsSnapshot);
+      })
+      .map((extra) => extra.extraId);
+    const selectedDefinitions = definitionIdsToResolve.length === 0
       ? []
       : await tx.select().from(extraDefinitions).where(and(
-          inArray(extraDefinitions.id, newDefinitionIds),
+          inArray(extraDefinitions.id, definitionIdsToResolve),
           eq(extraDefinitions.locationId, Number(locationId)),
           eq(extraDefinitions.isActive, true),
         )).orderBy(extraDefinitions.id).for("share");
-    if (selectedDefinitions.length !== newDefinitionIds.length) {
+    if (selectedDefinitions.length !== definitionIdsToResolve.length) {
       throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
     }
     const definitionsById = new Map(selectedDefinitions.map((definition) => [definition.id, definition]));
@@ -651,7 +668,10 @@ export class DatabaseStorage implements IStorage {
     return selectedExtras.map((selectedExtra, position) => {
       const extraDefinitionId = selectedExtra.extraId;
       const existing = existingByDefinitionId.get(extraDefinitionId);
-      if (existing) {
+      const shouldPreserveExisting = existing
+        && (selectedExtra.amountCents === undefined
+          || selectedExtra.amountCents === existing.amountCentsSnapshot);
+      if (shouldPreserveExisting) {
         const { appointmentId: _appointmentId, ...snapshot } = existing;
         return { ...snapshot, position };
       }
@@ -1281,9 +1301,7 @@ export class DatabaseStorage implements IStorage {
           ? undefined
           : validateAppointmentExtraInputs(extras);
         const extrasChanged = requestedExtras !== undefined
-          && (requestedExtras.length !== currentExtras.length
-            || requestedExtras.some((selectedExtra, index) =>
-              selectedExtra.extraId !== currentExtras[index]?.extraDefinitionId));
+          && appointmentExtrasSelectionChanged(requestedExtras, currentExtras);
         let replacementExtras: AppointmentExtraSnapshotInput[] = [];
         if (extrasChanged) {
           if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
@@ -2218,7 +2236,10 @@ export class MemoryStorage implements IStorage {
     return selectedExtras.map((selectedExtra, position) => {
       const extraDefinitionId = selectedExtra.extraId;
       const existing = existingByDefinitionId.get(extraDefinitionId);
-      if (existing) {
+      const shouldPreserveExisting = existing
+        && (selectedExtra.amountCents === undefined
+          || selectedExtra.amountCents === existing.amountCentsSnapshot);
+      if (shouldPreserveExisting) {
         const { appointmentId: _appointmentId, ...snapshot } = existing;
         return { ...snapshot, position };
       }
@@ -2835,9 +2856,7 @@ export class MemoryStorage implements IStorage {
       ? undefined
       : validateAppointmentExtraInputs(extras);
     const extrasChanged = requestedExtras !== undefined
-      && (requestedExtras.length !== currentExtras.length
-        || requestedExtras.some((selectedExtra, extraIndex) =>
-          selectedExtra.extraId !== currentExtras[extraIndex]?.extraDefinitionId));
+      && appointmentExtrasSelectionChanged(requestedExtras, currentExtras);
     let replacementExtras: AppointmentExtraSnapshotInput[] = [];
     if (extrasChanged) {
       if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {

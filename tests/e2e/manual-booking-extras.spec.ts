@@ -438,7 +438,7 @@ test.describe.serial("manual booking Extras", () => {
     expect(await findAppointments(request, recurringName, futureThursdayIso(252, 10))).toHaveLength(0);
   });
 
-  test("keeps public booking unaware of injected Extras", async ({ request }) => {
+  test("keeps public booking and no-Extras token UI unchanged", async ({ request, page }) => {
     const startTime = futureThursdayIso(253, 10);
     const customerName = `Public sem Extras ${Date.now()}`;
     const response = await request.post("/api/appointments", { data: {
@@ -456,6 +456,290 @@ test.describe.serial("manual booking Extras", () => {
     expect(publicAppointment).not.toHaveProperty("extras");
     const [adminAppointment] = await findAppointments(request, customerName, startTime);
     expect(adminAppointment.extras).toEqual([]);
+    const tokenResponse = await request.get(`/api/appointments/token/${publicAppointment.cancelToken}`);
+    expect(tokenResponse.status(), await tokenResponse.text()).toBe(200);
+    expect(await tokenResponse.json()).toMatchObject({ extras: [], totalPrice: service.price });
+    await page.goto(`/cancel/${publicAppointment.cancelToken}`);
+    await expect(page.getByText(customerName)).toHaveCount(0);
+    await expect(page.getByTestId("customer-appointment-commercial-summary")).toHaveCount(0);
+  });
+
+  test("edits booked Extras atomically and exposes only commercial snapshots in history and token", async ({ request }) => {
+    test.setTimeout(120_000);
+    const suffix = Date.now();
+    const createExtra = async (payload: Record<string, unknown>) => {
+      const response = await request.post("/api/admin/extras", { data: payload });
+      expect(response.status(), await response.text()).toBe(201);
+      return response.json();
+    };
+    const editableVariable = await createExtra({
+      name: `Deslocação editável ${suffix}`,
+      pricingMode: "variable",
+      amountCents: null,
+      financialRule: "barber",
+      sortOrder: 50,
+    });
+    const editableFixed = await createExtra({
+      name: `Extra fixo editável ${suffix}`,
+      pricingMode: "fixed",
+      amountCents: 500,
+      financialRule: "establishment",
+      sortOrder: 51,
+    });
+    const newVariable = await createExtra({
+      name: `Variável nova ${suffix}`,
+      pricingMode: "variable",
+      amountCents: null,
+      financialRule: "follow_compensation",
+      sortOrder: 52,
+    });
+
+    const startTime = futureThursdayIso(254, 10);
+    const customerName = `Editor Extras ${suffix}`;
+    const created = await createManual(request, customerName, startTime, {
+      hasSpecialTerms: true,
+      servicePriceCents: 2500,
+      extras: [
+        { extraId: editableVariable.id, amountCents: 1000 },
+        { extraId: editableFixed.id },
+      ],
+    });
+    expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+    const appointment = created.body.appointments[0];
+    expect(appointment.extras.map((extra: any) => extra.amountCentsSnapshot)).toEqual([1000, 500]);
+
+    const preserve = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: { servicePriceCents: 2600 },
+    });
+    expect(preserve.status(), await preserve.text()).toBe(200);
+    expect((await preserve.json()).extras.map((extra: any) => extra.amountCentsSnapshot)).toEqual([1000, 500]);
+
+    expect((await request.patch(`/api/admin/extras/${editableVariable.id}`, {
+      data: { name: `Deslocação atual ${suffix}`, financialRule: "follow_compensation" },
+    })).ok()).toBe(true);
+    expect((await request.patch(`/api/admin/extras/${editableFixed.id}`, {
+      data: { name: `Extra fixo atual ${suffix}`, amountCents: 750 },
+    })).ok()).toBe(true);
+
+    const unchanged = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: {
+        extras: [
+          { extraId: editableVariable.id, amountCents: 1000 },
+          { extraId: editableFixed.id },
+        ],
+      },
+    });
+    expect(unchanged.status(), await unchanged.text()).toBe(200);
+    expect((await unchanged.json()).extras).toEqual([
+      expect.objectContaining({ nameSnapshot: editableVariable.name, amountCentsSnapshot: 1000 }),
+      expect.objectContaining({ nameSnapshot: editableFixed.name, amountCentsSnapshot: 500 }),
+    ]);
+
+    const changed = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: {
+        extras: [
+          { extraId: editableVariable.id, amountCents: 1800 },
+          { extraId: editableFixed.id },
+        ],
+      },
+    });
+    expect(changed.status(), await changed.text()).toBe(200);
+    const changedBody = await changed.json();
+    expect(changedBody.extras).toEqual([
+      expect.objectContaining({ nameSnapshot: `Deslocação atual ${suffix}`, amountCentsSnapshot: 1800 }),
+      expect.objectContaining({ nameSnapshot: editableFixed.name, amountCentsSnapshot: 500 }),
+    ]);
+
+    const beforeRollback = (await findAppointments(request, customerName, startTime))[0];
+    const invalidRollback = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: {
+        servicePriceCents: 4000,
+        extras: [{ extraId: 999_999_999 }],
+      },
+    });
+    expect(invalidRollback.status(), await invalidRollback.text()).toBe(409);
+    const afterInvalidRollback = (await findAppointments(request, customerName, startTime))[0];
+    expect(afterInvalidRollback.servicePriceCentsSnapshot).toBe(beforeRollback.servicePriceCentsSnapshot);
+    expect(afterInvalidRollback.extras).toEqual(beforeRollback.extras);
+
+    const variableRollback = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: {
+        servicePriceCents: 4100,
+        extras: [{ extraId: newVariable.id }],
+      },
+    });
+    expect(variableRollback.status(), await variableRollback.text()).toBe(400);
+    const afterVariableRollback = (await findAppointments(request, customerName, startTime))[0];
+    expect(afterVariableRollback.servicePriceCentsSnapshot).toBe(beforeRollback.servicePriceCentsSnapshot);
+    expect(afterVariableRollback.extras).toEqual(beforeRollback.extras);
+
+    const historyResponse = await request.get(`/api/admin/customers/history?appointmentId=${appointment.id}`);
+    expect(historyResponse.status(), await historyResponse.text()).toBe(200);
+    const historyAppointment = (await historyResponse.json()).appointments.find((item: any) => item.id === appointment.id);
+    expect(historyAppointment).toMatchObject({ servicePrice: 2600, totalPrice: 4900, status: "booked" });
+    expect(historyAppointment.extras).toEqual([
+      expect.objectContaining({ nameSnapshot: `Deslocação atual ${suffix}`, amountCentsSnapshot: 1800 }),
+      expect.objectContaining({ nameSnapshot: editableFixed.name, amountCentsSnapshot: 500 }),
+    ]);
+    expect(JSON.stringify(historyAppointment)).not.toContain("financialRuleSnapshot");
+
+    const tokenResponse = await request.get(`/api/appointments/token/${appointment.cancelToken}`);
+    expect(tokenResponse.status(), await tokenResponse.text()).toBe(200);
+    const tokenBody = await tokenResponse.json();
+    expect(tokenBody).toMatchObject({ price: 2600, totalPrice: 4900 });
+    expect(tokenBody.extras).toEqual(historyAppointment.extras.map((extra: any) => ({
+      nameSnapshot: extra.nameSnapshot,
+      amountCentsSnapshot: extra.amountCentsSnapshot,
+      position: extra.position,
+    })));
+    expect(JSON.stringify(tokenBody)).not.toContain("financialRuleSnapshot");
+    expect(JSON.stringify(tokenBody)).not.toContain("extraDefinitionId");
+
+    const logs = await (await request.get("/api/admin/audit-logs?limit=100")).json();
+    const extrasAudit = logs.find((log: any) => log.action === "appointment.updated"
+      && log.entityId === appointment.id
+      && JSON.parse(log.metadata).fields.includes("extras"));
+    expect(extrasAudit).toBeTruthy();
+    const auditMetadata = JSON.parse(extrasAudit.metadata);
+    expect(auditMetadata).toMatchObject({ previousTotalCents: 4100, newTotalCents: 4900 });
+    expect(auditMetadata.previousExtras).toBeInstanceOf(Array);
+    expect(auditMetadata.newExtras).toBeInstanceOf(Array);
+    expect(JSON.stringify(auditMetadata)).not.toContain("financialRuleSnapshot");
+
+    expect((await request.patch(`/api/admin/extras/${editableFixed.id}`, { data: { isActive: false } })).ok()).toBe(true);
+    const removeInactive = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: { extras: [{ extraId: editableVariable.id, amountCents: 1800 }] },
+    });
+    expect(removeInactive.status(), await removeInactive.text()).toBe(200);
+    const readdInactive = await request.patch(`/api/appointments/${appointment.id}`, {
+      data: {
+        extras: [
+          { extraId: editableVariable.id, amountCents: 1800 },
+          { extraId: editableFixed.id },
+        ],
+      },
+    });
+    expect(readdInactive.status(), await readdInactive.text()).toBe(409);
+    expect((await findAppointments(request, customerName, startTime))[0].extras).toHaveLength(1);
+
+    const removeAll = await request.patch(`/api/appointments/${appointment.id}`, { data: { extras: [] } });
+    expect(removeAll.status(), await removeAll.text()).toBe(200);
+    expect((await removeAll.json()).extras).toEqual([]);
+
+    for (const [index, status] of ["completed", "cancelled", "late_cancelled", "no_show"].entries()) {
+      const stateStart = status === "completed" || status === "no_show"
+        ? futureThursdayIso(-270 - index, 10)
+        : futureThursdayIso(255 + index, 10);
+      const stateCreated = await createManual(request, `Estado Extra ${status} ${suffix}`, stateStart, {
+        allowOutsideHours: status === "completed" || status === "no_show",
+        extras: [{ extraId: editableVariable.id, amountCents: 900 }],
+      });
+      expect(stateCreated.response.status(), JSON.stringify(stateCreated.body)).toBe(201);
+      const stateAppointment = stateCreated.body.appointments[0];
+      if (stateAppointment.status !== status) {
+        const stateResponse = status === "no_show"
+          ? await request.patch(`/api/appointments/${stateAppointment.id}`, { data: { status } })
+          : await request.patch(`/api/appointments/${stateAppointment.id}/status`, {
+              data: { status, ...(status === "completed" ? { paymentMethod: "cash" } : {}) },
+            });
+        expect(stateResponse.status(), `${status}: ${await stateResponse.text()}`).toBe(200);
+      }
+      const editHistorical = await request.patch(`/api/appointments/${stateAppointment.id}`, { data: { extras: [] } });
+      expect(editHistorical.status(), `${status}: ${await editHistorical.text()}`).toBe(409);
+      expect((await findAppointments(request, `Estado Extra ${status} ${suffix}`, stateStart))[0].extras).toHaveLength(1);
+    }
+  });
+
+  test("renders and edits snapshot Extras coherently on desktop, mobile, history and customer token", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const suffix = Date.now();
+    const variableResponse = await request.post("/api/admin/extras", { data: {
+      name: `Extra UI variável ${suffix}`,
+      pricingMode: "variable",
+      amountCents: null,
+      financialRule: "barber",
+      sortOrder: 60,
+    } });
+    expect(variableResponse.status(), await variableResponse.text()).toBe(201);
+    const variable = await variableResponse.json();
+    const fixedResponse = await request.post("/api/admin/extras", { data: {
+      name: `Extra UI fixo ${suffix}`,
+      pricingMode: "fixed",
+      amountCents: 500,
+      financialRule: "establishment",
+      sortOrder: 61,
+    } });
+    expect(fixedResponse.status(), await fixedResponse.text()).toBe(201);
+    const fixed = await fixedResponse.json();
+    const startTime = futureThursdayIso(6, 10);
+    const customerName = `Detalhe Extras UI ${suffix}`;
+    const created = await createManual(request, customerName, startTime, {
+      hasSpecialTerms: true,
+      servicePriceCents: 2500,
+      extras: [
+        { extraId: variable.id, amountCents: 1000 },
+        { extraId: fixed.id },
+      ],
+    });
+    expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+    const appointment = created.body.appointments[0];
+    expect((await request.patch(`/api/admin/extras/${fixed.id}`, { data: { isActive: false } })).ok()).toBe(true);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdminPage(page);
+    await page.getByRole("tab", { name: /Marca/ }).click();
+    await page.getByRole("button", { name: /Pr.ximas/ }).click();
+    const appointmentButton = page.getByRole("button", {
+      name: new RegExp(`Abrir detalhes da marca..o de ${customerName}`),
+    }).first();
+    await expect(appointmentButton).toBeVisible();
+    await appointmentButton.click();
+
+    let details = page.getByRole("dialog", { name: /Detalhes da marca/ });
+    const breakdown = details.getByTestId("appointment-price-breakdown");
+    await expect(breakdown).toContainText(variable.name);
+    await expect(breakdown).toContainText(fixed.name);
+    await expect(breakdown.getByText("40,00 €", { exact: true })).toBeVisible();
+    await details.screenshot({ path: "test-results/appointment-extras-detail-desktop.png" });
+
+    await details.getByRole("button", { name: "Editar", exact: true }).click();
+    let editor = page.getByRole("dialog", { name: /Editar marca/ });
+    const extrasEditor = editor.getByTestId("appointment-extras-editor");
+    await expect(extrasEditor.getByLabel(`Selecionar Extra ${variable.name}`)).toBeChecked();
+    await expect(extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`)).toBeChecked();
+    await expect(extrasEditor.getByText("Inativo · pode remover, mas não voltar a adicionar")).toBeVisible();
+    await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toHaveCount(0);
+    await extrasEditor.getByLabel(`Valor do Extra ${variable.name}`).fill("18,00");
+    await extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`).click();
+    await expect(editor.getByTestId("appointment-edit-total")).toContainText("43,00 €");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(editor).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await editor.screenshot({ path: "test-results/appointment-extras-editor-mobile.png" });
+    await editor.getByRole("button", { name: "Guardar alterações" }).click();
+    await expect(editor).not.toBeVisible();
+
+    details = page.getByRole("dialog", { name: /Detalhes da marca/ });
+    await expect(details.getByTestId("appointment-price-breakdown")).toContainText("43,00 €");
+    await expect(details.getByTestId("appointment-price-breakdown")).toContainText(variable.name);
+    await expect(details.getByTestId("appointment-price-breakdown")).not.toContainText(fixed.name);
+    await details.getByRole("button", { name: "Histórico" }).click();
+    const history = page.getByRole("dialog", { name: "Histórico do cliente" });
+    const historyAppointment = history.getByTestId("customer-history-appointment").filter({ hasText: variable.name }).first();
+    await expect(historyAppointment).toContainText(variable.name);
+    await expect(historyAppointment).toContainText("18,00 €");
+    await expect(historyAppointment).toContainText("43,00 €");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+    await page.goto(`/cancel/${appointment.cancelToken}`);
+    const customerSummary = page.getByTestId("customer-appointment-commercial-summary");
+    await expect(customerSummary).toContainText(service.name);
+    await expect(customerSummary).toContainText(variable.name);
+    await expect(customerSummary).toContainText("18,00 €");
+    await expect(customerSummary).toContainText("43,00 €");
+    await expect(customerSummary).not.toContainText("barber");
+    await expect(customerSummary).not.toContainText("establishment");
   });
 
   test("preserves selections across service and special-term changes, resets recurrence and renders totals responsively", async ({ page }) => {

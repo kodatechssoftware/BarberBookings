@@ -113,7 +113,7 @@ type AdminAppointment = {
     extraDefinitionId: number;
     nameSnapshot: string;
     amountCentsSnapshot: number;
-    financialRuleSnapshot: string;
+    financialRuleSnapshot?: "follow_compensation" | "barber" | "establishment";
     position: number;
   }>;
   status: AppointmentStatus;
@@ -3337,12 +3337,30 @@ export default function Admin() {
                 )}
                 <div className="space-y-2">
                   {customerHistory.appointments.map((appointment: any) => (
-                    <div key={appointment.id} className="rounded-xl border border-white/10 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <p className="font-medium">{appointment.serviceName}</p>
-                        <p className="text-xs text-gray-400">{appointment.barberName} · {format(parseISO(appointment.startTime), "dd/MM/yyyy HH:mm")}</p>
+                    <div key={appointment.id} className="rounded-xl border border-white/10 p-3 space-y-3" data-testid="customer-history-appointment">
+                      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
+                        <div>
+                          <p className="font-medium">{appointment.serviceName}</p>
+                          <p className="text-xs text-gray-400">{appointment.barberName} · {format(parseISO(appointment.startTime), "dd/MM/yyyy HH:mm")}</p>
+                        </div>
+                        <span className="text-xs uppercase tracking-widest text-gray-400">{getStatusLabel(appointment.status)}</span>
                       </div>
-                      <span className="text-xs uppercase tracking-widest text-gray-400">{getStatusLabel(appointment.status)}</span>
+                      <div className="space-y-1.5 border-t border-white/10 pt-2 text-sm">
+                        <div className="flex items-start justify-between gap-4 text-gray-300">
+                          <span className="min-w-0 break-words">Serviço</span>
+                          <span className="shrink-0">{formatCents(appointment.servicePrice)}</span>
+                        </div>
+                        {(appointment.extras || []).map((extra: any) => (
+                          <div key={`${extra.extraDefinitionId}-${extra.position}`} className="flex items-start justify-between gap-4 text-gray-300">
+                            <span className="min-w-0 break-words">{extra.nameSnapshot}</span>
+                            <span className="shrink-0">{formatCents(extra.amountCentsSnapshot)}</span>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-2 font-semibold text-white">
+                          <span>Total</span>
+                          <span className="shrink-0 text-primary">{formatCents(appointment.totalPrice)}</span>
+                        </div>
+                      </div>
                     </div>
                   ))}
                   {customerHistory.appointments.length === 0 && (

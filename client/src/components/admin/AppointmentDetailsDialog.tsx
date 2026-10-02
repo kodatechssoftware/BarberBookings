@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Banknote, CheckCircle, CreditCard, Gift, Pencil, Phone, User, XCircle } from "lucide-react";
-import { type AppointmentPaymentMethod, type AppointmentStatus } from "@/hooks/use-appointments";
+import {
+  type AppointmentExtraSnapshot,
+  type AppointmentPaymentMethod,
+  type AppointmentStatus,
+} from "@/hooks/use-appointments";
+import { useExtras } from "@/hooks/use-extras";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button-custom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -18,6 +23,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -58,6 +64,7 @@ type AdminAppointment = {
   depositRequired?: boolean;
   depositReason?: string | null;
   canManage?: boolean;
+  extras?: AppointmentExtraSnapshot[];
 };
 
 type ServiceListItem = {
@@ -74,6 +81,29 @@ function parseAppointmentPriceInput(value: string) {
   const parsed = Number(normalized);
   const cents = Math.round(parsed * 100);
   return Number.isFinite(parsed) && cents >= 0 && cents <= 1_000_000 ? cents : null;
+}
+
+function parseAppointmentExtraPriceInput(value: string) {
+  const cents = parseAppointmentPriceInput(value);
+  return cents !== null && cents > 0 ? cents : null;
+}
+
+function formatAppointmentPrice(amountCents: number) {
+  return `${(amountCents / 100).toFixed(2).replace(".", ",")} €`;
+}
+
+type AppointmentExtraSelection = {
+  extraId: number;
+  amountEuros: string;
+};
+
+function appointmentExtraSelections(appointment: AdminAppointment): AppointmentExtraSelection[] {
+  return [...(appointment.extras ?? [])]
+    .sort((left, right) => left.position - right.position)
+    .map((extra) => ({
+      extraId: extra.extraDefinitionId,
+      amountEuros: String(extra.amountCentsSnapshot / 100).replace(".", ","),
+    }));
 }
 
 function EditAppointmentDialog({
@@ -110,8 +140,15 @@ function EditAppointmentDialog({
   const [priceValue, setPriceValue] = useState(
     String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","),
   );
+  const [selectedExtras, setSelectedExtras] = useState<AppointmentExtraSelection[]>(
+    () => appointmentExtraSelections(appointment),
+  );
   const [allowOutsideHours, setAllowOutsideHours] = useState(Boolean(appointment.manualOutsideHours));
   const [isSaving, setIsSaving] = useState(false);
+  const { data: extraDefinitions = [], isLoading: isLoadingExtras } = useExtras({
+    enabled: open,
+    locationId: appointment.locationId,
+  });
   const originalTime = format(parseISO(appointment.startTime), "HH:mm");
   const timeOptions = useMemo(() => createAppointmentTimeOptions({
     currentTime: originalTime,
@@ -198,6 +235,40 @@ function EditAppointmentDialog({
   const showExistingPriceTerms = serviceId !== "custom"
     && serviceId !== "none"
     && (selectedIsOutsideHours || hasExistingSpecificPrice);
+  const existingExtrasByDefinitionId = useMemo(
+    () => new Map((appointment.extras ?? []).map((extra) => [extra.extraDefinitionId, extra])),
+    [appointment.extras],
+  );
+  const extraDefinitionsById = useMemo(
+    () => new Map(extraDefinitions.map((extra) => [extra.id, extra])),
+    [extraDefinitions],
+  );
+  const visibleExtraDefinitions = useMemo(() => {
+    const activeDefinitions = extraDefinitions.filter((extra) => extra.isActive);
+    const inactiveSelectedDefinitions = extraDefinitions.filter((extra) =>
+      !extra.isActive && selectedExtras.some((selection) => selection.extraId === extra.id));
+    return [...activeDefinitions, ...inactiveSelectedDefinitions]
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id);
+  }, [extraDefinitions, selectedExtras]);
+  const missingSelectedExtras = useMemo(() => selectedExtras
+    .filter((selection) => !extraDefinitionsById.has(selection.extraId))
+    .map((selection) => existingExtrasByDefinitionId.get(selection.extraId))
+    .filter((extra): extra is AppointmentExtraSnapshot => Boolean(extra)), [
+      existingExtrasByDefinitionId,
+      extraDefinitionsById,
+      selectedExtras,
+    ]);
+  const proposedServicePriceCents = serviceId === "custom" || showExistingPriceTerms
+    ? parseAppointmentPriceInput(priceValue)
+    : selectedService?.price ?? (serviceId === "none" ? 0 : null);
+  const proposedExtrasTotalCents = selectedExtras.reduce((total, selection) => {
+    const definition = extraDefinitionsById.get(selection.extraId);
+    const existing = existingExtrasByDefinitionId.get(selection.extraId);
+    const amount = definition?.pricingMode === "fixed"
+      ? existing?.amountCentsSnapshot ?? definition.amountCents
+      : parseAppointmentExtraPriceInput(selection.amountEuros);
+    return total + (amount ?? existing?.amountCentsSnapshot ?? 0);
+  }, 0);
 
   useEffect(() => {
     if (!open) return;
@@ -226,6 +297,7 @@ function EditAppointmentDialog({
     setCustomServiceName(appointment.serviceNameSnapshot || "");
     setCustomDuration(String(appointment.durationMinutes || 30));
     setPriceValue(String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","));
+    setSelectedExtras(appointmentExtraSelections(appointment));
     setAllowOutsideHours(Boolean(appointment.manualOutsideHours));
   };
 
@@ -276,6 +348,31 @@ function EditAppointmentDialog({
       toast({ title: "Preço inválido", description: "Indique o preço final desta marcação.", variant: "destructive" });
       return;
     }
+    const extrasPayload = selectedExtras.map((selection) => {
+      const definition = extraDefinitionsById.get(selection.extraId);
+      const existing = existingExtrasByDefinitionId.get(selection.extraId);
+      if (!definition || !definition.isActive) {
+        return { extraId: selection.extraId, amountCents: existing?.amountCentsSnapshot };
+      }
+      if (definition.pricingMode === "fixed") return { extraId: selection.extraId };
+      return {
+        extraId: selection.extraId,
+        amountCents: parseAppointmentExtraPriceInput(selection.amountEuros) ?? undefined,
+      };
+    });
+    const invalidVariableExtra = selectedExtras.some((selection) => {
+      const definition = extraDefinitionsById.get(selection.extraId);
+      return definition?.isActive && definition.pricingMode === "variable"
+        && parseAppointmentExtraPriceInput(selection.amountEuros) === null;
+    });
+    if (invalidVariableExtra) {
+      toast({
+        title: "Valor de Extra inválido",
+        description: "Indique um valor superior a zero para cada Extra variável.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -285,6 +382,7 @@ function EditAppointmentDialog({
         serviceId: parsedServiceId,
         serviceMode: serviceId === "custom" ? "custom" : "existing",
         allowOutsideHours: allowOutsideHours && selectedIsOutsideHours,
+        extras: extrasPayload,
         ...(serviceId === "custom" ? {
           customServiceName: customServiceName.trim(),
           customDurationMinutes: parsedCustomDuration,
@@ -292,10 +390,12 @@ function EditAppointmentDialog({
         } : showExistingPriceTerms ? {
           servicePriceCents: priceCents,
         } : {}),
-      });
-      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      }, appointment.locationId ? { headers: locationHeaders(appointment.locationId) } : undefined);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/appointments"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] }),
+      ]);
       toast({ title: "Sucesso", description: "Marcação atualizada." });
       setOpen(false);
     } catch (err: any) {
@@ -316,7 +416,10 @@ function EditAppointmentDialog({
           <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
         </Button>
       </DialogTrigger>
-      <DialogContent className="bg-card border-white/10 text-white">
+      <DialogContent
+        mobileViewportAware
+        className="w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-lg"
+      >
         <DialogHeader><DialogTitle>Editar marcação</DialogTitle></DialogHeader>
         <div className="space-y-4 pt-4">
           <div className="grid grid-cols-2 gap-4">
@@ -451,6 +554,103 @@ function EditAppointmentDialog({
                     className="border-white/10 bg-background text-white"
                   />
                 </div>
+              </div>
+            </div>
+          )}
+          <div className="space-y-3 rounded-xl border border-white/10 bg-background/30 p-3" data-testid="appointment-extras-editor">
+            <div>
+              <p className="font-semibold text-white">Extras</p>
+              <p className="text-xs text-gray-400">Os valores guardados só mudam quando altera explicitamente a seleção.</p>
+            </div>
+            {isLoadingExtras ? (
+              <p className="text-xs text-gray-500">A carregar Extras...</p>
+            ) : visibleExtraDefinitions.length === 0 && missingSelectedExtras.length === 0 ? (
+              <p className="text-xs text-gray-500">Não existem Extras disponíveis nesta localização.</p>
+            ) : (
+              <div className="space-y-2">
+                {visibleExtraDefinitions.map((extra) => {
+                  const selection = selectedExtras.find((candidate) => candidate.extraId === extra.id);
+                  const existing = existingExtrasByDefinitionId.get(extra.id);
+                  const selected = Boolean(selection);
+                  const displayedFixedAmount = existing?.amountCentsSnapshot ?? extra.amountCents;
+                  return (
+                    <div key={extra.id} className="space-y-2 rounded-lg border border-white/10 bg-card/60 p-3">
+                      <label htmlFor={`edit-appointment-extra-${extra.id}`} className="flex min-h-6 cursor-pointer items-start gap-3">
+                        <Checkbox
+                          id={`edit-appointment-extra-${extra.id}`}
+                          checked={selected}
+                          onCheckedChange={(checked) => setSelectedExtras((current) => checked
+                            ? current.some((candidate) => candidate.extraId === extra.id)
+                              ? current
+                              : [...current, { extraId: extra.id, amountEuros: "" }]
+                            : current.filter((candidate) => candidate.extraId !== extra.id))}
+                          aria-label={`Selecionar Extra ${extra.name}`}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block break-words text-sm text-gray-200">{existing?.nameSnapshot ?? extra.name}</span>
+                          {!extra.isActive && (
+                            <span className="mt-0.5 block text-[11px] text-amber-300">Inativo · pode remover, mas não voltar a adicionar</span>
+                          )}
+                        </span>
+                        <span className="shrink-0 text-sm font-semibold text-primary">
+                          {extra.pricingMode === "fixed" && displayedFixedAmount
+                            ? formatAppointmentPrice(displayedFixedAmount)
+                            : "Variável"}
+                        </span>
+                      </label>
+                      {selected && extra.pricingMode === "variable" && (
+                        <div className="space-y-1.5 pl-7">
+                          <Label htmlFor={`edit-appointment-extra-amount-${extra.id}`} className="text-xs text-gray-300">
+                            Valor (€)
+                          </Label>
+                          <Input
+                            id={`edit-appointment-extra-amount-${extra.id}`}
+                            inputMode="decimal"
+                            value={selection?.amountEuros ?? ""}
+                            disabled={!extra.isActive}
+                            onChange={(event) => setSelectedExtras((current) => current.map((candidate) =>
+                              candidate.extraId === extra.id
+                                ? { ...candidate, amountEuros: event.target.value }
+                                : candidate))}
+                            aria-label={`Valor do Extra ${extra.name}`}
+                            className="h-10 border-white/10 bg-background text-white"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {missingSelectedExtras.map((extra) => (
+                  <div key={extra.extraDefinitionId} className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
+                    <label htmlFor={`edit-appointment-extra-missing-${extra.extraDefinitionId}`} className="flex cursor-pointer items-start gap-3">
+                      <Checkbox
+                        id={`edit-appointment-extra-missing-${extra.extraDefinitionId}`}
+                        checked
+                        onCheckedChange={(checked) => {
+                          if (!checked) setSelectedExtras((current) => current.filter((candidate) => candidate.extraId !== extra.extraDefinitionId));
+                        }}
+                        aria-label={`Remover Extra ${extra.nameSnapshot}`}
+                      />
+                      <span className="min-w-0 flex-1 text-sm text-gray-200">
+                        {extra.nameSnapshot}
+                        <span className="mt-0.5 block text-[11px] text-amber-300">Indisponível no catálogo · apenas pode remover</span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold text-primary">{formatAppointmentPrice(extra.amountCentsSnapshot)}</span>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {proposedServicePriceCents !== null && (
+            <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3 text-sm" data-testid="appointment-edit-total">
+              <div className="flex justify-between gap-4 text-gray-300">
+                <span>Serviço</span>
+                <span className="shrink-0">{formatAppointmentPrice(proposedServicePriceCents)}</span>
+              </div>
+              <div className="flex justify-between gap-4 border-t border-white/10 pt-2 font-bold text-white">
+                <span>Total</span>
+                <span className="shrink-0 text-primary">{formatAppointmentPrice(proposedServicePriceCents + proposedExtrasTotalCents)}</span>
               </div>
             </div>
           )}
@@ -672,7 +872,15 @@ export function AppointmentDetailsDialog({
   const end = getWeeklyAppointmentEnd(appointment);
   const contactLinks = getAppointmentContactLinks(appointment.customerPhone);
   const serviceName = appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId);
-  const finalPrice = appointment.servicePriceCentsSnapshot;
+  const finalPrice = appointment.servicePriceCentsSnapshot
+    ?? services?.find((service) => service.id === appointment.serviceId)?.price
+    ?? 0;
+  const appointmentExtras = [...(appointment.extras ?? [])]
+    .sort((left, right) => left.position - right.position);
+  const appointmentTotal = finalPrice + appointmentExtras.reduce(
+    (total, extra) => total + extra.amountCentsSnapshot,
+    0,
+  );
   const completeDisabledMessage = getStatusTimingMessage(appointment, "completed");
   const noShowDisabledMessage = getStatusTimingMessage(appointment, "no_show");
 
@@ -738,11 +946,9 @@ export function AppointmentDetailsDialog({
               <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
                 <p className="text-xs uppercase tracking-widest text-gray-500">Serviço</p>
                 <p className="mt-1 font-semibold text-white">{serviceName}</p>
-                {finalPrice !== null && finalPrice !== undefined && (
-                  <p className="mt-1 text-xs text-gray-400">
-                    Preço final: {(finalPrice / 100).toFixed(2).replace(".", ",")} €
-                  </p>
-                )}
+                <p className="mt-1 text-xs text-gray-400">
+                  {appointmentExtras.length > 0 ? "Preço do serviço" : "Preço final"}: {formatAppointmentPrice(finalPrice)}
+                </p>
                 {appointment.manualOutsideHours && (
                   <span className="mt-2 inline-flex rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200">
                     Marcação fora do horário
@@ -755,6 +961,27 @@ export function AppointmentDetailsDialog({
                   <p className="mt-1 font-semibold text-white">{getPaymentMethodLabel(appointment.paymentMethod)}</p>
                 </div>
               )}
+            </div>
+            <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-card px-3 py-3 text-sm" data-testid="appointment-price-breakdown">
+              <div className="flex items-start justify-between gap-4">
+                <span className="min-w-0 break-words text-gray-300">Serviço</span>
+                <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(finalPrice)}</span>
+              </div>
+              {appointmentExtras.length > 0 && (
+                <>
+                  <p className="pt-1 text-xs uppercase tracking-widest text-gray-500">Extras</p>
+                  {appointmentExtras.map((extra) => (
+                    <div key={`${extra.extraDefinitionId}-${extra.position}`} className="flex items-start justify-between gap-4">
+                      <span className="min-w-0 break-words text-gray-300">{extra.nameSnapshot}</span>
+                      <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(extra.amountCentsSnapshot)}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+              <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-2 font-bold">
+                <span className="text-white">Total</span>
+                <span className="shrink-0 text-primary">{formatAppointmentPrice(appointmentTotal)}</span>
+              </div>
             </div>
           </div>
 

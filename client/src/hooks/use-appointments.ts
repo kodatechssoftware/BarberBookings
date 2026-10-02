@@ -6,6 +6,14 @@ import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 export type AppointmentStatus = "booked" | "completed" | "cancelled" | "late_cancelled" | "no_show";
 export type AppointmentPaymentMethod = "pending" | "cash" | "card" | "gift";
 
+export type AppointmentExtraSnapshot = {
+  extraDefinitionId: number;
+  nameSnapshot: string;
+  amountCentsSnapshot: number;
+  financialRuleSnapshot?: "follow_compensation" | "barber" | "establishment";
+  position: number;
+};
+
 export type AppointmentRecord = {
   id: number;
   locationId: number;
@@ -19,13 +27,7 @@ export type AppointmentRecord = {
   serviceNameSnapshot: string | null;
   servicePriceCentsSnapshot: number | null;
   manualOutsideHours: boolean;
-  extras?: Array<{
-    extraDefinitionId: number;
-    nameSnapshot: string;
-    amountCentsSnapshot: number;
-    financialRuleSnapshot: "follow_compensation" | "barber" | "establishment";
-    position: number;
-  }>;
+  extras?: AppointmentExtraSnapshot[];
   status: AppointmentStatus;
   paymentMethod: AppointmentPaymentMethod;
   cancelToken: string;
@@ -72,6 +74,8 @@ export type AppointmentByToken = {
   serviceName: string;
   duration: number;
   price: number;
+  extras: Array<Pick<AppointmentExtraSnapshot, "nameSnapshot" | "amountCentsSnapshot" | "position">>;
+  totalPrice: number;
   manualOutsideHours: boolean;
 };
 
