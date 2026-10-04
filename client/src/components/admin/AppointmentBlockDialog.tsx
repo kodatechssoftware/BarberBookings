@@ -80,7 +80,7 @@ export function AppointmentBlockDialog({
   onSubmit,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
-  const isSingleTimeMode = blockData.isManualBooking && blockData.isRecurring;
+  const isSingleTimeMode = blockData.isManualBooking;
   const manualBookingTimeOptions = [
     ...createClockAlignedTimeOptions({
       startMinute: 9 * 60,
@@ -441,11 +441,13 @@ export function AppointmentBlockDialog({
             <div className="space-y-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <Label className="text-sm font-medium text-gray-300">{isSingleTimeMode ? "Hora da marcação" : "Horas afetadas"}</Label>
+                  <Label className="text-sm font-medium text-gray-300">{blockData.isManualBooking ? "Hora da marcação" : "Horas afetadas"}</Label>
                   <p className="text-xs text-gray-500">
                     {blockData.times.length > 0
                       ? `${blockData.times.length} horário${blockData.times.length === 1 ? "" : "s"} selecionado${blockData.times.length === 1 ? "" : "s"}`
-                      : isSingleTimeMode ? "Escolha a hora que se repete." : "Escolha uma ou mais horas."}
+                      : blockData.isManualBooking
+                        ? blockData.isRecurring ? "Escolha a hora que se repete." : "Escolha a hora de início."
+                        : "Escolha uma ou mais horas."}
                   </p>
                 </div>
                 {!isSingleTimeMode && (
@@ -484,6 +486,7 @@ export function AppointmentBlockDialog({
                       size="sm"
                       className="h-11 rounded-lg text-xs disabled:border-white/5 disabled:bg-black/20 disabled:text-gray-600 disabled:opacity-100 sm:h-10"
                       disabled={!isAvailable}
+                      aria-pressed={blockData.times.includes(time)}
                       data-availability={isAvailable ? "available" : "unavailable"}
                       title={isAvailable ? undefined : "Indisponível"}
                       onClick={() => handleTimeClick(time)}
@@ -853,6 +856,7 @@ export function AppointmentBlockDialog({
               isCheckingAvailability ||
               !blockData.barberId ||
               blockData.times.length === 0 ||
+              (blockData.isManualBooking && blockData.times.length !== 1) ||
               (blockData.isManualBooking && (!blockData.hasSpecialTerms || blockData.serviceMode === "existing") && !blockData.serviceId) ||
               (blockData.isManualBooking && blockData.hasSpecialTerms && blockData.serviceMode === "custom" && !blockData.customServiceName.trim())
             }

@@ -262,6 +262,7 @@ test.describe.serial("manual booking Extras", () => {
     expect(special.body.appointments[0]).toMatchObject({
       serviceId: service.id,
       servicePriceCentsSnapshot: 2000,
+      durationMinutes: 60,
       manualOutsideHours: false,
     });
     expect(special.body.appointments[0].extras).toHaveLength(1);
@@ -297,7 +298,10 @@ test.describe.serial("manual booking Extras", () => {
       extras: [{ extraId: travelExtra.id, amountCents: 1700 }],
     });
     expect(outside.response.status(), JSON.stringify(outside.body)).toBe(201);
-    expect(outside.body.appointments[0]).toMatchObject({ manualOutsideHours: true });
+    expect(outside.body.appointments[0]).toMatchObject({
+      durationMinutes: 60,
+      manualOutsideHours: true,
+    });
     expect(outside.body.appointments[0].extras).toHaveLength(1);
   });
 

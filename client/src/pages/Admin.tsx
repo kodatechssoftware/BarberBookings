@@ -2832,7 +2832,7 @@ export default function Admin() {
     setBlockData((current) => {
       const availableTimes = new Set(availableBlockTimes);
       const validTimes = current.times.filter((time) => availableTimes.has(time));
-      const nextTimes = current.isRecurring ? validTimes.slice(0, 1) : validTimes;
+      const nextTimes = current.isManualBooking ? validTimes.slice(0, 1) : validTimes;
       if (
         nextTimes.length === current.times.length &&
         nextTimes.every((time, index) => time === current.times[index])
@@ -2899,8 +2899,8 @@ export default function Admin() {
       toast({ title: "Erro", description: "Indique o nome do cliente.", variant: "destructive" });
       return;
     }
-    if (blockData.isRecurring && blockData.times.length !== 1) {
-      toast({ title: "Erro", description: "Escolha apenas uma hora para a marcação recorrente.", variant: "destructive" });
+    if (blockData.isManualBooking && blockData.times.length !== 1) {
+      toast({ title: "Erro", description: "Escolha apenas uma hora de início para a marcação.", variant: "destructive" });
       return;
     }
     if (blockData.isManualBooking && !isValidOptionalEmail(blockData.email)) {
@@ -3022,7 +3022,7 @@ export default function Admin() {
             servicePriceCents: appointmentPriceCents,
           } : {}),
           startTime: startTimes[0],
-          startTimes,
+          ...(!blockData.isManualBooking ? { startTimes } : {}),
           name: blockData.isManualBooking ? blockData.name.trim() : (blockData.name.trim() || "BLOQUEIO MANUAL"),
           phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
