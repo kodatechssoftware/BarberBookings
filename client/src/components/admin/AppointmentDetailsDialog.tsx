@@ -39,6 +39,12 @@ import {
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders } from "@/lib/location-context";
+import {
+  centsToMoneyInput,
+  formatMoneyInputOnBlur,
+  moneyInputToCents,
+  normalizeMoneyInput,
+} from "@/lib/money-input";
 import { createAppointmentTimeOptions } from "@/lib/appointment-time-options";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
 import {
@@ -76,11 +82,7 @@ type ServiceListItem = {
 };
 
 function parseAppointmentPriceInput(value: string) {
-  const normalized = value.trim().replace(",", ".");
-  if (!normalized || !/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
-  const parsed = Number(normalized);
-  const cents = Math.round(parsed * 100);
-  return Number.isFinite(parsed) && cents >= 0 && cents <= 1_000_000 ? cents : null;
+  return moneyInputToCents(value, { maxCents: 1_000_000 });
 }
 
 function parseAppointmentExtraPriceInput(value: string) {
@@ -89,7 +91,7 @@ function parseAppointmentExtraPriceInput(value: string) {
 }
 
 function formatAppointmentPrice(amountCents: number) {
-  return `${(amountCents / 100).toFixed(2).replace(".", ",")} €`;
+  return `${centsToMoneyInput(amountCents)} €`;
 }
 
 type AppointmentExtraSelection = {
@@ -102,7 +104,7 @@ function appointmentExtraSelections(appointment: AdminAppointment): AppointmentE
     .sort((left, right) => left.position - right.position)
     .map((extra) => ({
       extraId: extra.extraDefinitionId,
-      amountEuros: String(extra.amountCentsSnapshot / 100).replace(".", ","),
+      amountEuros: centsToMoneyInput(extra.amountCentsSnapshot),
     }));
 }
 
@@ -138,7 +140,7 @@ function EditAppointmentDialog({
   const [customServiceName, setCustomServiceName] = useState(appointment.serviceNameSnapshot || "");
   const [customDuration, setCustomDuration] = useState(String(appointment.durationMinutes || 30));
   const [priceValue, setPriceValue] = useState(
-    String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","),
+    centsToMoneyInput(appointment.servicePriceCentsSnapshot ?? 0),
   );
   const [selectedExtras, setSelectedExtras] = useState<AppointmentExtraSelection[]>(
     () => appointmentExtraSelections(appointment),
@@ -296,7 +298,7 @@ function EditAppointmentDialog({
     setServiceId(isCustomAppointment ? "custom" : appointment.serviceId ? String(appointment.serviceId) : "none");
     setCustomServiceName(appointment.serviceNameSnapshot || "");
     setCustomDuration(String(appointment.durationMinutes || 30));
-    setPriceValue(String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","));
+    setPriceValue(centsToMoneyInput(appointment.servicePriceCentsSnapshot ?? 0));
     setSelectedExtras(appointmentExtraSelections(appointment));
     setAllowOutsideHours(Boolean(appointment.manualOutsideHours));
   };
@@ -472,11 +474,11 @@ function EditAppointmentDialog({
               onValueChange={(value) => {
                 setServiceId(value);
                 if (value === "custom") {
-                  setPriceValue(String((appointment.servicePriceCentsSnapshot ?? 0) / 100).replace(".", ","));
+                  setPriceValue(centsToMoneyInput(appointment.servicePriceCentsSnapshot ?? 0));
                   return;
                 }
                 const service = serviceList.find((candidate) => String(candidate.id) === value);
-                if (service?.price != null) setPriceValue(String(service.price / 100).replace(".", ","));
+                if (service?.price != null) setPriceValue(centsToMoneyInput(service.price));
               }}
             >
               <SelectTrigger className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
@@ -524,7 +526,8 @@ function EditAppointmentDialog({
                   id="edit-custom-price"
                   inputMode="decimal"
                   value={priceValue}
-                  onChange={(event) => setPriceValue(event.target.value)}
+                  onChange={(event) => setPriceValue((current) => normalizeMoneyInput(event.target.value, current))}
+                  onBlur={() => setPriceValue((current) => formatMoneyInputOnBlur(current, { maxCents: 1_000_000 }))}
                   className="border-white/10 bg-background text-white"
                 />
               </div>
@@ -550,7 +553,8 @@ function EditAppointmentDialog({
                   <Input
                     inputMode="decimal"
                     value={priceValue}
-                    onChange={(event) => setPriceValue(event.target.value)}
+                    onChange={(event) => setPriceValue((current) => normalizeMoneyInput(event.target.value, current))}
+                    onBlur={() => setPriceValue((current) => formatMoneyInputOnBlur(current, { maxCents: 1_000_000 }))}
                     className="border-white/10 bg-background text-white"
                   />
                 </div>
@@ -610,7 +614,20 @@ function EditAppointmentDialog({
                             disabled={!extra.isActive}
                             onChange={(event) => setSelectedExtras((current) => current.map((candidate) =>
                               candidate.extraId === extra.id
-                                ? { ...candidate, amountEuros: event.target.value }
+                                ? {
+                                    ...candidate,
+                                    amountEuros: normalizeMoneyInput(event.target.value, candidate.amountEuros),
+                                  }
+                                : candidate))}
+                            onBlur={() => setSelectedExtras((current) => current.map((candidate) =>
+                              candidate.extraId === extra.id
+                                ? {
+                                    ...candidate,
+                                    amountEuros: formatMoneyInputOnBlur(candidate.amountEuros, {
+                                      minCents: 1,
+                                      maxCents: 1_000_000,
+                                    }),
+                                  }
                                 : candidate))}
                             aria-label={`Valor do Extra ${extra.name}`}
                             className="h-10 border-white/10 bg-background text-white"

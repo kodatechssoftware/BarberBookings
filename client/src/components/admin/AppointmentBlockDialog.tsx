@@ -12,6 +12,12 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  centsToMoneyInput,
+  formatMoneyInputOnBlur,
+  moneyInputToCents,
+  normalizeMoneyInput,
+} from "@/lib/money-input";
 import { cn } from "@/lib/utils";
 import { emailValidationMessage, isValidOptionalEmail } from "@shared/customer-validation";
 import {
@@ -107,15 +113,12 @@ export function AppointmentBlockDialog({
   const showSpecialTerms = blockData.isManualBooking && blockData.hasSpecialTerms && !blockData.isRecurring;
   const selectedExtras = extras.filter((extra) => blockData.extras.some((selection) => selection.extraId === extra.id));
 
-  const formatPrice = (priceCents: number) => `${(priceCents / 100).toFixed(2).replace(".", ",")} €`;
-  const parsePriceCents = (value: string) => {
-    const normalized = value.trim().replace(",", ".");
-    if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
-    const cents = Math.round(Number(normalized) * 100);
-    return Number.isSafeInteger(cents) && cents >= 0 ? cents : null;
-  };
+  const formatPrice = (priceCents: number) => `${centsToMoneyInput(priceCents)} €`;
+  const activeServicePrice = blockData.serviceMode === "custom"
+    ? blockData.customServicePrice
+    : blockData.existingServicePrice;
   const effectiveServicePriceCents = showSpecialTerms
-    ? parsePriceCents(blockData.servicePrice)
+    ? moneyInputToCents(activeServicePrice, { maxCents: 1_000_000 })
     : selectedService?.price ?? null;
   const effectiveServiceName = showSpecialTerms && blockData.serviceMode === "custom"
     ? blockData.customServiceName.trim()
@@ -126,7 +129,7 @@ export function AppointmentBlockDialog({
       ...extra,
       effectiveAmountCents: extra.pricingMode === "fixed"
         ? extra.amountCents
-        : parsePriceCents(selection?.amountEuros ?? ""),
+        : moneyInputToCents(selection?.amountEuros ?? "", { minCents: 1, maxCents: 1_000_000 }),
     };
   });
   const extrasTotalCents = selectedExtraRows.reduce(
@@ -258,9 +261,10 @@ export function AppointmentBlockDialog({
                         serviceMode: "existing",
                         customServiceName: "",
                         customDurationMinutes: "30",
-                        servicePrice: checked && selectedService
-                          ? String(selectedService.price / 100).replace(".", ",")
+                        existingServicePrice: checked && selectedService
+                          ? centsToMoneyInput(selectedService.price)
                           : "",
+                        customServicePrice: "",
                       })}
                     />
                   </div>
@@ -283,7 +287,8 @@ export function AppointmentBlockDialog({
                         serviceMode: "existing",
                         customServiceName: "",
                         customDurationMinutes: "30",
-                        servicePrice: "",
+                        existingServicePrice: "",
+                        customServicePrice: "",
                         extras: [],
                         times: checked ? blockData.times.slice(0, 1) : blockData.times,
                       })}
@@ -406,8 +411,8 @@ export function AppointmentBlockDialog({
                         onBlockDataChange({
                           ...blockData,
                           serviceId: value,
-                          servicePrice: blockData.hasSpecialTerms && service
-                            ? String(service.price / 100).replace(".", ",")
+                          existingServicePrice: blockData.hasSpecialTerms && service
+                            ? centsToMoneyInput(service.price)
                             : "",
                         });
                       }}
@@ -518,9 +523,6 @@ export function AppointmentBlockDialog({
                     onClick={() => onBlockDataChange({
                       ...blockData,
                       serviceMode: "existing",
-                      customServiceName: "",
-                      customDurationMinutes: "30",
-                      servicePrice: selectedService ? String(selectedService.price / 100).replace(".", ",") : "",
                     })}
                   >
                     Serviço existente
@@ -532,11 +534,6 @@ export function AppointmentBlockDialog({
                     onClick={() => onBlockDataChange({
                       ...blockData,
                       serviceMode: "custom",
-                      serviceId: "",
-                      customDurationMinutes: selectedService
-                        ? String(selectedService.duration)
-                        : blockData.customDurationMinutes || "30",
-                      servicePrice: blockData.servicePrice || "0",
                     })}
                   >
                     Serviço personalizado
@@ -558,8 +555,21 @@ export function AppointmentBlockDialog({
                       <Input
                         id="manual-booking-special-price"
                         inputMode="decimal"
-                        value={blockData.servicePrice}
-                        onChange={(event) => onBlockDataChange({ ...blockData, servicePrice: event.target.value })}
+                        value={blockData.existingServicePrice}
+                        onChange={(event) => onBlockDataChange((current) => ({
+                          ...current,
+                          existingServicePrice: normalizeMoneyInput(
+                            event.target.value,
+                            current.existingServicePrice,
+                          ),
+                        }))}
+                        onBlur={() => onBlockDataChange((current) => ({
+                          ...current,
+                          existingServicePrice: formatMoneyInputOnBlur(
+                            current.existingServicePrice,
+                            { maxCents: 1_000_000 },
+                          ),
+                        }))}
                         className="h-11 border-white/10 bg-background/50 text-white"
                         placeholder="Ex.: 25,00"
                       />
@@ -596,8 +606,21 @@ export function AppointmentBlockDialog({
                       <Input
                         id="manual-booking-custom-price"
                         inputMode="decimal"
-                        value={blockData.servicePrice}
-                        onChange={(event) => onBlockDataChange({ ...blockData, servicePrice: event.target.value })}
+                        value={blockData.customServicePrice}
+                        onChange={(event) => onBlockDataChange((current) => ({
+                          ...current,
+                          customServicePrice: normalizeMoneyInput(
+                            event.target.value,
+                            current.customServicePrice,
+                          ),
+                        }))}
+                        onBlur={() => onBlockDataChange((current) => ({
+                          ...current,
+                          customServicePrice: formatMoneyInputOnBlur(
+                            current.customServicePrice,
+                            { maxCents: 1_000_000 },
+                          ),
+                        }))}
                         className="h-11 border-white/10 bg-background/50 text-white"
                         placeholder="Ex.: 30,00"
                       />
@@ -658,7 +681,22 @@ export function AppointmentBlockDialog({
                                 onChange={(event) => onBlockDataChange((current) => ({
                                   ...current,
                                   extras: current.extras.map((candidate) => candidate.extraId === extra.id
-                                    ? { ...candidate, amountEuros: event.target.value }
+                                    ? {
+                                        ...candidate,
+                                        amountEuros: normalizeMoneyInput(event.target.value, candidate.amountEuros),
+                                      }
+                                    : candidate),
+                                }))}
+                                onBlur={() => onBlockDataChange((current) => ({
+                                  ...current,
+                                  extras: current.extras.map((candidate) => candidate.extraId === extra.id
+                                    ? {
+                                        ...candidate,
+                                        amountEuros: formatMoneyInputOnBlur(candidate.amountEuros, {
+                                          minCents: 1,
+                                          maxCents: 1_000_000,
+                                        }),
+                                      }
                                     : candidate),
                                 }))}
                                 placeholder="Ex.: 18,00"

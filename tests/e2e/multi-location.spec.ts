@@ -1116,6 +1116,16 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   const bookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeVisible();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toHaveCount(0);
+  await bookingDialog.getByRole("combobox").nth(0).click();
+  await page.getByRole("option", { name: barberB.name, exact: true }).click();
+  await bookingDialog.getByRole("combobox").nth(1).click();
+  await page.getByRole("option", { name: serviceB.name, exact: true }).click();
+  await bookingDialog.getByLabel("Condições especiais desta marcação").click();
+  await bookingDialog.locator("#manual-booking-special-price").fill("24,00");
+  await bookingDialog.getByRole("button", { name: "Serviço personalizado" }).click();
+  await bookingDialog.locator("#manual-booking-custom-service").fill("Draft da localização B");
+  await bookingDialog.locator("#manual-booking-custom-duration").fill("45");
+  await bookingDialog.locator("#manual-booking-custom-price").fill("30,00");
   await bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`).click();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeChecked();
   await page.evaluate((id) => {
@@ -1131,6 +1141,8 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
   await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).not.toBeChecked();
   await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toHaveCount(0);
+  await expect(reopenedBookingDialog.getByLabel("Condições especiais desta marcação")).not.toBeChecked();
+  await expect(reopenedBookingDialog.getByRole("combobox").nth(1)).toContainText("Selecione");
   await reopenedBookingDialog.getByRole("button", { name: "Close" }).click();
 
   expect((await request.patch(`/api/appointments/${localBookingBody.appointments[0].id}/status`, {

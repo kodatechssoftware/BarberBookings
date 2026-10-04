@@ -46,6 +46,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import { locationHeaders, setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
+import { moneyInputToCents } from "@/lib/money-input";
 import type { ShopLocation } from "@shared/locations";
 import {
   canBarberPerformService,
@@ -87,7 +88,6 @@ import {
   getAppointmentServiceName as resolveAppointmentServiceName,
   MAX_APPOINTMENT_DURATION_MINUTES,
   MAX_APPOINTMENT_SERVICE_NAME_LENGTH,
-  MAX_APPOINTMENT_SERVICE_PRICE_CENTS,
 } from "@shared/appointment-service-terms";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
@@ -996,15 +996,6 @@ function eurosInputToCents(value: string) {
   return Math.round(parsed * 100);
 }
 
-function appointmentEurosInputToCents(value: string) {
-  const normalized = value.replace(",", ".").trim();
-  if (!normalized || !/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed)) return null;
-  const cents = Math.round(parsed * 100);
-  return cents <= MAX_APPOINTMENT_SERVICE_PRICE_CENTS ? cents : null;
-}
-
 function getBarberCompensationFormData(barber?: BarberListItem): BarberCompensationFormData {
   return {
     compensationModel: barber?.compensationModel || defaultBarberCompensationFormData.compensationModel,
@@ -1693,7 +1684,8 @@ export default function Admin() {
     serviceMode: "existing",
     customServiceName: "",
     customDurationMinutes: "30",
-    servicePrice: "",
+    existingServicePrice: "",
+    customServicePrice: "",
     extras: [],
     times: [],
     name: "",
@@ -1782,7 +1774,8 @@ export default function Admin() {
       serviceMode: "existing",
       customServiceName: "",
       customDurationMinutes: "30",
-      servicePrice: "",
+      existingServicePrice: "",
+      customServicePrice: "",
       extras: [],
       times: [],
       hasSpecialTerms: false,
@@ -2137,7 +2130,8 @@ export default function Admin() {
       serviceMode: "existing",
       customServiceName: "",
       customDurationMinutes: "30",
-      servicePrice: "",
+      existingServicePrice: "",
+      customServicePrice: "",
       extras: [],
       times: initialTimes,
       name: "",
@@ -2831,7 +2825,8 @@ export default function Admin() {
           serviceMode: "existing",
           customServiceName: "",
           customDurationMinutes: "30",
-          servicePrice: "",
+          existingServicePrice: "",
+          customServicePrice: "",
         }
       : current);
   }, [blockData.hasSpecialTerms, blockData.isRecurring, blockData.serviceMode]);
@@ -2923,8 +2918,11 @@ export default function Admin() {
       toast({ title: "Erro", description: "Selecione um serviço.", variant: "destructive" });
       return;
     }
+    const activeServicePrice = usesCustomService
+      ? blockData.customServicePrice
+      : blockData.existingServicePrice;
     const appointmentPriceCents = usesSpecialTerms
-      ? appointmentEurosInputToCents(blockData.servicePrice)
+      ? moneyInputToCents(activeServicePrice, { maxCents: 1_000_000 })
       : null;
     const customDurationMinutes = Number(blockData.customDurationMinutes);
     if (usesCustomService) {
@@ -2972,7 +2970,10 @@ export default function Admin() {
           return;
         }
         if (definition.pricingMode === "variable") {
-          const amountCents = appointmentEurosInputToCents(selection.amountEuros);
+          const amountCents = moneyInputToCents(selection.amountEuros, {
+            minCents: 1,
+            maxCents: 1_000_000,
+          });
           if (amountCents === null || amountCents <= 0) {
             toast({
               title: "Valor inválido",
@@ -3087,7 +3088,8 @@ export default function Admin() {
         serviceMode: "existing",
         customServiceName: "",
         customDurationMinutes: "30",
-        servicePrice: "",
+        existingServicePrice: "",
+        customServicePrice: "",
         extras: [],
         isMultiDay: false,
         isManualBooking: false,
@@ -3685,7 +3687,17 @@ export default function Admin() {
           onOpenChange={(open) => {
             setIsBlocking(open);
             if (!open) {
-              setBlockData((current) => ({ ...current, extras: [] }));
+              setBlockData((current) => ({
+                ...current,
+                serviceId: "",
+                serviceMode: "existing",
+                customServiceName: "",
+                customDurationMinutes: "30",
+                existingServicePrice: "",
+                customServicePrice: "",
+                extras: [],
+                hasSpecialTerms: false,
+              }));
             }
           }}
           barbers={activeBarbers}
