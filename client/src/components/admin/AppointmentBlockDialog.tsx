@@ -332,7 +332,7 @@ export function AppointmentBlockDialog({
                 <Label className="text-sm font-medium text-gray-300">{blockData.isMultiDay ? "Início" : "Data"}</Label>
                 <Popover open={isCalendarOpen} onOpenChange={onCalendarOpenChange}>
                   <PopoverTrigger asChild>
-                    <Button variant="outline" className="h-12 w-full justify-start gap-2 rounded-xl border-white/10 bg-background/50 text-white">
+                    <Button data-testid="manual-booking-date-trigger" variant="outline" className="h-12 w-full justify-start gap-2 rounded-xl border-white/10 bg-background/50 text-white">
                       <CalendarIcon className="h-4 w-4" />{format(blockData.date, "dd/MM/yyyy")}
                     </Button>
                   </PopoverTrigger>
@@ -482,8 +482,10 @@ export function AppointmentBlockDialog({
                       type="button"
                       variant={blockData.times.includes(time) ? "gold" : "outline"}
                       size="sm"
-                      className="h-11 rounded-lg text-xs disabled:opacity-30 sm:h-10"
+                      className="h-11 rounded-lg text-xs disabled:border-white/5 disabled:bg-black/20 disabled:text-gray-600 disabled:opacity-100 sm:h-10"
                       disabled={!isAvailable}
+                      data-availability={isAvailable ? "available" : "unavailable"}
+                      title={isAvailable ? undefined : "Indisponível"}
                       onClick={() => handleTimeClick(time)}
                     >
                       {time}
@@ -848,6 +850,7 @@ export function AppointmentBlockDialog({
             variant="gold"
             className="h-12 w-full rounded-xl text-base font-bold"
             disabled={
+              isCheckingAvailability ||
               !blockData.barberId ||
               blockData.times.length === 0 ||
               (blockData.isManualBooking && (!blockData.hasSpecialTerms || blockData.serviceMode === "existing") && !blockData.serviceId) ||

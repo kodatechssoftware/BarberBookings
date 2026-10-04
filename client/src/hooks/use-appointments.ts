@@ -98,6 +98,7 @@ type AppointmentQueryParams = {
   refetchInterval?: number | false;
   scope?: "team" | "busy";
   locationId?: number;
+  cacheVersion?: number;
 };
 
 const PUBLIC_APPOINTMENTS_PATH = "/api/appointments/public";
