@@ -822,7 +822,7 @@ export function AppointmentDetailsDialog({
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
 
   useEffect(() => {
-    if (!open || !canManageAppointment || !appointment?.customerPhone) {
+    if (!open || !canManageAppointment || (!appointment?.customerPhone && !appointment?.customerEmail)) {
       setCustomerNotes("");
       setCustomerNotesUpdatedAt(null);
       return;
@@ -854,15 +854,14 @@ export function AppointmentDetailsDialog({
     return () => {
       isMounted = false;
     };
-  }, [appointment?.customerPhone, appointment?.id, appointment?.locationId, canManageAppointment, open]);
+  }, [appointment?.customerEmail, appointment?.customerPhone, appointment?.id, appointment?.locationId, canManageAppointment, open]);
 
   const handleSaveCustomerNotes = async () => {
-    if (!appointment?.customerPhone) return;
+    if (!appointment || (!appointment.customerPhone && !appointment.customerEmail)) return;
     setIsSavingCustomerNotes(true);
     try {
-      const res = await apiRequest("PATCH", `/api/admin/customers/${encodeURIComponent(appointment.customerPhone)}/notes`, {
-        customerName: appointment.customerName || "",
-        email: appointment.customerEmail || "",
+      const res = await apiRequest("PATCH", "/api/admin/customers/notes", {
+        appointmentId: appointment.id,
         notes: customerNotes,
       }, appointment.locationId ? { headers: locationHeaders(appointment.locationId) } : undefined);
       const savedNote = await res.json();
@@ -947,7 +946,9 @@ export function AppointmentDetailsDialog({
                 <p className="text-2xl font-display font-bold text-primary">{format(start, "HH:mm")}</p>
                 <h3 className="mt-1 truncate text-lg font-bold text-white">{appointment.customerName}</h3>
                 {canManageAppointment && (
-                  <p className="text-sm text-gray-400">{contactLinks.displayPhone || appointment.customerPhone}</p>
+                  <p className="text-sm text-gray-400">
+                    {contactLinks.displayPhone || appointment.customerPhone || appointment.customerEmail}
+                  </p>
                 )}
               </div>
               <span className={cn("shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide", getStatusClass(appointment.status))}>
@@ -1017,7 +1018,7 @@ export function AppointmentDetailsDialog({
                 </span>
               )}
             </div>
-            {appointment.customerPhone ? (
+            {appointment.customerPhone || appointment.customerEmail ? (
               <>
                 <Textarea
                   value={customerNotes}
@@ -1045,7 +1046,7 @@ export function AppointmentDetailsDialog({
               </>
             ) : (
               <p className="mt-3 rounded-xl border border-white/10 bg-card px-3 py-2 text-sm text-gray-400">
-                As notas do cliente precisam de um telemóvel associado à marcação.
+                Adicione um telemóvel ou email à marcação para utilizar notas internas.
               </p>
             )}
           </div>

@@ -377,15 +377,32 @@ export const barberInvites = appPgTable("barber_invites", {
 export const customerNotes = appPgTable("customer_notes", {
   id: idColumn("customer_notes_id_seq"),
   locationId: integer("location_id").references(() => locations.id).notNull(),
-  phone: text("phone").notNull(),
+  phone: text("phone"),
   customerNameKey: text("customer_name_key").notNull().default(""),
   email: text("email"),
+  emailKey: text("email_key"),
   notes: text("notes").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
   customerNotesIdentityIdx: uniqueIndex("customer_notes_location_phone_name_idx")
-    .on(table.locationId, table.phone, table.customerNameKey),
+    .on(table.locationId, table.phone, table.customerNameKey)
+    .where(sql`${table.phone} IS NOT NULL`),
+  customerNotesEmailIdentityIdx: uniqueIndex("customer_notes_location_email_name_idx")
+    .on(table.locationId, table.emailKey, table.customerNameKey)
+    .where(sql`${table.emailKey} IS NOT NULL`),
+  customerNotesContactRequiredCheck: check(
+    "customer_notes_contact_required_check",
+    sql`(${table.phone} IS NOT NULL AND btrim(${table.phone}) <> '') OR (${table.emailKey} IS NOT NULL AND btrim(${table.emailKey}) <> '')`,
+  ),
+  customerNotesPhoneNonemptyCheck: check(
+    "customer_notes_phone_nonempty_check",
+    sql`${table.phone} IS NULL OR btrim(${table.phone}) <> ''`,
+  ),
+  customerNotesEmailKeyNormalizedCheck: check(
+    "customer_notes_email_key_normalized_check",
+    sql`(((${table.email} IS NULL OR btrim(${table.email}) = '') AND ${table.emailKey} IS NULL) OR (${table.email} IS NOT NULL AND btrim(${table.email}) <> '' AND ${table.emailKey} = lower(btrim(${table.email})) AND ${table.emailKey} <> ''))`,
+  ),
 }));
 
 export const auditLogs = appPgTable("audit_logs", {
@@ -671,8 +688,17 @@ export const insertBarberServiceSchema = createInsertSchema(barberServices);
 export const insertBarberInviteSchema = createInsertSchema(barberInvites).omit({ id: true, createdAt: true });
 export const insertCustomerNoteSchema = createInsertSchema(customerNotes).omit({
   id: true,
+  emailKey: true,
   createdAt: true,
   updatedAt: true,
+}).superRefine((note, context) => {
+  if (!note.phone?.trim() && !note.email?.trim()) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Indique um telemóvel ou email.",
+      path: ["phone"],
+    });
+  }
 });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 export const insertBarberCompensationRuleSchema = createInsertSchema(barberCompensationRules).omit({

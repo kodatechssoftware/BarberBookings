@@ -2231,13 +2231,12 @@ export default function Admin() {
   };
 
   const handleSaveCustomerNotes = async () => {
-    if (!customerHistory?.customer?.phone) return;
+    if (!historyAppointment || (!customerHistory?.customer?.phone && !customerHistory?.customer?.email)) return;
     setIsSavingCustomerNotes(true);
     try {
       const locationId = historyAppointment?.locationId ?? activeLocationId;
-      const res = await apiRequest("PATCH", `/api/admin/customers/${encodeURIComponent(customerHistory.customer.phone)}/notes`, {
-        customerName: customerHistory.customer.name || "",
-        email: customerHistory.customer.email || "",
+      const res = await apiRequest("PATCH", "/api/admin/customers/notes", {
+        appointmentId: historyAppointment.id,
         notes: customerNotes,
       }, locationId ? { headers: locationHeaders(locationId) } : undefined);
       const savedNote = await res.json();
@@ -3240,7 +3239,7 @@ export default function Admin() {
                 <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
                   Última presença: {customerHistory.stats.lastPresence ? format(parseISO(customerHistory.stats.lastPresence), "dd/MM/yyyy HH:mm") : "sem presença registada"}
                 </div>
-                {customerHistory.customer.phone ? (
+                {customerHistory.customer.phone || customerHistory.customer.email ? (
                   <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <div>
@@ -3278,7 +3277,7 @@ export default function Admin() {
                   </div>
                 ) : (
                   <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-gray-400">
-                    As notas do cliente precisam de um telemóvel associado à marcação.
+                    Adicione um telemóvel ou email à marcação para utilizar notas internas.
                   </div>
                 )}
                 <div className="space-y-2">

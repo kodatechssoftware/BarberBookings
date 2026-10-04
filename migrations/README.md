@@ -28,7 +28,10 @@ barbers, and services are associated with the resulting default location.
 
 `0006_customer_notes_location.sql` associates each legacy customer note with
 that existing default location without changing its contents or timestamps.
-New notes are unique per `(location_id, phone, customer_name_key)`.
+Migration `0009_customer_notes_contact_identity.sql` keeps those legacy values,
+adds a normalized email identity, and allows notes to be identified by phone or
+email within the same location and normalized customer name. Conflicting legacy
+email identities stop explicitly instead of being merged automatically.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
