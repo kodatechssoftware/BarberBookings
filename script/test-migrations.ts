@@ -29,6 +29,7 @@ assert.equal(migrationChecksum("SELECT 1;\nSELECT 2;\n"), migrationChecksum("SEL
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
 const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-terms-"));
 const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-extras-"));
+const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -50,6 +51,18 @@ for (const file of [
   "0007_appointment_service_snapshots.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preExtrasMigrationsDirectory, file));
+}
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+  "0008_appointment_extras.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preCustomerNoteIdentityMigrationsDirectory, file));
 }
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -153,7 +166,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 8, "a fresh empty application schema must apply migrations 0001 through 0008");
+  assert.equal(freshRun.applied.length, 9, "a fresh empty application schema must apply migrations 0001 through 0009");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -170,7 +183,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 8);
+  assert.equal(secondFreshRun.alreadyApplied, 9);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -405,7 +418,11 @@ try {
     "controlled migration 0007 re-execution must not mutate operational data",
   );
   const releaseDataBeforeExtrasMigration = await captureReleaseData();
-  const extrasRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const extrasRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preCustomerNoteIdentityMigrationsDirectory,
+  });
   assert.deepEqual(extrasRun.applied, ["0008_appointment_extras.sql"]);
   assert.equal(extrasRun.alreadyApplied, 7);
   assert.deepEqual(
@@ -416,7 +433,11 @@ try {
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_extras")}`)).rows[0].count), 0,
     "legacy appointments must receive no artificial Extra rows");
-  const secondExtrasRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondExtrasRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preCustomerNoteIdentityMigrationsDirectory,
+  });
   assert.equal(secondExtrasRun.applied.length, 0);
   assert.equal(secondExtrasRun.alreadyApplied, 8);
   assert.deepEqual(
@@ -424,6 +445,59 @@ try {
     releaseDataBeforeExtrasMigration,
     "controlled migration 0008 re-execution must not mutate operational data",
   );
+
+  await pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, notes)
+    VALUES
+      ($1, '920000001', 'identidade ambigua', 'Shared@Example.Test', 'Nota A'),
+      ($1, '920000002', 'identidade ambigua', 'shared@example.test', 'Nota B')
+  `, [defaultLocation.id]);
+  await assert.rejects(
+    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory }),
+    (error: any) => error?.code === "23505" && /Ambiguous legacy customer-note email identities/.test(error.message),
+    "migration 0009 must stop on ambiguous legacy email identities instead of merging them",
+  );
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("schema_migrations")}
+    WHERE name = '0009_customer_notes_contact_identity.sql'
+  `)).rows[0].count), 0, "a rejected migration 0009 must not be recorded");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'customer_notes' AND column_name = 'email_key'
+  `, [schema])).rows[0].count), 0, "a rejected migration 0009 must roll back its schema changes");
+  await pool.query(`DELETE FROM ${table("customer_notes")} WHERE phone IN ('920000001', '920000002')`);
+
+  const releaseDataBeforeCustomerNoteIdentityMigration = await captureReleaseData();
+  const customerNoteIdentityRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(customerNoteIdentityRun.applied, ["0009_customer_notes_contact_identity.sql"]);
+  assert.equal(customerNoteIdentityRun.alreadyApplied, 8);
+  const releaseDataAfterCustomerNoteIdentityMigration = await captureReleaseData();
+  assert.deepEqual(
+    releaseDataAfterCustomerNoteIdentityMigration.customerNotes.map(({ email_key: _emailKey, ...note }) => note),
+    releaseDataBeforeCustomerNoteIdentityMigration.customerNotes,
+    "migration 0009 must preserve every legacy customer-note value byte-for-byte",
+  );
+  assert.deepEqual(
+    releaseDataAfterCustomerNoteIdentityMigration.customerNotes.map((note) => note.email_key),
+    ["cliente@example.test"],
+    "migration 0009 must derive only the normalized email identity key",
+  );
+  const {
+    customerNotes: _customerNotesBeforeIdentityMigration,
+    ...unrelatedDataBeforeCustomerNoteIdentityMigration
+  } = releaseDataBeforeCustomerNoteIdentityMigration;
+  const {
+    customerNotes: _customerNotesAfterIdentityMigration,
+    ...unrelatedDataAfterCustomerNoteIdentityMigration
+  } = releaseDataAfterCustomerNoteIdentityMigration;
+  assert.deepEqual(
+    unrelatedDataAfterCustomerNoteIdentityMigration,
+    unrelatedDataBeforeCustomerNoteIdentityMigration,
+    "migration 0009 must not alter unrelated operational data",
+  );
+  const secondCustomerNoteIdentityRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondCustomerNoteIdentityRun.applied.length, 0);
+  assert.equal(secondCustomerNoteIdentityRun.alreadyApplied, 9);
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
@@ -433,6 +507,7 @@ try {
     "appointments_series_occurrence_idx", "appointment_notification_events_series_idx",
     "service_categories_name_ci_idx", "service_categories_active_order_idx", "services_category_id_idx",
     "customer_notes_location_id_idx", "customer_notes_location_phone_name_idx",
+    "customer_notes_location_email_name_idx",
     "extra_definitions_location_name_ci_idx", "extra_definitions_location_active_order_idx",
     "appointment_extras_pkey", "appointment_extras_appointment_position_unique",
     "appointment_extras_extra_definition_id_idx",
@@ -446,8 +521,8 @@ try {
     RETURNING id
   `)).rows[0].id);
   await pool.query(`
-    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, notes)
-    VALUES ($1, '910000000', 'cliente original', 'cliente@example.test', 'Nota independente B')
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, email_key, notes)
+    VALUES ($1, '910000000', 'cliente original', 'cliente@example.test', 'cliente@example.test', 'Nota independente B')
   `, [secondLocationId]);
   assert.equal(Number((await pool.query(`
     SELECT count(*) AS count FROM ${table("customer_notes")}
@@ -457,6 +532,22 @@ try {
     INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, notes)
     VALUES ($1, '910000000', 'cliente original', 'Duplicada A')
   `, [defaultLocation.id]), (error: any) => error?.code === "23505");
+  await pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, email_key, notes)
+    VALUES ($1, NULL, 'cliente email', ' Email.Only@Example.Test ', 'email.only@example.test', 'Nota por email')
+  `, [defaultLocation.id]);
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, email_key, notes)
+    VALUES ($1, NULL, 'cliente email', 'email.only@example.test', 'email.only@example.test', 'Duplicada por email')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23505");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, email_key, notes)
+    VALUES ($1, NULL, 'sem contacto', NULL, NULL, 'Inválida')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, email_key, notes)
+    VALUES ($1, '', 'telefone vazio', NULL, NULL, 'Inválida')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514");
 
   await assert.rejects(
     pool.query(`INSERT INTO ${table("extra_definitions")} (location_id, name, pricing_mode, amount_cents, financial_rule)
@@ -581,12 +672,65 @@ try {
   process.env.DATABASE_SCHEMA = schema;
   process.env.DATABASE_POOL_MAX = "2";
   process.env.USE_MEMORY_STORAGE = "false";
-  const [{ DatabaseStorage }, { pool: importedApplicationPool }] = await Promise.all([
+  const [{ CustomerNoteIdentityConflictError, DatabaseStorage }, { pool: importedApplicationPool }] = await Promise.all([
     import("../server/storage"),
     import("../server/db"),
   ]);
   applicationPool = importedApplicationPool;
   const databaseStorage = new DatabaseStorage();
+  const postgresPhoneNote = await databaseStorage.upsertCustomerNote({
+    locationId: Number(defaultLocation.id),
+    phone: "+351930000001",
+    customerNameKey: "postgres telefone",
+    notes: "Nota PostgreSQL telefone",
+  });
+  const postgresEmailNote = await databaseStorage.upsertCustomerNote({
+    locationId: Number(defaultLocation.id),
+    email: " Postgres.Email@Example.Test ",
+    customerNameKey: "postgres email",
+    notes: "Nota PostgreSQL email",
+  });
+  assert.equal(postgresEmailNote.phone, null);
+  assert.equal(postgresEmailNote.emailKey, "postgres.email@example.test");
+  const enrichedPostgresPhoneNote = await databaseStorage.upsertCustomerNote({
+    locationId: Number(defaultLocation.id),
+    phone: "+351930000001",
+    email: "postgres-phone@example.test",
+    customerNameKey: "postgres telefone",
+    notes: "Nota PostgreSQL enriquecida",
+  });
+  assert.equal(enrichedPostgresPhoneNote.id, postgresPhoneNote.id);
+  assert.equal((await databaseStorage.getCustomerNoteByIdentity({
+    locationId: Number(defaultLocation.id),
+    email: "POSTGRES-PHONE@example.test",
+    customerNameKey: "postgres telefone",
+  }))?.notes, "Nota PostgreSQL enriquecida");
+  const isolatedPostgresNote = await databaseStorage.upsertCustomerNote({
+    locationId: secondLocationId,
+    email: "postgres.email@example.test",
+    customerNameKey: "postgres email",
+    notes: "Nota PostgreSQL loja B",
+  });
+  assert.notEqual(isolatedPostgresNote.id, postgresEmailNote.id);
+  await databaseStorage.upsertCustomerNote({
+    locationId: Number(defaultLocation.id),
+    phone: "+351930000002",
+    customerNameKey: "postgres conflito",
+    notes: "Conflito telefone",
+  });
+  await databaseStorage.upsertCustomerNote({
+    locationId: Number(defaultLocation.id),
+    email: "postgres-conflict@example.test",
+    customerNameKey: "postgres conflito",
+    notes: "Conflito email",
+  });
+  await assert.rejects(databaseStorage.upsertCustomerNote({
+    locationId: Number(defaultLocation.id),
+    phone: "+351930000002",
+    email: "postgres-conflict@example.test",
+    customerNameKey: "postgres conflito",
+    notes: "Não deve fundir",
+  }), (error: unknown) => error instanceof CustomerNoteIdentityConflictError);
   assert.deepEqual(await databaseStorage.getAppointmentExtras([1]), [],
     "legacy appointments must be exposed with an empty Extra collection");
   const travelExtra = await databaseStorage.createExtraDefinition({
@@ -991,7 +1135,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -999,4 +1143,5 @@ try {
   await rm(databaseDir, { recursive: true, force: true });
   await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
   await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });
+  await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
 }

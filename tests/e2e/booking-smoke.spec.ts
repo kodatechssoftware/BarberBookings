@@ -258,7 +258,7 @@ function lisbonDateTimeParts(isoDate: string) {
 
 async function createManualAppointmentForCurrentWeek(
   request: APIRequestContext,
-  options: { name?: string; phone?: string; hour?: number; minute?: number } = {},
+  options: { name?: string; phone?: string; email?: string; hour?: number; minute?: number; allowOutsideHours?: boolean } = {},
 ) {
   await loginAdminRequest(request);
 
@@ -278,8 +278,10 @@ async function createManualAppointmentForCurrentWeek(
       serviceId: service.id,
       startTime: futureThursdayIso(1, options.hour ?? 10, options.minute ?? 0),
       name: options.name || "Agenda Click QA",
-      phone: options.phone || "912695705",
+      phone: options.phone ?? "912695705",
+      customerEmail: options.email ?? "",
       isManualBooking: true,
+      allowOutsideHours: options.allowOutsideHours,
     },
   });
   expect(createResponse.ok(), await createResponse.text()).toBe(true);
@@ -2117,6 +2119,56 @@ test.describe("admin navigation", () => {
     await expect(historyDialog.locator("textarea")).toHaveValue(noteText);
   });
 
+  test("saves email-only customer notes by appointment id on mobile and desktop", async ({ page, request }) => {
+    const customerName = `Notas Email QA ${Date.now()}`;
+    await createManualAppointmentForCurrentWeek(request, {
+      name: customerName,
+      phone: "",
+      email: `notes-${Date.now()}@example.test`,
+      hour: 22,
+      minute: 0,
+      allowOutsideHours: true,
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginAdmin(page);
+    await selectAgendaDay(page);
+    const appointmentButton = page.getByRole("button", {
+      name: new RegExp(`Abrir detalhes da marcação de ${customerName}`),
+    }).first();
+    await expect(appointmentButton).toBeVisible();
+    await appointmentButton.click();
+
+    const mobileDialog = page.getByRole("dialog", { name: "Detalhes da marcação" });
+    await expect(mobileDialog.getByText("Notas internas", { exact: true })).toBeVisible();
+    await expect(mobileDialog.getByText("Adicione um telemóvel ou email à marcação para utilizar notas internas.")).toHaveCount(0);
+    const mobileNotes = mobileDialog.locator("textarea").last();
+    await expect(mobileNotes).toBeEnabled();
+    const noteText = "Cliente identificado apenas por email.";
+    await mobileNotes.fill(noteText);
+    const notesRequestPromise = page.waitForRequest((request) =>
+      request.method() === "PATCH" && new URL(request.url()).pathname === "/api/admin/customers/notes",
+    );
+    await mobileDialog.getByRole("button", { name: "Guardar notas" }).click();
+    const notesRequest = await notesRequestPromise;
+    expect(notesRequest.postDataJSON()).toMatchObject({ notes: noteText });
+    expect(notesRequest.postDataJSON().appointmentId).toEqual(expect.any(Number));
+    await expect(page.getByText("As notas internas do cliente foram atualizadas.").first()).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await mobileDialog.getByRole("button", { name: "Close" }).click();
+    await expect(mobileDialog).not.toBeVisible();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await selectAgendaDay(page);
+    await appointmentButton.click();
+    const desktopDialog = page.getByRole("dialog", { name: "Detalhes da marcação" });
+    await expect(desktopDialog.locator("textarea").last()).toHaveValue(noteText);
+    await desktopDialog.getByRole("button", { name: "Histórico" }).click();
+    const historyDialog = page.getByRole("dialog", { name: "Histórico do cliente" });
+    await expect(historyDialog.locator("textarea")).toHaveValue(noteText);
+    await expectNoHorizontalOverflow(page);
+  });
+
   test("keeps customer history errors local and retries in the appointment location", async ({ page, request }) => {
     const customerName = `Histórico retry QA ${Date.now()}`;
     await createManualAppointmentForCurrentWeek(request, {
@@ -2222,7 +2274,7 @@ test.describe("admin navigation", () => {
     }).first().click();
 
     const detailsDialog = page.getByRole("dialog", { name: "Detalhes da marcação" });
-    await expect(detailsDialog.getByText("As notas do cliente precisam de um telemóvel associado à marcação.")).toBeVisible();
+    await expect(detailsDialog.getByText("Adicione um telemóvel ou email à marcação para utilizar notas internas.")).toBeVisible();
     await expect(detailsDialog.locator("textarea")).toHaveCount(0);
     await detailsDialog.getByRole("button", { name: "Histórico" }).click();
 
@@ -2231,7 +2283,7 @@ test.describe("admin navigation", () => {
     await expect(historyDialog.getByText("Sem telemóvel ou email associado")).toBeVisible();
     await expect(historyDialog.getByText("Sem um contacto que identifique o cliente, o histórico apresenta apenas esta marcação.")).toBeVisible();
     await expect(historyDialog.getByText(service.name)).toBeVisible();
-    await expect(historyDialog.getByText("As notas do cliente precisam de um telemóvel associado à marcação.")).toBeVisible();
+    await expect(historyDialog.getByText("Adicione um telemóvel ou email à marcação para utilizar notas internas.")).toBeVisible();
     await expect(historyDialog.locator("textarea")).toHaveCount(0);
     await expect(historyDialog.getByText("Total").locator("..").getByText("1", { exact: true })).toBeVisible();
     expect(historyRequests).toEqual([

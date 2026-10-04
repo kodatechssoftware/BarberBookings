@@ -320,6 +320,9 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     headers: { "X-Location-Id": "999999" },
     data: { customerName: "Cliente multi loja", email: "multi@example.test", notes: "Não deve ser gravada" },
   })).status()).toBe(404);
+  expect((await request.patch("/api/admin/customers/notes", {
+    data: { appointmentId: 1, notes: "Não deve ser gravada" },
+  })).status()).toBe(400);
 
   const guest = await playwright.request.newContext({ baseURL });
   try {
@@ -374,6 +377,15 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     })).status()).toBe(200);
     expect((await request.get(`/api/admin/customers/history?appointmentId=${customerAppointmentIds[0]}`, {
       headers: portoHeaders,
+    })).status()).toBe(404);
+    const appointmentNotesUpdate = await request.patch("/api/admin/customers/notes", {
+      headers: primaryHeaders,
+      data: { appointmentId: customerAppointmentIds[0], notes: primaryNote },
+    });
+    expect(appointmentNotesUpdate.ok(), await appointmentNotesUpdate.text()).toBe(true);
+    expect((await request.patch("/api/admin/customers/notes", {
+      headers: portoHeaders,
+      data: { appointmentId: customerAppointmentIds[0], notes: "Não deve atravessar lojas" },
     })).status()).toBe(404);
 
     monday.setUTCHours(14, 0, 0, 0);
@@ -474,6 +486,10 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
     expect(staffLocations.map((location: any) => location.id).sort()).toEqual([initial[0].id, created[0].id].sort());
     expect((await (await page.request.get(`${customerPath}/history${customerQuery}`, { headers: primaryHeaders })).json()).notes.notes).toBe(primaryNote);
     expect((await (await page.request.get(`${customerPath}/history${customerQuery}`, { headers: portoHeaders })).json()).notes.notes).toBe(portoNote);
+    expect((await page.request.patch("/api/admin/customers/notes", {
+      headers: primaryHeaders,
+      data: { appointmentId: customerAppointmentIds[0], notes: primaryNote },
+    })).ok()).toBe(true);
     expect((await page.request.get("/api/appointments", { headers: { "X-Location-Id": String(created[1].id) } })).status()).toBe(403);
     const forbiddenHistory = await page.request.get(`${customerPath}/history${customerQuery}`, {
       headers: { "X-Location-Id": String(created[1].id) },

@@ -60,7 +60,6 @@ import {
   type CreateBarberAvailabilityRequest,
   type CreateBarberServiceRequest,
   type CreateBarberInviteRequest,
-  type CreateCustomerNoteRequest,
   type CreateAuditLogRequest,
   type CreateBarberCompensationRuleRequest,
   type CreateBusinessExpenseRequest,
@@ -84,6 +83,56 @@ export type AppointmentExtraInput = {
   extraId: number;
   amountCents?: number;
 };
+
+export type CustomerNoteIdentityInput = {
+  locationId: number;
+  phone?: string | null;
+  email?: string | null;
+  customerNameKey: string;
+};
+
+export type UpsertCustomerNoteInput = CustomerNoteIdentityInput & {
+  notes: string;
+};
+
+export const customerNoteIdentityConflictCode = "CUSTOMER_NOTE_IDENTITY_CONFLICT";
+
+export class CustomerNoteIdentityConflictError extends Error {
+  code = customerNoteIdentityConflictCode;
+  status = 409;
+
+  constructor() {
+    super("O telemóvel e o email estão associados a notas de clientes diferentes.");
+    this.name = "CustomerNoteIdentityConflictError";
+  }
+}
+
+function normalizeCustomerNoteIdentity(identity: CustomerNoteIdentityInput) {
+  return {
+    locationId: identity.locationId,
+    phone: identity.phone?.trim() || null,
+    email: normalizeEmail(identity.email) || null,
+    customerNameKey: identity.customerNameKey || "",
+  };
+}
+
+function customerNoteIdentityWhere(identity: CustomerNoteIdentityInput) {
+  const normalized = normalizeCustomerNoteIdentity(identity);
+  const contacts: SQL[] = [];
+  if (normalized.phone) contacts.push(eq(customerNotes.phone, normalized.phone));
+  if (normalized.email) contacts.push(eq(customerNotes.emailKey, normalized.email));
+  if (contacts.length === 0) {
+    throw new Error("Customer note identity requires a phone or email.");
+  }
+  return {
+    normalized,
+    where: and(
+      eq(customerNotes.locationId, normalized.locationId),
+      eq(customerNotes.customerNameKey, normalized.customerNameKey),
+      or(...contacts),
+    ),
+  };
+}
 
 export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "whatsappOptIn"> & {
   whatsappOptIn?: boolean;
@@ -574,8 +623,8 @@ export interface IStorage {
   acceptBarberInvite(inviteId: number, barberId: number, password: string): Promise<Barber | undefined>;
 
   // Customer notes
-  getCustomerNoteByIdentity(locationId: number, phone: string, customerNameKey: string): Promise<CustomerNote | undefined>;
-  upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote>;
+  getCustomerNoteByIdentity(identity: CustomerNoteIdentityInput): Promise<CustomerNote | undefined>;
+  upsertCustomerNote(note: UpsertCustomerNoteInput): Promise<CustomerNote>;
 
   // Audit log
   getAuditLogs(limit?: number): Promise<AuditLog[]>;
@@ -1825,41 +1874,51 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getCustomerNoteByIdentity(locationId: number, phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
-    const [note] = await db
+  async getCustomerNoteByIdentity(identity: CustomerNoteIdentityInput): Promise<CustomerNote | undefined> {
+    const { where } = customerNoteIdentityWhere(identity);
+    const matches = await db
       .select()
       .from(customerNotes)
-      .where(and(
-        eq(customerNotes.locationId, locationId),
-        eq(customerNotes.phone, phone),
-        eq(customerNotes.customerNameKey, customerNameKey),
-      ));
-    return note;
+      .where(where)
+      .limit(2);
+    if (matches.length > 1) throw new CustomerNoteIdentityConflictError();
+    return matches[0];
   }
 
-  async upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote> {
-    const now = new Date();
-    const [savedNote] = await db
-      .insert(customerNotes)
-      .values({
-        locationId: note.locationId,
-        phone: note.phone,
-        customerNameKey: note.customerNameKey || "",
-        email: note.email || null,
-        notes: note.notes || "",
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [customerNotes.locationId, customerNotes.phone, customerNotes.customerNameKey],
-        set: {
-          email: note.email || null,
+  async upsertCustomerNote(note: UpsertCustomerNoteInput): Promise<CustomerNote> {
+    const { normalized, where } = customerNoteIdentityWhere(note);
+    return db.transaction(async (tx) => {
+      const matches = await tx.select().from(customerNotes).where(where).limit(2);
+      if (matches.length > 1) throw new CustomerNoteIdentityConflictError();
+
+      const now = new Date();
+      const existing = matches[0];
+      if (existing) {
+        const phone = existing.phone || normalized.phone;
+        const email = existing.emailKey ? existing.email : normalized.email;
+        const emailKey = existing.emailKey || normalized.email;
+        const [savedNote] = await tx
+          .update(customerNotes)
+          .set({ phone, email, emailKey, notes: note.notes || "", updatedAt: now })
+          .where(eq(customerNotes.id, existing.id))
+          .returning();
+        return savedNote;
+      }
+
+      const [savedNote] = await tx
+        .insert(customerNotes)
+        .values({
+          locationId: normalized.locationId,
+          phone: normalized.phone,
+          customerNameKey: normalized.customerNameKey,
+          email: normalized.email,
+          emailKey: normalized.email,
           notes: note.notes || "",
           updatedAt: now,
-        },
-      })
-      .returning();
-
-    return savedNote;
+        })
+        .returning();
+      return savedNote;
+    });
   }
 
   async getAuditLogs(limit = 50): Promise<AuditLog[]> {
@@ -3237,22 +3296,44 @@ export class MemoryStorage implements IStorage {
     return this.barbers[barberIndex];
   }
 
-  async getCustomerNoteByIdentity(locationId: number, phone: string, customerNameKey: string): Promise<CustomerNote | undefined> {
-    return this.customerNotes.find((note) =>
-      note.locationId === locationId && note.phone === phone && note.customerNameKey === customerNameKey,
+  async getCustomerNoteByIdentity(identity: CustomerNoteIdentityInput): Promise<CustomerNote | undefined> {
+    const normalized = normalizeCustomerNoteIdentity(identity);
+    if (!normalized.phone && !normalized.email) {
+      throw new Error("Customer note identity requires a phone or email.");
+    }
+    const matches = this.customerNotes.filter((note) =>
+      note.locationId === normalized.locationId
+      && note.customerNameKey === normalized.customerNameKey
+      && ((normalized.phone && note.phone === normalized.phone)
+        || (normalized.email && note.emailKey === normalized.email)),
     );
+    if (matches.length > 1) throw new CustomerNoteIdentityConflictError();
+    return matches[0];
   }
 
-  async upsertCustomerNote(note: CreateCustomerNoteRequest): Promise<CustomerNote> {
+  async upsertCustomerNote(note: UpsertCustomerNoteInput): Promise<CustomerNote> {
+    const normalized = normalizeCustomerNoteIdentity(note);
+    if (!normalized.phone && !normalized.email) {
+      throw new Error("Customer note identity requires a phone or email.");
+    }
     const now = new Date();
-    const customerNameKey = note.customerNameKey || "";
-    const existingIndex = this.customerNotes.findIndex((item) =>
-      item.locationId === note.locationId && item.phone === note.phone && item.customerNameKey === customerNameKey,
-    );
-    if (existingIndex !== -1) {
+    const matchingIndexes = this.customerNotes.flatMap((item, index) => (
+      item.locationId === normalized.locationId
+      && item.customerNameKey === normalized.customerNameKey
+      && ((normalized.phone && item.phone === normalized.phone)
+        || (normalized.email && item.emailKey === normalized.email))
+        ? [index]
+        : []
+    ));
+    if (matchingIndexes.length > 1) throw new CustomerNoteIdentityConflictError();
+    const existingIndex = matchingIndexes[0];
+    if (existingIndex !== undefined) {
+      const existing = this.customerNotes[existingIndex];
       this.customerNotes[existingIndex] = {
-        ...this.customerNotes[existingIndex],
-        email: note.email || null,
+        ...existing,
+        phone: existing.phone || normalized.phone,
+        email: existing.emailKey ? existing.email : normalized.email,
+        emailKey: existing.emailKey || normalized.email,
         notes: note.notes || "",
         updatedAt: now,
       };
@@ -3261,10 +3342,11 @@ export class MemoryStorage implements IStorage {
 
     const savedNote: CustomerNote = {
       id: this.nextIds.customerNote++,
-      locationId: note.locationId,
-      phone: note.phone,
-      customerNameKey,
-      email: note.email || null,
+      locationId: normalized.locationId,
+      phone: normalized.phone,
+      customerNameKey: normalized.customerNameKey,
+      email: normalized.email,
+      emailKey: normalized.email,
       notes: note.notes || "",
       createdAt: now,
       updatedAt: now,

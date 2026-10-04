@@ -3,6 +3,8 @@ import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import {
   AppointmentExtrasError,
+  CustomerNoteIdentityConflictError,
+  customerNoteIdentityConflictCode,
   appointmentBarberLocationUnavailableCode,
   appointmentExtraAmountInvalidCode,
   appointmentExtraIdsInvalidCode,
@@ -239,6 +241,10 @@ type AppSession = session.Session & Partial<session.SessionData> & {
 const customerNotesInputSchema = z.object({
   customerName: z.string().trim().max(120, "O nome não pode ter mais de 120 caracteres.").optional(),
   email: z.string().email().or(z.literal("")).optional(),
+  notes: z.string().max(1200, "As notas não podem ter mais de 1200 caracteres."),
+});
+const customerNotesByAppointmentInputSchema = z.object({
+  appointmentId: z.number().int().positive("Indique uma marcação válida."),
   notes: z.string().max(1200, "As notas não podem ter mais de 1200 caracteres."),
 });
 
@@ -873,6 +879,7 @@ function isLocationSensitiveMutation(req: Request) {
     /^\/appointments$/,
     /^\/appointments\/block$/,
     /^\/appointments\/\d+(?:\/status)?$/,
+    /^\/admin\/customers\/notes$/,
     /^\/admin\/customers\/[^/]+\/notes$/,
   ].some((pattern) => pattern.test(req.path));
 }
@@ -5052,6 +5059,35 @@ export async function registerRoutes(
     );
   };
 
+  const resolveCustomerNoteIdentity = async (
+    locationId: number,
+    phone: string,
+    email: string,
+    customerNameKey: string,
+  ) => {
+    const exactNote = await storage.getCustomerNoteByIdentity({
+      locationId,
+      phone,
+      email,
+      customerNameKey,
+    });
+    if (!customerNameKey) return { note: exactNote, customerNameKey };
+
+    const legacyNote = await storage.getCustomerNoteByIdentity({
+      locationId,
+      phone,
+      email,
+      customerNameKey: "",
+    });
+    if (exactNote && legacyNote && exactNote.id !== legacyNote.id) {
+      throw new CustomerNoteIdentityConflictError();
+    }
+    return {
+      note: exactNote ?? legacyNote,
+      customerNameKey: legacyNote ? "" : customerNameKey,
+    };
+  };
+
   const sendCustomerHistory = async (req: Request, res: Response, options: {
     phone?: string;
     email?: string;
@@ -5121,10 +5157,22 @@ export async function registerRoutes(
       };
     });
     const metrics = summarizeCustomerAppointments(matchingAppointments);
-    const customerNote = phone && (appSession.role === "admin" || matchingAppointments.length > 0)
-      ? await storage.getCustomerNoteByIdentity(locationId, phone, customerNameKey) ??
-        (customerNameKey ? await storage.getCustomerNoteByIdentity(locationId, phone, "") : undefined)
-      : undefined;
+    let customerNote;
+    if ((phone || email) && (appSession.role === "admin" || matchingAppointments.length > 0)) {
+      try {
+        customerNote = (await resolveCustomerNoteIdentity(
+          locationId,
+          phone,
+          email,
+          customerNameKey,
+        )).note;
+      } catch (error) {
+        if (error instanceof CustomerNoteIdentityConflictError) {
+          return res.status(409).json({ message: error.message, code: customerNoteIdentityConflictCode });
+        }
+        throw error;
+      }
+    }
 
     res.json({
       customer: {
@@ -5172,6 +5220,57 @@ export async function registerRoutes(
     });
   });
 
+  app.patch("/api/admin/customers/notes", requireAuth, async (req, res) => {
+    const parsed = customerNotesByAppointmentInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Notas inválidas." });
+    }
+
+    const locationId = Number(res.locals.locationId);
+    const appointment = await storage.getAppointment(parsed.data.appointmentId);
+    if (!appointment || appointment.locationId !== locationId) {
+      return res.status(404).json({ message: "Marcação não encontrada." });
+    }
+
+    const phone = normalizePhone(appointment.customerPhone);
+    const email = normalizeEmail(appointment.customerEmail);
+    const customerNameKey = normalizeCustomerName(appointment.customerName);
+    if (!phone && !email) {
+      return res.status(400).json({ message: "Adicione um telemóvel ou email à marcação para utilizar notas internas." });
+    }
+    if (!(await canManageCustomer(req, phone, email, customerNameKey, locationId))) {
+      return res.status(403).json({ message: "Não autorizado" });
+    }
+
+    try {
+      const resolvedIdentity = await resolveCustomerNoteIdentity(locationId, phone, email, customerNameKey);
+      const note = await storage.upsertCustomerNote({
+        locationId,
+        phone,
+        email,
+        customerNameKey: resolvedIdentity.customerNameKey,
+        notes: parsed.data.notes.trim(),
+      });
+      await recordAuditLog(req, {
+        action: "customer_note.updated",
+        entityType: "customer_note",
+        entityId: note.id,
+        summary: `Notas do cliente atualizadas: ${appointment.customerName}`,
+        metadata: {
+          appointmentId: appointment.id,
+          locationId,
+          identityContacts: [phone ? "phone" : null, email ? "email" : null].filter(Boolean),
+        },
+      });
+      return res.json(note);
+    } catch (error) {
+      if (error instanceof CustomerNoteIdentityConflictError) {
+        return res.status(409).json({ message: error.message, code: customerNoteIdentityConflictCode });
+      }
+      throw error;
+    }
+  });
+
   app.patch("/api/admin/customers/:phone/notes", requireAuth, async (req, res) => {
     const phone = normalizePhone(req.params.phone);
     if (!phone) {
@@ -5183,25 +5282,42 @@ export async function registerRoutes(
       return res.status(400).json({ message: parsed.error.errors[0]?.message || "Notas inválidas." });
     }
 
-    const email = (parsed.data.email || "").trim().toLowerCase();
+    const email = normalizeEmail(parsed.data.email);
     const customerNameKey = normalizeCustomerName(parsed.data.customerName);
     if (!(await canManageCustomer(req, phone, email, customerNameKey, Number(res.locals.locationId)))) {
       return res.status(403).json({ message: "Não autorizado" });
     }
 
-    const note = await storage.upsertCustomerNote({
-      locationId: Number(res.locals.locationId),
-      phone,
-      customerNameKey,
-      email: email || undefined,
-      notes: parsed.data.notes.trim(),
-    });
+    let note;
+    try {
+      const resolvedIdentity = await resolveCustomerNoteIdentity(
+        Number(res.locals.locationId),
+        phone,
+        email,
+        customerNameKey,
+      );
+      note = await storage.upsertCustomerNote({
+        locationId: Number(res.locals.locationId),
+        phone,
+        customerNameKey: resolvedIdentity.customerNameKey,
+        email: email || undefined,
+        notes: parsed.data.notes.trim(),
+      });
+    } catch (error) {
+      if (error instanceof CustomerNoteIdentityConflictError) {
+        return res.status(409).json({ message: error.message, code: customerNoteIdentityConflictCode });
+      }
+      throw error;
+    }
     await recordAuditLog(req, {
       action: "customer_note.updated",
       entityType: "customer_note",
       entityId: note.id,
       summary: `Notas do cliente atualizadas: ${parsed.data.customerName || phone}`,
-      metadata: { phone, customerNameKey, locationId: Number(res.locals.locationId) },
+      metadata: {
+        locationId: Number(res.locals.locationId),
+        identityContacts: ["phone", email ? "email" : null].filter(Boolean),
+      },
     });
 
     res.json(note);
