@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
-import { getAvailableTimeSlots } from "../../client/src/lib/availability";
+import { calendarTimeInTimeZone, getAvailableTimeSlots } from "../../client/src/lib/availability";
 import { formatAppointmentForEmail } from "../../server/email";
 import { parseMultiLocationConfig } from "../../shared/multi-location-config";
 
@@ -2231,78 +2231,231 @@ test.describe("admin navigation", () => {
     expect(historyRequests.some((url) => url.includes("/customers//history"))).toBe(false);
   });
 
-  test("keeps manual and public availability in sync", async ({ page, request }) => {
+  test("keeps manual and public availability in sync without exposing occupied blocks", async ({ page, request }) => {
+    test.setTimeout(120_000);
     await loginAdminRequest(request);
-
-    const appointmentStart = futureThursdayIso(1, 16, 30);
-    const { appointment, barber, service } = await createExportAppointment(request, {
-      name: "Disponibilidade Manual QA",
-      phone: "912695707",
-      startTime: appointmentStart,
-    });
+    const suffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const bookingDate = new Date(futureThursdayIso(1, 12));
+    const at = (time: string) => calendarTimeInTimeZone(bookingDate, time, "Europe/Lisbon").toISOString();
+    const appointmentStart = at("16:30");
     const appointmentDateKey = dateKeyFromIso(appointmentStart);
+    const originalShopAvailability = await (await request.get("/api/shop/availability")).json();
+    const createdAppointmentIds: number[] = [];
+    const createdBarberIds: number[] = [];
+    const createdServiceIds: number[] = [];
 
-    const publicBusyResponse = await request.get(`/api/appointments/public?barberId=${barber.id}&date=${appointmentDateKey}`);
-    expect(publicBusyResponse.ok()).toBe(true);
-    const publicBusyAppointments = await publicBusyResponse.json();
-    expect(publicBusyAppointments.some((item: any) => item.id === appointment.id)).toBe(true);
+    const standardHours = Array.from({ length: 7 }, (_, dayOfWeek) => ({
+      dayOfWeek,
+      startTime: "09:00",
+      endTime: "20:00",
+      isOpen: true,
+    }));
+    const saveAppointmentId = async (name: string) => {
+      const response = await request.get(`/api/appointments?date=${appointmentDateKey}`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const appointment = (await response.json()).find((item: any) => item.customerName === name);
+      expect(appointment).toBeTruthy();
+      createdAppointmentIds.push(appointment.id);
+      return appointment;
+    };
 
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await loginAdmin(page);
+    let barber: any;
+    let secondBarber: any;
+    let shortService: any;
+    let longService: any;
 
-    let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
-    await selectDialogOption(page, dialog, 0, barber.name);
-    await selectDialogOption(page, dialog, 1, service.name);
+    try {
+      expect((await request.patch("/api/shop/availability", { data: standardHours })).ok()).toBe(true);
+      const shortServiceResponse = await request.post("/api/services", { data: {
+        name: `Disponibilidade 30 QA ${suffix}`,
+        description: "Serviço de teste da disponibilidade manual",
+        price: 1500,
+        duration: 30,
+        isVisible: true,
+      } });
+      expect(shortServiceResponse.status(), await shortServiceResponse.text()).toBe(201);
+      shortService = await shortServiceResponse.json();
+      createdServiceIds.push(shortService.id);
 
-    await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
-    await page.keyboard.press("Escape");
-    await expect(dialog).not.toBeVisible();
+      const longServiceResponse = await request.post("/api/services", { data: {
+        name: `Disponibilidade 60 QA ${suffix}`,
+        description: "Serviço longo de teste da disponibilidade manual",
+        price: 2500,
+        duration: 60,
+        isVisible: true,
+      } });
+      expect(longServiceResponse.status(), await longServiceResponse.text()).toBe(201);
+      longService = await longServiceResponse.json();
+      createdServiceIds.push(longService.id);
 
-    const cancelResponse = await request.patch(`/api/appointments/${appointment.id}/status`, {
-      data: { status: "cancelled" },
-    });
-    expect(cancelResponse.ok(), await cancelResponse.text()).toBe(true);
+      const createBarber = async (name: string) => {
+        const response = await request.post("/api/barbers", { data: {
+          name,
+          specialty: "Disponibilidade manual",
+          isVisible: true,
+          serviceIds: [shortService.id, longService.id],
+        } });
+        expect(response.status(), await response.text()).toBe(201);
+        const created = await response.json();
+        createdBarberIds.push(created.id);
+        const hoursResponse = await request.patch(`/api/barbers/${created.id}/availability`, {
+          data: standardHours.map((row) => ({ ...row, isWorking: true })),
+        });
+        expect(hoursResponse.ok(), await hoursResponse.text()).toBe(true);
+        return created;
+      };
+      barber = await createBarber(`Disponibilidade Pedro QA ${suffix}`);
+      secondBarber = await createBarber(`Disponibilidade Livre QA ${suffix}`);
 
-    const publicFreeResponse = await request.get(`/api/appointments/public?barberId=${barber.id}&date=${appointmentDateKey}`);
-    expect(publicFreeResponse.ok()).toBe(true);
-    const publicFreeAppointments = await publicFreeResponse.json();
-    expect(publicFreeAppointments.some((item: any) => item.id === appointment.id)).toBe(false);
+      const createManual = async (name: string, time: string, serviceId: number, allowOutsideHours = false) => {
+        const response = await request.post("/api/appointments/block", { data: {
+          barberId: barber.id,
+          serviceId,
+          startTime: at(time),
+          name,
+          phone: "912695707",
+          customerEmail: "",
+          isManualBooking: true,
+          allowOutsideHours,
+        } });
+        expect(response.status(), await response.text()).toBe(201);
+        return saveAppointmentId(name);
+      };
 
-    await page.reload();
-    await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
-    await expect(page.getByRole("button", {
-      name: /Abrir detalhes da marcação de Disponibilidade Manual QA/,
-    })).toHaveCount(0);
+      const firstBusy = await createManual(`Ocupado 16h30 QA ${suffix}`, "16:30", longService.id);
+      await createManual(`Ocupado 18h QA ${suffix}`, "18:00", longService.id);
+      await createManual(`Ocupado exterior QA ${suffix}`, "07:00", shortService.id, true);
 
-    dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
-    await selectDialogOption(page, dialog, 0, barber.name);
-    await selectDialogOption(page, dialog, 1, service.name);
+      const publicBusyResponse = await request.get(`/api/appointments/public?barberId=${barber.id}&date=${appointmentDateKey}`);
+      expect(publicBusyResponse.ok()).toBe(true);
+      const publicBusyAppointments = await publicBusyResponse.json();
+      expect(publicBusyAppointments.some((item: any) => item.id === firstBusy.id)).toBe(true);
 
-    await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await loginAdmin(page);
 
-    const publicAppointmentStart = futureThursdayIso(1, 17, 30);
-    const publicCreateResponse = await request.post("/api/appointments", {
-      data: {
+      let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await selectDialogOption(page, dialog, 1, shortService.name);
+      await dialog.getByRole("button", { name: "Limpar" }).click();
+
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "17:00", exact: true })).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "17:30", exact: true })).toBeEnabled();
+      await expect(dialog.getByRole("button", { name: "18:00", exact: true })).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "18:30", exact: true })).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toHaveAttribute("title", "Indisponível");
+
+      await dialog.getByRole("button", { name: "17:30", exact: true }).click();
+      await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
+      await selectDialogOption(page, dialog, 1, longService.name);
+      await expect(dialog.getByRole("button", { name: "17:30", exact: true })).toBeDisabled();
+      await expect(dialog.getByText("Escolha uma ou mais horas.")).toBeVisible();
+      await selectDialogOption(page, dialog, 1, shortService.name);
+
+      await selectDialogOption(page, dialog, 0, secondBarber.name);
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
+
+      const alternateDate = new Date(bookingDate);
+      alternateDate.setDate(bookingDate.getDate() + (bookingDate.getDate() === 1 ? 1 : -1));
+      await dialog.getByTestId("manual-booking-date-trigger").click();
+      await page.getByRole("grid").last().locator("[role='gridcell']:not(.day-outside)")
+        .filter({ hasText: new RegExp(`^${alternateDate.getDate()}$`) })
+        .click();
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
+      await dialog.getByTestId("manual-booking-date-trigger").click();
+      await page.getByRole("grid").last().locator("[role='gridcell']:not(.day-outside)")
+        .filter({ hasText: new RegExp(`^${bookingDate.getDate()}$`) })
+        .click();
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
+
+      const availableCount = async (period: "morning" | "afternoon" | "day") => dialog
+        .locator('button[data-availability="available"]')
+        .evaluateAll((buttons, selectedPeriod) => buttons.filter((button) => {
+          const time = button.textContent?.trim() || "";
+          if (selectedPeriod === "morning") return time < "13:00";
+          if (selectedPeriod === "afternoon") return time >= "14:00";
+          return true;
+        }).length, period);
+      const selectedCountLabel = (count: number) => `${count} horário${count === 1 ? "" : "s"} selecionado${count === 1 ? "" : "s"}`;
+
+      const morningCount = await availableCount("morning");
+      await dialog.getByRole("button", { name: "Manhã" }).click();
+      await expect(dialog.getByText(selectedCountLabel(morningCount))).toBeVisible();
+      const afternoonCount = await availableCount("afternoon");
+      await dialog.getByRole("button", { name: "Tarde" }).click();
+      await expect(dialog.getByText(selectedCountLabel(afternoonCount))).toBeVisible();
+      const dayCount = await availableCount("day");
+      await dialog.getByRole("button", { name: "Dia inteiro" }).click();
+      await expect(dialog.getByText(selectedCountLabel(dayCount))).toBeVisible();
+      await dialog.getByRole("button", { name: "Limpar" }).click();
+      await expect(dialog.getByText("Escolha uma ou mais horas.")).toBeVisible();
+
+      await dialog.getByLabel("Permitir horários fora do horário normal").click();
+      await expect(dialog.getByRole("button", { name: "06:00", exact: true })).toBeEnabled();
+      await expect(dialog.getByRole("button", { name: "07:00", exact: true })).toBeDisabled();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expectNoHorizontalOverflow(page);
+      await page.keyboard.press("Escape");
+      await expect(dialog).not.toBeVisible();
+
+      const cancelResponse = await request.patch(`/api/appointments/${firstBusy.id}/status`, {
+        data: { status: "cancelled" },
+      });
+      expect(cancelResponse.ok(), await cancelResponse.text()).toBe(true);
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await selectDialogOption(page, dialog, 1, shortService.name);
+      await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
+
+      const publicAppointmentStart = at("15:00");
+      const publicCreateResponse = await request.post("/api/appointments", { data: {
         barberId: barber.id,
-        serviceId: service.id,
+        serviceId: longService.id,
         startTime: publicAppointmentStart,
-        customerName: "Publico Sincronizado QA",
+        customerName: `Público sincronizado QA ${suffix}`,
         customerPhone: "912695709",
         customerEmail: null,
-      },
-    });
-    expect(publicCreateResponse.ok(), await publicCreateResponse.text()).toBe(true);
+      } });
+      expect(publicCreateResponse.ok(), await publicCreateResponse.text()).toBe(true);
+      const publicAppointment = await saveAppointmentId(`Público sincronizado QA ${suffix}`);
 
-    await page.keyboard.press("Escape");
-    await page.reload();
-    await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00");
+      await selectDialogOption(page, dialog, 0, barber.name);
+      await selectDialogOption(page, dialog, 1, shortService.name);
+      await expect(dialog.getByRole("button", { name: "15:00", exact: true })).toBeDisabled();
+      await expect(dialog.getByRole("button", { name: "15:30", exact: true })).toBeDisabled();
 
-    dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00");
-    await selectDialogOption(page, dialog, 0, barber.name);
-    await selectDialogOption(page, dialog, 1, service.name);
-
-    await expect(dialog.getByRole("button", { name: "17:30", exact: true })).toBeDisabled();
-    await expectNoHorizontalOverflow(page);
+      const forcedOverlap = await request.post("/api/appointments/block", { data: {
+        barberId: barber.id,
+        serviceId: shortService.id,
+        startTime: at("15:30"),
+        name: `Sobreposição forçada QA ${suffix}`,
+        phone: "912695710",
+        customerEmail: "",
+        isManualBooking: true,
+      } });
+      expect(forcedOverlap.status()).toBe(409);
+      expect(await forcedOverlap.text()).toMatch(/reservado|sobreposi|indisponível/i);
+      expect(createdAppointmentIds).toContain(publicAppointment.id);
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      for (const appointmentId of createdAppointmentIds) {
+        await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
+      }
+      for (const barberId of createdBarberIds) {
+        await request.patch(`/api/barbers/${barberId}`, { data: { isVisible: false } });
+      }
+      for (const serviceId of createdServiceIds) {
+        await request.patch(`/api/services/${serviceId}`, { data: { isVisible: false } });
+      }
+      await request.patch("/api/shop/availability", { data: originalShopAvailability });
+    }
   });
 
   test("reduces large barber photos before saving them", async ({ page }) => {

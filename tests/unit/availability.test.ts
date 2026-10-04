@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   calendarTimeInTimeZone,
   findFirstAvailableDate,
+  hasAppointmentIntervalConflict,
   type ShopAvailabilityRow,
 } from "../../client/src/lib/availability";
 
@@ -66,4 +67,48 @@ test("uses the location date near midnight and preserves availability across DST
 test("returns no arbitrary date when the booking window has no availability", () => {
   assert.equal(find({ startDate: date(2026, 9, 15), endDate: date(2026, 9, 18),
     now: new Date("2026-09-15T07:00:00Z"), shopAvailabilityRows: openDays(0) }), null);
+});
+
+test("uses the shared interval rule for every occupied block and only blocking appointments", () => {
+  const occupiedStart = calendarTimeInTimeZone(date(2026, 10, 8), "09:00", timeZone);
+  const appointments = [{
+    barberId: 7,
+    startTime: occupiedStart.toISOString(),
+    durationMinutes: 60,
+    status: "booked",
+  }];
+  const conflictsAt = (time: string, durationMinutes = 30) => hasAppointmentIntervalConflict({
+    appointments,
+    barberId: 7,
+    startTime: calendarTimeInTimeZone(date(2026, 10, 8), time, timeZone),
+    durationMinutes,
+  });
+
+  assert.equal(conflictsAt("08:30"), false);
+  assert.equal(conflictsAt("08:30", 60), true);
+  assert.equal(conflictsAt("09:00"), true);
+  assert.equal(conflictsAt("09:30"), true);
+  assert.equal(conflictsAt("10:00"), false);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments,
+    barberId: 8,
+    startTime: occupiedStart,
+    durationMinutes: 30,
+  }), false);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments: appointments.map((appointment) => ({ ...appointment, status: "completed" })),
+    barberId: 7,
+    startTime: occupiedStart,
+    durationMinutes: 30,
+  }), false);
+});
+
+test("accepts the public duration contract and blocks appointments without an exposed status", () => {
+  const occupiedStart = calendarTimeInTimeZone(date(2026, 3, 30), "09:00", timeZone);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments: [{ barberId: 1, startTime: occupiedStart.toISOString(), duration: 60 }],
+    barberId: 1,
+    startTime: calendarTimeInTimeZone(date(2026, 3, 30), "09:30", timeZone),
+    durationMinutes: 30,
+  }), true);
 });

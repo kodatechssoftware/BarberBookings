@@ -49,8 +49,10 @@ import { locationHeaders, setActiveLocationId, useActiveLocationId } from "@/lib
 import { moneyInputToCents } from "@/lib/money-input";
 import type { ShopLocation } from "@shared/locations";
 import {
+  calendarTimeInTimeZone,
   canBarberPerformService,
   getEffectivePeriodsForBarber,
+  hasAppointmentIntervalConflict,
   periodsForShop,
   timeToMinutes,
   type AvailabilityRow,
@@ -83,7 +85,6 @@ import {
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
 import {
-  getEffectiveAppointmentDurationMinutes as resolveAppointmentDurationMinutes,
   getAppointmentPriceCents as resolveAppointmentPriceCents,
   getAppointmentServiceName as resolveAppointmentServiceName,
   MAX_APPOINTMENT_DURATION_MINUTES,
@@ -326,51 +327,6 @@ function isOperationalAdminAppointment(appointment: AdminAppointment) {
 function getAdminAppointmentEnd(appointment: AdminAppointment) {
   const start = parseISO(appointment.startTime);
   return new Date(start.getTime() + Math.max(15, appointment.durationMinutes || 30) * 60000);
-}
-
-function getAdminAppointmentDurationMinutes(
-  appointment: Pick<AdminAppointment, "serviceId" | "durationMinutes" | "serviceNameSnapshot" | "servicePriceCentsSnapshot">,
-  services?: Array<{ id: number; duration?: number | null }>,
-) {
-  return resolveAppointmentDurationMinutes(
-    appointment,
-    new Map((services || []).flatMap((service) => typeof service.duration === "number"
-      ? [[service.id, service.duration] as const]
-      : [])),
-  );
-}
-
-function hasAdminAppointmentConflict({
-  appointments,
-  barberId,
-  date,
-  time,
-  duration,
-  services,
-}: {
-  appointments: AdminAppointment[];
-  barberId: number;
-  date: Date;
-  time: string;
-  duration: number;
-  services?: Array<{ id: number; duration?: number | null }>;
-}) {
-  const [hours, minutes] = time.split(":").map(Number);
-  const start = new Date(date);
-  start.setHours(hours, minutes, 0, 0);
-  const end = new Date(start.getTime() + duration * 60000);
-  const isHistoricalTime = end.getTime() <= Date.now();
-
-  return appointments.some((appointment) => {
-    if (appointment.barberId !== barberId) return false;
-    if (appointment.status !== "booked" && !(isHistoricalTime && appointment.status === "completed")) return false;
-
-    const appointmentStart = parseISO(appointment.startTime);
-    const appointmentDuration = getAdminAppointmentDurationMinutes(appointment, services);
-    const appointmentEnd = new Date(appointmentStart.getTime() + appointmentDuration * 60000);
-
-    return start < appointmentEnd && end > appointmentStart;
-  });
 }
 
 function getAppointmentServicePriceCents(
@@ -1680,6 +1636,7 @@ export default function Admin() {
   const { toast } = useToast();
 
   const [isBlocking, setIsBlocking] = useState(false);
+  const [blockAvailabilitySession, setBlockAvailabilitySession] = useState(0);
   const [blockData, setBlockData] = useState<AppointmentBlockData>({
     barberId: "",
     serviceId: "",
@@ -1707,10 +1664,11 @@ export default function Admin() {
   const {
     data: blockAppointments,
   } = useAppointments({
-    enabled: user?.authorized === true && Boolean(blockData.barberId),
+    enabled: user?.authorized === true && isBlocking && Boolean(blockData.barberId),
     scope: "busy",
     date: blockAppointmentDate,
     barberId: blockData.barberId || undefined,
+    cacheVersion: blockAvailabilitySession,
     refetchInterval: 10000,
   });
   const blockAppointmentList = useMemo(
@@ -2150,6 +2108,7 @@ export default function Admin() {
     if (mode === "manual") {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/extras"] });
     }
+    setBlockAvailabilitySession((current) => current + 1);
     setIsBlocking(true);
   };
 
@@ -2806,12 +2765,9 @@ export default function Admin() {
     intervalMinutes: bookingSlotIntervalMinutes,
   }), [bookingSlotIntervalMinutes]);
 
-  const createBlockStartTime = (date: Date, timeStr: string) => {
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    const startTime = new Date(date);
-    startTime.setHours(hours, minutes, 0, 0);
-    return startTime;
-  };
+  const activeLocationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
+  const createBlockStartTime = (date: Date, timeStr: string) =>
+    calendarTimeInTimeZone(date, timeStr, activeLocationTimeZone);
   const getAppointmentServiceName = (appointment: AdminAppointment) => resolveAppointmentServiceName(
     appointment,
     new Map((services || []).map((service) => [service.id, service.name])),
@@ -2846,13 +2802,11 @@ export default function Admin() {
         return false;
       }
 
-      return !hasAdminAppointmentConflict({
+      return !hasAppointmentIntervalConflict({
         appointments: blockAppointmentList,
         barberId,
-        date: blockData.date,
-        time,
-        duration: selectedBlockDuration,
-        services,
+        startTime: createBlockStartTime(blockData.date, time),
+        durationMinutes: selectedBlockDuration,
       });
     });
   }, [
@@ -2862,18 +2816,18 @@ export default function Admin() {
     blockData.date,
     blockData.allowOutsideHours,
     blockData.isManualBooking,
+    activeLocationTimeZone,
     hasLoadedBlockAppointments,
     manualBookingOutsideHoursTimeOptions,
     manualBookingTimeOptions,
     selectedBlockDuration,
-    services,
     shopAvailabilityRows,
   ]);
   const availableBlockTimesKey = availableBlockTimes.join("|");
   const selectedBlockTimesKey = blockData.times.join("|");
 
   useEffect(() => {
-    if (blockData.isManualBooking && blockData.allowOutsideHours) return;
+    if (!blockData.barberId || !hasLoadedBlockAppointments) return;
 
     setBlockData((current) => {
       const availableTimes = new Set(availableBlockTimes);
@@ -2887,7 +2841,7 @@ export default function Admin() {
       }
       return { ...current, times: nextTimes };
     });
-  }, [availableBlockTimesKey, selectedBlockTimesKey]);
+  }, [availableBlockTimesKey, blockData.barberId, hasLoadedBlockAppointments, selectedBlockTimesKey]);
 
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
@@ -3099,7 +3053,11 @@ export default function Admin() {
         hasSpecialTerms: false,
         isRecurring: false,
       });
-      refetch();
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ["/api/appointments"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] }),
+      ]);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
       if (

@@ -37,6 +37,14 @@ export type TimeSlot = {
   available: boolean;
 };
 
+export type AvailabilityAppointment = {
+  barberId: number;
+  startTime: string | Date;
+  duration?: number | null;
+  durationMinutes?: number | null;
+  status?: string;
+};
+
 function calendarDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -70,6 +78,35 @@ export function canBarberPerformService(barber: BarberOption | undefined | null,
   if (!barber || !serviceId) return true;
   const serviceIds = barber.serviceIds ?? [];
   return (barber.allServicesAllowed !== false && serviceIds.length === 0) || serviceIds.includes(serviceId);
+}
+
+export function hasAppointmentIntervalConflict({
+  appointments,
+  barberId,
+  startTime,
+  durationMinutes,
+}: {
+  appointments: AvailabilityAppointment[];
+  barberId: number;
+  startTime: Date;
+  durationMinutes: number;
+}) {
+  const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
+
+  return appointments.some((appointment) => {
+    if (appointment.barberId !== barberId) return false;
+    if (appointment.status !== undefined && appointment.status !== "booked") return false;
+
+    const appointmentStart = new Date(appointment.startTime);
+    if (Number.isNaN(appointmentStart.getTime())) return false;
+    const storedDuration = appointment.durationMinutes ?? appointment.duration ?? 30;
+    const appointmentDuration = Number.isFinite(storedDuration) && storedDuration > 0
+      ? storedDuration
+      : 30;
+    const appointmentEnd = new Date(appointmentStart.getTime() + appointmentDuration * 60000);
+
+    return startTime < appointmentEnd && endTime > appointmentStart;
+  });
 }
 
 type MinutePeriod = {
@@ -208,20 +245,18 @@ export function getAvailableTimeSlots({
       ? calendarTimeInTimeZone(selectedDate, timeString, timeZone)
       : new Date(selectedDate);
     if (!timeZone) slotDateTime.setHours(hours, minutes, 0, 0);
-    const endDateTime = new Date(slotDateTime.getTime() + selectedService.duration * 60000);
     const isPast = (timeZone ? calendarDateKey(selectedDate) === dateKeyInTimeZone(now, timeZone) : calendarDateKey(selectedDate) === calendarDateKey(now))
       && slotDateTime <= now;
 
     const busyBarberIds = new Set(
-      existingAppointments
-        .filter((appointment) => {
-          const appointmentStart = new Date(appointment.startTime);
-          const appointmentEnd = new Date(
-            appointmentStart.getTime() + (appointment.duration || 30) * 60000,
-          );
-          return slotDateTime < appointmentEnd && endDateTime > appointmentStart;
-        })
-        .map((appointment) => appointment.barberId),
+      eligibleBarbers
+        .filter((barber) => hasAppointmentIntervalConflict({
+          appointments: existingAppointments,
+          barberId: barber.id,
+          startTime: slotDateTime,
+          durationMinutes: selectedService.duration,
+        }))
+        .map((barber) => barber.id),
     );
 
     const hasAvailableBarber = eligibleBarbers.some((barber) => {
