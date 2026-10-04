@@ -19,7 +19,8 @@ export type AppointmentBlockData = {
   serviceMode: "existing" | "custom";
   customServiceName: string;
   customDurationMinutes: string;
-  servicePrice: string;
+  existingServicePrice: string;
+  customServicePrice: string;
   extras: Array<{ extraId: number; amountEuros: string }>;
   times: string[];
   name: string;

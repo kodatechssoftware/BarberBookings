@@ -839,6 +839,130 @@ test.describe.serial("manual booking Extras", () => {
     });
   });
 
+  test("normalizes money drafts and preserves independent existing and custom service drafts", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await loginAdminPage(page);
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+
+    let dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+    await dialog.getByLabel("Condições especiais desta marcação").click();
+
+    const existingPrice = dialog.locator("#manual-booking-special-price");
+    await expect(existingPrice).toHaveValue("15,00");
+    await existingPrice.fill("021");
+    await expect(existingPrice).toHaveValue("21");
+    await existingPrice.blur();
+    await expect(existingPrice).toHaveValue("21,00");
+    await existingPrice.fill("12,345");
+    await expect(existingPrice).toHaveValue("21,00");
+
+    await dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
+    const variableExtraAmount = dialog.getByLabel(`Valor do Extra ${travelExtra.name}`);
+    await variableExtraAmount.fill("0.50");
+    await expect(variableExtraAmount).toHaveValue("0,50");
+    await variableExtraAmount.fill("0,558");
+    await expect(variableExtraAmount).toHaveValue("0,50");
+    await variableExtraAmount.fill("");
+    await variableExtraAmount.pressSequentially("5,");
+    await expect(variableExtraAmount).toHaveValue("5,");
+    await variableExtraAmount.pressSequentially("5");
+    await variableExtraAmount.blur();
+    await expect(variableExtraAmount).toHaveValue("5,50");
+
+    await dialog.getByRole("button", { name: "Serviço personalizado" }).click();
+    await dialog.locator("#manual-booking-custom-service").fill("Produção custom draft QA");
+    await dialog.locator("#manual-booking-custom-duration").fill("45");
+    const customPrice = dialog.locator("#manual-booking-custom-price");
+    await customPrice.fill("36");
+    await customPrice.blur();
+    await expect(customPrice).toHaveValue("36,00");
+    await customPrice.fill("1,9999");
+    await expect(customPrice).toHaveValue("36,00");
+
+    await dialog.getByRole("button", { name: "Serviço existente" }).click();
+    await expect(dialog.getByRole("combobox").nth(1)).toContainText(service.name);
+    await expect(dialog.getByText(`${service.duration} min`, { exact: true })).toBeVisible();
+    await expect(dialog.getByText("15,00 €", { exact: true }).first()).toBeVisible();
+    await expect(existingPrice).toHaveValue("21,00");
+
+    await dialog.getByRole("button", { name: "Serviço personalizado" }).click();
+    await expect(dialog.locator("#manual-booking-custom-service")).toHaveValue("Produção custom draft QA");
+    await expect(dialog.locator("#manual-booking-custom-duration")).toHaveValue("45");
+    await expect(customPrice).toHaveValue("36,00");
+
+    await dialog.getByRole("button", { name: "Serviço existente" }).click();
+    await dialog.getByLabel("Nome do cliente", { exact: true }).fill(`Draft payload QA ${Date.now()}`);
+    await clickFirstEnabledManualTime(dialog);
+
+    const submittedPayloads: Array<Record<string, unknown>> = [];
+    await page.route("**/api/appointments/block", async (route) => {
+      submittedPayloads.push(route.request().postDataJSON());
+      if (submittedPayloads.length === 1) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "Falha controlada para validar o segundo modo." }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "1 marcação criada.", appointments: [] }),
+      });
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await dialog.getByRole("button", { name: "Criar marcação" }).click();
+    await expect.poll(() => submittedPayloads.length).toBe(1);
+    expect(submittedPayloads[0]).toMatchObject({
+      serviceId: service.id,
+      serviceMode: "existing",
+      hasSpecialTerms: true,
+      servicePriceCents: 2100,
+      extras: [{ extraId: travelExtra.id, amountCents: 550 }],
+    });
+    expect(submittedPayloads[0]).not.toHaveProperty("customServiceName");
+    expect(submittedPayloads[0]).not.toHaveProperty("customDurationMinutes");
+
+    await dialog.getByRole("button", { name: "Serviço personalizado" }).click();
+    await expect(dialog.locator("#manual-booking-custom-service")).toHaveValue("Produção custom draft QA");
+    await expect(dialog.locator("#manual-booking-custom-duration")).toHaveValue("45");
+    await expect(customPrice).toHaveValue("36,00");
+    await dialog.getByRole("button", { name: "Criar marcação" }).click();
+    await expect(dialog).not.toBeVisible();
+    expect(submittedPayloads[1]).toMatchObject({
+      serviceId: null,
+      serviceMode: "custom",
+      hasSpecialTerms: true,
+      customServiceName: "Produção custom draft QA",
+      customDurationMinutes: 45,
+      servicePriceCents: 3600,
+      extras: [{ extraId: travelExtra.id, amountCents: 550 }],
+    });
+
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+    dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await expect(dialog.getByLabel("Condições especiais desta marcação")).not.toBeChecked();
+    await expect(dialog.getByRole("combobox").nth(1)).toContainText("Selecione");
+    await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
+
+    await selectDialogOption(page, dialog, 0, barber.name);
+    await selectDialogOption(page, dialog, 1, service.name);
+    await dialog.getByLabel("Condições especiais desta marcação").click();
+    await dialog.getByRole("button", { name: "Serviço personalizado" }).click();
+    await dialog.locator("#manual-booking-custom-service").fill("Draft que deve ser limpo");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+    dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await expect(dialog.getByLabel("Condições especiais desta marcação")).not.toBeChecked();
+    await expect(dialog.getByRole("combobox").nth(1)).toContainText("Selecione");
+  });
+
   test("uses the central finance engine in dashboard, rankings and the accounting workbook", async ({ request }) => {
     test.setTimeout(120_000);
     const suffix = Date.now();

@@ -917,7 +917,7 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     await expect(editDialog.locator("#edit-custom-service-name")).toHaveValue("Corte ao domicílio");
     await expect(editDialog.locator("#edit-custom-duration")).toHaveValue("45");
     const priceInput = editDialog.locator("#edit-custom-price");
-    await expect(priceInput).toHaveValue("30");
+    await expect(priceInput).toHaveValue("30,00");
     await expect(priceInput).toBeVisible();
     await priceInput.fill("31,00");
     await editDialog.getByRole("button", { name: "Guardar alterações" }).click();

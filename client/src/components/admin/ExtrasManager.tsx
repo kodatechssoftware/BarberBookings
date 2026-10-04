@@ -19,6 +19,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useExtras } from "@/hooks/use-extras";
 import { useToast } from "@/hooks/use-toast";
+import {
+  centsToMoneyInput,
+  formatMoneyInputOnBlur,
+  moneyInputToCents,
+  normalizeMoneyInput,
+} from "@/lib/money-input";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
 const financialRuleLabels: Record<ExtraFinancialRule, string> = {
@@ -47,18 +53,6 @@ const euroFormatter = new Intl.NumberFormat("pt-PT", {
   style: "currency",
   currency: "EUR",
 });
-
-function amountInputFromCents(amountCents: number | null) {
-  if (amountCents === null) return "";
-  return (amountCents / 100).toFixed(2).replace(".", ",");
-}
-
-function parseAmountCents(value: string) {
-  const normalized = value.trim().replace(",", ".");
-  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
-  const cents = Math.round(Number(normalized) * 100);
-  return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
-}
 
 export function ExtrasManager({ enabled }: { enabled: boolean }) {
   const { toast } = useToast();
@@ -93,7 +87,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
     setForm({
       name: extra.name,
       pricingMode: extra.pricingMode,
-      amountEuros: amountInputFromCents(extra.amountCents),
+      amountEuros: centsToMoneyInput(extra.amountCents),
       financialRule: extra.financialRule,
       sortOrder: String(extra.sortOrder),
     });
@@ -110,7 +104,9 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
 
   const saveExtra = async () => {
     const name = form.name.trim();
-    const amountCents = form.pricingMode === "fixed" ? parseAmountCents(form.amountEuros) : null;
+    const amountCents = form.pricingMode === "fixed"
+      ? moneyInputToCents(form.amountEuros, { minCents: 1, maxCents: 1_000_000 })
+      : null;
     const sortOrder = Number(form.sortOrder);
     if (!name) {
       setFormError("Indique o nome do Extra.");
@@ -331,7 +327,17 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
                     id="extra-amount"
                     inputMode="decimal"
                     value={form.amountEuros}
-                    onChange={(event) => setForm((current) => ({ ...current, amountEuros: event.target.value }))}
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      amountEuros: normalizeMoneyInput(event.target.value, current.amountEuros),
+                    }))}
+                    onBlur={() => setForm((current) => ({
+                      ...current,
+                      amountEuros: formatMoneyInputOnBlur(current.amountEuros, {
+                        minCents: 1,
+                        maxCents: 1_000_000,
+                      }),
+                    }))}
                     placeholder="Ex.: 5,00"
                     required
                     className="border-white/10 bg-background text-white"
