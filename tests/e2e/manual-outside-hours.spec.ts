@@ -841,6 +841,8 @@ test.describe.serial("manual outside-hours appointment terms", () => {
     expect(submittedPayload).not.toHaveProperty("servicePriceCents");
     expect(submittedPayload).not.toHaveProperty("customServiceName");
     expect(submittedPayload).not.toHaveProperty("customDurationMinutes");
+    expect(submittedPayload).toHaveProperty("startTime");
+    expect(submittedPayload).not.toHaveProperty("startTimes");
 
     await page.getByRole("button", { name: "Marcação manual" }).click();
     await expect(specialTermsSwitch).not.toBeChecked();

@@ -1080,13 +1080,21 @@ test.describe("admin navigation", () => {
     await expect(manualDialog.getByRole("button", { name: todayLabel, exact: true })).toBeVisible();
     await expect(manualDialog.getByLabel("Nome do cliente", { exact: true })).toHaveAttribute("placeholder", "Ex.: João Silva");
     await expect(manualDialog.getByText("Nome do cliente / nota", { exact: true })).toHaveCount(0);
-    await expect(manualDialog.getByText("Horas afetadas")).toBeVisible();
+    await expect(manualDialog.getByText("Hora da marcação")).toBeVisible();
+    await expect(manualDialog.getByText("Escolha a hora de início.")).toBeVisible();
+    await expect(manualDialog.getByRole("button", { name: "Manhã" })).toHaveCount(0);
+    await expect(manualDialog.getByRole("button", { name: "Tarde" })).toHaveCount(0);
+    await expect(manualDialog.getByRole("button", { name: "Dia inteiro" })).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(manualDialog).not.toBeVisible();
     await page.getByRole("button", { name: "Ausência" }).click();
     const absenceDialog = page.getByRole("dialog", { name: "Ausência na agenda" });
     await expect(absenceDialog).toBeVisible();
     await expect(absenceDialog.getByLabel("Motivo / nota", { exact: true })).toBeVisible();
+    await expect(absenceDialog.getByText("Horas afetadas")).toBeVisible();
+    await expect(absenceDialog.getByRole("button", { name: "Manhã" })).toBeVisible();
+    await expect(absenceDialog.getByRole("button", { name: "Tarde" })).toBeVisible();
+    await expect(absenceDialog.getByRole("button", { name: "Dia inteiro" })).toBeVisible();
     await page.keyboard.press("Escape");
     await selectAgendaDay(page);
     const weeklyAppointment = page.getByRole("button", {
@@ -1812,7 +1820,8 @@ test.describe("admin navigation", () => {
       await dialog.locator("#manual-booking-phone").fill("912695743");
       const timeButton = dialog.getByRole("button", { name: "18:30", exact: true });
       await expect(timeButton).toBeEnabled();
-      await timeButton.click();
+      if (await timeButton.getAttribute("aria-pressed") !== "true") await timeButton.click();
+      await expect(timeButton).toHaveAttribute("aria-pressed", "true");
       await dialog.getByRole("button", { name: /Criar marcação/i }).click();
       await expect(dialog).not.toBeVisible();
 
@@ -2337,7 +2346,15 @@ test.describe("admin navigation", () => {
       let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, shortService.name);
-      await dialog.getByRole("button", { name: "Limpar" }).click();
+      const initialTime = dialog.getByRole("button", { name: "09:00", exact: true });
+      await expect(initialTime).toHaveAttribute("aria-pressed", "true");
+      await initialTime.click();
+      await expect(initialTime).toHaveAttribute("aria-pressed", "false");
+      await expect(dialog.getByText("Escolha a hora de início.")).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Manhã" })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Tarde" })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Dia inteiro" })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Limpar" })).toHaveCount(0);
 
       await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
       await expect(dialog.getByRole("button", { name: "17:00", exact: true })).toBeDisabled();
@@ -2350,8 +2367,17 @@ test.describe("admin navigation", () => {
       await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
       await selectDialogOption(page, dialog, 1, longService.name);
       await expect(dialog.getByRole("button", { name: "17:30", exact: true })).toBeDisabled();
-      await expect(dialog.getByText("Escolha uma ou mais horas.")).toBeVisible();
+      await expect(dialog.getByText("Escolha a hora de início.")).toBeVisible();
       await selectDialogOption(page, dialog, 1, shortService.name);
+
+      const firstAvailableTime = dialog.getByRole("button", { name: "17:30", exact: true });
+      const secondAvailableTime = dialog.getByRole("button", { name: "19:00", exact: true });
+      await firstAvailableTime.click();
+      await expect(firstAvailableTime).toHaveAttribute("aria-pressed", "true");
+      await secondAvailableTime.click();
+      await expect(firstAvailableTime).toHaveAttribute("aria-pressed", "false");
+      await expect(secondAvailableTime).toHaveAttribute("aria-pressed", "true");
+      await expect(dialog.getByText("1 horário selecionado")).toBeVisible();
 
       await selectDialogOption(page, dialog, 0, secondBarber.name);
       await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
@@ -2371,34 +2397,12 @@ test.describe("admin navigation", () => {
         .click();
       await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeDisabled();
 
-      const availableCount = async (period: "morning" | "afternoon" | "day") => dialog
-        .locator('button[data-availability="available"]')
-        .evaluateAll((buttons, selectedPeriod) => buttons.filter((button) => {
-          const time = button.textContent?.trim() || "";
-          if (selectedPeriod === "morning") return time < "13:00";
-          if (selectedPeriod === "afternoon") return time >= "14:00";
-          return true;
-        }).length, period);
-      const selectedCountLabel = (count: number) => `${count} horário${count === 1 ? "" : "s"} selecionado${count === 1 ? "" : "s"}`;
-
-      const morningCount = await availableCount("morning");
-      await dialog.getByRole("button", { name: "Manhã" }).click();
-      await expect(dialog.getByText(selectedCountLabel(morningCount))).toBeVisible();
-      const afternoonCount = await availableCount("afternoon");
-      await dialog.getByRole("button", { name: "Tarde" }).click();
-      await expect(dialog.getByText(selectedCountLabel(afternoonCount))).toBeVisible();
-      const dayCount = await availableCount("day");
-      await dialog.getByRole("button", { name: "Dia inteiro" }).click();
-      await expect(dialog.getByText(selectedCountLabel(dayCount))).toBeVisible();
-      await dialog.getByRole("button", { name: "Limpar" }).click();
-      await expect(dialog.getByText("Escolha uma ou mais horas.")).toBeVisible();
-
       await dialog.getByLabel("Permitir horários fora do horário normal").click();
       await expect(dialog.getByRole("button", { name: "06:00", exact: true })).toBeEnabled();
       await expect(dialog.getByRole("button", { name: "07:00", exact: true })).toBeDisabled();
       await page.setViewportSize({ width: 390, height: 844 });
       await expectNoHorizontalOverflow(page);
-      await page.keyboard.press("Escape");
+      await dialog.getByRole("button", { name: "Close" }).click();
       await expect(dialog).not.toBeVisible();
 
       const cancelResponse = await request.patch(`/api/appointments/${firstBusy.id}/status`, {
@@ -2424,7 +2428,7 @@ test.describe("admin navigation", () => {
       expect(publicCreateResponse.ok(), await publicCreateResponse.text()).toBe(true);
       const publicAppointment = await saveAppointmentId(`Público sincronizado QA ${suffix}`);
 
-      await page.keyboard.press("Escape");
+      await dialog.getByRole("button", { name: "Close" }).click();
       dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00");
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, shortService.name);
