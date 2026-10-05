@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Loader2, Pencil, Plus, Sparkles } from "lucide-react";
 import type { ExtraDefinition, ExtraFinancialRule, ExtraPricingMode } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
@@ -62,6 +62,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
   const [form, setForm] = useState<ExtraForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const pendingActionRef = useRef<string | null>(null);
 
   const nextSortOrder = useMemo(
     () => extras.reduce((highest, extra) => Math.max(highest, extra.sortOrder), -1) + 1,
@@ -103,6 +104,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
   };
 
   const saveExtra = async () => {
+    if (pendingActionRef.current) return;
     const name = form.name.trim();
     const amountCents = form.pricingMode === "fixed"
       ? moneyInputToCents(form.amountEuros, { minCents: 1, maxCents: 1_000_000 })
@@ -122,6 +124,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
     }
 
     const actionKey = editingExtra ? `save-${editingExtra.id}` : "create";
+    pendingActionRef.current = actionKey;
     setPendingAction(actionKey);
     setFormError(null);
     try {
@@ -142,12 +145,16 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Não foi possível guardar o Extra.");
     } finally {
+      pendingActionRef.current = null;
       setPendingAction(null);
     }
   };
 
   const toggleExtra = async (extra: ExtraDefinition, isActive: boolean) => {
-    setPendingAction(`toggle-${extra.id}`);
+    if (pendingActionRef.current) return;
+    const actionKey = `toggle-${extra.id}`;
+    pendingActionRef.current = actionKey;
+    setPendingAction(actionKey);
     try {
       await apiRequest("PATCH", `/api/admin/extras/${extra.id}`, { isActive });
       await refresh();
@@ -162,6 +169,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
         variant: "destructive",
       });
     } finally {
+      pendingActionRef.current = null;
       setPendingAction(null);
     }
   };
@@ -265,7 +273,9 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
         )}
       </CardContent>
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        if (!open && !pendingActionRef.current) closeDialog();
+      }}>
         <DialogContent
           mobileViewportAware
           className="w-[calc(100vw-1rem)] max-w-lg overflow-y-auto border-white/10 bg-card text-white"

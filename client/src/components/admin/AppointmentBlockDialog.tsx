@@ -4,6 +4,7 @@ import { pt } from "date-fns/locale";
 import { AlertTriangle, Calendar as CalendarIcon, User } from "lucide-react";
 import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
+import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -63,6 +64,7 @@ type AppointmentBlockDialogProps = {
   isCheckingAvailability?: boolean;
   canCreateAsCompleted: boolean;
   onSubmit: () => void;
+  isSubmitting?: boolean;
 };
 
 export function AppointmentBlockDialog({
@@ -81,6 +83,7 @@ export function AppointmentBlockDialog({
   isCheckingAvailability = false,
   canCreateAsCompleted,
   onSubmit,
+  isSubmitting = false,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking;
@@ -182,7 +185,10 @@ export function AppointmentBlockDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-2xl border-white/10 bg-card p-0 text-white shadow-2xl backdrop-blur-md sm:w-[94vw] sm:max-w-2xl">
+      <DialogContent
+        aria-busy={isSubmitting}
+        className="grid max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-2xl border-white/10 bg-card p-0 text-white shadow-2xl backdrop-blur-md sm:w-[94vw] sm:max-w-2xl"
+      >
         <DialogHeader className="border-b border-white/10 px-5 py-5 pr-12 sm:px-6">
           <DialogTitle className="text-xl font-display font-bold text-primary">
             {blockData.isManualBooking ? "Marcação manual" : "Ausência na agenda"}
@@ -545,6 +551,7 @@ export function AppointmentBlockDialog({
                     <AppointmentPaymentOptions
                       value={blockData.paymentMethod}
                       onSelect={(paymentMethod) => onBlockDataChange({ ...blockData, paymentMethod })}
+                      disabled={isSubmitting}
                     />
                   </div>
                 )}
@@ -890,10 +897,12 @@ export function AppointmentBlockDialog({
         </div>
         <div className="border-t border-white/10 bg-card/95 px-5 py-4 sm:px-6">
           <Button
+            data-testid="appointment-block-submit"
             type="button"
             variant="gold"
             className="h-12 w-full rounded-xl text-base font-bold"
             disabled={
+              isSubmitting ||
               isCheckingAvailability ||
               !blockData.barberId ||
               blockData.times.length === 0 ||
@@ -907,9 +916,15 @@ export function AppointmentBlockDialog({
               onSubmit();
             }}
           >
-            {blockData.isManualBooking ? "Criar marcação" : "Guardar ausência"}
+            {isSubmitting
+              ? blockData.isManualBooking ? "A criar marcação..." : "A guardar ausência..."
+              : blockData.isManualBooking ? "Criar marcação" : "Guardar ausência"}
           </Button>
         </div>
+        <MutationPendingOverlay
+          active={isSubmitting}
+          label={blockData.isManualBooking ? "A criar marcação..." : "A guardar ausência..."}
+        />
       </DialogContent>
     </Dialog>
   );

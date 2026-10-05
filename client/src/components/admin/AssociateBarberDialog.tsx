@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useActiveLocationId } from "@/lib/location-context";
@@ -11,12 +11,15 @@ export function AssociateBarberDialog() {
   const [open, setOpen] = useState(false);
   const [barberId, setBarberId] = useState("");
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const locationId = useActiveLocationId();
   const { toast } = useToast();
   const { data: barbers = [], isLoading, isError } = useQuery<Array<{ id: number; name: string }>>({
     queryKey: ["/api/admin/available-barbers", { locationId }], enabled: open, staleTime: 0,
   });
   async function associate() {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       await apiRequest("POST", "/api/admin/location-barbers", { barberId: Number(barberId) });
@@ -27,9 +30,15 @@ export function AssociateBarberDialog() {
       toast({ title: "Barbeiro associado", description: "Configure os serviços e o horário do barbeiro nesta loja." });
     } catch (error) {
       toast({ title: "Não foi possível associar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
-    } finally { setSaving(false); }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   }
-  return <Dialog open={open} onOpenChange={setOpen}>
+  return <Dialog open={open} onOpenChange={(nextOpen) => {
+    if (!nextOpen && savingRef.current) return;
+    setOpen(nextOpen);
+  }}>
     <DialogTrigger asChild><Button variant="outline">Associar barbeiro existente</Button></DialogTrigger>
     <DialogContent className="w-[95vw] max-w-lg border-white/10 bg-card text-white">
       <DialogHeader><DialogTitle>Associar barbeiro a esta loja</DialogTitle>

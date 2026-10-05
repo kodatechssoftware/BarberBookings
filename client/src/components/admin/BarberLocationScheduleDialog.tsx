@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Clock, Loader2, Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -70,6 +70,7 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
   rows: ScheduleRow[]; shopRows: ShopAvailabilityRow[]; onSaved: () => void;
 }) {
   const { toast } = useToast();
+  const savingRef = useRef(false);
   const [days, setDays] = useState(() => weekdays.map((_, dayOfWeek) => {
     const periods = rows.length
       ? rows.filter((row) => row.dayOfWeek === dayOfWeek && row.isWorking).map(({ startTime, endTime }) => ({ startTime, endTime }))
@@ -98,11 +99,20 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
       toast({ title: "Horário guardado", description: `${barber.name} — ${location.name}. As outras lojas não foram alteradas.` });
     },
   });
+  const submitSchedule = (data: ScheduleRow[]) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    save.mutate(data, {
+      onSettled: () => {
+        savingRef.current = false;
+      },
+    });
+  };
   const updateDay = (day: number, data: Partial<typeof days[number]>) => setDays((current) => current.map((value, index) => index === day ? { ...value, ...data } : value));
   return <form className="min-w-0 space-y-4" onSubmit={(event) => {
     event.preventDefault();
     // Closed rows are intentional: [] means inherit shop hours, not a closed week.
-    save.mutate(days.flatMap<ScheduleRow>((day, dayOfWeek) => day.isWorking
+    submitSchedule(days.flatMap<ScheduleRow>((day, dayOfWeek) => day.isWorking
       ? day.periods.map((period) => ({ ...period, dayOfWeek, isWorking: true }))
       : [{ dayOfWeek, startTime: "09:00", endTime: "19:00", isWorking: false }]));
   }}>
@@ -128,7 +138,7 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
       </section>)}
       <div className="flex flex-col gap-2 sm:flex-row">
         <Button type="submit" variant="gold" className="flex-1">{save.isPending ? "A guardar…" : "Guardar horário nesta loja"}</Button>
-        <Button type="button" variant="outline" onClick={() => save.mutate([])}>Usar horário da loja</Button>
+        <Button type="button" variant="outline" onClick={() => submitSchedule([])}>Usar horário da loja</Button>
       </div>
     </fieldset>
     {save.isError && <p role="alert" className="text-sm text-red-400">{save.error.message}</p>}

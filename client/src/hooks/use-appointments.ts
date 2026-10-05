@@ -206,7 +206,21 @@ export function useUpdateAppointmentStatus() {
       }
       return await res.json() as AppointmentRecord;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] }),
+    onSuccess: (updatedAppointment) => {
+      queryClient.setQueriesData<AppointmentRecord[]>(
+        { queryKey: [api.appointments.list.path] },
+        (current) => current?.map((appointment) => appointment.id === updatedAppointment.id
+          ? {
+              ...appointment,
+              ...updatedAppointment,
+              extras: updatedAppointment.extras ?? appointment.extras,
+            }
+          : appointment),
+      );
+      // Keep the UI responsive after the PATCH succeeds. The cache already has
+      // the returned status; the authoritative refresh can finish in background.
+      void queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
+    },
   });
 }
 
