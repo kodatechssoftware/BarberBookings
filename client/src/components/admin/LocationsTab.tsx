@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, ExternalLink, MapPin, Pencil, Plus } from "lucide-react";
 import type { ShopLocation } from "@shared/locations";
@@ -40,6 +40,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
   const [editing, setEditing] = useState<ShopLocation | null>(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [form, setForm] = useState<LocationForm>(emptyForm);
   const hasCustomMapLinks = Boolean(form.mapUrl.trim() || form.mapEmbedUrl.trim());
   const { data: locations = [], isLoading } = useQuery<ShopLocation[]>({
@@ -68,6 +69,8 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
   };
 
   const save = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       const path = editing ? `/api/admin/locations/${editing.id}` : "/api/admin/locations";
@@ -92,6 +95,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
         variant: "destructive",
       });
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -156,7 +160,10 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
         </div>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(nextOpen) => {
+        if (!nextOpen && savingRef.current) return;
+        setOpen(nextOpen);
+      }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto border-white/10 bg-card text-white sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Editar localização" : "Nova localização"}</DialogTitle>

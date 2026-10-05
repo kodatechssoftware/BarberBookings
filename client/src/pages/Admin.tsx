@@ -35,7 +35,10 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppointmentsTab, blockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
-import { AppointmentDetailsDialog } from "@/components/admin/AppointmentDetailsDialog";
+import {
+  AppointmentDetailsDialog,
+  type AppointmentMutationPendingAction,
+} from "@/components/admin/AppointmentDetailsDialog";
 import { LocationsTab } from "@/components/admin/LocationsTab";
 import { AssociateBarberDialog } from "@/components/admin/AssociateBarberDialog";
 import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
@@ -1391,6 +1394,10 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
+  const addBarberSubmissionRef = useRef(false);
+  const [isCreatingBarber, setIsCreatingBarber] = useState(false);
+  const addServiceSubmissionRef = useRef(false);
+  const [isCreatingService, setIsCreatingService] = useState(false);
   const [barberFormData, setBarberFormData] = useState({
     name: "",
     specialty: "",
@@ -1405,6 +1412,7 @@ export default function Admin() {
   const [barberServiceDrafts, setBarberServiceDrafts] = useState<Record<number, number[]>>({});
   const [barberCompensationDrafts, setBarberCompensationDrafts] = useState<Record<number, BarberCompensationFormData>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
+  const savingBarberIdRef = useRef<number | null>(null);
   const [editingBarberId, setEditingBarberId] = useState<number | null>(null);
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
@@ -1414,6 +1422,8 @@ export default function Admin() {
   const [isReassigningBarber, setIsReassigningBarber] = useState(false);
   const [serviceFormData, setServiceFormData] = useState<ServiceFormData>(emptyServiceFormData);
   const [editingServiceId, setEditingServiceId] = useState<number | null>(null);
+  const [savingServiceId, setSavingServiceId] = useState<number | null>(null);
+  const savingServiceIdRef = useRef<number | null>(null);
   const [serviceCategoryDrafts, setServiceCategoryDrafts] = useState<Record<number, number | null>>({});
 
   const [selectedDateFilter, setSelectedDateFilter] = useState<Date>(startOfToday());
@@ -1434,6 +1444,9 @@ export default function Admin() {
     expenseDate: startOfToday(),
   }));
   const [isSavingExpense, setIsSavingExpense] = useState(false);
+  const savingExpenseRef = useRef(false);
+  const [deletingExpenseId, setDeletingExpenseId] = useState<number | null>(null);
+  const deletingExpenseIdRef = useRef<number | null>(null);
   const businessDashboardRef = useRef<HTMLDivElement>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
@@ -1635,9 +1648,13 @@ export default function Admin() {
     return candidates.find((appointment) => appointment.id === selectedAppointment.id) || selectedAppointment;
   }, [agendaAppointmentList, appointmentList, selectedAppointment]);
   const updateStatus = useUpdateAppointmentStatus();
+  const appointmentMutationRef = useRef<AppointmentMutationPendingAction | null>(null);
+  const [pendingAppointmentAction, setPendingAppointmentAction] = useState<AppointmentMutationPendingAction | null>(null);
   const { toast } = useToast();
 
   const [isBlocking, setIsBlocking] = useState(false);
+  const blockSubmissionRef = useRef(false);
+  const [isSubmittingBlock, setIsSubmittingBlock] = useState(false);
   const [blockAvailabilitySession, setBlockAvailabilitySession] = useState(0);
   const [blockData, setBlockData] = useState<AppointmentBlockData>({
     barberId: "",
@@ -1751,6 +1768,9 @@ export default function Admin() {
 
   const handleAddBarber = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (addBarberSubmissionRef.current) return;
+    addBarberSubmissionRef.current = true;
+    setIsCreatingBarber(true);
     try {
       const allServiceIds = getAllServiceIds(services);
       await apiRequest("POST", "/api/barbers", {
@@ -1776,11 +1796,17 @@ export default function Admin() {
       toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao adicionar barbeiro.", variant: "destructive" });
+    } finally {
+      addBarberSubmissionRef.current = false;
+      setIsCreatingBarber(false);
     }
   };
 
   const handleAddService = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (addServiceSubmissionRef.current) return;
+    addServiceSubmissionRef.current = true;
+    setIsCreatingService(true);
     try {
       const payload = {
         ...serviceFormData,
@@ -1798,6 +1824,9 @@ export default function Admin() {
       toast({ title: "Sucesso", description: "Serviço adicionado com sucesso." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao adicionar serviço.", variant: "destructive" });
+    } finally {
+      addServiceSubmissionRef.current = false;
+      setIsCreatingService(false);
     }
   };
 
@@ -1852,6 +1881,7 @@ export default function Admin() {
 
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingExpenseRef.current) return;
     const amountCents = eurosInputToCents(expenseForm.amount);
 
     if (!expenseForm.description.trim()) {
@@ -1864,6 +1894,7 @@ export default function Admin() {
       return;
     }
 
+    savingExpenseRef.current = true;
     setIsSavingExpense(true);
     try {
       await apiRequest("POST", "/api/admin/expenses", {
@@ -1884,11 +1915,15 @@ export default function Admin() {
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao registar despesa.", variant: "destructive" });
     } finally {
+      savingExpenseRef.current = false;
       setIsSavingExpense(false);
     }
   };
 
   const handleDeleteExpense = async (expense: BusinessExpense) => {
+    if (deletingExpenseIdRef.current !== null) return;
+    deletingExpenseIdRef.current = expense.id;
+    setDeletingExpenseId(expense.id);
     try {
       await apiRequest("DELETE", `/api/admin/expenses/${expense.id}`);
       invalidateExpensesQueries();
@@ -1896,6 +1931,9 @@ export default function Admin() {
       toast({ title: "Sucesso", description: "Despesa removida." });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Erro ao remover despesa.", variant: "destructive" });
+    } finally {
+      deletingExpenseIdRef.current = null;
+      setDeletingExpenseId(null);
     }
   };
 
@@ -2503,6 +2541,16 @@ export default function Admin() {
     status: AppointmentStatus,
     options?: { onSuccess?: () => void; paymentMethod?: AppointmentPaymentMethod },
   ) => {
+    if (appointmentMutationRef.current) return;
+
+    const pendingAction: AppointmentMutationPendingAction = {
+      appointmentId,
+      status,
+      paymentMethod: options?.paymentMethod,
+    };
+    appointmentMutationRef.current = pendingAction;
+    setPendingAppointmentAction(pendingAction);
+
     updateStatus.mutate(
       { id: appointmentId, status, expectedStatus: "booked", paymentMethod: options?.paymentMethod },
       {
@@ -2513,6 +2561,10 @@ export default function Admin() {
         },
         onError: (error: any) => {
           toast({ title: "Erro", description: error.message || "Não foi possível atualizar a marcação.", variant: "destructive" });
+        },
+        onSettled: () => {
+          appointmentMutationRef.current = null;
+          setPendingAppointmentAction(null);
         },
       },
     );
@@ -2900,6 +2952,8 @@ export default function Admin() {
   };
 
   const handleBlockTime = async (options?: { skipBlacklistCheck?: boolean }) => {
+    if (blockSubmissionRef.current) return;
+
     if (!blockData.barberId) {
       toast({ title: "Erro", description: "Selecione um barbeiro.", variant: "destructive" });
       return;
@@ -3015,6 +3069,8 @@ export default function Admin() {
       }
     }
 
+    blockSubmissionRef.current = true;
+    setIsSubmittingBlock(true);
     try {
       if (blockData.isRecurring) {
         const timeStr = blockData.times[0];
@@ -3141,6 +3197,9 @@ export default function Admin() {
         return;
       }
       toast({ title: "Erro", description: err.message, variant: "destructive" });
+    } finally {
+      blockSubmissionRef.current = false;
+      setIsSubmittingBlock(false);
     }
   };
 
@@ -3590,6 +3649,7 @@ export default function Admin() {
           getStatusClass={getStatusClass}
           onOpenHistory={openCustomerHistory}
           onStatusChange={handleStatusChange}
+          pendingAction={pendingAppointmentAction}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}
           canManageSchedule={user.role === "admin"}
           canManageAppointment={user.role === "admin" || selectedAppointmentDetails?.canManage !== false}
@@ -3707,6 +3767,7 @@ export default function Admin() {
         <AppointmentBlockDialog
           open={isBlocking}
           onOpenChange={(open) => {
+            if (!open && blockSubmissionRef.current) return;
             setIsBlocking(open);
             if (!open) {
               setBlockData((current) => ({
@@ -3737,6 +3798,7 @@ export default function Admin() {
           isCheckingAvailability={Boolean(blockData.barberId) && !hasLoadedBlockAppointments}
           canCreateAsCompleted={canCreateManualBookingAsCompleted}
           onSubmit={handleBlockTime}
+          isSubmitting={isSubmittingBlock}
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -3888,7 +3950,10 @@ export default function Admin() {
                   </Button>
                 ) : null}
               {multiLocationConfig?.enabled && <AssociateBarberDialog key={activeLocationId} />}
-              <Dialog open={isAddingBarber} onOpenChange={setIsAddingBarber}>
+              <Dialog open={isAddingBarber} onOpenChange={(open) => {
+                if (!open && addBarberSubmissionRef.current) return;
+                setIsAddingBarber(open);
+              }}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="gap-2">
                     <Plus className="w-4 h-4" /> Adicionar Barbeiro
@@ -3961,8 +4026,10 @@ export default function Admin() {
                     <Button 
                       variant="gold" 
                       className="w-full" 
+                      disabled={isCreatingBarber}
                       onClick={handleAddBarber}
                     >
+                      {isCreatingBarber ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                       Criar Barbeiro
                     </Button>
                   </div>
@@ -4026,7 +4093,10 @@ export default function Admin() {
                       />
                     )}
                     <div className="flex flex-wrap gap-2">
-                      <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => setEditingBarberId(open ? barber.id : null)}>
+                      <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => {
+                        if (!open && savingBarberIdRef.current === barber.id) return;
+                        setEditingBarberId(open ? barber.id : null);
+                      }}>
                         <DialogTrigger asChild>
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
@@ -4101,6 +4171,8 @@ export default function Admin() {
                               className="w-full"
                               disabled={savingBarberId === barber.id}
                               onClick={async (event) => {
+                                if (savingBarberIdRef.current !== null) return;
+                                savingBarberIdRef.current = barber.id;
                                 setSavingBarberId(barber.id);
                                 try {
                                   const formRoot = event.currentTarget.closest("[data-edit-barber-form]");
@@ -4165,6 +4237,7 @@ export default function Admin() {
                                     variant: "destructive",
                                   });
                                 } finally {
+                                  savingBarberIdRef.current = null;
                                   setSavingBarberId(null);
                                 }
                               }}
@@ -4402,7 +4475,10 @@ export default function Admin() {
                     isError={isServiceCategoriesError}
                   />
                 )}
-                <Dialog open={isAddingService} onOpenChange={setIsAddingService}>
+                <Dialog open={isAddingService} onOpenChange={(open) => {
+                  if (!open && addServiceSubmissionRef.current) return;
+                  setIsAddingService(open);
+                }}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="w-full gap-2 sm:w-auto">
                     <Plus className="w-4 h-4" /> Adicionar Serviço
@@ -4485,8 +4561,10 @@ export default function Admin() {
                     <Button 
                       variant="gold" 
                       className="w-full" 
+                      disabled={isCreatingService}
                       onClick={handleAddService}
                     >
+                      {isCreatingService ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                       Criar Serviço
                     </Button>
                   </div>
@@ -4533,6 +4611,7 @@ export default function Admin() {
                     )}
                     <div className="flex flex-wrap gap-2">
                       <Dialog open={editingServiceId === service.id} onOpenChange={(open) => {
+                        if (!open && savingServiceIdRef.current === service.id) return;
                         setEditingServiceId(open ? service.id : null);
                         if (open) {
                           setServiceCategoryDrafts((current) => ({
@@ -4586,7 +4665,10 @@ export default function Admin() {
                                 </Select>
                               </div>
                             )}
-                            <Button variant="gold" className="w-full" onClick={async (event) => {
+                            <Button variant="gold" className="w-full" disabled={savingServiceId === service.id} onClick={async (event) => {
+                              if (savingServiceIdRef.current !== null) return;
+                              savingServiceIdRef.current = service.id;
+                              setSavingServiceId(service.id);
                               try {
                                 const formRoot = event.currentTarget.closest("[data-edit-service-form]");
                                 const name = formRoot?.querySelector<HTMLInputElement>(`#edit-service-name-${service.id}`)?.value || "";
@@ -4607,8 +4689,14 @@ export default function Admin() {
                                 toast({ title: "Sucesso", description: "Serviço atualizado." });
                               } catch (err: any) {
                                 toast({ title: "Erro", description: err.message || "Erro ao atualizar serviço.", variant: "destructive" });
+                              } finally {
+                                savingServiceIdRef.current = null;
+                                setSavingServiceId(null);
                               }
-                            }}>Guardar</Button>
+                            }}>
+                              {savingServiceId === service.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Guardar
+                            </Button>
                           </div>
                         </DialogContent>
                       </Dialog>
@@ -5114,10 +5202,14 @@ export default function Admin() {
                             <Button
                               variant="outline"
                               size="sm"
+                              disabled={deletingExpenseId !== null}
+                              aria-label={`Remover despesa ${expense.description}`}
                               className="border-red-500/30 text-red-300 hover:bg-red-500/10"
                               onClick={() => handleDeleteExpense(expense)}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              {deletingExpenseId === expense.id
+                                ? <Loader2 className="h-4 w-4 animate-spin" />
+                                : <Trash2 className="h-4 w-4" />}
                             </Button>
                           </div>
                         </div>

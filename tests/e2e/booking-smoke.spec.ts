@@ -7218,3 +7218,301 @@ test.describe("booking rules", () => {
     expect(await barberAfterResponse.json()).toEqual(originalBarberRows);
   });
 });
+
+test.describe("admin mutation pending states", () => {
+  async function createPendingAppointment(
+    request: APIRequestContext,
+    label: string,
+    weeksBack: number,
+    hour: number,
+  ) {
+    await loginAdminRequest(request);
+    const startTime = futureThursdayIso(-weeksBack, hour, 0);
+    return {
+      ...(await createExportAppointment(request, {
+        name: `${label} ${Date.now()}`,
+        phone: `+35191269${String(weeksBack).padStart(4, "0").slice(-4)}`,
+        startTime,
+      })),
+      startTime,
+    };
+  }
+
+  async function openAppointmentDetails(page: Page, customerName: string, startTime: string) {
+    await loginAdmin(page);
+    await selectAgendaDay(page, startTime);
+    const appointmentButton = page.getByRole("button", {
+      name: new RegExp(`Abrir detalhes da marcação de ${customerName}`),
+    }).first();
+    await expect(appointmentButton).toBeVisible();
+    await appointmentButton.click();
+    const detailsDialog = page.getByRole("dialog", { name: "Detalhes da marcação" });
+    await expect(detailsDialog).toBeVisible();
+    return detailsDialog;
+  }
+
+  test("blocks double-submit and competing appointment actions while a slow cash completion is pending", async ({ page, request }) => {
+    const { appointment, barber, startTime } = await createPendingAppointment(request, "Pending Dinheiro QA", 9, 9);
+    const statusPath = `/api/appointments/${appointment.id}/status`;
+    let requestCount = 0;
+    let submittedPaymentMethod: string | undefined;
+
+    await page.route((url) => url.pathname === statusPath, async (route) => {
+      requestCount += 1;
+      submittedPaymentMethod = route.request().postDataJSON()?.paymentMethod;
+      await new Promise((resolve) => setTimeout(resolve, 2_200));
+      await route.continue();
+    });
+
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const detailsDialog = await openAppointmentDetails(page, appointment.customerName, startTime);
+      await detailsDialog.getByRole("button", { name: "Feita" }).click();
+      const paymentDialog = page.getByRole("alertdialog", { name: "Como foi pago?" });
+      await expect(paymentDialog).toBeVisible();
+
+      await paymentDialog.locator("[data-payment-method]").evaluateAll((buttons) => {
+        (buttons[0] as HTMLButtonElement).click();
+        (buttons[0] as HTMLButtonElement).click();
+        (buttons[1] as HTMLButtonElement).click();
+      });
+
+      await expect.poll(() => requestCount).toBe(1);
+      await expect(paymentDialog.locator('[data-payment-method="cash"]')).toBeDisabled();
+      await expect(paymentDialog.locator('[data-payment-method="card"]')).toBeDisabled();
+      await expect(paymentDialog.locator('[data-payment-method="gift"]')).toBeDisabled();
+      await expect(page.getByTestId("appointment-action-no-show")).toBeDisabled();
+      await expect(page.getByTestId("appointment-action-cancel")).toBeDisabled();
+      await expect(page.getByTestId("appointment-action-block-customer")).toBeDisabled();
+      await expect(page.getByTestId("appointment-action-edit")).toBeDisabled();
+      const pendingOverlay = paymentDialog.getByRole("status", { name: "A processar pagamento..." });
+      await expect(paymentDialog).toHaveAttribute("aria-busy", "true");
+      await expect(pendingOverlay).toBeVisible();
+      await expect(pendingOverlay.locator("img")).toHaveAttribute("src", "/images/logo.jpg");
+      await expect(pendingOverlay.locator("span[aria-hidden='true']")).toHaveClass(/animate-spin/);
+      await expect(pendingOverlay.locator("img")).not.toHaveClass(/animate-spin/);
+      await expectNoHorizontalOverflow(page);
+
+      await page.setViewportSize({ width: 820, height: 1_080 });
+      await expect(paymentDialog.getByRole("status", { name: "A processar pagamento..." })).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+      await page.setViewportSize({ width: 1_440, height: 900 });
+      await expect(paymentDialog.getByRole("status", { name: "A processar pagamento..." })).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+
+      await expect(paymentDialog).not.toBeVisible({ timeout: 7_500 });
+      expect(requestCount).toBe(1);
+      expect(submittedPaymentMethod).toBe("cash");
+      const appointmentResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKeyFromIso(startTime)}`);
+      const updated = (await appointmentResponse.json()).find((candidate: any) => candidate.id === appointment.id);
+      expect(updated).toMatchObject({ status: "completed", paymentMethod: "cash" });
+    } finally {
+      await page.unroute((url) => url.pathname === statusPath);
+    }
+  });
+
+  for (const [paymentMethod, label] of [["card", "Multibanco"], ["gift", "Oferta"]] as const) {
+    test(`shows delayed feedback for a slow ${label} completion`, async ({ page, request }) => {
+      const weeksBack = paymentMethod === "card" ? 10 : 11;
+      const hour = paymentMethod === "card" ? 10 : 11;
+      const { appointment, barber, startTime } = await createPendingAppointment(request, `Pending ${label} QA`, weeksBack, hour);
+      const statusPath = `/api/appointments/${appointment.id}/status`;
+      let requestCount = 0;
+
+      await page.route((url) => url.pathname === statusPath, async (route) => {
+        requestCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        await route.continue();
+      });
+
+      try {
+        const detailsDialog = await openAppointmentDetails(page, appointment.customerName, startTime);
+        await detailsDialog.getByRole("button", { name: "Feita" }).click();
+        const paymentDialog = page.getByRole("alertdialog", { name: "Como foi pago?" });
+        await paymentDialog.locator(`[data-payment-method="${paymentMethod}"]`).click();
+        await expect(paymentDialog.getByRole("status", { name: "A processar pagamento..." })).toBeVisible();
+        await expect(paymentDialog).not.toBeVisible({ timeout: 5_000 });
+        expect(requestCount).toBe(1);
+        const appointmentResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKeyFromIso(startTime)}`);
+        const updated = (await appointmentResponse.json()).find((candidate: any) => candidate.id === appointment.id);
+        expect(updated).toMatchObject({ status: "completed", paymentMethod });
+      } finally {
+        await page.unroute((url) => url.pathname === statusPath);
+      }
+    });
+  }
+
+  test("unlocks payment controls after backend and network errors and permits an explicit retry", async ({ page, request }) => {
+    const { appointment, startTime } = await createPendingAppointment(request, "Pending Retry QA", 12, 12);
+    const statusPath = `/api/appointments/${appointment.id}/status`;
+    let attempt = 0;
+
+    await page.route((url) => url.pathname === statusPath, async (route) => {
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      if (attempt === 1) {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "Falha simulada" }) });
+        return;
+      }
+      if (attempt === 2) {
+        await route.abort("timedout");
+        return;
+      }
+      await route.continue();
+    });
+
+    try {
+      const detailsDialog = await openAppointmentDetails(page, appointment.customerName, startTime);
+      await detailsDialog.getByRole("button", { name: "Feita" }).click();
+      const paymentDialog = page.getByRole("alertdialog", { name: "Como foi pago?" });
+      const cashButton = paymentDialog.locator('[data-payment-method="cash"]');
+      const cardButton = paymentDialog.locator('[data-payment-method="card"]');
+      const giftButton = paymentDialog.locator('[data-payment-method="gift"]');
+
+      await cashButton.click();
+      await expect(cashButton).toBeDisabled();
+      await expect(cashButton).toBeEnabled({ timeout: 5_000 });
+      await expect(paymentDialog.getByRole("status", { name: "A processar pagamento..." })).not.toBeVisible();
+      await expect(page.getByText("Falha simulada", { exact: true })).toBeVisible();
+      expect(attempt).toBe(1);
+
+      await cardButton.click();
+      await expect(cardButton).toBeDisabled();
+      await expect(cardButton).toBeEnabled({ timeout: 5_000 });
+      await expect(paymentDialog.getByRole("status", { name: "A processar pagamento..." })).not.toBeVisible();
+      expect(attempt).toBe(2);
+
+      await giftButton.click();
+      await expect(paymentDialog).not.toBeVisible({ timeout: 5_000 });
+      expect(attempt).toBe(3);
+    } finally {
+      await page.unroute((url) => url.pathname === statusPath);
+    }
+  });
+
+  test("manual creation and appointment editing each submit only once while their request is slow", async ({ page, request }) => {
+    await loginAdminRequest(request);
+    const [barbersResponse, servicesResponse] = await Promise.all([
+      request.get("/api/barbers"),
+      request.get("/api/services"),
+    ]);
+    const { barber, service } = getCompatibleBarberAndService(
+      await barbersResponse.json(),
+      await servicesResponse.json(),
+    );
+    const futureStart = futureThursdayIso(20, 10, 0);
+    const manualCustomerName = `Pending Criação QA ${Date.now()}`;
+    let manualRequestCount = 0;
+
+    await page.route((url) => url.pathname === "/api/appointments/block", async (route) => {
+      manualRequestCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await route.continue();
+    });
+
+    await loginAdmin(page);
+    await selectAgendaDay(page, futureStart);
+    await page.getByRole("button", { name: "Marcação manual" }).click();
+    const manualDialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await selectDialogOption(page, manualDialog, 0, barber.name);
+    await selectDialogOption(page, manualDialog, 1, service.name);
+    await manualDialog.getByPlaceholder("João").fill(manualCustomerName);
+    await manualDialog.locator("#manual-booking-phone").fill("912695799");
+    await clickFirstEnabledManualTime(manualDialog);
+    const createButton = manualDialog.getByTestId("appointment-block-submit");
+    await createButton.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(createButton).toBeDisabled();
+    await expect(manualDialog.getByRole("status", { name: "A criar marcação..." })).toBeVisible();
+    await expect(manualDialog).not.toBeVisible({ timeout: 5_000 });
+    expect(manualRequestCount).toBe(1);
+    await page.unroute((url) => url.pathname === "/api/appointments/block");
+
+    const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKeyFromIso(futureStart)}`);
+    const createdAppointment = (await appointmentsResponse.json()).find(
+      (candidate: any) => candidate.customerName === manualCustomerName,
+    );
+    expect(createdAppointment).toBeTruthy();
+
+    await selectAgendaDay(page, createdAppointment.startTime);
+    await page.getByRole("button", {
+      name: new RegExp(`Abrir detalhes da marcação de ${manualCustomerName}`),
+    }).first().click();
+    const detailsDialog = page.getByRole("dialog", { name: "Detalhes da marcação" });
+    await detailsDialog.getByRole("button", { name: "Editar", exact: true }).click();
+    const editDialog = page.getByRole("dialog", { name: "Editar marcação" });
+    let editRequestCount = 0;
+    await page.route((url) => url.pathname === `/api/appointments/${createdAppointment.id}`, async (route) => {
+      editRequestCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await route.continue();
+    });
+    const saveButton = editDialog.getByTestId("edit-appointment-save");
+    await saveButton.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(saveButton).toBeDisabled();
+    await expect(editDialog.getByRole("status", { name: "A guardar marcação..." })).toBeVisible();
+    await expect(editDialog).not.toBeVisible({ timeout: 5_000 });
+    expect(editRequestCount).toBe(1);
+    await page.unroute((url) => url.pathname === `/api/appointments/${createdAppointment.id}`);
+  });
+
+  test("Extras and service creation reject duplicate submits while their requests are pending", async ({ page }) => {
+    await loginAdmin(page);
+    await page.getByRole("tab", { name: "Extras", exact: true }).click();
+    await page.getByRole("button", { name: "Novo Extra" }).click();
+    const extraDialog = page.getByRole("dialog", { name: "Novo Extra" });
+    await extraDialog.getByLabel("Nome").fill(`Pending Extra QA ${Date.now()}`);
+    await extraDialog.getByLabel("Valor (€)").fill("4,50");
+    let extraRequestCount = 0;
+    await page.route((url) => url.pathname === "/api/admin/extras", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      extraRequestCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await route.continue();
+    });
+    const createExtraButton = extraDialog.getByRole("button", { name: "Criar Extra" });
+    await createExtraButton.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(createExtraButton).toBeDisabled();
+    await expect(extraDialog).not.toBeVisible({ timeout: 5_000 });
+    expect(extraRequestCount).toBe(1);
+    await page.unroute((url) => url.pathname === "/api/admin/extras");
+
+    await page.getByRole("tab", { name: "Serviços", exact: true }).click();
+    await page.getByRole("button", { name: "Adicionar Serviço" }).click();
+    const serviceDialog = page.getByRole("dialog", { name: "Novo Serviço" });
+    const serviceInputs = serviceDialog.locator("input");
+    await serviceInputs.nth(0).fill(`Pending Serviço QA ${Date.now()}`);
+    await serviceInputs.nth(3).fill("19.50");
+    await serviceInputs.nth(4).fill("30");
+    let serviceRequestCount = 0;
+    await page.route((url) => url.pathname === "/api/services", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      serviceRequestCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await route.continue();
+    });
+    const createServiceButton = serviceDialog.getByRole("button", { name: "Criar Serviço" });
+    await createServiceButton.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect(createServiceButton).toBeDisabled();
+    await expect(serviceDialog).not.toBeVisible({ timeout: 5_000 });
+    expect(serviceRequestCount).toBe(1);
+    await page.unroute((url) => url.pathname === "/api/services");
+  });
+});

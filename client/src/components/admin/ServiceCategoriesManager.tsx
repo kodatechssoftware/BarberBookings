@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Loader2, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import type { ServiceCategoryWithCount } from "@shared/routes";
 import { Button } from "@/components/ui/button-custom";
@@ -40,6 +40,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const pendingActionRef = useRef<string | null>(null);
 
   const refresh = async () => {
     await Promise.all([
@@ -50,6 +51,8 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
   };
 
   const runAction = async (key: string, action: () => Promise<void>, successMessage: string) => {
+    if (pendingActionRef.current) return;
+    pendingActionRef.current = key;
     setPendingAction(key);
     try {
       await action();
@@ -62,6 +65,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
         variant: "destructive",
       });
     } finally {
+      pendingActionRef.current = null;
       setPendingAction(null);
     }
   };
@@ -104,6 +108,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
     <Dialog
       open={isManagerOpen}
       onOpenChange={(open) => {
+        if (!open && pendingActionRef.current) return;
         setIsManagerOpen(open);
         if (!open) {
           setNewName("");

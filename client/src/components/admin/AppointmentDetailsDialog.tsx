@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
 import { CheckCircle, Pencil, Phone, User, XCircle } from "lucide-react";
@@ -48,6 +48,7 @@ import {
 import { createAppointmentTimeOptions } from "@/lib/appointment-time-options";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
+import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import {
   isClockTimeAligned,
   type BookingSlotIntervalMinutes,
@@ -73,6 +74,12 @@ type AdminAppointment = {
   depositReason?: string | null;
   canManage?: boolean;
   extras?: AppointmentExtraSnapshot[];
+};
+
+export type AppointmentMutationPendingAction = {
+  appointmentId: number;
+  status: AppointmentStatus;
+  paymentMethod?: AppointmentPaymentMethod;
 };
 
 type ServiceListItem = {
@@ -119,6 +126,7 @@ function EditAppointmentDialog({
   shopAvailabilityRows,
   bookingSlotIntervalMinutes,
   toast,
+  disabled = false,
 }: {
   appointment: AdminAppointment;
   barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null; isVisible?: boolean | null }>;
@@ -128,6 +136,7 @@ function EditAppointmentDialog({
   shopAvailabilityRows?: ShopAvailabilityRow[];
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   toast: ReturnType<typeof useToast>["toast"];
+  disabled?: boolean;
 }) {
   const isCustomAppointment = appointment.serviceId === null
     && appointment.serviceNameSnapshot != null
@@ -149,6 +158,7 @@ function EditAppointmentDialog({
   );
   const [allowOutsideHours, setAllowOutsideHours] = useState(Boolean(appointment.manualOutsideHours));
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const { data: extraDefinitions = [], isLoading: isLoadingExtras } = useExtras({
     enabled: open,
     locationId: appointment.locationId,
@@ -306,11 +316,13 @@ function EditAppointmentDialog({
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && isSavingRef.current) return;
     if (nextOpen) resetForm();
     setOpen(nextOpen);
   };
 
   const handleSave = async () => {
+    if (isSavingRef.current) return;
     const newStartTime = new Date(`${dateValue}T${timeValue}`);
     const parsedBarberId = Number(barberId);
     const parsedServiceId = serviceId === "none" || serviceId === "custom" ? null : Number(serviceId);
@@ -378,6 +390,7 @@ function EditAppointmentDialog({
       return;
     }
 
+    isSavingRef.current = true;
     setIsSaving(true);
     try {
       await apiRequest("PATCH", `/api/appointments/${appointment.id}`, {
@@ -409,6 +422,7 @@ function EditAppointmentDialog({
         variant: "destructive",
       });
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -416,12 +430,13 @@ function EditAppointmentDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="ghost" className="h-8 text-xs text-primary hover:text-primary/80">
+        <Button data-testid="appointment-action-edit" disabled={disabled} size="sm" variant="ghost" className="h-8 text-xs text-primary hover:text-primary/80">
           <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
         </Button>
       </DialogTrigger>
       <DialogContent
         mobileViewportAware
+        aria-busy={isSaving}
         className="w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-lg"
       >
         <DialogHeader><DialogTitle>Editar marcação</DialogTitle></DialogHeader>
@@ -674,6 +689,7 @@ function EditAppointmentDialog({
             </div>
           )}
           <Button
+            data-testid="edit-appointment-save"
             variant="gold"
             className="w-full"
             disabled={isSaving || !hasCompatibleService || availableBarbers.length === 0}
@@ -682,6 +698,7 @@ function EditAppointmentDialog({
             {isSaving ? "A guardar..." : "Guardar alterações"}
           </Button>
         </div>
+        <MutationPendingOverlay active={isSaving} label="A guardar marcação..." />
       </DialogContent>
     </Dialog>
   );
@@ -768,6 +785,7 @@ export function AppointmentDetailsDialog({
   onBlockCustomer,
   canManageSchedule,
   canManageAppointment,
+  pendingAction = null,
 }: {
   appointment: AdminAppointment | null;
   open: boolean;
@@ -792,12 +810,16 @@ export function AppointmentDetailsDialog({
   onBlockCustomer: (appointment: AdminAppointment) => Promise<boolean | void>;
   canManageSchedule: boolean;
   canManageAppointment: boolean;
+  pendingAction?: AppointmentMutationPendingAction | null;
 }) {
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
   const [isLoadingCustomerNotes, setIsLoadingCustomerNotes] = useState(false);
   const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
+  const isAppointmentMutationPending = Boolean(
+    pendingAction && appointment && pendingAction.appointmentId === appointment.id,
+  );
 
   useEffect(() => {
     if (!open || !canManageAppointment || (!appointment?.customerPhone && !appointment?.customerEmail)) {
@@ -905,9 +927,16 @@ export function AppointmentDetailsDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && isAppointmentMutationPending) return;
+        onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent
         mobileViewportAware
+        aria-busy={isAppointmentMutationPending}
         className="w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-xl"
       >
         <DialogHeader>
@@ -1002,7 +1031,7 @@ export function AppointmentDetailsDialog({
                   value={customerNotes}
                   onChange={(event) => setCustomerNotes(event.target.value)}
                   maxLength={1200}
-                  disabled={isLoadingCustomerNotes}
+                  disabled={isLoadingCustomerNotes || isAppointmentMutationPending}
                   placeholder="Ex.: prefere máquina 0.5, costuma atrasar 10 min, quer sempre barba curta."
                   className="mt-3 min-h-[96px] scroll-mb-24 resize-y border-white/10 bg-card text-white placeholder:text-gray-600"
                 />
@@ -1015,7 +1044,7 @@ export function AppointmentDetailsDialog({
                     variant="gold"
                     size="sm"
                     onClick={handleSaveCustomerNotes}
-                    disabled={isLoadingCustomerNotes || isSavingCustomerNotes}
+                    disabled={isLoadingCustomerNotes || isSavingCustomerNotes || isAppointmentMutationPending}
                     className="w-full sm:w-auto"
                   >
                     {isSavingCustomerNotes ? "A guardar..." : "Guardar notas"}
@@ -1049,26 +1078,28 @@ export function AppointmentDetailsDialog({
             {canManageAppointment && appointment.status === "booked" && (
               <>
                 <Button
+                  data-testid="appointment-action-complete"
                   size="sm"
                   variant="ghost"
                   onClick={() => setIsPaymentDialogOpen(true)}
-                  disabled={Boolean(completeDisabledMessage)}
+                  disabled={Boolean(completeDisabledMessage) || isAppointmentMutationPending}
                   title={completeDisabledMessage || "Marcar como feita"}
                   className="h-9 text-xs text-green-300 hover:text-green-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
                 </Button>
                 <Button
+                  data-testid="appointment-action-no-show"
                   size="sm"
                   variant="ghost"
                   onClick={() => handleStatusChange("no_show")}
-                  disabled={Boolean(noShowDisabledMessage)}
+                  disabled={Boolean(noShowDisabledMessage) || isAppointmentMutationPending}
                   title={noShowDisabledMessage || "Marcar falta"}
                   className="h-9 text-xs text-rose-300 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Falta
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">
+                <Button data-testid="appointment-action-cancel" disabled={isAppointmentMutationPending} size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">
                   <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
                 </Button>
                 {canManageSchedule && (
@@ -1080,7 +1111,7 @@ export function AppointmentDetailsDialog({
                       confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       onConfirm={handleBlockCustomer}
                     >
-                      <Button size="sm" variant="ghost" className="h-9 text-xs text-destructive hover:text-red-300">
+                      <Button data-testid="appointment-action-block-customer" disabled={isAppointmentMutationPending} size="sm" variant="ghost" className="h-9 text-xs text-destructive hover:text-red-300">
                         Bloquear
                       </Button>
                     </ConfirmAction>
@@ -1093,6 +1124,7 @@ export function AppointmentDetailsDialog({
                       shopAvailabilityRows={shopAvailabilityRows}
                       bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
                       toast={toast}
+                      disabled={isAppointmentMutationPending}
                     />
                   </>
                 )}
@@ -1100,21 +1132,43 @@ export function AppointmentDetailsDialog({
             )}
           </div>
         </div>
+        <MutationPendingOverlay
+          active={isAppointmentMutationPending && !isPaymentDialogOpen}
+          label={pendingAction?.status === "no_show"
+            ? "A marcar falta..."
+            : pendingAction?.status === "cancelled"
+              ? "A cancelar marcação..."
+              : "A atualizar marcação..."}
+        />
       </DialogContent>
-      <AlertDialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
-        <AlertDialogContent className="border-white/10 bg-card text-white">
+      <AlertDialog
+        open={isPaymentDialogOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && isAppointmentMutationPending) return;
+          setIsPaymentDialogOpen(nextOpen);
+        }}
+      >
+        <AlertDialogContent
+          aria-busy={isAppointmentMutationPending}
+          className="overflow-hidden border-white/10 bg-card text-white"
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Como foi pago?</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
               Esta escolha fica guardada no relatorio Excel e ajuda a separar dinheiro, multibanco e ofertas.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AppointmentPaymentOptions onSelect={handleCompleteWithPayment} />
+          <AppointmentPaymentOptions
+            onSelect={handleCompleteWithPayment}
+            disabled={isAppointmentMutationPending}
+            pendingValue={pendingAction?.status === "completed" ? pendingAction.paymentMethod : null}
+          />
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">
+            <AlertDialogCancel disabled={isAppointmentMutationPending} className="border-white/10 bg-background text-white hover:bg-white/10">
               Voltar
             </AlertDialogCancel>
           </AlertDialogFooter>
+          <MutationPendingOverlay active={isAppointmentMutationPending} label="A processar pagamento..." />
         </AlertDialogContent>
       </AlertDialog>
     </Dialog>
