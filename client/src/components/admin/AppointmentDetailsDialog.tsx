@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Banknote, CheckCircle, CreditCard, Gift, Pencil, Phone, User, XCircle } from "lucide-react";
+import { CheckCircle, Pencil, Phone, User, XCircle } from "lucide-react";
 import {
   type AppointmentExtraSnapshot,
   type AppointmentPaymentMethod,
@@ -47,10 +47,12 @@ import {
 } from "@/lib/money-input";
 import { createAppointmentTimeOptions } from "@/lib/appointment-time-options";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
+import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
 import {
   isClockTimeAligned,
   type BookingSlotIntervalMinutes,
 } from "@shared/booking-slot-interval";
+import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
 
 type AdminAppointment = {
   id: number;
@@ -685,32 +687,6 @@ function EditAppointmentDialog({
   );
 }
 
-const paymentOptions: Array<{
-  value: Exclude<AppointmentPaymentMethod, "pending">;
-  label: string;
-  description: string;
-  icon: ComponentType<{ className?: string }>;
-}> = [
-  {
-    value: "cash",
-    label: "Dinheiro",
-    description: "Conta como valor recebido em numerário.",
-    icon: Banknote,
-  },
-  {
-    value: "card",
-    label: "Multibanco",
-    description: "Conta como valor recebido por cartão ou MB.",
-    icon: CreditCard,
-  },
-  {
-    value: "gift",
-    label: "Oferta",
-    description: "Conta como serviço feito, mas sem receita recebida.",
-    icon: Gift,
-  },
-];
-
 function getPaymentMethodLabel(paymentMethod?: AppointmentPaymentMethod | null) {
   if (paymentMethod === "cash") return "Dinheiro";
   if (paymentMethod === "card") return "Multibanco";
@@ -721,10 +697,12 @@ function getPaymentMethodLabel(paymentMethod?: AppointmentPaymentMethod | null) 
 function getStatusTimingMessage(appointment: AdminAppointment, status: AppointmentStatus) {
   const now = new Date();
   const start = parseISO(appointment.startTime);
-  const end = getWeeklyAppointmentEnd(appointment);
 
-  if (status === "completed" && end.getTime() > now.getTime()) {
-    return "Só pode marcar como feita depois da hora de fim da marcação.";
+  if (status === "completed") {
+    return getAppointmentCompletionTimingError({
+      startTime: start,
+      durationMinutes: appointment.durationMinutes,
+    }, now) ?? "";
   }
 
   if (status === "no_show" && start.getTime() > now.getTime()) {
@@ -1131,25 +1109,7 @@ export function AppointmentDetailsDialog({
               Esta escolha fica guardada no relatorio Excel e ajuda a separar dinheiro, multibanco e ofertas.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="grid gap-2">
-            {paymentOptions.map((option) => {
-              const Icon = option.icon;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => handleCompleteWithPayment(option.value)}
-                  className="rounded-lg border border-white/10 bg-background/70 p-3 text-left transition hover:border-primary/50 hover:bg-primary/10"
-                >
-                  <span className="flex items-center gap-2 font-semibold text-white">
-                    <Icon className="h-4 w-4 text-primary" />
-                    {option.label}
-                  </span>
-                  <span className="mt-1 block text-xs text-gray-400">{option.description}</span>
-                </button>
-              );
-            })}
-          </div>
+          <AppointmentPaymentOptions onSelect={handleCompleteWithPayment} />
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">
               Voltar

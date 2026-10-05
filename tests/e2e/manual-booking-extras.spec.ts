@@ -998,19 +998,27 @@ test.describe.serial("manual booking Extras", () => {
       weeksAhead: number,
       extras: Array<{ extraId: number; amountCents?: number }>,
       paymentMethod: "cash" | "card" | "gift" = "cash",
+      creationMode: "transition" | "direct" = "transition",
+      overrides: Record<string, unknown> = {},
     ) => {
       const startTime = futureThursdayIso(weeksAhead, 10);
       const created = await createManual(request, `Finance Extras ${weeksAhead} ${suffix}`, startTime, {
         barberId: financeBarber.id,
         allowOutsideHours: true,
         extras,
+        ...(creationMode === "direct" ? { isAlreadyCompleted: true, paymentMethod } : {}),
+        ...overrides,
       });
       expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
       const appointment = created.body.appointments[0];
-      const completed = await request.patch(`/api/appointments/${appointment.id}/status`, {
-        data: { status: "completed", paymentMethod },
-      });
-      expect(completed.ok(), await completed.text()).toBe(true);
+      if (creationMode === "transition") {
+        const completed = await request.patch(`/api/appointments/${appointment.id}/status`, {
+          data: { status: "completed", paymentMethod },
+        });
+        expect(completed.ok(), await completed.text()).toBe(true);
+      } else {
+        expect(appointment).toMatchObject({ status: "completed", paymentMethod });
+      }
       return { appointment, startTime };
     };
     const dashboardFor = async (startTime: string, selectedBarberId = financeBarber.id) => {
@@ -1070,6 +1078,93 @@ test.describe.serial("manual booking Extras", () => {
       establishmentRevenueCents: 2500,
       commissionCents: 1000,
     });
+
+    const equivalenceExtras = [
+      { extraId: travelExtra.id, amountCents: 1000 },
+      { extraId: followExtra.id },
+      { extraId: establishmentExtra.id },
+    ];
+    const transitionedEquivalent = await createCompleted(
+      -266,
+      equivalenceExtras,
+      "cash",
+      "transition",
+      { hasSpecialTerms: true, servicePriceCents: 3000 },
+    );
+    const directEquivalent = await createCompleted(
+      -267,
+      equivalenceExtras,
+      "cash",
+      "direct",
+      { hasSpecialTerms: true, servicePriceCents: 3000 },
+    );
+    const transitionedSummary = (await dashboardFor(transitionedEquivalent.startTime)).summary;
+    const directSummary = (await dashboardFor(directEquivalent.startTime)).summary;
+    for (const field of [
+      "revenueCents",
+      "serviceRevenueCents",
+      "extrasRevenueCents",
+      "barberRevenueCents",
+      "establishmentRevenueCents",
+      "commissionCents",
+      "chairRentCents",
+    ]) {
+      expect(directSummary[field], `${field} must match normal completion`).toBe(transitionedSummary[field]);
+    }
+
+    const createCustomCompleted = async (weeksAhead: number, direct: boolean) => {
+      const startTime = futureThursdayIso(weeksAhead, 10);
+      const created = await createManual(request, `Custom finance ${weeksAhead} ${suffix}`, startTime, {
+        barberId: financeBarber.id,
+        serviceId: null,
+        serviceMode: "custom",
+        hasSpecialTerms: true,
+        customServiceName: "Serviço personalizado financeiro",
+        customDurationMinutes: 45,
+        servicePriceCents: 3000,
+        allowOutsideHours: true,
+        extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
+        ...(direct ? { isAlreadyCompleted: true, paymentMethod: "cash" } : {}),
+      });
+      expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+      const appointment = created.body.appointments[0];
+      if (!direct) {
+        const completed = await request.patch(`/api/appointments/${appointment.id}/status`, {
+          data: { status: "completed", paymentMethod: "cash" },
+        });
+        expect(completed.ok(), await completed.text()).toBe(true);
+      }
+      return { appointment, startTime };
+    };
+    const transitionedCustom = await createCustomCompleted(-268, false);
+    const directCustom = await createCustomCompleted(-269, true);
+    expect(directCustom.appointment).toMatchObject({
+      serviceId: null,
+      durationMinutes: 45,
+      serviceNameSnapshot: "Serviço personalizado financeiro",
+      servicePriceCentsSnapshot: 3000,
+      status: "completed",
+      paymentMethod: "cash",
+    });
+    const transitionedCustomSummary = (await dashboardFor(transitionedCustom.startTime)).summary;
+    const directCustomSummary = (await dashboardFor(directCustom.startTime)).summary;
+    expect(directCustomSummary).toMatchObject({
+      revenueCents: 4000,
+      extrasRevenueCents: 1000,
+      barberRevenueCents: 2200,
+      establishmentRevenueCents: 1800,
+      commissionCents: 1200,
+    });
+    for (const field of [
+      "revenueCents",
+      "extrasRevenueCents",
+      "barberRevenueCents",
+      "establishmentRevenueCents",
+      "commissionCents",
+    ]) {
+      expect(directCustomSummary[field], `${field} custom must match normal completion`)
+        .toBe(transitionedCustomSummary[field]);
+    }
 
     const multipleDay = dateKey(multipleCase.startTime);
     const multipleExportResponse = await request.get(
@@ -1215,6 +1310,27 @@ test.describe.serial("manual booking Extras", () => {
     expect(chairSettlement.getCell(chairRentColumn).value).toBe(25);
     expect(chairSettlement.getCell(chairBarberValueColumn).value).toBe(-25);
     expect(chairSettlement.getCell(chairShopValueColumn).value).toBe(25);
+
+    const directChairStart = futureThursdayIso(-275, 10);
+    const directChairCreated = await createManual(request, `Gift chair direto Extras ${suffix}`, directChairStart, {
+      barberId: chairBarber.id,
+      allowOutsideHours: true,
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
+      isAlreadyCompleted: true,
+      paymentMethod: "gift",
+    });
+    expect(directChairCreated.response.status(), JSON.stringify(directChairCreated.body)).toBe(201);
+    expect(directChairCreated.body.appointments[0]).toMatchObject({
+      status: "completed",
+      paymentMethod: "gift",
+    });
+    expect((await dashboardFor(directChairStart, chairBarber.id)).summary).toMatchObject({
+      revenueCents: 0,
+      extrasRevenueCents: 0,
+      barberRevenueCents: -2500,
+      establishmentRevenueCents: 2500,
+      chairRentCents: 2500,
+    });
 
     const stateDay = futureThursdayIso(-264, 10);
     const stateAppointments: any[] = [];

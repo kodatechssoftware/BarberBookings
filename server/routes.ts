@@ -46,6 +46,7 @@ import {
   bookingSlotIntervalMessage,
   isMinuteOfDayAligned,
 } from "@shared/booking-slot-interval";
+import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
 import {
   DEFAULT_APPOINTMENT_DURATION_MINUTES,
   hasAppointmentServiceTermsSnapshot,
@@ -675,6 +676,16 @@ function isKnownAppointmentStatus(status: unknown): status is Appointment["statu
 
 function isKnownAppointmentPaymentMethod(paymentMethod: unknown): paymentMethod is AppointmentPaymentMethod {
   return typeof paymentMethod === "string" && appointmentPaymentMethodSet.has(paymentMethod);
+}
+
+function getCompletedAppointmentPaymentMethodError(paymentMethod: unknown) {
+  if (paymentMethod !== undefined && !isKnownAppointmentPaymentMethod(paymentMethod)) {
+    return "Método de pagamento inválido.";
+  }
+  if (!paymentMethod || paymentMethod === "pending") {
+    return "Indique como o cliente pagou antes de concluir a marcação.";
+  }
+  return null;
 }
 
 function getStatusPatch(status: Appointment["status"]) {
@@ -1482,8 +1493,11 @@ function getAppointmentStatusTimingError(
 ) {
   const startTime = toDate(appointment.startTime);
 
-  if (status === "completed" && getAppointmentEndTime(appointment, serviceDurations).getTime() > now.getTime()) {
-    return "Só pode marcar como feita depois da hora de fim da marcação.";
+  if (status === "completed") {
+    return getAppointmentCompletionTimingError({
+      startTime,
+      durationMinutes: getEffectiveAppointmentDurationMinutes(appointment, serviceDurations),
+    }, now);
   }
 
   if (status === "no_show" && startTime.getTime() > now.getTime()) {
@@ -3567,6 +3581,8 @@ export async function registerRoutes(
         isManualBooking,
         allowOutsideHours,
         hasSpecialTerms,
+        isAlreadyCompleted,
+        paymentMethod: requestedPaymentMethod,
         extras,
         isRecurring,
         recurringWeeks,
@@ -3576,6 +3592,7 @@ export async function registerRoutes(
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
         (hasSpecialTerms !== undefined && typeof hasSpecialTerms !== "boolean") ||
+        (isAlreadyCompleted !== undefined && typeof isAlreadyCompleted !== "boolean") ||
         (extras !== undefined && !Array.isArray(extras)) ||
         Object.prototype.hasOwnProperty.call(req.body, "extraIds") ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
@@ -3584,6 +3601,23 @@ export async function registerRoutes(
         (serviceMode !== undefined && serviceMode !== "existing" && serviceMode !== "custom")
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
+      }
+      const shouldCreateAsCompleted = isAlreadyCompleted === true;
+      if (requestedPaymentMethod !== undefined && !isKnownAppointmentPaymentMethod(requestedPaymentMethod)) {
+        return res.status(400).json({ message: "Método de pagamento inválido." });
+      }
+      if (shouldCreateAsCompleted && (!isManualBooking || isRecurring)) {
+        return res.status(400).json({
+          message: "A conclusão direta só está disponível para uma marcação manual não recorrente.",
+        });
+      }
+      if (shouldCreateAsCompleted) {
+        const paymentError = getCompletedAppointmentPaymentMethodError(requestedPaymentMethod);
+        if (paymentError) return res.status(400).json({ message: paymentError });
+      } else if (requestedPaymentMethod !== undefined && requestedPaymentMethod !== "pending") {
+        return res.status(400).json({
+          message: "O meio de pagamento só pode ser indicado ao concluir a marcação.",
+        });
       }
 
       const barberIdNumber = Number(barberId);
@@ -3741,6 +3775,12 @@ export async function registerRoutes(
       const duration = isCustomService
         ? customDuration!
         : selectedServiceTerms?.durationMinutes ?? DEFAULT_APPOINTMENT_DURATION_MINUTES;
+      const serviceNameSnapshot = isManualBooking
+        ? isCustomService ? customName : selectedServiceTerms?.name ?? null
+        : null;
+      const servicePriceCentsSnapshot = isManualBooking
+        ? isCustomService ? parsedManualPrice : hasManualPrice ? parsedManualPrice : selectedServiceTerms?.priceCents ?? null
+        : null;
       if (isManualBooking && serviceIdNumber) {
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
         if (!barberCanPerformService(barberServiceMap, barberIdNumber, serviceIdNumber)) {
@@ -3787,9 +3827,20 @@ export async function registerRoutes(
       for (let occurrenceIndex = 0; occurrenceIndex < occurrenceStarts.length; occurrenceIndex += 1) {
         const currentStart = occurrenceStarts[occurrenceIndex];
         const currentEnd = new Date(currentStart.getTime() + duration * 60000);
-        const isHistoricalManualBooking = Boolean(
+        const hasEndedManualBooking = Boolean(
           isManualBooking && !isRecurring && currentEnd.getTime() <= requestTimestamp,
         );
+        if (shouldCreateAsCompleted) {
+          const timingError = getAppointmentStatusTimingError({
+            barberId: barberIdNumber,
+            serviceId: serviceIdNumber,
+            startTime: currentStart,
+            durationMinutes: duration,
+            serviceNameSnapshot,
+            servicePriceCentsSnapshot,
+          }, "completed", serviceDurations, new Date(requestTimestamp));
+          if (timingError) return res.status(400).json({ message: timingError });
+        }
         const shopDateParts = getShopDateParts(currentStart);
         let workingPeriods = workingPeriodsByWeekday.get(shopDateParts.weekday);
         if (!workingPeriods) {
@@ -3850,7 +3901,7 @@ export async function registerRoutes(
             currentEnd,
             serviceDurations,
             undefined,
-            isHistoricalManualBooking
+            hasEndedManualBooking
               ? historicalAppointmentConflictStatuses
               : activeAppointmentConflictStatuses,
           )
@@ -3870,18 +3921,15 @@ export async function registerRoutes(
           whatsappOptIn: manualWhatsappOptIn,
           whatsappOptInAt: manualWhatsappOptInAt,
           durationMinutes: duration,
-          serviceNameSnapshot: isManualBooking
-            ? isCustomService ? customName : selectedServiceTerms?.name ?? null
-            : null,
-          servicePriceCentsSnapshot: isManualBooking
-            ? isCustomService ? parsedManualPrice : hasManualPrice ? parsedManualPrice : selectedServiceTerms?.priceCents ?? null
-            : null,
+          serviceNameSnapshot,
+          servicePriceCentsSnapshot,
           manualOutsideHours: Boolean(isManualBooking && outsideHoursByOccurrence[occurrenceIndex]),
-          status: isHistoricalManualBooking ? "completed" : "booked",
+          status: shouldCreateAsCompleted ? "completed" : "booked",
+          paymentMethod: shouldCreateAsCompleted ? requestedPaymentMethod : "pending",
           cancelToken: randomUUID(),
           depositRequired: false,
           depositReason: null,
-          notificationEventType: appointmentNotificationEventsEnabled && isManualBooking && !isHistoricalManualBooking && (!isRecurring || occurrences === 1)
+          notificationEventType: appointmentNotificationEventsEnabled && isManualBooking && !hasEndedManualBooking && (!isRecurring || occurrences === 1)
             ? "appointment_confirmation"
             : undefined,
           extras: isManualBooking && !isRecurring ? requestedExtras : undefined,
@@ -3965,6 +4013,8 @@ export async function registerRoutes(
           barberId: barberIdNumber,
           serviceId: serviceIdNumber,
           recurring: Boolean(isRecurring),
+          createdStatus: shouldCreateAsCompleted ? "completed" : "booked",
+          paymentMethod: shouldCreateAsCompleted ? requestedPaymentMethod : "pending",
           extraIds: requestedExtras.map((extra) => extra.extraId),
           seriesId: recurringSeriesId,
           whatsappOptInSource: manualWhatsappOptIn ? "admin_manual" : null,
@@ -4072,6 +4122,7 @@ export async function registerRoutes(
         customDurationMinutes,
         servicePriceCents,
         allowOutsideHours,
+        paymentMethod: requestedPaymentMethod,
         extras,
       } = req.body;
       const hasStartTimePatch = Object.prototype.hasOwnProperty.call(req.body, "startTime");
@@ -4083,10 +4134,12 @@ export async function registerRoutes(
       const hasCustomDurationPatch = Object.prototype.hasOwnProperty.call(req.body, "customDurationMinutes");
       const hasServicePricePatch = Object.prototype.hasOwnProperty.call(req.body, "servicePriceCents");
       const hasAllowOutsideHoursPatch = Object.prototype.hasOwnProperty.call(req.body, "allowOutsideHours");
+      const hasPaymentMethodPatch = Object.prototype.hasOwnProperty.call(req.body, "paymentMethod");
       const hasExtrasPatch = Object.prototype.hasOwnProperty.call(req.body, "extras");
       if (
         (hasServiceModePatch && serviceMode !== "existing" && serviceMode !== "custom")
         || (hasAllowOutsideHoursPatch && typeof allowOutsideHours !== "boolean")
+        || (hasPaymentMethodPatch && !isKnownAppointmentPaymentMethod(requestedPaymentMethod))
         || (hasExtrasPatch && !Array.isArray(extras))
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
@@ -4099,6 +4152,14 @@ export async function registerRoutes(
       if (!currentApp || currentApp.locationId !== locationId) return res.status(404).json({ message: "Marcação não encontrada" });
       if (hasExtrasPatch && (currentApp.status !== "booked" || currentApp.seriesId)) {
         throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
+      }
+      const hasAppointmentDetailsPatch = hasStartTimePatch || hasBarberPatch || hasServicePatch
+        || hasServiceModePatch || hasCustomNamePatch || hasCustomDurationPatch
+        || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch;
+      if (currentApp.status !== "booked" && hasAppointmentDetailsPatch) {
+        return res.status(409).json({
+          message: "Apenas marcações ativas podem ser editadas.",
+        });
       }
       const previousExtras = hasExtrasPatch
         ? await storage.getAppointmentExtras([appointmentId])
@@ -4307,6 +4368,23 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Estado de marcação inválido." });
         }
         Object.assign(updateData, getStatusPatch(status));
+        if (status === "completed") {
+          const paymentError = getCompletedAppointmentPaymentMethodError(requestedPaymentMethod);
+          if (paymentError) return res.status(400).json({ message: paymentError });
+          const timingError = getAppointmentStatusTimingError(
+            { ...currentApp, ...updateData },
+            status,
+            serviceDurations,
+          );
+          if (timingError) return res.status(400).json({ message: timingError });
+          updateData.paymentMethod = requestedPaymentMethod;
+        } else {
+          updateData.paymentMethod = "pending";
+        }
+      } else if (hasPaymentMethodPatch) {
+        return res.status(400).json({
+          message: "O meio de pagamento só pode ser indicado ao concluir a marcação.",
+        });
       }
       const updateResult = await storage.updateAppointmentWithNotification(
         appointmentId,
@@ -4379,12 +4457,12 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Estado anterior de marcação inválido." });
       }
       const requestedPaymentMethod = req.body.paymentMethod;
-      if (requestedPaymentMethod !== undefined && !isKnownAppointmentPaymentMethod(requestedPaymentMethod)) {
-        return res.status(400).json({ message: "Método de pagamento inválido." });
-      }
       const paymentMethod = status === "completed" ? requestedPaymentMethod : "pending";
-      if (status === "completed" && (!paymentMethod || paymentMethod === "pending")) {
-        return res.status(400).json({ message: "Indique como o cliente pagou antes de concluir a marcação." });
+      if (status === "completed") {
+        const paymentError = getCompletedAppointmentPaymentMethodError(paymentMethod);
+        if (paymentError) return res.status(400).json({ message: paymentError });
+      } else if (requestedPaymentMethod !== undefined && !isKnownAppointmentPaymentMethod(requestedPaymentMethod)) {
+        return res.status(400).json({ message: "Método de pagamento inválido." });
       }
 
       const appointmentId = parsePositiveInteger(req.params.id);

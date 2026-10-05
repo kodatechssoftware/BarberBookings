@@ -3,6 +3,7 @@ import { format, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { AlertTriangle, Calendar as CalendarIcon, User } from "lucide-react";
 import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
+import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -60,6 +61,7 @@ type AppointmentBlockDialogProps = {
   availableBlockTimes: string[];
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   isCheckingAvailability?: boolean;
+  canCreateAsCompleted: boolean;
   onSubmit: () => void;
 };
 
@@ -77,6 +79,7 @@ export function AppointmentBlockDialog({
   availableBlockTimes,
   bookingSlotIntervalMinutes,
   isCheckingAvailability = false,
+  canCreateAsCompleted,
   onSubmit,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
@@ -105,7 +108,6 @@ export function AppointmentBlockDialog({
   const afternoonBlockTimes = visibleBlockTimeOptions.filter((time) => time >= "14:00");
   const today = startOfToday();
   const recurringStartsInPast = blockData.isRecurring && blockData.date < today;
-  const isHistoricalManualBooking = blockData.isManualBooking && !blockData.isRecurring && blockData.date < today;
   const manualPhoneParts = splitStoredPhone(blockData.phone);
   const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
@@ -284,6 +286,8 @@ export function AppointmentBlockDialog({
                         isRecurring: checked,
                         isMultiDay: false,
                         hasSpecialTerms: false,
+                        isAlreadyCompleted: false,
+                        paymentMethod: "pending",
                         serviceMode: "existing",
                         customServiceName: "",
                         customDurationMinutes: "30",
@@ -353,11 +357,6 @@ export function AppointmentBlockDialog({
                 </Popover>
                 {recurringStartsInPast && (
                   <p className="text-xs text-red-300">A recorrência deve começar hoje ou numa data futura.</p>
-                )}
-                {isHistoricalManualBooking && (
-                  <p className="text-xs text-emerald-300">
-                    Esta marcação será registada como concluída e incluída nos relatórios.
-                  </p>
                 )}
               </div>
 
@@ -509,6 +508,48 @@ export function AppointmentBlockDialog({
                 </div>
               )}
             </div>
+
+            {blockData.isManualBooking && !blockData.isRecurring && canCreateAsCompleted && (
+              <div
+                className="space-y-4 rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-4"
+                data-testid="manual-booking-completion"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <Label htmlFor="manual-booking-already-completed" className="cursor-pointer font-bold text-emerald-100">
+                      Marcação já realizada
+                    </Label>
+                    <p className="mt-1 text-xs text-emerald-100/75">
+                      O período desta marcação já terminou. Ative para a registar diretamente como concluída.
+                    </p>
+                  </div>
+                  <Switch
+                    id="manual-booking-already-completed"
+                    checked={blockData.isAlreadyCompleted}
+                    onCheckedChange={(checked) => onBlockDataChange({
+                      ...blockData,
+                      isAlreadyCompleted: checked,
+                      paymentMethod: checked ? blockData.paymentMethod : "pending",
+                    })}
+                  />
+                </div>
+
+                {blockData.isAlreadyCompleted && (
+                  <div className="space-y-3 border-t border-emerald-100/15 pt-4">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Como foi pago?</p>
+                      <p className="mt-1 text-xs text-gray-400">
+                        A escolha fica guardada no Dashboard, no financeiro e no relatório Excel.
+                      </p>
+                    </div>
+                    <AppointmentPaymentOptions
+                      value={blockData.paymentMethod}
+                      onSelect={(paymentMethod) => onBlockDataChange({ ...blockData, paymentMethod })}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             {showSpecialTerms && (
               <div className="space-y-4 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4" data-testid="manual-booking-special-terms">
@@ -857,6 +898,7 @@ export function AppointmentBlockDialog({
               !blockData.barberId ||
               blockData.times.length === 0 ||
               (blockData.isManualBooking && blockData.times.length !== 1) ||
+              (blockData.isAlreadyCompleted && blockData.paymentMethod === "pending") ||
               (blockData.isManualBooking && (!blockData.hasSpecialTerms || blockData.serviceMode === "existing") && !blockData.serviceId) ||
               (blockData.isManualBooking && blockData.hasSpecialTerms && blockData.serviceMode === "custom" && !blockData.customServiceName.trim())
             }
