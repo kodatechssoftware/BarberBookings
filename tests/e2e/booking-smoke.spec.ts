@@ -1786,7 +1786,7 @@ test.describe("admin navigation", () => {
     }
   });
 
-  test("creates a completed historical manual booking through the admin UI", async ({ page, request }) => {
+  test("creates a completed retroactive manual booking with payment through the admin UI", async ({ page, request }) => {
     await loginAdminRequest(request);
 
     const [barbersResponse, servicesResponse] = await Promise.all([
@@ -1814,7 +1814,6 @@ test.describe("admin navigation", () => {
       await page.getByRole("button", { name: new RegExp(`Criar marcação para ${barber.name}.*18:30`, "i") }).click();
       const dialog = page.getByRole("dialog", { name: /Marcação manual/i });
       await expect(dialog).toBeVisible();
-      await expect(dialog.getByText("Esta marcação será registada como concluída e incluída nos relatórios.")).toBeVisible();
 
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, service.name);
@@ -1824,6 +1823,20 @@ test.describe("admin navigation", () => {
       await expect(timeButton).toBeEnabled();
       if (await timeButton.getAttribute("aria-pressed") !== "true") await timeButton.click();
       await expect(timeButton).toHaveAttribute("aria-pressed", "true");
+
+      const completedSwitch = dialog.getByRole("switch", { name: "Marcação já realizada" });
+      await expect(completedSwitch).toBeVisible();
+      await expect(completedSwitch).not.toBeChecked();
+      await completedSwitch.click();
+      await expect(dialog.getByText("Como foi pago?")).toBeVisible();
+      await dialog.getByRole("button", { name: /^Dinheiro/ }).click();
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await completedSwitch.scrollIntoViewIfNeeded();
+      await expect(completedSwitch).toBeVisible();
+      await expect(dialog.getByRole("button", { name: /^Dinheiro/ })).toHaveAttribute("aria-pressed", "true");
+      await expectNoHorizontalOverflow(page);
+
       await dialog.getByRole("button", { name: /Criar marcação/i }).click();
       await expect(dialog).not.toBeVisible();
 
@@ -1836,6 +1849,7 @@ test.describe("admin navigation", () => {
       );
       expect(appointment).toBeTruthy();
       expect(appointment.status).toBe("completed");
+      expect(appointment.paymentMethod).toBe("cash");
       appointmentId = appointment.id;
     } finally {
       if (appointmentId) {
@@ -2257,7 +2271,12 @@ test.describe("admin navigation", () => {
       `/api/appointments?barberId=${barber.id}&date=${dateKeyFromIso(pastThursday.toISOString())}`,
     );
     const appointment = (await appointmentsResponse.json()).find((item: any) => item.customerName === customerName);
-    expect(appointment).toMatchObject({ customerPhone: "", customerEmail: null, status: "completed" });
+    expect(appointment).toMatchObject({
+      customerPhone: "",
+      customerEmail: null,
+      status: "booked",
+      paymentMethod: "pending",
+    });
 
     const historyRequests: string[] = [];
     await page.route("**/api/admin/customers/history?appointmentId=*", async (route) => {
@@ -2267,8 +2286,6 @@ test.describe("admin navigation", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdmin(page);
     await selectAgendaDay(page, pastThursday.toISOString());
-    await page.getByRole("combobox").filter({ hasText: "Marcadas" }).click();
-    await page.getByRole("option", { name: "Concluídas" }).click();
     await page.getByRole("button", {
       name: new RegExp(`Abrir detalhes da marcação de ${customerName}`),
     }).first().click();
@@ -3569,13 +3586,7 @@ test.describe("booking rules", () => {
     const barber = await createBarberResponse.json();
 
     const historicalStart = futureThursdayIso(-6, 9, 0);
-    const currentRuleStartDate = new Date(Date.now() + 60 * 60 * 1000);
-    currentRuleStartDate.setUTCMinutes(
-      Math.floor(currentRuleStartDate.getUTCMinutes() / 30) * 30,
-      0,
-      0,
-    );
-    const currentRuleStart = currentRuleStartDate.toISOString();
+    const currentRuleStart = futureThursdayIso(-5, 9, 0);
     const startDateKey = dateKeyFromIso(historicalStart);
     const endDateKey = dateKeyFromIso(currentRuleStart);
 
@@ -3587,6 +3598,8 @@ test.describe("booking rules", () => {
         name: `Cliente historico financeiro ${suffix}`,
         phone: "+351912697001",
         isManualBooking: true,
+        isAlreadyCompleted: true,
+        paymentMethod: "cash",
       },
     });
     expect(historicalAppointmentResponse.status(), await historicalAppointmentResponse.text()).toBe(201);
@@ -3608,20 +3621,11 @@ test.describe("booking rules", () => {
         phone: "+351912697002",
         isManualBooking: true,
         allowOutsideHours: true,
+        isAlreadyCompleted: true,
+        paymentMethod: "cash",
       },
     });
     expect(currentAppointmentResponse.status(), await currentAppointmentResponse.text()).toBe(201);
-
-    const currentAppointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${endDateKey}`);
-    expect(currentAppointmentsResponse.ok(), await currentAppointmentsResponse.text()).toBe(true);
-    const currentAppointment = (await currentAppointmentsResponse.json()).find((appointment: any) =>
-      appointment.customerName === `Cliente atual financeiro ${suffix}`,
-    );
-    expect(currentAppointment).toBeTruthy();
-    const completeCurrentResponse = await request.patch(`/api/appointments/${currentAppointment.id}`, {
-      data: { status: "completed" },
-    });
-    expect(completeCurrentResponse.ok(), await completeCurrentResponse.text()).toBe(true);
 
     const exportResponse = await request.get(
       `/api/admin/export?startDate=${startDateKey}&endDate=${endDateKey}&barberId=${barber.id}`,
@@ -3639,8 +3643,8 @@ test.describe("booking rules", () => {
     expect(detailSheet).toBeTruthy();
 
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Receita de servicos concluidos")).toBe(200);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Recebimentos confirmados")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Pagamentos por confirmar")).toBe(200);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Recebimentos confirmados")).toBe(200);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Pagamentos por confirmar")).toBe(0);
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBeUndefined();
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Saldo de recebimentos apos despesas registadas")).toBeUndefined();
 
@@ -3665,9 +3669,9 @@ test.describe("booking rules", () => {
     });
     expect(compensationRow).toBeTruthy();
     expect(compensationRow!.getCell(compensationRevenueCol).value).toBe(200);
-    expect(compensationRow!.getCell(commissionCol).value).toBe(90);
-    expect(compensationRow!.getCell(barberValueCol).value).toBe(90);
-    expect(compensationRow!.getCell(shopValueCol).value).toBe(110);
+    expect(compensationRow!.getCell(commissionCol).value).toBe(80);
+    expect(compensationRow!.getCell(barberValueCol).value).toBe(80);
+    expect(compensationRow!.getCell(shopValueCol).value).toBe(120);
 
     const detailHeaderRow = getHeaderRow(detailSheet!, "Data do serviço");
     const detailHeaders = detailHeaderRow.values as unknown[];
@@ -3723,6 +3727,8 @@ test.describe("booking rules", () => {
         name: customerName,
         phone: "+351912697003",
         isManualBooking: true,
+        isAlreadyCompleted: true,
+        paymentMethod: "cash",
       },
     });
     expect(createAppointmentResponse.status(), await createAppointmentResponse.text()).toBe(201);
@@ -3741,8 +3747,8 @@ test.describe("booking rules", () => {
     expect(compensationSheet).toBeTruthy();
 
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Receita de servicos concluidos")).toBe(100);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Recebimentos confirmados")).toBe(0);
-    expect(getCellValueByFirstColumnLabel(financialSheet!, "Pagamentos por confirmar")).toBe(100);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Recebimentos confirmados")).toBe(100);
+    expect(getCellValueByFirstColumnLabel(financialSheet!, "Pagamentos por confirmar")).toBe(0);
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Despesas registadas")).toBeUndefined();
     expect(getCellValueByFirstColumnLabel(financialSheet!, "Saldo de recebimentos apos despesas registadas")).toBeUndefined();
 
@@ -4234,7 +4240,7 @@ test.describe("booking rules", () => {
     }
   });
 
-  test("records a historical manual booking as completed and includes it in the Excel report", async ({ request }) => {
+  test("keeps past manual bookings open unless completion and payment are explicitly requested", async ({ request }) => {
     await loginAdminRequest(request);
 
     const [barbersResponse, servicesResponse] = await Promise.all([
@@ -4249,6 +4255,8 @@ test.describe("booking rules", () => {
     const pastStart = futureThursdayIso(-6, 17, 0);
     const dateKey = dateKeyFromIso(pastStart);
     const customerName = `Registo histórico QA ${Date.now()}`;
+    const directCustomerName = `${customerName} direto`;
+    const directStart = futureThursdayIso(-6, 16, 0);
     let createdAppointments: any[] = [];
 
     try {
@@ -4270,7 +4278,83 @@ test.describe("booking rules", () => {
         appointment.customerName === customerName,
       );
       expect(createdAppointments).toHaveLength(1);
-      expect(createdAppointments[0].status).toBe("completed");
+      expect(createdAppointments[0].status).toBe("booked");
+      expect(createdAppointments[0].paymentMethod).toBe("pending");
+
+      const completeNormallyResponse = await request.patch(`/api/appointments/${createdAppointments[0].id}/status`, {
+        data: { status: "completed", paymentMethod: "cash" },
+      });
+      expect(completeNormallyResponse.status(), await completeNormallyResponse.text()).toBe(200);
+      expect(await completeNormallyResponse.json()).toMatchObject({
+        status: "completed",
+        paymentMethod: "cash",
+      });
+
+      const missingPaymentResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: futureThursdayIso(-6, 15, 0),
+          name: `${customerName} sem pagamento`,
+          phone: "+351912695746",
+          isManualBooking: true,
+          isAlreadyCompleted: true,
+        },
+      });
+      expect(missingPaymentResponse.status(), await missingPaymentResponse.text()).toBe(400);
+      expect(await missingPaymentResponse.json()).toMatchObject({
+        message: "Indique como o cliente pagou antes de concluir a marcação.",
+      });
+
+      const directResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: directStart,
+          name: directCustomerName,
+          phone: "+351912695747",
+          isManualBooking: true,
+          isAlreadyCompleted: true,
+          paymentMethod: "cash",
+        },
+      });
+      expect(directResponse.status(), await directResponse.text()).toBe(201);
+      const directAppointment = (await directResponse.json()).appointments[0];
+      expect(directAppointment).toMatchObject({ status: "completed", paymentMethod: "cash" });
+      createdAppointments.push(directAppointment);
+      const editCompletedResponse = await request.patch(`/api/appointments/${directAppointment.id}`, {
+        data: { servicePriceCents: service.price + 100 },
+      });
+      expect(editCompletedResponse.status(), await editCompletedResponse.text()).toBe(409);
+      expect(await editCompletedResponse.json()).toMatchObject({
+        message: "Apenas marcações ativas podem ser editadas.",
+      });
+
+      const editorPathResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: service.id,
+          startTime: futureThursdayIso(-6, 14, 0),
+          name: `${customerName} editor`,
+          phone: "+351912695749",
+          isManualBooking: true,
+        },
+      });
+      expect(editorPathResponse.status(), await editorPathResponse.text()).toBe(201);
+      const editorPathAppointment = (await editorPathResponse.json()).appointments[0];
+      createdAppointments.push(editorPathAppointment);
+      const editorMissingPayment = await request.patch(`/api/appointments/${editorPathAppointment.id}`, {
+        data: { status: "completed" },
+      });
+      expect(editorMissingPayment.status(), await editorMissingPayment.text()).toBe(400);
+      expect(await editorMissingPayment.json()).toMatchObject({
+        message: "Indique como o cliente pagou antes de concluir a marcação.",
+      });
+      const editorCompleted = await request.patch(`/api/appointments/${editorPathAppointment.id}`, {
+        data: { status: "completed", paymentMethod: "cash" },
+      });
+      expect(editorCompleted.status(), await editorCompleted.text()).toBe(200);
+      expect(await editorCompleted.json()).toMatchObject({ status: "completed", paymentMethod: "cash" });
 
       const duplicateResponse = await request.post("/api/appointments/block", {
         data: {
@@ -4299,6 +4383,14 @@ test.describe("booking rules", () => {
       });
       expect(recurringResponse.status(), await recurringResponse.text()).toBe(400);
 
+      await expect.poll(async () => {
+        const auditResponse = await request.get("/api/admin/audit-logs?limit=100");
+        const entry = (await auditResponse.json()).find((log: any) =>
+          log.action === "appointment.created_manual" && log.entityId === directAppointment.id,
+        );
+        return entry ? JSON.parse(entry.metadata || "{}") : null;
+      }).toMatchObject({ createdStatus: "completed", paymentMethod: "cash" });
+
       const exportResponse = await request.get(
         `/api/admin/export?startDate=${dateKey}&endDate=${dateKey}&barberId=${barber.id}`,
       );
@@ -4317,14 +4409,20 @@ test.describe("booking rules", () => {
       expect(paymentColumn).toBeGreaterThan(0);
       expect(receivedColumn).toBeGreaterThan(0);
       let detailRow: ExcelJS.Row | undefined;
+      let directDetailRow: ExcelJS.Row | undefined;
       detailSheet!.eachRow((row, rowNumber) => {
         if (rowNumber > detailHeaderRow.number && row.getCell(appointmentIdColumn).value === createdAppointments[0].id) detailRow = row;
+        if (rowNumber > detailHeaderRow.number && row.getCell(appointmentIdColumn).value === directAppointment.id) directDetailRow = row;
       });
 
       expect(detailRow).toBeTruthy();
-      expect(detailRow!.getCell(paymentColumn).value).toBeNull();
-      expect(detailRow!.getCell(confirmationColumn).value).toBe("Por confirmar");
-      expect(detailRow!.getCell(receivedColumn).value).toBe(0);
+      expect(directDetailRow).toBeTruthy();
+      expect(detailRow!.getCell(paymentColumn).value).toBe("Dinheiro");
+      expect(detailRow!.getCell(confirmationColumn).value).toBe("Confirmado");
+      expect(detailRow!.getCell(receivedColumn).value).toBe(service.price / 100);
+      expect(directDetailRow!.getCell(paymentColumn).value).toBe("Dinheiro");
+      expect(directDetailRow!.getCell(confirmationColumn).value).toBe("Confirmado");
+      expect(directDetailRow!.getCell(receivedColumn).value).toBe(service.price / 100);
     } finally {
       if (createdAppointments.length === 0) {
         const appointmentsResponse = await request.get(`/api/appointments?barberId=${barber.id}&date=${dateKey}`);
@@ -4353,6 +4451,32 @@ test.describe("booking rules", () => {
 
     try {
       expect(appointment.status).toBe("booked");
+
+      const directCompletedResponse = await request.post("/api/appointments/block", {
+        data: {
+          barberId: barber.id,
+          serviceId: appointment.serviceId,
+          startTime: futureThursdayIso(6, 18, 0),
+          name: `Manual futura direta QA ${Date.now()}`,
+          phone: "+351912695748",
+          isManualBooking: true,
+          isAlreadyCompleted: true,
+          paymentMethod: "cash",
+          allowOutsideHours: true,
+        },
+      });
+      expect(directCompletedResponse.status(), await directCompletedResponse.text()).toBe(400);
+      expect(await directCompletedResponse.json()).toMatchObject({
+        message: "Só pode marcar como feita depois da hora de fim da marcação.",
+      });
+
+      const editorBypassResponse = await request.patch(`/api/appointments/${appointment.id}`, {
+        data: { status: "completed", paymentMethod: "cash" },
+      });
+      expect(editorBypassResponse.status(), await editorBypassResponse.text()).toBe(400);
+      expect(await editorBypassResponse.json()).toMatchObject({
+        message: "Só pode marcar como feita depois da hora de fim da marcação.",
+      });
 
       const completedResponse = await request.patch(`/api/appointments/${appointment.id}/status`, {
         data: { status: "completed", paymentMethod: "cash" },

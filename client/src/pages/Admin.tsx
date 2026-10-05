@@ -85,6 +85,10 @@ import {
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
 import {
+  appointmentCompletionTimingMessage,
+  canCompleteAppointment,
+} from "@shared/appointment-completion";
+import {
   getAppointmentPriceCents as resolveAppointmentPriceCents,
   getAppointmentServiceName as resolveAppointmentServiceName,
   MAX_APPOINTMENT_DURATION_MINUTES,
@@ -1656,10 +1660,13 @@ export default function Admin() {
     isManualBooking: false,
     allowOutsideHours: false,
     hasSpecialTerms: false,
+    isAlreadyCompleted: false,
+    paymentMethod: "pending",
     isRecurring: false,
     recurringWeeks: "2",
     recurringMonths: "6",
   });
+  const [manualBookingCompletionNow, setManualBookingCompletionNow] = useState(() => Date.now());
   const blockAppointmentDate = format(blockData.date, "yyyy-MM-dd");
   const {
     data: blockAppointments,
@@ -1739,6 +1746,8 @@ export default function Admin() {
       extras: [],
       times: [],
       hasSpecialTerms: false,
+      isAlreadyCompleted: false,
+      paymentMethod: "pending",
     }));
   }, [activeLocationId]);
 
@@ -2103,12 +2112,15 @@ export default function Admin() {
       isManualBooking: mode === "manual",
       allowOutsideHours: false,
       hasSpecialTerms: false,
+      isAlreadyCompleted: false,
+      paymentMethod: "pending",
       isRecurring: false,
     }));
     if (mode === "manual") {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/extras"] });
     }
     setBlockAvailabilitySession((current) => current + 1);
+    setManualBookingCompletionNow(Date.now());
     setIsBlocking(true);
   };
 
@@ -2767,6 +2779,15 @@ export default function Admin() {
   const activeLocationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
   const createBlockStartTime = (date: Date, timeStr: string) =>
     calendarTimeInTimeZone(date, timeStr, activeLocationTimeZone);
+  const canCreateManualBookingAsCompleted = Boolean(
+    blockData.isManualBooking &&
+    !blockData.isRecurring &&
+    blockData.times.length === 1 &&
+    canCompleteAppointment({
+      startTime: createBlockStartTime(blockData.date, blockData.times[0] || "00:00"),
+      durationMinutes: selectedBlockDuration,
+    }, new Date(manualBookingCompletionNow)),
+  );
   const getAppointmentServiceName = (appointment: AdminAppointment) => resolveAppointmentServiceName(
     appointment,
     new Map((services || []).map((service) => [service.id, service.name])),
@@ -2787,6 +2808,30 @@ export default function Admin() {
         }
       : current);
   }, [blockData.hasSpecialTerms, blockData.isRecurring, blockData.serviceMode]);
+
+  useEffect(() => {
+    if (!isBlocking || !blockData.isManualBooking) return;
+    setManualBookingCompletionNow(Date.now());
+    const intervalId = window.setInterval(
+      () => setManualBookingCompletionNow(Date.now()),
+      30_000,
+    );
+    return () => window.clearInterval(intervalId);
+  }, [blockData.isManualBooking, isBlocking]);
+
+  useEffect(() => {
+    if (canCreateManualBookingAsCompleted) return;
+    if (!blockData.isAlreadyCompleted && blockData.paymentMethod === "pending") return;
+    setBlockData((current) => ({
+      ...current,
+      isAlreadyCompleted: false,
+      paymentMethod: "pending",
+    }));
+  }, [
+    blockData.isAlreadyCompleted,
+    blockData.paymentMethod,
+    canCreateManualBookingAsCompleted,
+  ]);
 
   const availableBlockTimes = useMemo(() => {
     if (!blockData.barberId || !hasLoadedBlockAppointments) return [];
@@ -2906,6 +2951,18 @@ export default function Admin() {
       toast({ title: "Email inválido", description: emailValidationMessage, variant: "destructive" });
       return;
     }
+    if (blockData.isAlreadyCompleted && !canCreateManualBookingAsCompleted) {
+      toast({ title: "Erro", description: appointmentCompletionTimingMessage, variant: "destructive" });
+      return;
+    }
+    if (blockData.isAlreadyCompleted && blockData.paymentMethod === "pending") {
+      toast({
+        title: "Meio de pagamento obrigatório",
+        description: "Indique como o cliente pagou antes de concluir a marcação.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (blockData.isRecurring && format(blockData.date, "yyyy-MM-dd") < format(startOfToday(), "yyyy-MM-dd")) {
       toast({ title: "Erro", description: "A recorrência deve começar hoje ou numa data futura.", variant: "destructive" });
@@ -2983,6 +3040,8 @@ export default function Admin() {
           recurringWeeks: Number(blockData.recurringWeeks),
           recurringMonths: Number(blockData.recurringMonths),
           allowOutsideHours: blockData.allowOutsideHours,
+          isAlreadyCompleted: false,
+          paymentMethod: "pending",
           hasSpecialTerms: false,
         });
       } else {
@@ -3027,6 +3086,10 @@ export default function Admin() {
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
           isManualBooking: blockData.isManualBooking,
           allowOutsideHours: blockData.allowOutsideHours,
+          ...(blockData.isManualBooking ? {
+            isAlreadyCompleted: blockData.isAlreadyCompleted,
+            paymentMethod: blockData.isAlreadyCompleted ? blockData.paymentMethod : "pending",
+          } : {}),
           ...(blockData.isManualBooking ? { extras: appointmentExtraInputs } : {}),
         });
       }
@@ -3050,6 +3113,8 @@ export default function Admin() {
         isManualBooking: false,
         allowOutsideHours: false,
         hasSpecialTerms: false,
+        isAlreadyCompleted: false,
+        paymentMethod: "pending",
         isRecurring: false,
       });
       await Promise.all([
@@ -3668,6 +3733,8 @@ export default function Admin() {
                 customServicePrice: "",
                 extras: [],
                 hasSpecialTerms: false,
+                isAlreadyCompleted: false,
+                paymentMethod: "pending",
               }));
             }
           }}
@@ -3682,6 +3749,7 @@ export default function Admin() {
           availableBlockTimes={availableBlockTimes}
           bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
           isCheckingAvailability={Boolean(blockData.barberId) && !hasLoadedBlockAppointments}
+          canCreateAsCompleted={canCreateManualBookingAsCompleted}
           onSubmit={handleBlockTime}
         />
 

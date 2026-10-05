@@ -1084,6 +1084,53 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     expect.objectContaining({ extraDefinitionId: extraB.id, amountCentsSnapshot: 900 }),
   ]);
 
+  const historicalStart = new Date(Date.now() - 300 * 86400000);
+  historicalStart.setUTCHours(11, 0, 0, 0);
+  const directCompletedBooking = await request.post("/api/appointments/block", {
+    headers: headersB,
+    data: {
+      ...bookingData,
+      startTime: historicalStart.toISOString(),
+      name: "Cliente retroativo Extra Loja B",
+      extras: [{ extraId: extraB.id }],
+      isAlreadyCompleted: true,
+      paymentMethod: "card",
+    },
+  });
+  expect(directCompletedBooking.status(), await directCompletedBooking.text()).toBe(201);
+  const directCompletedAppointment = (await directCompletedBooking.json()).appointments[0];
+  expect(directCompletedAppointment).toMatchObject({
+    locationId: shopB.id,
+    status: "completed",
+    paymentMethod: "card",
+    extras: [expect.objectContaining({ extraDefinitionId: extraB.id })],
+  });
+  expect((await request.patch(`/api/appointments/${directCompletedAppointment.id}/status`, {
+    headers: headersA,
+    data: { status: "completed", paymentMethod: "cash" },
+  })).status()).toBe(404);
+  expect((await request.patch(`/api/appointments/${directCompletedAppointment.id}`, {
+    headers: headersA,
+    data: { status: "completed", paymentMethod: "cash" },
+  })).status()).toBe(404);
+  const historicalDate = historicalStart.toISOString().slice(0, 10);
+  const historicalDashboardB = await request.get(
+    `/api/admin/dashboard?startDate=${historicalDate}&endDate=${historicalDate}&barberId=${barberB.id}`,
+    { headers: headersB },
+  );
+  expect(historicalDashboardB.ok(), await historicalDashboardB.text()).toBe(true);
+  expect((await historicalDashboardB.json()).summary).toMatchObject({
+    appointments: 1,
+    revenueCents: 2700,
+    extrasRevenueCents: 900,
+  });
+  const historicalDashboardA = await request.get(
+    `/api/admin/dashboard?startDate=${historicalDate}&endDate=${historicalDate}&barberId=${barberB.id}`,
+    { headers: headersA },
+  );
+  expect(historicalDashboardA.ok(), await historicalDashboardA.text()).toBe(true);
+  expect((await historicalDashboardA.json()).summary).toMatchObject({ appointments: 0, revenueCents: 0 });
+
   const bookingDate = bookingStart.toISOString().slice(0, 10);
   const dashboardBResponse = await request.get(
     `/api/admin/dashboard?startDate=${bookingDate}&endDate=${bookingDate}&barberId=${barberB.id}`,
@@ -1125,6 +1172,8 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   expect(localMovement?.getCell(movementExtrasValueColumn).value).toBe(9);
   expect(localMovement?.getCell(movementTotalColumn).value).toBe(27);
 
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
   await page.getByRole("tab", { name: "Agenda" }).click();
   await page.getByRole("button", { name: "Marcação manual" }).click();
   const bookingDialog = page.getByRole("dialog", { name: "Marcação manual" });

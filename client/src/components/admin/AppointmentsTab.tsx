@@ -1,7 +1,7 @@
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Bell, Calendar as CalendarIcon, Loader2, Plus } from "lucide-react";
-import { type AppointmentStatus } from "@/hooks/use-appointments";
+import { type AppointmentPaymentMethod, type AppointmentStatus } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
@@ -32,6 +32,8 @@ export type AppointmentBlockData = {
   isManualBooking: boolean;
   allowOutsideHours: boolean;
   hasSpecialTerms: boolean;
+  isAlreadyCompleted: boolean;
+  paymentMethod: AppointmentPaymentMethod;
   isRecurring: boolean;
   recurringWeeks: string;
   recurringMonths: string;
