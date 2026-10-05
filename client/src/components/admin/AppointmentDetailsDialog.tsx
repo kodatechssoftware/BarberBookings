@@ -127,6 +127,7 @@ function EditAppointmentDialog({
   bookingSlotIntervalMinutes,
   toast,
   disabled = false,
+  locationLogoUrl,
 }: {
   appointment: AdminAppointment;
   barbers?: Array<{ id: number; name: string; serviceIds?: number[] | null; isVisible?: boolean | null }>;
@@ -137,6 +138,7 @@ function EditAppointmentDialog({
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   toast: ReturnType<typeof useToast>["toast"];
   disabled?: boolean;
+  locationLogoUrl?: string | null;
 }) {
   const isCustomAppointment = appointment.serviceId === null
     && appointment.serviceNameSnapshot != null
@@ -698,7 +700,7 @@ function EditAppointmentDialog({
             {isSaving ? "A guardar..." : "Guardar alterações"}
           </Button>
         </div>
-        <MutationPendingOverlay active={isSaving} label="A guardar marcação..." />
+        <MutationPendingOverlay active={isSaving} label="A guardar marcação..." logoUrl={locationLogoUrl} />
       </DialogContent>
     </Dialog>
   );
@@ -786,6 +788,7 @@ export function AppointmentDetailsDialog({
   canManageSchedule,
   canManageAppointment,
   pendingAction = null,
+  locationLogoUrl,
 }: {
   appointment: AdminAppointment | null;
   open: boolean;
@@ -811,6 +814,7 @@ export function AppointmentDetailsDialog({
   canManageSchedule: boolean;
   canManageAppointment: boolean;
   pendingAction?: AppointmentMutationPendingAction | null;
+  locationLogoUrl?: string | null;
 }) {
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
@@ -1125,6 +1129,7 @@ export function AppointmentDetailsDialog({
                       bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
                       toast={toast}
                       disabled={isAppointmentMutationPending}
+                      locationLogoUrl={locationLogoUrl}
                     />
                   </>
                 )}
@@ -1134,6 +1139,7 @@ export function AppointmentDetailsDialog({
         </div>
         <MutationPendingOverlay
           active={isAppointmentMutationPending && !isPaymentDialogOpen}
+          logoUrl={locationLogoUrl}
           label={pendingAction?.status === "no_show"
             ? "A marcar falta..."
             : pendingAction?.status === "cancelled"
@@ -1168,7 +1174,11 @@ export function AppointmentDetailsDialog({
               Voltar
             </AlertDialogCancel>
           </AlertDialogFooter>
-          <MutationPendingOverlay active={isAppointmentMutationPending} label="A processar pagamento..." />
+          <MutationPendingOverlay
+            active={isAppointmentMutationPending}
+            label="A processar pagamento..."
+            logoUrl={locationLogoUrl}
+          />
         </AlertDialogContent>
       </AlertDialog>
     </Dialog>

@@ -32,6 +32,9 @@ Migration `0009_customer_notes_contact_identity.sql` keeps those legacy values,
 adds a normalized email identity, and allows notes to be identified by phone or
 email within the same location and normalized customer name. Conflicting legacy
 email identities stop explicitly instead of being merged automatically.
+Migration `0010_location_branding.sql` adds an optional logo URL to each
+location. Existing locations remain unchanged and continue to use the global
+shop logo as their fallback.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

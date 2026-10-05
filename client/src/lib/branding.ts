@@ -33,6 +33,10 @@ export const shopBranding = {
   heroImageUrl: isPowerhouseDemo ? "/images/powerhouse-hero.jpg" : defaultHeroImageUrl,
 };
 
+export function resolveLocationLogoUrl(logoUrl?: string | null) {
+  return logoUrl?.trim() || shopBranding.logoUrl;
+}
+
 export function applyShopBrandingToDocument() {
   document.documentElement.dataset.brandTheme = shopBranding.theme;
   document.title = shopBranding.name;

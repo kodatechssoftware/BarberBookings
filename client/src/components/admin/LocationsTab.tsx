@@ -16,6 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 type LocationForm = {
   name: string;
   address: string;
+  logoUrl: string;
   mapUrl: string;
   mapEmbedUrl: string;
   phone: string;
@@ -27,6 +28,7 @@ type LocationForm = {
 const emptyForm: LocationForm = {
   name: "",
   address: "",
+  logoUrl: "",
   mapUrl: "",
   mapEmbedUrl: "",
   phone: "",
@@ -58,6 +60,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
     setForm({
       name: location.name,
       address: location.address,
+      logoUrl: location.logoUrl || "",
       mapUrl: location.mapUrl || "",
       mapEmbedUrl: location.mapEmbedUrl || "",
       phone: location.phone || "",
@@ -180,6 +183,19 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
                 {hasCustomMapLinks
                   ? "Esta localização usa ligações personalizadas. Para usar apenas a morada, reponha o mapa automático nas opções avançadas."
                   : "O mapa e a ligação para o Google Maps são gerados automaticamente a partir desta morada. Confirme a localização no mapa depois de guardar."}
+              </p>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="location-logo-url">Logótipo da localização</Label>
+              <Input
+                id="location-logo-url"
+                value={form.logoUrl}
+                onChange={(event) => setForm({ ...form, logoUrl: event.target.value })}
+                placeholder="Opcional — usa o logótipo principal quando vazio"
+                maxLength={1000}
+              />
+              <p className="text-xs leading-relaxed text-gray-400">
+                Utilize um caminho local iniciado por / ou um endereço HTTP(S).
               </p>
             </div>
             <div className="space-y-2">

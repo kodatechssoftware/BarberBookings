@@ -30,6 +30,7 @@ const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-pg-"));
 const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-terms-"));
 const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-extras-"));
 const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
+const preLocationBrandingMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-location-branding-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -63,6 +64,19 @@ for (const file of [
   "0008_appointment_extras.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preCustomerNoteIdentityMigrationsDirectory, file));
+}
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+  "0008_appointment_extras.sql",
+  "0009_customer_notes_contact_identity.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preLocationBrandingMigrationsDirectory, file));
 }
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -166,7 +180,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 9, "a fresh empty application schema must apply migrations 0001 through 0009");
+  assert.equal(freshRun.applied.length, 10, "a fresh empty application schema must apply migrations 0001 through 0010");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -177,13 +191,19 @@ try {
   `, [freshSchema])).rows;
   assert.ok(freshExtrasColumns.some((column) => column.column_name === "pricing_mode" && column.is_nullable === "NO"));
   assert.ok(freshExtrasColumns.some((column) => column.column_name === "amount_cents" && column.is_nullable === "YES"));
+  const freshLocationColumns = (await pool.query(`
+    SELECT column_name, is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'locations'
+  `, [freshSchema])).rows;
+  assert.ok(freshLocationColumns.some((column) => column.column_name === "logo_url" && column.is_nullable === "YES"));
   const secondFreshRun = await runSchemaMigrations(pool, {
     schemaName: freshSchema,
     environment,
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 9);
+  assert.equal(secondFreshRun.alreadyApplied, 10);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -453,7 +473,7 @@ try {
       ($1, '920000002', 'identidade ambigua', 'shared@example.test', 'Nota B')
   `, [defaultLocation.id]);
   await assert.rejects(
-    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory }),
+    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory: preLocationBrandingMigrationsDirectory }),
     (error: any) => error?.code === "23505" && /Ambiguous legacy customer-note email identities/.test(error.message),
     "migration 0009 must stop on ambiguous legacy email identities instead of merging them",
   );
@@ -468,7 +488,11 @@ try {
   await pool.query(`DELETE FROM ${table("customer_notes")} WHERE phone IN ('920000001', '920000002')`);
 
   const releaseDataBeforeCustomerNoteIdentityMigration = await captureReleaseData();
-  const customerNoteIdentityRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const customerNoteIdentityRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preLocationBrandingMigrationsDirectory,
+  });
   assert.deepEqual(customerNoteIdentityRun.applied, ["0009_customer_notes_contact_identity.sql"]);
   assert.equal(customerNoteIdentityRun.alreadyApplied, 8);
   const releaseDataAfterCustomerNoteIdentityMigration = await captureReleaseData();
@@ -495,9 +519,32 @@ try {
     unrelatedDataBeforeCustomerNoteIdentityMigration,
     "migration 0009 must not alter unrelated operational data",
   );
-  const secondCustomerNoteIdentityRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondCustomerNoteIdentityRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preLocationBrandingMigrationsDirectory,
+  });
   assert.equal(secondCustomerNoteIdentityRun.applied.length, 0);
   assert.equal(secondCustomerNoteIdentityRun.alreadyApplied, 9);
+  const releaseDataBeforeLocationBrandingMigration = await captureReleaseData();
+  const locationBrandingRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(locationBrandingRun.applied, ["0010_location_branding.sql"]);
+  assert.equal(locationBrandingRun.alreadyApplied, 9);
+  const releaseDataAfterLocationBrandingMigration = await captureReleaseData();
+  assert.deepEqual(
+    {
+      ...releaseDataAfterLocationBrandingMigration,
+      locations: releaseDataAfterLocationBrandingMigration.locations.map(({ logo_url: _logoUrl, ...location }) => location),
+    },
+    releaseDataBeforeLocationBrandingMigration,
+    "migration 0010 must not alter legacy operational data",
+  );
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("locations")} WHERE logo_url IS NOT NULL
+  `)).rows[0].count), 0, "migration 0010 must leave legacy locations on the global-logo fallback");
+  const secondLocationBrandingRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondLocationBrandingRun.applied.length, 0);
+  assert.equal(secondLocationBrandingRun.alreadyApplied, 10);
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
@@ -1135,7 +1182,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1144,4 +1191,5 @@ try {
   await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
   await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });
   await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
+  await rm(preLocationBrandingMigrationsDirectory, { recursive: true, force: true });
 }

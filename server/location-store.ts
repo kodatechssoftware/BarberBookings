@@ -32,6 +32,7 @@ function mapLocation(row: any): ShopLocation {
     name: row.name,
     slug: row.slug,
     address: row.address,
+    logoUrl: row.logo_url ?? null,
     mapUrl: row.map_url ?? null,
     mapEmbedUrl: row.map_embed_url ?? null,
     phone: row.phone ?? null,
@@ -50,6 +51,7 @@ let memoryLocations: ShopLocation[] = [{
   name: process.env.SHOP_NAME?.trim() || "Barbearia",
   slug: "principal",
   address: process.env.SHOP_ADDRESS?.trim() || "Morada principal",
+  logoUrl: null,
   mapUrl: process.env.SHOP_MAP_URL?.trim() || process.env.VITE_SHOP_MAP_URL?.trim() || null,
   mapEmbedUrl: process.env.SHOP_MAP_EMBED_URL?.trim() || process.env.VITE_SHOP_MAP_EMBED_URL?.trim() || null,
   phone: null,
@@ -275,6 +277,7 @@ export async function createLocation(input: LocationInput, maxLocations: number)
       name: input.name,
       slug: chooseUniqueSlug(input.name, memoryLocations),
       address: input.address,
+      logoUrl: input.logoUrl || null,
       mapUrl: input.mapUrl || null,
       mapEmbedUrl: input.mapEmbedUrl || null,
       phone: input.phone || null,
@@ -301,15 +304,16 @@ export async function createLocation(input: LocationInput, maxLocations: number)
     const slug = chooseUniqueSlug(input.name, existing.rows);
     const inserted = await client.query(`
       INSERT INTO ${locationsTable} (
-        name, slug, address, map_url, map_embed_url, phone, email, timezone,
+        name, slug, address, logo_url, map_url, map_embed_url, phone, email, timezone,
         is_active, is_default, sort_order
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, false, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, false, $10)
       RETURNING *
     `, [
       input.name,
       slug,
       input.address,
+      input.logoUrl || null,
       input.mapUrl || null,
       input.mapEmbedUrl || null,
       input.phone || null,
@@ -342,6 +346,7 @@ export async function updateLocation(id: number, input: LocationUpdate) {
       mapEmbedUrl: input.mapEmbedUrl === undefined ? memoryLocations[index].mapEmbedUrl : input.mapEmbedUrl || null,
       phone: input.phone === undefined ? memoryLocations[index].phone : input.phone || null,
       email: input.email === undefined ? memoryLocations[index].email : input.email || null,
+      logoUrl: input.logoUrl === undefined ? memoryLocations[index].logoUrl : input.logoUrl || null,
       updatedAt: new Date(),
     };
     return memoryLocations[index];
@@ -379,12 +384,13 @@ export async function updateLocation(id: number, input: LocationUpdate) {
         name = $2,
         slug = $3,
         address = $4,
-        map_url = $5,
-        map_embed_url = $6,
-        phone = $7,
-        email = $8,
-        timezone = $9,
-        is_active = $10,
+        logo_url = $5,
+        map_url = $6,
+        map_embed_url = $7,
+        phone = $8,
+        email = $9,
+        timezone = $10,
+        is_active = $11,
         updated_at = now()
       WHERE id = $1
       RETURNING *
@@ -393,6 +399,7 @@ export async function updateLocation(id: number, input: LocationUpdate) {
       input.name ?? current.name,
       slug,
       input.address ?? current.address,
+      input.logoUrl === undefined ? current.logoUrl : input.logoUrl || null,
       input.mapUrl === undefined ? current.mapUrl : input.mapUrl || null,
       input.mapEmbedUrl === undefined ? current.mapEmbedUrl : input.mapEmbedUrl || null,
       input.phone === undefined ? current.phone : input.phone || null,

@@ -1,21 +1,35 @@
-import { useEffect, useState } from "react";
-import { shopBranding } from "@/lib/branding";
+import { type SyntheticEvent, useEffect, useState } from "react";
+import { resolveLocationLogoUrl, shopBranding } from "@/lib/branding";
 import { cn } from "@/lib/utils";
 
 type MutationPendingOverlayProps = {
   active: boolean;
   label?: string;
+  logoUrl?: string | null;
   delayMs?: number;
   className?: string;
 };
 
+function handleLogoLoadError(event: SyntheticEvent<HTMLImageElement>) {
+  const image = event.currentTarget;
+  if (image.dataset.fallbackApplied !== "true") {
+    image.dataset.fallbackApplied = "true";
+    image.src = shopBranding.logoUrl;
+    return;
+  }
+
+  image.hidden = true;
+}
+
 export function MutationPendingOverlay({
   active,
   label = "A processar...",
+  logoUrl,
   delayMs = 180,
   className,
 }: MutationPendingOverlayProps) {
   const [isVisible, setIsVisible] = useState(active && delayMs <= 0);
+  const resolvedLogoUrl = resolveLocationLogoUrl(logoUrl);
 
   useEffect(() => {
     if (!active) {
@@ -51,11 +65,19 @@ export function MutationPendingOverlay({
             aria-hidden="true"
             className="absolute inset-0 animate-spin rounded-full border-2 border-white/15 border-r-primary border-t-primary"
           />
+          <div
+            aria-hidden="true"
+            className="flex h-14 w-14 items-center justify-center rounded-full bg-card text-lg font-bold text-primary shadow-lg shadow-black/40"
+          >
+            {shopBranding.name.trim().charAt(0).toUpperCase() || "B"}
+          </div>
           <img
-            src={shopBranding.logoUrl}
+            key={resolvedLogoUrl}
+            src={resolvedLogoUrl}
             alt=""
             aria-hidden="true"
-            className="h-14 w-14 rounded-full bg-card object-contain shadow-lg shadow-black/40"
+            onError={handleLogoLoadError}
+            className="absolute h-14 w-14 rounded-full bg-card object-contain shadow-lg shadow-black/40"
           />
         </div>
         <p className="break-words text-sm font-semibold text-white">{label}</p>

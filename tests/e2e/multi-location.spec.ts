@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
 import { calendarTimeInTimeZone, getAvailableTimeSlots } from "../../client/src/lib/availability";
 
@@ -32,6 +32,36 @@ async function ensureLocations(request: APIRequestContext, count: number) {
     locations.push(await response.json());
   }
   return locations;
+}
+
+function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+async function selectAgendaDay(page: Page, isoDate: string) {
+  const dayKey = localDateKey(new Date(isoDate));
+  const targetDay = () => page.getByTestId(`weekly-agenda-day-${dayKey}`).filter({ visible: true }).first();
+
+  if (await targetDay().count()) {
+    await targetDay().click();
+    return;
+  }
+
+  await page.getByRole("button", { name: "Hoje" }).click();
+  const targetDate = new Date(`${dayKey}T12:00:00`);
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const directionButton = targetDate >= today ? "Semana seguinte" : "Semana anterior";
+
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (await targetDay().count()) {
+      await targetDay().click();
+      return;
+    }
+    await page.getByRole("button", { name: directionButton }).click();
+  }
+
+  throw new Error(`Could not navigate weekly agenda to ${dayKey}`);
 }
 
 test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões e relatórios", async ({ page, request, playwright, baseURL }) => {
@@ -1240,4 +1270,138 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   });
   expect(missingLocation.status(), await missingLocation.text()).toBe(400);
   expect(await missingLocation.json()).toMatchObject({ code: "LOCATION_REQUIRED" });
+});
+
+test("[multi-location] pending loader uses the appointment location logo and updates between shops", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const [shopA, shopB] = await ensureLocations(request, 2);
+  const logoA = "/images/demo-logo.svg";
+  const logoB = "/images/logo.jpg";
+  const headersFor = (locationId: number) => ({ "X-Location-Id": String(locationId) });
+
+  for (const [shop, logoUrl] of [[shopA, logoA], [shopB, logoB]] as const) {
+    const response = await request.patch(`/api/admin/locations/${shop.id}`, {
+      data: { isActive: true, logoUrl },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  }
+
+  const locationsResponse = await request.get("/api/account/locations");
+  expect(locationsResponse.ok(), await locationsResponse.text()).toBe(true);
+  const configuredLocations = await locationsResponse.json();
+  expect(configuredLocations.find((location: any) => location.id === shopA.id)?.logoUrl).toBe(logoA);
+  expect(configuredLocations.find((location: any) => location.id === shopB.id)?.logoUrl).toBe(logoB);
+
+  const appointmentFixtures: Array<{ appointment: any; customerName: string; logoUrl: string; shop: any; startTime: string }> = [];
+  for (const [index, fixture] of [{ shop: shopA, logoUrl: logoA }, { shop: shopB, logoUrl: logoB }].entries()) {
+    const headers = headersFor(fixture.shop.id);
+    const suffix = `${Date.now()}-${index}`;
+    const serviceResponse = await request.post("/api/services", {
+      headers,
+      data: {
+        name: `Branding service ${suffix}`,
+        description: "Pending loader multi-location branding test",
+        duration: 30,
+        price: 1500,
+        isVisible: true,
+      },
+    });
+    expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
+    const service = await serviceResponse.json();
+
+    const barberResponse = await request.post("/api/barbers", {
+      headers,
+      data: {
+        name: `Branding barber ${suffix}`,
+        specialty: "Branding QA",
+        bio: "Pending loader multi-location branding test",
+        color: index === 0 ? "#2563EB" : "#9333EA",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(barberResponse.status(), await barberResponse.text()).toBe(201);
+    const barber = await barberResponse.json();
+
+    const start = new Date();
+    start.setDate(start.getDate() - 14 - index);
+    start.setHours(9 + index, 0, 0, 0);
+    const customerName = `Branding customer ${suffix}`;
+    const appointmentResponse = await request.post("/api/appointments/block", {
+      headers,
+      data: {
+        barberId: barber.id,
+        serviceId: service.id,
+        startTime: start.toISOString(),
+        name: customerName,
+        phone: `+35191268${String(index).padStart(4, "0")}`,
+        customerEmail: "",
+        isManualBooking: true,
+        allowOutsideHours: true,
+        isRecurring: false,
+      },
+    });
+    expect(appointmentResponse.status(), await appointmentResponse.text()).toBe(201);
+    const appointmentBody = await appointmentResponse.json();
+    appointmentFixtures.push({
+      appointment: appointmentBody.appointments[0],
+      customerName,
+      logoUrl: fixture.logoUrl,
+      shop: fixture.shop,
+      startTime: start.toISOString(),
+    });
+  }
+
+  await loginAdmin(page.request);
+  await page.goto("/admin");
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+
+  const selectShop = async (shop: any) => {
+    await page.getByLabel(/Loja em gest/).click();
+    await page.getByRole("option", { name: shop.name, exact: true }).click();
+    await expect(page.getByLabel(/Loja em gest/)).toContainText(shop.name);
+  };
+
+  const assertAppointmentPendingLogo = async (fixture: typeof appointmentFixtures[number], expectedLogoUrl: string) => {
+    await selectShop(fixture.shop);
+    await selectAgendaDay(page, fixture.startTime);
+    await page.getByRole("button", {
+      name: new RegExp(`Abrir detalhes da marca.*o de ${fixture.customerName}`),
+    }).first().click();
+
+    const detailsDialog = page.getByRole("dialog", { name: /Detalhes da marca/ });
+    await expect(detailsDialog).toBeVisible();
+    const statusPath = `/api/appointments/${fixture.appointment.id}/status`;
+    await page.route((url) => url.pathname === statusPath, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await route.fulfill({ status: 500, json: { message: "Expected branding test failure" } });
+    });
+
+    await detailsDialog.getByRole("button", { name: "Feita" }).click();
+    const paymentDialog = page.getByRole("alertdialog", { name: "Como foi pago?" });
+    await paymentDialog.locator('[data-payment-method="cash"]').click();
+    const pendingOverlay = paymentDialog.getByRole("status", { name: "A processar pagamento..." });
+    await expect(pendingOverlay).toBeVisible();
+    await expect(pendingOverlay.locator("img")).toHaveAttribute("src", expectedLogoUrl);
+    await expect.poll(() => pendingOverlay.locator("img").evaluate((image: HTMLImageElement) => (
+      !image.hidden && image.complete && image.naturalWidth > 0
+    ))).toBe(true);
+    await expect(paymentDialog.locator('[data-payment-method="cash"]')).toBeEnabled();
+    await paymentDialog.getByRole("button", { name: "Voltar" }).click();
+    await detailsDialog.getByRole("button", { name: "Close" }).click();
+    await page.unroute((url) => url.pathname === statusPath);
+  };
+
+  for (const fixture of appointmentFixtures) {
+    await assertAppointmentPendingLogo(fixture, fixture.logoUrl);
+  }
+
+  const invalidLogoUrl = "/images/missing-location-logo.png";
+  const invalidLogoResponse = await request.patch(`/api/admin/locations/${shopA.id}`, {
+    data: { logoUrl: invalidLogoUrl },
+  });
+  expect(invalidLogoResponse.ok(), await invalidLogoResponse.text()).toBe(true);
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+  await assertAppointmentPendingLogo(appointmentFixtures[0], "/images/logo.jpg");
 });

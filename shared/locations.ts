@@ -10,6 +10,17 @@ const optionalHttpUrl = z.string().trim().max(1000).refine((value) => {
   }
 }, "Indique um endereço web válido.");
 
+const optionalLogoUrl = z.string().trim().max(1000).refine((value) => {
+  if (!value) return true;
+  if (value.startsWith("/") && !value.startsWith("//") && !value.includes("\\")) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}, "Indique um endereço válido para o logótipo.");
+
 const optionalGoogleMapsEmbedUrl = optionalHttpUrl.refine((value) => {
   if (!value) return true;
   try {
@@ -28,6 +39,7 @@ const optionalGoogleMapsEmbedUrl = optionalHttpUrl.refine((value) => {
 export const locationInputSchema = z.object({
   name: z.string().trim().min(2, "Indique o nome da localização.").max(120),
   address: z.string().trim().min(5, "Indique a morada completa.").max(300),
+  logoUrl: optionalLogoUrl.optional().default(""),
   mapUrl: optionalHttpUrl.optional().default(""),
   mapEmbedUrl: optionalGoogleMapsEmbedUrl.optional().default(""),
   phone: z.string().trim().max(40).optional().default(""),
@@ -49,6 +61,7 @@ export type ShopLocation = {
   name: string;
   slug: string;
   address: string;
+  logoUrl: string | null;
   mapUrl: string | null;
   mapEmbedUrl: string | null;
   phone: string | null;

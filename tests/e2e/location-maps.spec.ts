@@ -87,6 +87,20 @@ test.describe("validação das ligações opcionais dos mapas", () => {
       .toEqual({ mapUrl: "", mapEmbedUrl: "" });
   });
 
+  test("aceita logótipos locais ou HTTP(S) e permite regressar ao fallback global", () => {
+    expect(locationUpdateSchema.parse({ logoUrl: "/images/logo-loja-a.svg" })).toEqual({
+      logoUrl: "/images/logo-loja-a.svg",
+    });
+    expect(locationUpdateSchema.safeParse({ logoUrl: "https://cdn.example.test/logo-loja-b.png" }).success).toBe(true);
+    expect(locationUpdateSchema.parse({ logoUrl: "  " })).toEqual({ logoUrl: "" });
+  });
+
+  for (const logoUrl of ["javascript:alert(1)", "//example.test/logo.png", "/\\server/logo.png", "logo.png"]) {
+    test(`rejeita um logótipo inseguro ou relativo sem raiz: ${logoUrl}`, () => {
+      expect(locationUpdateSchema.safeParse({ logoUrl }).success).toBe(false);
+    });
+  }
+
   for (const mapEmbedUrl of [
     automaticEmbedUrl,
     "https://www.google.com/maps?output=embed&q=Lisboa",

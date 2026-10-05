@@ -131,6 +131,7 @@ export const locations = appPgTable("locations", {
   name: text("name").notNull(),
   slug: text("slug").notNull(),
   address: text("address").notNull().default(""),
+  logoUrl: text("logo_url"),
   mapUrl: text("map_url"),
   mapEmbedUrl: text("map_embed_url"),
   phone: text("phone"),

@@ -1506,7 +1506,7 @@ export default function Admin() {
   const activeLocationId = useActiveLocationId();
   const { data: availableLocations = [] } = useQuery<ShopLocation[]>({
     queryKey: ["/api/account/locations"],
-    enabled: user?.authorized === true && multiLocationConfig?.enabled === true,
+    enabled: user?.authorized === true,
   });
   const activeLocation = availableLocations.find((location) => location.id === activeLocationId)
     ?? availableLocations.find((location) => location.isDefault)
@@ -1649,6 +1649,9 @@ export default function Admin() {
     const candidates = [...agendaAppointmentList, ...appointmentList];
     return candidates.find((appointment) => appointment.id === selectedAppointment.id) || selectedAppointment;
   }, [agendaAppointmentList, appointmentList, selectedAppointment]);
+  const selectedAppointmentLocationLogoUrl = selectedAppointmentDetails?.locationId
+    ? availableLocations.find((location) => location.id === selectedAppointmentDetails.locationId)?.logoUrl
+    : null;
   const updateStatus = useUpdateAppointmentStatus();
   const appointmentMutationRef = useRef<AppointmentMutationPendingAction | null>(null);
   const [pendingAppointmentAction, setPendingAppointmentAction] = useState<AppointmentMutationPendingAction | null>(null);
@@ -3664,6 +3667,7 @@ export default function Admin() {
           onOpenHistory={openCustomerHistory}
           onStatusChange={handleStatusChange}
           pendingAction={pendingAppointmentAction}
+          locationLogoUrl={selectedAppointmentLocationLogoUrl}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}
           canManageSchedule={user.role === "admin"}
           canManageAppointment={user.role === "admin" || selectedAppointmentDetails?.canManage !== false}
@@ -3813,6 +3817,7 @@ export default function Admin() {
           canCreateAsCompleted={canCreateManualBookingAsCompleted}
           onSubmit={handleBlockTime}
           isSubmitting={isSubmittingBlock}
+          locationLogoUrl={activeLocation?.logoUrl}
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">

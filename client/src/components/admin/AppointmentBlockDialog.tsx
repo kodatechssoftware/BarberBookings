@@ -65,6 +65,7 @@ type AppointmentBlockDialogProps = {
   canCreateAsCompleted: boolean;
   onSubmit: () => void;
   isSubmitting?: boolean;
+  locationLogoUrl?: string | null;
 };
 
 export function AppointmentBlockDialog({
@@ -84,6 +85,7 @@ export function AppointmentBlockDialog({
   canCreateAsCompleted,
   onSubmit,
   isSubmitting = false,
+  locationLogoUrl,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking;
@@ -924,6 +926,7 @@ export function AppointmentBlockDialog({
         <MutationPendingOverlay
           active={isSubmitting}
           label={blockData.isManualBooking ? "A criar marcação..." : "A guardar ausência..."}
+          logoUrl={locationLogoUrl}
         />
       </DialogContent>
     </Dialog>
