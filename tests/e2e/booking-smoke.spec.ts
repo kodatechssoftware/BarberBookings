@@ -638,24 +638,44 @@ test.describe("public booking flow", () => {
     expect(cleanupResponse.ok()).toBe(true);
   });
 
-  test("opens /booking and stays responsive on desktop and mobile", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto("/booking");
+  test("opens /booking and stays responsive on desktop and mobile", async ({ page }, testInfo) => {
+    const viewports = [
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 820, height: 1180 },
+      { width: 1024, height: 900 },
+      { width: 1440, height: 900 },
+      { width: 1920, height: 1080 },
+    ];
 
-    await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Mudar loja" })).toHaveCount(0);
-    await expectNoHorizontalOverflow(page);
-    await expectNoBrokenImages(page);
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await page.goto("/booking");
 
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/booking");
+      await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Mudar loja" })).toHaveCount(0);
+      await expect(page.getByTestId("public-booking-header")).toBeVisible();
+      await expect(page.getByTestId("booking-stepper")).toBeVisible();
+      await expect(page.getByTestId("booking-step-content")).toBeVisible();
+      await expect(page.getByTestId("booking-actions").getByRole("button", { name: "Seguinte" })).toBeDisabled();
+      await expectNoHorizontalOverflow(page);
+      await expectNoBrokenImages(page);
 
-    await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Mudar loja" })).toHaveCount(0);
-    await expectNoHorizontalOverflow(page);
-    await expectNoBrokenImages(page);
+      const contentBounds = await page.getByTestId("booking-step-content").boundingBox();
+      expect(contentBounds).not.toBeNull();
+      expect(contentBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(contentBounds!.x + contentBounds!.width).toBeLessThanOrEqual(viewport.width);
+      expect(contentBounds!.width).toBeLessThanOrEqual(1026);
+
+      if ([390, 820, 1920].includes(viewport.width)) {
+        await page.screenshot({
+          path: testInfo.outputPath(`single-location-${viewport.width}.png`),
+          fullPage: true,
+          animations: "disabled",
+        });
+      }
+    }
   });
 
   test("reuses the booking window for date changes, month changes and revisited dates", async ({ page }) => {

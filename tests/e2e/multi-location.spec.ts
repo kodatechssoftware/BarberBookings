@@ -64,8 +64,8 @@ async function selectAgendaDay(page: Page, isoDate: string) {
   throw new Error(`Could not navigate weekly agenda to ${dayKey}`);
 }
 
-test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões e relatórios", async ({ page, request, playwright, baseURL }) => {
-  test.setTimeout(120_000);
+test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões e relatórios", async ({ page, request, playwright, baseURL }, testInfo) => {
+  test.setTimeout(180_000);
   expect((await request.get("/api/admin/locations")).status()).toBe(401);
   await loginAdmin(request);
 
@@ -104,10 +104,50 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   });
   expect(overLimit.status()).toBe(409);
 
-  for (const location of created) {
+  const activateLocation = async (location: any) => {
     const response = await request.patch(`/api/admin/locations/${location.id}`, { data: { isActive: true } });
     expect(response.ok(), await response.text()).toBe(true);
+  };
+  const assertPublicLocationLayout = async (expectedCount: number, label: string) => {
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 820, height: 1180 },
+      { width: 1024, height: 900 },
+      { width: 1440, height: 900 },
+      { width: 1920, height: 1080 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/book");
+      await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toBeVisible();
+      const grid = page.getByTestId("booking-location-grid");
+      const cards = grid.locator("button");
+      await expect(cards).toHaveCount(expectedCount);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+      const firstCard = await cards.nth(0).boundingBox();
+      const secondCard = await cards.nth(1).boundingBox();
+      expect(firstCard).not.toBeNull();
+      expect(secondCard).not.toBeNull();
+      if (viewport.width === 390) expect(secondCard!.y).toBeGreaterThan(firstCard!.y);
+      if (viewport.width >= 1024) expect(Math.abs(secondCard!.y - firstCard!.y)).toBeLessThanOrEqual(2);
+
+      if ([390, 820, 1920].includes(viewport.width)) {
+        await page.screenshot({
+          path: testInfo.outputPath(`location-choice-${label}-${viewport.width}.png`),
+          fullPage: true,
+          animations: "disabled",
+        });
+      }
+    }
+  };
+
+  await activateLocation(created[0]);
+  await assertPublicLocationLayout(2, "two");
+  for (const location of created.slice(1)) {
+    await activateLocation(location);
   }
+  await assertPublicLocationLayout(4, "four");
 
   const deactivateDefault = await request.patch(`/api/admin/locations/${initial[0].id}`, { data: { isActive: false } });
   expect(deactivateDefault.status()).toBe(409);
@@ -144,6 +184,20 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   });
   expect(barberResponse.status(), await barberResponse.text()).toBe(201);
   const portoBarber = await barberResponse.json();
+
+  const noServiceBarberResponse = await request.post("/api/barbers", {
+    headers: { "X-Location-Id": String(created[2].id) },
+    data: {
+      name: "Barbeiro sem serviços QA",
+      specialty: "Catálogo em preparação",
+      bio: "Teste visual do estado vazio",
+      color: "#5B6472",
+      isVisible: true,
+      serviceIds: [],
+    },
+  });
+  expect(noServiceBarberResponse.status(), await noServiceBarberResponse.text()).toBe(201);
+  const noServiceBarber = await noServiceBarberResponse.json();
 
   const portoServices = await (await request.get("/api/services", { headers: portoHeaders })).json();
   const portoBarbers = await (await request.get("/api/barbers", { headers: portoHeaders })).json();
@@ -245,18 +299,64 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   await page.evaluate(() => localStorage.removeItem("barberbookings:location-id"));
+  await page.setViewportSize({ width: 1024, height: 900 });
   await page.goto(`/book?barberId=${portoBarber.id}&serviceId=${portoService.id}`);
   await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toBeVisible();
+  await page.getByRole("button", { name: /Loja Braga/ }).click();
+  const barberEmptyState = page.getByTestId("booking-empty-state");
+  await expect(barberEmptyState).toContainText("não tem barbeiros disponíveis");
+  await expect(page.getByTestId("booking-actions").getByRole("button", { name: "Seguinte" })).toBeDisabled();
+  const barberEmptyBounds = await barberEmptyState.boundingBox();
+  expect(barberEmptyBounds).not.toBeNull();
+  await page.screenshot({ path: testInfo.outputPath("empty-barbers-1024.png"), fullPage: true, animations: "disabled" });
+
+  await page.getByRole("button", { name: "Mudar loja" }).click();
+  await page.getByRole("button", { name: /Loja Coimbra/ }).click();
+  await page.getByText(noServiceBarber.name, { exact: true }).click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  const serviceEmptyState = page.getByTestId("booking-empty-state");
+  await expect(serviceEmptyState).toContainText("não tem serviços disponíveis");
+  await expect(page.getByTestId("booking-actions").getByRole("button", { name: "Seguinte" })).toBeDisabled();
+  const serviceEmptyBounds = await serviceEmptyState.boundingBox();
+  expect(serviceEmptyBounds).not.toBeNull();
+  expect(Math.abs(serviceEmptyBounds!.width - barberEmptyBounds!.width)).toBeLessThanOrEqual(2);
+  await page.screenshot({ path: testInfo.outputPath("empty-services-1024.png"), fullPage: true, animations: "disabled" });
+
+  await page.getByRole("button", { name: "Mudar loja" }).click();
   await page.getByRole("button", { name: /Loja Porto/ }).click();
   await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
   await expect(page.getByText("Rui Porto", { exact: true })).toBeVisible();
   await expect(page.getByText("Tiago Martins", { exact: true })).not.toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
   const changeLocation = await page.getByRole("button", { name: "Mudar loja" }).boundingBox();
   expect(changeLocation).toBeTruthy();
   expect(changeLocation!.x + changeLocation!.width).toBeLessThanOrEqual(390);
   await page.getByText("Rui Porto", { exact: true }).click();
   await page.getByRole("button", { name: "Seguinte" }).click();
   await expect(page.getByRole("heading", { name: "Categoria Porto QA", exact: true })).toBeVisible();
+  await page.getByText(portoService.name, { exact: true }).click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.screenshot({ path: testInfo.outputPath("multi-date-time-820.png"), fullPage: true, animations: "disabled" });
+  const enabledTimeSlot = page.locator("button:not(:disabled)").filter({ hasText: /^\d{2}:\d{2}h$/ }).first();
+  await expect(enabledTimeSlot).toBeVisible();
+  await enabledTimeSlot.click();
+  await page.getByRole("button", { name: "Seguinte" }).click();
+  await expect(page.getByText("Resumo da Marcação", { exact: true })).toBeVisible();
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 820, height: 1180 },
+    { width: 1920, height: 1080 },
+  ]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`multi-details-${viewport.width}.png`),
+      fullPage: true,
+      animations: "disabled",
+    });
+  }
   await page.getByRole("button", { name: "Mudar loja" }).click();
   await page.getByRole("button", { name: initial[0].name }).click();
   await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();

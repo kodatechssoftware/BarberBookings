@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
+import { useEffect, useState, useMemo, useRef, type ChangeEvent, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -232,38 +232,65 @@ const ServiceCardSkeleton = () => (
   </div>
 );
 
+const BookingStepContent = ({ children, className }: { children: ReactNode; className?: string }) => (
+  <div data-testid="booking-step-content" className={cn("mx-auto w-full max-w-5xl", className)}>
+    {children}
+  </div>
+);
+
+const BookingStepHeading = ({ title, description }: { title: string; description: string }) => (
+  <div className="mx-auto max-w-2xl text-center">
+    <h2 className="font-display text-2xl font-bold sm:text-3xl">{title}</h2>
+    <p className="mt-2 text-sm leading-relaxed text-gray-400 sm:text-base">{description}</p>
+  </div>
+);
+
+const BookingEmptyState = ({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "error" }) => (
+  <div
+    data-testid="booking-empty-state"
+    className={cn(
+      "flex min-h-36 w-full items-center justify-center rounded-2xl border px-6 py-8 text-center text-sm leading-relaxed sm:min-h-40 sm:px-10 sm:text-base",
+      tone === "error"
+        ? "border-red-500/20 bg-red-500/10 text-red-200"
+        : "border-dashed border-white/10 bg-white/[0.02] text-gray-400",
+    )}
+  >
+    <p className="max-w-2xl">{children}</p>
+  </div>
+);
+
 // Step components
 const StepIndicator = ({ currentStep }: { currentStep: number }) => {
   const steps = ["Barbeiro", "Serviço", "Data e hora", "Detalhes"];
   return (
-    <div className="w-full py-4 md:py-6 mb-4 md:mb-8 lg:py-4 lg:mb-6">
-      <div className="flex justify-between items-center relative z-10">
+    <div data-testid="booking-stepper" className="mx-auto mb-7 w-full max-w-3xl py-3 sm:mb-9 sm:py-4">
+      <div className="relative z-10 flex items-start justify-between">
+        <div className="absolute left-[12.5%] right-[12.5%] top-3.5 -z-10 h-0.5 overflow-hidden bg-white/10 sm:top-4">
+          <div
+            className="h-full bg-primary transition-[width] duration-300"
+            style={{ width: `${((currentStep - 1) / 3) * 100}%` }}
+          />
+        </div>
         {steps.map((step, i) => (
-          <div key={i} className="flex flex-col items-center gap-1 md:gap-2 w-1/4">
+          <div key={step} className="flex w-1/4 min-w-0 flex-col items-center gap-1.5 sm:gap-2">
             <div 
               className={cn(
-                "w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-xs md:text-sm font-bold border-2 transition-colors duration-300 bg-background",
+                "flex h-7 w-7 items-center justify-center rounded-full border-2 bg-background text-xs font-bold transition-colors duration-300 sm:h-8 sm:w-8 sm:text-sm",
                 currentStep > i + 1 ? "border-primary bg-primary text-background" : 
                 currentStep === i + 1 ? "border-primary text-primary" : "border-white/20 text-gray-500"
               )}
+              aria-current={currentStep === i + 1 ? "step" : undefined}
             >
-              {currentStep > i + 1 ? <Check className="w-3 h-3 md:w-4 md:h-4" /> : i + 1}
+              {currentStep > i + 1 ? <Check className="h-3 w-3 sm:h-4 sm:w-4" /> : i + 1}
             </div>
             <span className={cn(
-              "text-[10px] md:text-xs font-medium transition-colors duration-300 text-center px-1",
+              "px-0.5 text-center text-[10px] font-medium leading-tight transition-colors duration-300 sm:px-1 sm:text-xs",
               currentStep >= i + 1 ? "text-white" : "text-gray-600"
             )}>
               {step}
             </span>
           </div>
         ))}
-        {/* Progress bar background */}
-        <div className="absolute top-3.5 md:top-4 left-0 w-full h-[2px] bg-white/10 -z-10" />
-        {/* Progress bar active */}
-        <div 
-          className="absolute top-3.5 md:top-4 left-0 h-[2px] bg-primary transition-all duration-300 -z-10" 
-          style={{ width: `${((currentStep - 1) / 3) * 100}%` }} 
-        />
       </div>
     </div>
   );
@@ -763,33 +790,49 @@ export default function Booking() {
 
   if (hasMultipleLocations && !activeLocation) {
     return (
-      <div className="min-h-screen bg-background px-4 py-10 text-white">
-        <div className="mx-auto max-w-5xl">
-          <Button variant="ghost" className="mb-8" onClick={() => navigate("/")}>
+      <div data-testid="booking-location-choice" className="relative min-h-screen overflow-x-hidden bg-background text-white">
+        <div className="absolute inset-x-0 top-0 z-10 mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 sm:pt-6 lg:px-8">
+          <Button variant="ghost" onClick={() => navigate("/")}>
             <ChevronLeft className="mr-2 h-4 w-4" /> Voltar
           </Button>
-          <div className="mb-8 text-center">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Nova marcação</p>
-            <h1 className="mt-2 text-3xl font-display font-bold md:text-5xl">Onde quer marcar?</h1>
-            <p className="mt-3 text-gray-400">Escolha a localização para consultar os barbeiros, serviços e horários dessa loja.</p>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {locations.map((location) => (
-              <button
-                key={location.id}
-                type="button"
-                className="min-h-40 rounded-xl border border-white/10 bg-card p-5 text-left transition hover:border-primary hover:bg-primary/5"
-                onClick={() => {
-                  selectBookingLocation(location.id);
-                }}
-              >
-                <MapPin className="mb-4 h-6 w-6 text-primary" />
-                <span className="block text-lg font-bold">{location.name}</span>
-                <span className="mt-2 block text-sm leading-relaxed text-gray-400">{location.address}</span>
-              </button>
-            ))}
-          </div>
         </div>
+        <main className="flex min-h-screen items-center px-4 py-24 sm:px-6 sm:py-28 lg:px-8">
+          <div className="mx-auto w-full max-w-6xl">
+            <div className="mx-auto mb-8 max-w-2xl text-center sm:mb-10">
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Nova marcação</p>
+              <h1 className="mt-3 font-display text-3xl font-bold sm:text-4xl lg:text-5xl">Onde quer marcar?</h1>
+              <p className="mt-4 text-sm leading-relaxed text-gray-400 sm:text-base">
+                Escolha a localização para consultar os barbeiros, serviços e horários dessa loja.
+              </p>
+            </div>
+            <div
+              data-testid="booking-location-grid"
+              className={cn(
+                "mx-auto grid w-full grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5",
+                locations.length === 2 && "max-w-3xl",
+                locations.length === 3 && "max-w-5xl lg:grid-cols-3",
+                locations.length >= 4 && "max-w-6xl lg:grid-cols-4",
+              )}
+            >
+              {locations.map((location) => (
+                <button
+                  key={location.id}
+                  type="button"
+                  className="group flex min-h-44 w-full flex-col rounded-2xl border border-white/10 bg-card p-5 text-left transition duration-200 hover:-translate-y-0.5 hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:min-h-48 sm:p-6"
+                  onClick={() => {
+                    selectBookingLocation(location.id);
+                  }}
+                >
+                  <span className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary transition group-hover:bg-primary/15">
+                    <MapPin className="h-5 w-5" />
+                  </span>
+                  <span className="block text-lg font-bold leading-snug sm:text-xl">{location.name}</span>
+                  <span className="mt-2 block text-sm leading-relaxed text-gray-400">{location.address}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
@@ -841,13 +884,14 @@ export default function Booking() {
 
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col font-body">
-      <nav className="border-b border-white/10 py-4 bg-background sticky top-0 z-50">
-        <div className="mx-auto flex w-full max-w-4xl items-center gap-4 px-4 lg:max-w-[calc(100vw-4rem)] xl:max-w-7xl">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background font-body text-foreground">
+      <nav data-testid="public-booking-header" className="sticky top-0 z-50 border-b border-white/10 bg-background/95 py-3 backdrop-blur sm:py-4">
+        <div className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 sm:gap-3 sm:px-6 lg:px-8">
           <Button 
             variant="ghost" 
             size="icon" 
             className="shrink-0 hover:bg-white/10"
+            aria-label={step > 1 ? "Voltar ao passo anterior" : "Voltar ao início"}
             onClick={() => {
               if (step > 1) setStep(prev => prev - 1);
               else navigate("/");
@@ -859,7 +903,7 @@ export default function Booking() {
             src={activeLocation?.logoUrl?.trim() || shopBranding.logoUrl}
             alt=""
             aria-hidden="true"
-            className="h-9 w-9 shrink-0 rounded-full object-contain"
+            className="h-8 w-8 shrink-0 rounded-full object-contain sm:h-9 sm:w-9"
             onError={(event) => {
               const image = event.currentTarget;
               if (!image.dataset.fallbackApplied) {
@@ -869,16 +913,22 @@ export default function Booking() {
             }}
           />
           <div className="min-w-0 flex-1">
-            <span className="font-display font-bold text-lg">Nova Marcação</span>
-            {hasMultipleLocations && activeLocation && <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>{activeLocation.name}</span>}
+            <span className="block truncate font-display text-base font-bold sm:text-lg">Nova Marcação</span>
+            {hasMultipleLocations && activeLocation && (
+              <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>
+                {activeLocation.name}
+              </span>
+            )}
           </div>
           {hasMultipleLocations && (
-            <Button className="shrink-0" variant="ghost" size="sm" onClick={() => selectBookingLocation(null)}>Mudar loja</Button>
+            <Button className="h-9 shrink-0 px-2 text-xs sm:px-3 sm:text-sm" variant="ghost" size="sm" onClick={() => selectBookingLocation(null)}>
+              Mudar loja
+            </Button>
           )}
         </div>
       </nav>
 
-      <div className="mx-auto flex-1 w-full max-w-4xl px-4 pt-8 pb-28 md:pt-8 md:pb-0 lg:max-w-[calc(100vw-4rem)] xl:max-w-7xl">
+      <main data-testid="booking-flow" className="mx-auto w-full max-w-6xl flex-1 px-4 pb-28 pt-5 sm:px-6 sm:pt-7 md:pb-8 lg:px-8">
         <StepIndicator currentStep={step} />
 
         <AnimatePresence mode="wait">
@@ -888,30 +938,32 @@ export default function Booking() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
             transition={{ duration: 0.3 }}
-            className="min-h-[400px] lg:min-h-0"
+            className="w-full"
           >
             {/* STEP 1: SELECT BARBER */}
             {step === 1 && (
-              <div className="space-y-6 lg:space-y-4">
-                <div className="text-center mb-8 lg:mb-6">
-                  <h2 className="text-2xl font-display font-bold mb-2">Seleciona o barbeiro</h2>
-                  <p className="text-gray-400">Escolhe com quem queres marcar.</p>
-                </div>
-                
+              <BookingStepContent className="space-y-7 sm:space-y-8">
+                <BookingStepHeading title="Seleciona o barbeiro" description="Escolhe com quem queres marcar." />
+
                 {loadingBarbers || fetchingBarbers ? (
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 md:gap-6 lg:grid-cols-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 md:grid-cols-3 lg:grid-cols-4">
                     {Array.from({ length: 4 }, (_, i) => <BarberCardSkeleton key={i} />)}
                   </div>
                 ) : barbersError ? (
-                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-center text-sm text-red-200">
+                  <BookingEmptyState tone="error">
                     Não foi possível carregar os barbeiros desta localização. Tente novamente dentro de instantes.
-                  </div>
+                  </BookingEmptyState>
                 ) : visibleBarbers.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-400">
+                  <BookingEmptyState>
                     Esta localização ainda não tem barbeiros disponíveis para marcação online.
-                  </div>
+                  </BookingEmptyState>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
+                  <div className={cn(
+                    "mx-auto grid w-full grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5",
+                    visibleBarbers.length === 1 && "max-w-2xl",
+                    visibleBarbers.length === 2 && "md:max-w-4xl md:grid-cols-3",
+                    visibleBarbers.length >= 3 && "md:grid-cols-3 lg:grid-cols-4",
+                  )}>
                     <motion.div 
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
@@ -1008,29 +1060,32 @@ export default function Booking() {
                     )})}
                   </div>
                 )}
-              </div>
+              </BookingStepContent>
             )}
 
             {/* STEP 2: SELECT SERVICE */}
             {step === 2 && (
-              <div className="space-y-6 lg:space-y-4">
-                <div className="text-center mb-8 lg:mb-6">
-                  <h2 className="text-2xl font-display font-bold mb-2">Selecione o Serviço</h2>
-                  <p className="text-gray-400">O que vamos fazer hoje?</p>
-                </div>
+              <BookingStepContent className="space-y-7 sm:space-y-8">
+                <BookingStepHeading title="Selecione o Serviço" description="O que vamos fazer hoje?" />
 
                 {loadingServices || fetchingServices ? (
-                  <div className="mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0">
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                     {Array.from({ length: 3 }, (_, i) => <ServiceCardSkeleton key={i} />)}
                   </div>
                 ) : servicesError ? (
-                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-center text-sm text-red-200">
+                  <BookingEmptyState tone="error">
                     Não foi possível carregar os serviços desta localização. Tente novamente dentro de instantes.
-                  </div>
+                  </BookingEmptyState>
+                ) : availableServices.length === 0 ? (
+                  <BookingEmptyState>
+                    {visibleServices.length === 0
+                      ? "Esta localização ainda não tem serviços disponíveis para marcação online."
+                      : "Este barbeiro não tem serviços disponíveis para marcação online."}
+                  </BookingEmptyState>
                 ) : (
                   <div className={hasVisibleServiceCategories
-                    ? "mx-auto max-w-6xl space-y-7 px-1"
-                    : "mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0"}
+                    ? "space-y-7"
+                    : "grid grid-cols-1 gap-4 lg:grid-cols-3"}
                   >
                     {hasVisibleServiceCategories
                       ? availableServiceGroups.map((group) => (
@@ -1038,27 +1093,20 @@ export default function Booking() {
                             <h3 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-gray-300 md:text-sm">
                               {group.label}
                             </h3>
-                            <div className="max-w-2xl space-y-3 md:space-y-4 lg:grid lg:max-w-none lg:grid-cols-3 lg:gap-4 lg:space-y-0">
+                            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                               {group.services.map(renderServiceCard)}
                             </div>
                           </section>
                         ))
                       : availableServices.map(renderServiceCard)}
-                    {availableServices.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
-                        {visibleServices.length === 0
-                          ? "Esta localização ainda não tem serviços disponíveis para marcação online."
-                          : "Este barbeiro não tem serviços disponíveis para marcação online."}
-                      </div>
-                    )}
                   </div>
                 )}
-              </div>
+              </BookingStepContent>
             )}
 
             {/* STEP 3: DATE & TIME */}
             {step === 3 && (
-              <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(300px,380px)_1fr] lg:items-start">
+              <BookingStepContent className="grid grid-cols-1 gap-7 sm:gap-8 lg:grid-cols-[minmax(300px,380px)_1fr] lg:items-start">
                 <div className="w-full">
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     <CalendarIcon className="w-5 h-5 text-primary" /> Selecione a Data
@@ -1190,12 +1238,12 @@ export default function Booking() {
                     )}
                   </div>
                 </div>
-              </div>
+              </BookingStepContent>
             )}
 
             {/* STEP 4: CUSTOMER DETAILS */}
             {step === 4 && (
-              <div className="mx-auto max-w-md space-y-8 lg:grid lg:max-w-4xl lg:grid-cols-2 lg:gap-6 lg:space-y-0">
+              <BookingStepContent className="space-y-7 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-7 lg:space-y-0">
                 <div className="bg-card border border-white/10 rounded-xl p-6 space-y-4">
                   <h3 className="font-bold text-lg mb-4 border-b border-white/10 pb-2">Resumo da Marcação</h3>
                   <div className="flex justify-between text-sm">
@@ -1328,18 +1376,19 @@ export default function Booking() {
                     )}
                   </div>
                 </div>
-              </div>
+              </BookingStepContent>
             )}
           </motion.div>
         </AnimatePresence>
 
         {/* Footer Actions */}
-        <div className="fixed bottom-0 left-0 w-full bg-card border-t border-white/10 p-4 md:static md:bg-transparent md:border-0 md:mt-12 lg:mt-6">
-          <div className="mx-auto flex w-full max-w-4xl justify-end lg:max-w-[calc(100vw-4rem)] xl:max-w-7xl">
+        <div data-testid="booking-actions" className="fixed bottom-0 left-0 z-40 w-full border-t border-white/10 bg-card/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-12px_30px_rgba(0,0,0,0.18)] backdrop-blur sm:px-6 md:static md:mt-8 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none">
+          <div className="mx-auto flex w-full max-w-5xl justify-end">
             {step < 4 ? (
               <Button 
                 variant="gold" 
                 onClick={handleNext}
+                className="w-full disabled:opacity-40 sm:w-auto sm:min-w-32"
                 disabled={
                   (step === 1 && selectedBarberId === null) ||
                   (step === 2 && !selectedServiceId) ||
@@ -1353,14 +1402,14 @@ export default function Booking() {
                 variant="gold" 
                 onClick={handleSubmit}
                 disabled={createAppointment.isPending}
-                className="w-32"
+                className="w-full disabled:opacity-40 sm:w-32"
               >
                 {createAppointment.isPending ? "A marcar..." : "Confirmar"}
               </Button>
             )}
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
