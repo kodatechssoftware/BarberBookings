@@ -32,6 +32,11 @@ Migration `0009_customer_notes_contact_identity.sql` keeps those legacy values,
 adds a normalized email identity, and allows notes to be identified by phone or
 email within the same location and normalized customer name. Conflicting legacy
 email identities stop explicitly instead of being merged automatically.
+Migration `0011_appointment_voucher_payment.sql` extends the existing
+appointment payment-method constraint with `voucher`. It does not rewrite
+legacy appointments or introduce split payments; a voucher settles the full
+nominal appointment value while remaining distinct from cash/card receipts and
+from a gifted service.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

@@ -32,6 +32,7 @@ const preCustomerNotesMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "b
 const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-terms-"));
 const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-extras-"));
 const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
+const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-voucher-payment-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -73,6 +74,19 @@ for (const file of [
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preCustomerNoteIdentityMigrationsDirectory, file));
 }
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+  "0008_appointment_extras.sql",
+  "0009_customer_notes_contact_identity.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preVoucherPaymentMigrationsDirectory, file));
+}
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -107,7 +121,9 @@ try {
       customer_name text NOT NULL, customer_email text, customer_phone text NOT NULL,
       duration_minutes integer NOT NULL DEFAULT 30, status text NOT NULL DEFAULT 'booked',
       cancel_token text NOT NULL, cancelled_at timestamp, payment_method text NOT NULL DEFAULT 'pending',
-      deposit_required boolean NOT NULL DEFAULT false, deposit_reason text, created_at timestamp DEFAULT now()
+      deposit_required boolean NOT NULL DEFAULT false, deposit_reason text, created_at timestamp DEFAULT now(),
+      CONSTRAINT appointments_payment_method_check
+        CHECK (payment_method IN ('pending', 'cash', 'card', 'gift'))
     );
     CREATE TABLE ${table("shop_availability")} (
       id serial PRIMARY KEY, day_of_week integer NOT NULL, start_time text NOT NULL,
@@ -190,7 +206,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 9, "a fresh empty application schema must apply migrations 0001 through 0009");
+  assert.equal(freshRun.applied.length, 10,
+    "a fresh empty application schema must apply migrations 0001 through 0009 plus 0011 without requiring 0010");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -207,7 +224,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 9);
+  assert.equal(secondFreshRun.alreadyApplied, 10);
 
   const foundationRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -621,7 +638,7 @@ try {
       ($1, '920000002', 'identidade ambigua', 'shared@example.test', 'Nota B')
   `, [defaultLocation.id]);
   await assert.rejects(
-    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory }),
+    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory: preVoucherPaymentMigrationsDirectory }),
     (error: any) => error?.code === "23505" && /Ambiguous legacy customer-note email identities/.test(error.message),
     "migration 0009 must stop on ambiguous legacy email identities instead of merging them",
   );
@@ -636,7 +653,11 @@ try {
   await pool.query(`DELETE FROM ${table("customer_notes")} WHERE phone IN ('920000001', '920000002')`);
 
   const releaseDataBeforeCustomerNoteIdentityMigration = await captureReleaseData();
-  const customerNoteIdentityRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const customerNoteIdentityRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preVoucherPaymentMigrationsDirectory,
+  });
   assert.deepEqual(customerNoteIdentityRun.applied, ["0009_customer_notes_contact_identity.sql"]);
   assert.equal(customerNoteIdentityRun.alreadyApplied, 8);
   const releaseDataAfterCustomerNoteIdentityMigration = await captureReleaseData();
@@ -647,7 +668,11 @@ try {
   );
   assert.deepEqual(
     releaseDataAfterCustomerNoteIdentityMigration.customerNotes.map((note) => note.email_key),
-    ["cliente@example.test"],
+    releaseDataBeforeCustomerNoteIdentityMigration.customerNotes.map((note) => (
+      typeof note.email === "string" && note.email.trim()
+        ? note.email.trim().toLowerCase()
+        : null
+    )),
     "migration 0009 must derive only the normalized email identity key",
   );
   const {
@@ -663,9 +688,39 @@ try {
     unrelatedDataBeforeCustomerNoteIdentityMigration,
     "migration 0009 must not alter unrelated operational data",
   );
-  const secondCustomerNoteIdentityRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondCustomerNoteIdentityRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preVoucherPaymentMigrationsDirectory,
+  });
   assert.equal(secondCustomerNoteIdentityRun.applied.length, 0);
   assert.equal(secondCustomerNoteIdentityRun.alreadyApplied, 9);
+
+  const releaseDataBeforeVoucherMigration = await captureReleaseData();
+  const voucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(voucherMigrationRun.applied, ["0011_appointment_voucher_payment.sql"]);
+  assert.equal(voucherMigrationRun.alreadyApplied, 9);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataBeforeVoucherMigration,
+    "migration 0011 must preserve every legacy operational value",
+  );
+  const paymentConstraintDefinition = String((await pool.query(`
+    SELECT pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE connamespace = $1::regnamespace AND conrelid = $2::regclass
+      AND conname = 'appointments_payment_method_check'
+  `, [schema, `${schema}.appointments`])).rows[0]?.definition || "");
+  assert.match(paymentConstraintDefinition, /voucher/, "migration 0011 must allow voucher payments");
+  await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'voucher' WHERE id = 1`);
+  await assert.rejects(
+    pool.query(`UPDATE ${table("appointments")} SET payment_method = 'unsupported' WHERE id = 1`),
+    /appointments_payment_method_check/,
+  );
+  await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'pending' WHERE id = 1`);
+  const secondVoucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondVoucherMigrationRun.applied.length, 0);
+  assert.equal(secondVoucherMigrationRun.alreadyApplied, 10);
 
   process.env.DATABASE_URL = databaseUrl;
   process.env.DATABASE_SCHEMA = schema;
@@ -1239,7 +1294,10 @@ try {
       series_id, series_occurrence_index
     ) VALUES (1, 1, '2031-01-16 10:00:00', 'Duplicado', '910000000', 'series-token-3', ${Number(defaultLocation.id)}, 'series-fixture', 1)
   `), (error: any) => error?.code === "23505");
-  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointments")} WHERE series_id IS NULL`)).rows[0].count),
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointments")}
+    WHERE cancel_token IN ('token-fixture', 'block-fixture') AND series_id IS NULL
+  `)).rows[0].count),
     2,
     "legacy appointments must not be retroactively grouped");
 
@@ -1305,7 +1363,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0011 without 0010, voucher payments, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1316,4 +1374,5 @@ try {
   await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
   await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });
   await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
+  await rm(preVoucherPaymentMigrationsDirectory, { recursive: true, force: true });
 }

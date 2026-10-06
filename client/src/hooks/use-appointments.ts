@@ -4,7 +4,7 @@ import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
 export type AppointmentStatus = "booked" | "completed" | "cancelled" | "late_cancelled" | "no_show";
-export type AppointmentPaymentMethod = "pending" | "cash" | "card" | "gift";
+export type AppointmentPaymentMethod = "pending" | "cash" | "card" | "voucher" | "gift";
 
 export type AppointmentExtraSnapshot = {
   extraDefinitionId: number;

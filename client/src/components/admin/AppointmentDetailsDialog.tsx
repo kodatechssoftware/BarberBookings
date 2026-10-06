@@ -743,6 +743,7 @@ function EditAppointmentDialog({
 function getPaymentMethodLabel(paymentMethod?: AppointmentPaymentMethod | null) {
   if (paymentMethod === "cash") return "Dinheiro";
   if (paymentMethod === "card") return "Multibanco";
+  if (paymentMethod === "voucher") return "Vale/Cupão";
   if (paymentMethod === "gift") return "Oferta";
   return "Por confirmar";
 }
@@ -1191,7 +1192,7 @@ export function AppointmentDetailsDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>Como foi pago?</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
-              Esta escolha fica guardada no relatorio Excel e ajuda a separar dinheiro, multibanco e ofertas.
+              Esta escolha fica registada no relatório Excel e permite distinguir os pagamentos em dinheiro, Multibanco, vale/cupão e oferta.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AppointmentPaymentOptions

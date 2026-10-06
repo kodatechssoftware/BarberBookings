@@ -560,7 +560,7 @@ export function AppointmentBlockDialog({
                     <div>
                       <p className="text-sm font-semibold text-white">Como foi pago?</p>
                       <p className="mt-1 text-xs text-gray-400">
-                        A escolha fica guardada no Dashboard, no financeiro e no relatório Excel.
+                        A escolha fica registada no Dashboard, no financeiro e no relatório Excel.
                       </p>
                     </div>
                     <AppointmentPaymentOptions
