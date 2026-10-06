@@ -31,6 +31,7 @@ const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "ba
 const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-extras-"));
 const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
 const preLocationBrandingMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-location-branding-"));
+const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-voucher-payment-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -78,6 +79,20 @@ for (const file of [
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preLocationBrandingMigrationsDirectory, file));
 }
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+  "0008_appointment_extras.sql",
+  "0009_customer_notes_contact_identity.sql",
+  "0010_location_branding.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preVoucherPaymentMigrationsDirectory, file));
+}
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -106,7 +121,9 @@ try {
       customer_name text NOT NULL, customer_email text, customer_phone text NOT NULL,
       duration_minutes integer NOT NULL DEFAULT 30, status text NOT NULL DEFAULT 'booked',
       cancel_token text NOT NULL, cancelled_at timestamp, payment_method text NOT NULL DEFAULT 'pending',
-      deposit_required boolean NOT NULL DEFAULT false, deposit_reason text, created_at timestamp DEFAULT now()
+      deposit_required boolean NOT NULL DEFAULT false, deposit_reason text, created_at timestamp DEFAULT now(),
+      CONSTRAINT appointments_payment_method_check
+        CHECK (payment_method IN ('pending', 'cash', 'card', 'gift'))
     );
     CREATE TABLE ${table("shop_availability")} (
       id serial PRIMARY KEY, day_of_week integer NOT NULL, start_time text NOT NULL,
@@ -180,7 +197,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 10, "a fresh empty application schema must apply migrations 0001 through 0010");
+  assert.equal(freshRun.applied.length, 11, "a fresh empty application schema must apply migrations 0001 through 0011");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -203,7 +220,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 10);
+  assert.equal(secondFreshRun.alreadyApplied, 11);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -527,7 +544,11 @@ try {
   assert.equal(secondCustomerNoteIdentityRun.applied.length, 0);
   assert.equal(secondCustomerNoteIdentityRun.alreadyApplied, 9);
   const releaseDataBeforeLocationBrandingMigration = await captureReleaseData();
-  const locationBrandingRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const locationBrandingRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preVoucherPaymentMigrationsDirectory,
+  });
   assert.deepEqual(locationBrandingRun.applied, ["0010_location_branding.sql"]);
   assert.equal(locationBrandingRun.alreadyApplied, 9);
   const releaseDataAfterLocationBrandingMigration = await captureReleaseData();
@@ -542,9 +563,38 @@ try {
   assert.equal(Number((await pool.query(`
     SELECT count(*) AS count FROM ${table("locations")} WHERE logo_url IS NOT NULL
   `)).rows[0].count), 0, "migration 0010 must leave legacy locations on the global-logo fallback");
-  const secondLocationBrandingRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondLocationBrandingRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preVoucherPaymentMigrationsDirectory,
+  });
   assert.equal(secondLocationBrandingRun.applied.length, 0);
   assert.equal(secondLocationBrandingRun.alreadyApplied, 10);
+  const releaseDataBeforeVoucherMigration = await captureReleaseData();
+  const voucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(voucherMigrationRun.applied, ["0011_appointment_voucher_payment.sql"]);
+  assert.equal(voucherMigrationRun.alreadyApplied, 10);
+  assert.deepEqual(
+    await captureReleaseData(),
+    releaseDataBeforeVoucherMigration,
+    "migration 0011 must preserve every legacy operational value",
+  );
+  const paymentConstraintDefinition = String((await pool.query(`
+    SELECT pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE connamespace = $1::regnamespace AND conrelid = $2::regclass
+      AND conname = 'appointments_payment_method_check'
+  `, [schema, `${schema}.appointments`])).rows[0]?.definition || "");
+  assert.match(paymentConstraintDefinition, /voucher/, "migration 0011 must allow voucher payments");
+  await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'voucher' WHERE id = 1`);
+  await assert.rejects(
+    pool.query(`UPDATE ${table("appointments")} SET payment_method = 'unsupported' WHERE id = 1`),
+    /appointments_payment_method_check/,
+  );
+  await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'pending' WHERE id = 1`);
+  const secondVoucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondVoucherMigrationRun.applied.length, 0);
+  assert.equal(secondVoucherMigrationRun.alreadyApplied, 11);
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
@@ -1182,7 +1232,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010/0011, voucher payments, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1192,4 +1242,5 @@ try {
   await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });
   await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
   await rm(preLocationBrandingMigrationsDirectory, { recursive: true, force: true });
+  await rm(preVoucherPaymentMigrationsDirectory, { recursive: true, force: true });
 }

@@ -1829,12 +1829,12 @@ test.describe("admin navigation", () => {
       await expect(completedSwitch).not.toBeChecked();
       await completedSwitch.click();
       await expect(dialog.getByText("Como foi pago?")).toBeVisible();
-      await dialog.getByRole("button", { name: /^Dinheiro/ }).click();
+      await dialog.getByRole("button", { name: /^Vale\/Cupão/ }).click();
 
       await page.setViewportSize({ width: 390, height: 844 });
       await completedSwitch.scrollIntoViewIfNeeded();
       await expect(completedSwitch).toBeVisible();
-      await expect(dialog.getByRole("button", { name: /^Dinheiro/ })).toHaveAttribute("aria-pressed", "true");
+      await expect(dialog.getByRole("button", { name: /^Vale\/Cupão/ })).toHaveAttribute("aria-pressed", "true");
       await expectNoHorizontalOverflow(page);
 
       await dialog.getByRole("button", { name: /Criar marcação/i }).click();
@@ -1849,8 +1849,21 @@ test.describe("admin navigation", () => {
       );
       expect(appointment).toBeTruthy();
       expect(appointment.status).toBe("completed");
-      expect(appointment.paymentMethod).toBe("cash");
+      expect(appointment.paymentMethod).toBe("voucher");
       appointmentId = appointment.id;
+
+      const paymentBreakdown = page.getByTestId("dashboard-payment-breakdown");
+      for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 820, height: 1_080 },
+        { width: 1_440, height: 900 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await paymentBreakdown.scrollIntoViewIfNeeded();
+        await expect(paymentBreakdown).toBeVisible();
+        await expect(paymentBreakdown.getByText("Vale/Cupão", { exact: true })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+      }
     } finally {
       if (appointmentId) {
         await request.patch(`/api/appointments/${appointmentId}/status`, { data: { status: "cancelled" } });
@@ -7270,6 +7283,9 @@ test.describe("admin mutation pending states", () => {
       await detailsDialog.getByRole("button", { name: "Feita" }).click();
       const paymentDialog = page.getByRole("alertdialog", { name: "Como foi pago?" });
       await expect(paymentDialog).toBeVisible();
+      await expect(paymentDialog).toContainText(
+        "Esta escolha fica registada no relatório Excel e permite distinguir os pagamentos em dinheiro, Multibanco, vale/cupão e oferta.",
+      );
 
       await paymentDialog.locator("[data-payment-method]").evaluateAll((buttons) => {
         (buttons[0] as HTMLButtonElement).click();
@@ -7280,6 +7296,7 @@ test.describe("admin mutation pending states", () => {
       await expect.poll(() => requestCount).toBe(1);
       await expect(paymentDialog.locator('[data-payment-method="cash"]')).toBeDisabled();
       await expect(paymentDialog.locator('[data-payment-method="card"]')).toBeDisabled();
+      await expect(paymentDialog.locator('[data-payment-method="voucher"]')).toBeDisabled();
       await expect(paymentDialog.locator('[data-payment-method="gift"]')).toBeDisabled();
       await expect(page.getByTestId("appointment-action-no-show")).toBeDisabled();
       await expect(page.getByTestId("appointment-action-cancel")).toBeDisabled();
@@ -7311,10 +7328,12 @@ test.describe("admin mutation pending states", () => {
     }
   });
 
-  for (const [paymentMethod, label] of [["card", "Multibanco"], ["gift", "Oferta"]] as const) {
+  for (const [paymentMethod, label, weeksBack, hour] of [
+    ["card", "Multibanco", 10, 10],
+    ["voucher", "Vale/Cupão", 13, 10],
+    ["gift", "Oferta", 11, 11],
+  ] as const) {
     test(`shows delayed feedback for a slow ${label} completion`, async ({ page, request }) => {
-      const weeksBack = paymentMethod === "card" ? 10 : 11;
-      const hour = paymentMethod === "card" ? 10 : 11;
       const { appointment, barber, startTime } = await createPendingAppointment(request, `Pending ${label} QA`, weeksBack, hour);
       const statusPath = `/api/appointments/${appointment.id}/status`;
       let requestCount = 0;

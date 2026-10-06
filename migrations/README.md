@@ -35,6 +35,11 @@ email identities stop explicitly instead of being merged automatically.
 Migration `0010_location_branding.sql` adds an optional logo URL to each
 location. Existing locations remain unchanged and continue to use the global
 shop logo as their fallback.
+Migration `0011_appointment_voucher_payment.sql` extends the existing
+appointment payment-method constraint with `voucher`. It does not rewrite
+legacy appointments or introduce split payments; a voucher settles the full
+nominal appointment value while remaining distinct from cash/card receipts and
+from a gifted service.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

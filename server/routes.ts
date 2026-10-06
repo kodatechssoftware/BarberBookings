@@ -230,6 +230,7 @@ const appointmentPaymentMethodLabels: Record<AppointmentPaymentMethod, string> =
   pending: "Por confirmar",
   cash: "Dinheiro",
   card: "Multibanco",
+  voucher: "Vale/Cupão",
   gift: "Oferta",
 };
 
@@ -4983,6 +4984,16 @@ export async function registerRoutes(
         cancellations: cancelledAppointments.length + lateCancelledAppointments.length,
         noShows: noShowAppointments.length,
         revenueCents,
+        nominalCompletedCents: completedAppointments.reduce(
+          (total, appointment) => total + dashboardFinancials.byAppointmentId.get(appointment.id)!.totalAmountCents,
+          0,
+        ),
+        receivedCents: dashboardFinancials.receivedAmountCents,
+        cashCents: dashboardFinancials.cashAmountCents,
+        cardCents: dashboardFinancials.cardAmountCents,
+        voucherCents: dashboardFinancials.voucherAmountCents,
+        giftCents: dashboardFinancials.giftAmountCents,
+        pendingPaymentCents: dashboardFinancials.pendingPaymentAmountCents,
         projectedRevenueCents,
         extrasRevenueCents: dashboardFinancials.appointments.reduce(
           (total, financial) => total + financial.lines
@@ -5510,6 +5521,7 @@ export async function registerRoutes(
         realizedCents: number;
         cashCents: number;
         cardCents: number;
+        voucherCents: number;
         giftCents: number;
         pendingPaymentCents: number;
         projectedCents: number;
@@ -5533,6 +5545,7 @@ export async function registerRoutes(
         realizedCents: 0,
         cashCents: 0,
         cardCents: 0,
+        voucherCents: 0,
         giftCents: 0,
         pendingPaymentCents: 0,
         projectedCents: 0,
@@ -5564,7 +5577,7 @@ export async function registerRoutes(
           } else if (paymentMethod === "card") {
             summary.cardCents += amountCents;
             summary.confirmedPaymentCents += amountCents;
-          }
+          } else if (paymentMethod === "voucher") summary.voucherCents += amountCents;
           else if (paymentMethod === "gift") summary.giftCents += amountCents;
           else summary.pendingPaymentCents += amountCents;
         }
@@ -5996,6 +6009,7 @@ export async function registerRoutes(
         ["Receita realizada", centsToEuros(totalSummary.realizedCents)],
         ["Receita em dinheiro", centsToEuros(totalSummary.cashCents)],
         ["Receita em multibanco", centsToEuros(totalSummary.cardCents)],
+        ["Valor coberto por Vale/Cupão", centsToEuros(totalSummary.voucherCents)],
         ["Ofertas (valor de tabela)", centsToEuros(totalSummary.giftCents)],
         ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
@@ -6030,6 +6044,7 @@ export async function registerRoutes(
             "Receita realizada",
             "Receita em dinheiro",
             "Receita em multibanco",
+            "Valor coberto por Vale/Cupão",
             "Ofertas (valor de tabela)",
             "Pagamentos por confirmar",
             "Receita prevista em agenda",
@@ -6068,6 +6083,7 @@ export async function registerRoutes(
         "Receita realizada (€)",
         "Dinheiro (€)",
         "Multibanco (€)",
+        "Vale/Cupão (€)",
         "Ofertas (€)",
         "Por confirmar (€)",
         "Receita prevista (€)",
@@ -6085,6 +6101,7 @@ export async function registerRoutes(
         centsToEuros(item.realizedCents),
         centsToEuros(item.cashCents),
         centsToEuros(item.cardCents),
+        centsToEuros(item.voucherCents),
         centsToEuros(item.giftCents),
         centsToEuros(item.pendingPaymentCents),
         centsToEuros(item.projectedCents),
@@ -6104,6 +6121,7 @@ export async function registerRoutes(
           "Receita realizada (€)",
           "Dinheiro (€)",
           "Multibanco (€)",
+          "Vale/Cupão (€)",
           "Ofertas (€)",
           "Por confirmar (€)",
           "Receita prevista (€)",
@@ -6127,6 +6145,7 @@ export async function registerRoutes(
               centsToEuros(item.realizedCents),
               centsToEuros(item.cashCents),
               centsToEuros(item.cardCents),
+              centsToEuros(item.voucherCents),
               centsToEuros(item.giftCents),
               centsToEuros(item.pendingPaymentCents),
               centsToEuros(item.projectedCents),
@@ -6138,7 +6157,7 @@ export async function registerRoutes(
             ];
           }),
       );
-      finishTableSheet(barberSheet, [26, 26, 17, 13, 20, 16, 18, 16, 18, 20, 28, 30, 32, 16, 16], {
+      finishTableSheet(barberSheet, [26, 26, 17, 13, 20, 16, 18, 18, 16, 18, 20, 28, 30, 32, 16, 16], {
         5: currencyFormat,
         6: currencyFormat,
         7: currencyFormat,
@@ -6149,7 +6168,8 @@ export async function registerRoutes(
         12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
-        15: percentFormat,
+        15: currencyFormat,
+        16: percentFormat,
       });
 
       const serviceSheet = workbook.addWorksheet("Resumo por Serviço");
@@ -6161,7 +6181,7 @@ export async function registerRoutes(
           .sort((left, right) => right.realizedCents - left.realizedCents || right.appointments - left.appointments)
           .map(summaryToRow),
       );
-      finishTableSheet(serviceSheet, [28, 17, 13, 12, 12, 22, 10, 20, 16, 18, 16, 18, 20, 16, 16], {
+      finishTableSheet(serviceSheet, [28, 17, 13, 12, 12, 22, 10, 20, 16, 18, 18, 16, 18, 20, 16, 16], {
         8: currencyFormat,
         9: currencyFormat,
         10: currencyFormat,
@@ -6169,7 +6189,8 @@ export async function registerRoutes(
         12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
-        15: percentFormat,
+        15: currencyFormat,
+        16: percentFormat,
       });
 
       const dailySheet = workbook.addWorksheet("Resumo diário");
@@ -6188,6 +6209,7 @@ export async function registerRoutes(
           centsToEuros(item.realizedCents),
           centsToEuros(item.cashCents),
           centsToEuros(item.cardCents),
+          centsToEuros(item.voucherCents),
           centsToEuros(item.giftCents),
           centsToEuros(item.pendingPaymentCents),
           centsToEuros(item.projectedCents),
@@ -6195,7 +6217,7 @@ export async function registerRoutes(
           item.appointments ? item.completed / item.appointments : 0,
         ]),
       );
-      finishTableSheet(dailySheet, [14, 17, 13, 12, 12, 22, 10, 20, 16, 18, 16, 18, 20, 16, 16], {
+      finishTableSheet(dailySheet, [14, 17, 13, 12, 12, 22, 10, 20, 16, 18, 18, 16, 18, 20, 16, 16], {
         1: dateFormat,
         8: currencyFormat,
         9: currencyFormat,
@@ -6204,7 +6226,8 @@ export async function registerRoutes(
         12: currencyFormat,
         13: currencyFormat,
         14: currencyFormat,
-        15: percentFormat,
+        15: currencyFormat,
+        16: percentFormat,
       });
 
       const compensationSheet = workbook.addWorksheet("Acertos Barbeiros");
@@ -6285,6 +6308,7 @@ export async function registerRoutes(
         ["Receita concluída", centsToEuros(totalSummary.realizedCents)],
         ["Receita em dinheiro", centsToEuros(totalSummary.cashCents)],
         ["Receita em multibanco", centsToEuros(totalSummary.cardCents)],
+        ["Valor coberto por Vale/Cupão", centsToEuros(totalSummary.voucherCents)],
         ["Ofertas (valor de tabela)", centsToEuros(totalSummary.giftCents)],
         ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
@@ -6315,6 +6339,7 @@ export async function registerRoutes(
             "Receita concluída",
             "Receita em dinheiro",
             "Receita em multibanco",
+            "Valor coberto por Vale/Cupão",
             "Ofertas (valor de tabela)",
             "Pagamentos por confirmar",
             "Receita prevista em agenda",
@@ -6386,7 +6411,7 @@ export async function registerRoutes(
             getAppointmentStatusLabel(appointment.status),
             getAppointmentPaymentMethodLabel(appointment.paymentMethod),
             centsToEuros(financial.serviceAmountCents),
-            centsToEuros(financial.realizedAmountCents),
+            centsToEuros(financial.receivedAmountCents),
             centsToEuros(financial.projectedAmountCents),
             getCompensationModelLabel(financial.compensationModel),
             commissionRate,
@@ -6492,6 +6517,7 @@ export async function registerRoutes(
         ["Recebimentos confirmados", centsToEuros(totalSummary.confirmedPaymentCents)],
         ["Recebimentos em dinheiro", centsToEuros(totalSummary.cashCents)],
         ["Recebimentos em multibanco", centsToEuros(totalSummary.cardCents)],
+        ["Valor coberto por Vale/Cupão", centsToEuros(totalSummary.voucherCents)],
         ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Ofertas (valor dos serviços, sem recebimento)", centsToEuros(giftServiceAmountCents)],
         ["Ofertas (valor dos Extras, sem recebimento)", centsToEuros(giftExtrasAmountCents)],
@@ -6527,7 +6553,7 @@ export async function registerRoutes(
       const accountingNoteRow = summarySectionRow + financialRows.length + 2;
       accountingSummarySheet.mergeCells(accountingNoteRow, 1, accountingNoteRow, 4);
       accountingSummarySheet.getCell(accountingNoteRow, 1).value =
-        "Os totais financeiros incluem o valor efetivo do serviço e os Extras. Os recebimentos confirmados incluem apenas dinheiro e multibanco; ofertas e pagamentos por confirmar aparecem em separado.";
+        "Os totais financeiros incluem o valor efetivo do serviço e os Extras. Os recebimentos confirmados incluem apenas dinheiro e Multibanco; Vale/Cupão, oferta e pagamentos por confirmar aparecem em separado.";
       accountingSummarySheet.getCell(accountingNoteRow, 1).font = { italic: true, color: { argb: "FF4B5563" } };
       accountingSummarySheet.getCell(accountingNoteRow, 1).alignment = { wrapText: true, vertical: "top" };
       accountingSummarySheet.getRow(accountingNoteRow).height = 34;
@@ -6569,7 +6595,7 @@ export async function registerRoutes(
         views: [{ showGridLines: false }],
         pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
       });
-      styleReportTitle(movementsSheet, "A1:P1", "Detalhe dos movimentos");
+      styleReportTitle(movementsSheet, "A1:Q1", "Detalhe dos movimentos");
       movementsSheet.getCell("A3").value = "Período";
       movementsSheet.getCell("B3").value = reportPeriod;
       movementsSheet.getCell("D3").value = "Barbeiro";
@@ -6597,6 +6623,7 @@ export async function registerRoutes(
           "Método de pagamento",
           "Confirmação do pagamento",
           "Valor recebido (€)",
+          "Valor coberto por Vale/Cupão (€)",
           "Valor realizado (€)",
           "Parte barbeiro (€)",
           "Parte estabelecimento (€)",
@@ -6604,17 +6631,16 @@ export async function registerRoutes(
         rows: rangeAppointments.map((appointment) => {
           const financial = reportFinancials.byAppointmentId.get(appointment.id)!;
           const paymentMethod = appointment.paymentMethod || "pending";
-          const receivedCents = appointment.status === "completed"
-            && (paymentMethod === "cash" || paymentMethod === "card")
-            ? financial.totalAmountCents
-            : 0;
+          const receivedCents = financial.receivedAmountCents;
           const paymentConfirmation = appointment.status !== "completed"
             ? "Não aplicável"
             : paymentMethod === "gift"
               ? "Oferta (sem recebimento)"
-              : paymentMethod === "cash" || paymentMethod === "card"
-                ? "Confirmado"
-                : "Por confirmar";
+              : paymentMethod === "voucher"
+                ? "Vale/Cupão (sem recebimento no momento)"
+                : paymentMethod === "cash" || paymentMethod === "card"
+                  ? "Confirmado"
+                  : "Por confirmar";
           return [
             toExcelShopDateTime(new Date(appointment.startTime)),
             appointment.id,
@@ -6629,13 +6655,14 @@ export async function registerRoutes(
             paymentMethod === "pending" ? null : getAppointmentPaymentMethodLabel(paymentMethod),
             paymentConfirmation,
             centsToEuros(receivedCents),
+            centsToEuros(financial.voucherAmountCents),
             centsToEuros(financial.realizedAmountCents),
             centsToEuros(financial.barberAmountCents),
             centsToEuros(financial.establishmentAmountCents),
           ];
         }),
       });
-      styleReportTable(movementsSheet, movementHeaderRow, [20, 17, 40, 36, 19, 52, 18, 16, 18, 22, 26, 30, 20, 20, 21, 27], {
+      styleReportTable(movementsSheet, movementHeaderRow, [20, 17, 40, 36, 19, 52, 18, 16, 18, 22, 26, 38, 20, 31, 20, 21, 27], {
         1: dateTimeFormat,
         5: currencyFormat,
         7: currencyFormat,
@@ -6644,10 +6671,11 @@ export async function registerRoutes(
         14: currencyFormat,
         15: currencyFormat,
         16: currencyFormat,
+        17: currencyFormat,
       });
       if (rangeAppointments.length === 0) {
         const emptyMessageRow = movementHeaderRow + 1;
-        movementsSheet.mergeCells(emptyMessageRow, 1, emptyMessageRow, 16);
+        movementsSheet.mergeCells(emptyMessageRow, 1, emptyMessageRow, 17);
         const emptyMessageCell = movementsSheet.getCell(emptyMessageRow, 1);
         emptyMessageCell.value = "Sem movimentos no período para o filtro selecionado.";
         emptyMessageCell.font = { italic: true, color: { argb: "FF4B5563" } };

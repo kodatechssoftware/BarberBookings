@@ -301,7 +301,7 @@ export async function ensureAppointmentPaymentMethodColumn() {
     BEGIN
       ALTER TABLE ${qualifiedTableName}
       ADD CONSTRAINT ${quoteIdentifier(constraintName)}
-      CHECK (payment_method IN ('pending', 'cash', 'card', 'gift'));
+      CHECK (payment_method IN ('pending', 'cash', 'card', 'voucher', 'gift'));
     EXCEPTION
       WHEN duplicate_object THEN NULL;
     END $$;

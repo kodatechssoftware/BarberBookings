@@ -34,6 +34,12 @@ export type AppointmentFinancialResult = {
   serviceAmountCents: number;
   extrasAmountCents: number;
   totalAmountCents: number;
+  receivedAmountCents: number;
+  cashAmountCents: number;
+  cardAmountCents: number;
+  voucherAmountCents: number;
+  giftAmountCents: number;
+  pendingPaymentAmountCents: number;
   projectedAmountCents: number;
   realizedAmountCents: number;
   barberAmountCents: number;
@@ -49,6 +55,12 @@ export type AppointmentsFinancialResult = {
   serviceAmountCents: number;
   extrasAmountCents: number;
   totalAmountCents: number;
+  receivedAmountCents: number;
+  cashAmountCents: number;
+  cardAmountCents: number;
+  voucherAmountCents: number;
+  giftAmountCents: number;
+  pendingPaymentAmountCents: number;
   projectedAmountCents: number;
   realizedAmountCents: number;
   barberAmountCents: number;
@@ -176,6 +188,36 @@ function sum<T>(values: readonly T[], select: (value: T) => number) {
   return values.reduce((total, value) => total + select(value), 0);
 }
 
+export function getAppointmentPaymentAmounts(
+  appointment: Pick<Appointment, "status" | "paymentMethod">,
+  totalAmountCents: number,
+) {
+  const amounts = {
+    receivedAmountCents: 0,
+    cashAmountCents: 0,
+    cardAmountCents: 0,
+    voucherAmountCents: 0,
+    giftAmountCents: 0,
+    pendingPaymentAmountCents: 0,
+  };
+  if (appointment.status !== "completed") return amounts;
+
+  if (appointment.paymentMethod === "cash") {
+    amounts.cashAmountCents = totalAmountCents;
+    amounts.receivedAmountCents = totalAmountCents;
+  } else if (appointment.paymentMethod === "card") {
+    amounts.cardAmountCents = totalAmountCents;
+    amounts.receivedAmountCents = totalAmountCents;
+  } else if (appointment.paymentMethod === "voucher") {
+    amounts.voucherAmountCents = totalAmountCents;
+  } else if (appointment.paymentMethod === "gift") {
+    amounts.giftAmountCents = totalAmountCents;
+  } else {
+    amounts.pendingPaymentAmountCents = totalAmountCents;
+  }
+  return amounts;
+}
+
 function calculateBaseAppointmentFinancials(
   appointment: Appointment,
   extras: readonly AppointmentExtra[],
@@ -208,6 +250,7 @@ function calculateBaseAppointmentFinancials(
   ];
   const extrasAmountCents = sum(orderedExtras, (extra) => extra.amountCentsSnapshot);
   const totalAmountCents = serviceAmountCents + extrasAmountCents;
+  const paymentAmounts = getAppointmentPaymentAmounts(appointment, totalAmountCents);
 
   return {
     appointmentId: appointment.id,
@@ -218,6 +261,7 @@ function calculateBaseAppointmentFinancials(
     serviceAmountCents,
     extrasAmountCents,
     totalAmountCents,
+    ...paymentAmounts,
     projectedAmountCents: appointment.status === "booked" ? totalAmountCents : 0,
     realizedAmountCents: sum(lines, (line) => line.realizedAmountCents),
     barberAmountCents: sum(lines, (line) => line.barberAmountCents),
@@ -283,6 +327,12 @@ export function calculateAppointmentsFinancials({
     serviceAmountCents: sum(results, (result) => result.serviceAmountCents),
     extrasAmountCents: sum(results, (result) => result.extrasAmountCents),
     totalAmountCents: sum(results, (result) => result.totalAmountCents),
+    receivedAmountCents: sum(results, (result) => result.receivedAmountCents),
+    cashAmountCents: sum(results, (result) => result.cashAmountCents),
+    cardAmountCents: sum(results, (result) => result.cardAmountCents),
+    voucherAmountCents: sum(results, (result) => result.voucherAmountCents),
+    giftAmountCents: sum(results, (result) => result.giftAmountCents),
+    pendingPaymentAmountCents: sum(results, (result) => result.pendingPaymentAmountCents),
     projectedAmountCents: sum(results, (result) => result.projectedAmountCents),
     realizedAmountCents: sum(results, (result) => result.realizedAmountCents),
     barberAmountCents: sum(results, (result) => result.barberAmountCents),

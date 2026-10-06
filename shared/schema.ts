@@ -53,6 +53,7 @@ export const appointmentPaymentMethods = [
   "pending",
   "cash",
   "card",
+  "voucher",
   "gift",
 ] as const;
 

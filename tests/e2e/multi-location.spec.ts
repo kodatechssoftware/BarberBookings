@@ -1124,7 +1124,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
       name: "Cliente retroativo Extra Loja B",
       extras: [{ extraId: extraB.id }],
       isAlreadyCompleted: true,
-      paymentMethod: "card",
+      paymentMethod: "voucher",
     },
   });
   expect(directCompletedBooking.status(), await directCompletedBooking.text()).toBe(201);
@@ -1132,7 +1132,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   expect(directCompletedAppointment).toMatchObject({
     locationId: shopB.id,
     status: "completed",
-    paymentMethod: "card",
+    paymentMethod: "voucher",
     extras: [expect.objectContaining({ extraDefinitionId: extraB.id })],
   });
   expect((await request.patch(`/api/appointments/${directCompletedAppointment.id}/status`, {
@@ -1151,7 +1151,10 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   expect(historicalDashboardB.ok(), await historicalDashboardB.text()).toBe(true);
   expect((await historicalDashboardB.json()).summary).toMatchObject({
     appointments: 1,
+    nominalCompletedCents: 2700,
     revenueCents: 2700,
+    receivedCents: 0,
+    voucherCents: 2700,
     extrasRevenueCents: 900,
   });
   const historicalDashboardA = await request.get(
@@ -1159,7 +1162,37 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
     { headers: headersA },
   );
   expect(historicalDashboardA.ok(), await historicalDashboardA.text()).toBe(true);
-  expect((await historicalDashboardA.json()).summary).toMatchObject({ appointments: 0, revenueCents: 0 });
+  expect((await historicalDashboardA.json()).summary).toMatchObject({
+    appointments: 0,
+    revenueCents: 0,
+    voucherCents: 0,
+  });
+  const historicalVoucherExportB = await request.get(
+    `/api/admin/export?startDate=${historicalDate}&endDate=${historicalDate}&barberId=${barberB.id}`,
+    { headers: headersB },
+  );
+  expect(historicalVoucherExportB.ok(), await historicalVoucherExportB.text()).toBe(true);
+  const historicalVoucherWorkbookB = new ExcelJS.Workbook();
+  await historicalVoucherWorkbookB.xlsx.load(await historicalVoucherExportB.body());
+  const historicalVoucherSummaryB = new Map<string, unknown>();
+  historicalVoucherWorkbookB.getWorksheet("Resumo Financeiro")!.eachRow((row) => {
+    historicalVoucherSummaryB.set(String(row.getCell(1).value), row.getCell(2).value);
+  });
+  expect(historicalVoucherSummaryB.get("Valor coberto por Vale/Cupão")).toBe(27);
+  expect(historicalVoucherSummaryB.get("Recebimentos confirmados")).toBe(0);
+
+  const historicalVoucherExportA = await request.get(
+    `/api/admin/export?startDate=${historicalDate}&endDate=${historicalDate}`,
+    { headers: headersA },
+  );
+  expect(historicalVoucherExportA.ok(), await historicalVoucherExportA.text()).toBe(true);
+  const historicalVoucherWorkbookA = new ExcelJS.Workbook();
+  await historicalVoucherWorkbookA.xlsx.load(await historicalVoucherExportA.body());
+  const historicalVoucherSummaryA = new Map<string, unknown>();
+  historicalVoucherWorkbookA.getWorksheet("Resumo Financeiro")!.eachRow((row) => {
+    historicalVoucherSummaryA.set(String(row.getCell(1).value), row.getCell(2).value);
+  });
+  expect(historicalVoucherSummaryA.get("Valor coberto por Vale/Cupão")).toBe(0);
 
   const bookingDate = bookingStart.toISOString().slice(0, 10);
   const dashboardBResponse = await request.get(

@@ -1050,8 +1050,8 @@ test.describe.serial("manual booking Extras", () => {
     const createCompleted = async (
       weeksAhead: number,
       extras: Array<{ extraId: number; amountCents?: number }>,
-      paymentMethod: "cash" | "card" | "gift" = "cash",
-      creationMode: "transition" | "direct" = "transition",
+      paymentMethod: "cash" | "card" | "voucher" | "gift" = "cash",
+      creationMode: "transition" | "general-patch" | "direct" = "transition",
       overrides: Record<string, unknown> = {},
     ) => {
       const startTime = futureThursdayIso(weeksAhead, 10);
@@ -1064,10 +1064,15 @@ test.describe.serial("manual booking Extras", () => {
       });
       expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
       const appointment = created.body.appointments[0];
-      if (creationMode === "transition") {
-        const completed = await request.patch(`/api/appointments/${appointment.id}/status`, {
+      if (creationMode !== "direct") {
+        const completed = await request.patch(
+          creationMode === "transition"
+            ? `/api/appointments/${appointment.id}/status`
+            : `/api/appointments/${appointment.id}`,
+          {
           data: { status: "completed", paymentMethod },
-        });
+          },
+        );
         expect(completed.ok(), await completed.text()).toBe(true);
       } else {
         expect(appointment).toMatchObject({ status: "completed", paymentMethod });
@@ -1131,6 +1136,121 @@ test.describe.serial("manual booking Extras", () => {
       establishmentRevenueCents: 2500,
       commissionCents: 1000,
     });
+
+    const voucherNormalCase = await createCompleted(
+      -276,
+      [{ extraId: travelExtra.id, amountCents: 1000 }],
+      "voucher",
+    );
+    expect((await dashboardFor(voucherNormalCase.startTime)).summary).toMatchObject({
+      nominalCompletedCents: 2500,
+      revenueCents: 2500,
+      receivedCents: 0,
+      cashCents: 0,
+      cardCents: 0,
+      voucherCents: 2500,
+      giftCents: 0,
+      barberRevenueCents: 1600,
+      establishmentRevenueCents: 900,
+      commissionCents: 600,
+    });
+    const voucherHistoryResponse = await request.get(
+      `/api/admin/customers/history?appointmentId=${voucherNormalCase.appointment.id}`,
+    );
+    expect(voucherHistoryResponse.ok(), await voucherHistoryResponse.text()).toBe(true);
+    expect((await voucherHistoryResponse.json()).appointments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: voucherNormalCase.appointment.id,
+        paymentMethod: "voucher",
+        totalPrice: 2500,
+      }),
+    ]));
+    const voucherAuditResponse = await request.get("/api/admin/audit-logs?limit=100");
+    expect(voucherAuditResponse.ok(), await voucherAuditResponse.text()).toBe(true);
+    const voucherAudit = (await voucherAuditResponse.json()).find((log: any) =>
+      log.action === "appointment.status_changed" && log.entityId === voucherNormalCase.appointment.id);
+    expect(voucherAudit).toBeTruthy();
+    expect(JSON.parse(voucherAudit.metadata)).toMatchObject({ newPaymentMethod: "voucher" });
+
+    const voucherSpecialCase = await createCompleted(
+      -277,
+      [{ extraId: followExtra.id }],
+      "voucher",
+      "general-patch",
+      { hasSpecialTerms: true, servicePriceCents: 3000 },
+    );
+    expect((await dashboardFor(voucherSpecialCase.startTime)).summary).toMatchObject({
+      nominalCompletedCents: 4000,
+      revenueCents: 4000,
+      receivedCents: 0,
+      voucherCents: 4000,
+      barberRevenueCents: 1600,
+      establishmentRevenueCents: 2400,
+      commissionCents: 1600,
+    });
+
+    const voucherCustomStart = futureThursdayIso(-278, 10);
+    const voucherCustomCreated = await createManual(request, `Voucher custom ${suffix}`, voucherCustomStart, {
+      barberId: financeBarber.id,
+      serviceId: null,
+      serviceMode: "custom",
+      hasSpecialTerms: true,
+      customServiceName: "Serviço personalizado com Vale",
+      customDurationMinutes: 45,
+      servicePriceCents: 3000,
+      allowOutsideHours: true,
+      extras: [
+        { extraId: travelExtra.id, amountCents: 1000 },
+        { extraId: followExtra.id },
+        { extraId: establishmentExtra.id },
+      ],
+      isAlreadyCompleted: true,
+      paymentMethod: "voucher",
+    });
+    expect(voucherCustomCreated.response.status(), JSON.stringify(voucherCustomCreated.body)).toBe(201);
+    expect(voucherCustomCreated.body.appointments[0]).toMatchObject({
+      status: "completed",
+      paymentMethod: "voucher",
+      serviceId: null,
+      serviceNameSnapshot: "Serviço personalizado com Vale",
+      servicePriceCentsSnapshot: 3000,
+    });
+    expect((await dashboardFor(voucherCustomStart)).summary).toMatchObject({
+      nominalCompletedCents: 6000,
+      revenueCents: 6000,
+      receivedCents: 0,
+      voucherCents: 6000,
+      barberRevenueCents: 2600,
+      establishmentRevenueCents: 3400,
+      commissionCents: 1600,
+    });
+
+    const voucherDay = dateKey(voucherNormalCase.startTime);
+    const voucherExportResponse = await request.get(
+      `/api/admin/export?startDate=${voucherDay}&endDate=${voucherDay}&barberId=${financeBarber.id}`,
+    );
+    expect(voucherExportResponse.ok(), await voucherExportResponse.text()).toBe(true);
+    const voucherWorkbook = new ExcelJS.Workbook();
+    await voucherWorkbook.xlsx.load(await voucherExportResponse.body());
+    const voucherSummary = getSummaryValues(voucherWorkbook.getWorksheet("Resumo Financeiro")!);
+    expect(voucherSummary.get("Receita total concluída")).toBe(25);
+    expect(voucherSummary.get("Receita realizada")).toBe(25);
+    expect(voucherSummary.get("Recebimentos confirmados")).toBe(0);
+    expect(voucherSummary.get("Valor coberto por Vale/Cupão")).toBe(25);
+    expect(voucherSummary.get("Total atribuído aos barbeiros")).toBe(16);
+    expect(voucherSummary.get("Total atribuído ao estabelecimento")).toBe(9);
+    const voucherDetail = voucherWorkbook.getWorksheet("Detalhe dos Movimentos")!;
+    const voucherHeader = getHeaderRow(voucherDetail, "Data do serviço");
+    const voucherHeaders = voucherHeader.values as unknown[];
+    const voucherMethodColumn = voucherHeaders.indexOf("Método de pagamento");
+    const voucherReceivedColumn = voucherHeaders.indexOf("Valor recebido (€)");
+    const voucherCoveredColumn = voucherHeaders.indexOf("Valor coberto por Vale/Cupão (€)");
+    const voucherRealizedColumn = voucherHeaders.indexOf("Valor realizado (€)");
+    const voucherMovement = voucherDetail.getRow(voucherHeader.number + 1);
+    expect(voucherMovement.getCell(voucherMethodColumn).value).toBe("Vale/Cupão");
+    expect(voucherMovement.getCell(voucherReceivedColumn).value).toBe(0);
+    expect(voucherMovement.getCell(voucherCoveredColumn).value).toBe(25);
+    expect(voucherMovement.getCell(voucherRealizedColumn).value).toBe(25);
 
     const equivalenceExtras = [
       { extraId: travelExtra.id, amountCents: 1000 },
@@ -1381,6 +1501,25 @@ test.describe.serial("manual booking Extras", () => {
       revenueCents: 0,
       extrasRevenueCents: 0,
       barberRevenueCents: -2500,
+      establishmentRevenueCents: 2500,
+      chairRentCents: 2500,
+    });
+
+    const voucherChairStart = futureThursdayIso(-279, 10);
+    const voucherChairCreated = await createManual(request, `Voucher chair Extras ${suffix}`, voucherChairStart, {
+      barberId: chairBarber.id,
+      allowOutsideHours: true,
+      extras: [{ extraId: travelExtra.id, amountCents: 1000 }],
+      isAlreadyCompleted: true,
+      paymentMethod: "voucher",
+    });
+    expect(voucherChairCreated.response.status(), JSON.stringify(voucherChairCreated.body)).toBe(201);
+    expect((await dashboardFor(voucherChairStart, chairBarber.id)).summary).toMatchObject({
+      nominalCompletedCents: 2500,
+      revenueCents: 2500,
+      receivedCents: 0,
+      voucherCents: 2500,
+      barberRevenueCents: 0,
       establishmentRevenueCents: 2500,
       chairRentCents: 2500,
     });

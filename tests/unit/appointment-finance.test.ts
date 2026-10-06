@@ -246,6 +246,82 @@ test("booked is projected while cancelled, late-cancelled, no-show and gift real
   }
 });
 
+test("voucher preserves nominal value and remuneration without becoming a cash/card receipt", () => {
+  const voucherAppointment = appointment({ paymentMethod: "voucher" });
+  const voucherResult = calculateAppointmentFinancials({
+    appointment: voucherAppointment,
+    appointmentExtras: [extra(voucherAppointment.id, 1000, "follow_compensation")],
+    servicePrices,
+    compensationRules: [compensationRule("commission")],
+  });
+  const cashAppointment = appointment({ paymentMethod: "cash" });
+  const cashResult = calculateAppointmentFinancials({
+    appointment: cashAppointment,
+    appointmentExtras: [extra(cashAppointment.id, 1000, "follow_compensation")],
+    servicePrices,
+    compensationRules: [compensationRule("commission")],
+  });
+
+  assert.deepEqual({
+    total: voucherResult.totalAmountCents,
+    realized: voucherResult.realizedAmountCents,
+    received: voucherResult.receivedAmountCents,
+    cash: voucherResult.cashAmountCents,
+    card: voucherResult.cardAmountCents,
+    voucher: voucherResult.voucherAmountCents,
+    gift: voucherResult.giftAmountCents,
+    barber: voucherResult.barberAmountCents,
+    establishment: voucherResult.establishmentAmountCents,
+    commission: voucherResult.commissionAmountCents,
+  }, {
+    total: 2500,
+    realized: 2500,
+    received: 0,
+    cash: 0,
+    card: 0,
+    voucher: 2500,
+    gift: 0,
+    barber: 1000,
+    establishment: 1500,
+    commission: 1000,
+  });
+  assert.deepEqual(
+    [voucherResult.barberAmountCents, voucherResult.establishmentAmountCents, voucherResult.commissionAmountCents],
+    [cashResult.barberAmountCents, cashResult.establishmentAmountCents, cashResult.commissionAmountCents],
+  );
+});
+
+test("voucher keeps chair-rent and Extra financial rules unchanged", () => {
+  const current = appointment({ paymentMethod: "voucher" });
+  const result = calculateAppointmentFinancials({
+    appointment: current,
+    appointmentExtras: [
+      extra(current.id, 1000, "barber", { position: 0 }),
+      extra(current.id, 500, "establishment", { position: 1 }),
+    ],
+    servicePrices,
+    compensationRules: [compensationRule("chair_rent")],
+  });
+
+  assert.deepEqual({
+    total: result.totalAmountCents,
+    voucher: result.voucherAmountCents,
+    received: result.receivedAmountCents,
+    realized: result.realizedAmountCents,
+    barber: result.barberAmountCents,
+    establishment: result.establishmentAmountCents,
+    chairRent: result.chairRentAmountCents,
+  }, {
+    total: 3000,
+    voucher: 3000,
+    received: 0,
+    realized: 3000,
+    barber: 2000,
+    establishment: 1000,
+    chairRent: 500,
+  });
+});
+
 test("integer-cent rounding preserves every cent across multiple percentage lines", () => {
   const current = appointment({ serviceId: 21 });
   const result = calculateAppointmentFinancials({

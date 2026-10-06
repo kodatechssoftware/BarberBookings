@@ -175,6 +175,13 @@ type DashboardData = {
     cancellations: number;
     noShows: number;
     revenueCents: number;
+    nominalCompletedCents: number;
+    receivedCents: number;
+    cashCents: number;
+    cardCents: number;
+    voucherCents: number;
+    giftCents: number;
+    pendingPaymentCents: number;
     projectedRevenueCents: number;
     extrasRevenueCents: number;
     barberRevenueCents: number;
@@ -593,6 +600,43 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
             </p>
             <p className="mt-2 text-2xl font-bold text-rose-300">{data.summary.noShows}</p>
             <p className="mt-1 text-xs text-gray-400">{data.summary.noShowRate}% de risco registado</p>
+          </div>
+        </div>
+
+        <div className="space-y-3" data-testid="dashboard-payment-breakdown">
+          <div>
+            <h3 className="font-semibold text-white">Pagamentos das marcações concluídas</h3>
+            <p className="mt-1 text-xs text-gray-400">
+              O Vale/Cupão preserva o valor nominal e os acertos, mas não conta como dinheiro recebido no momento.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            {[
+              ["Valor nominal", data.summary.nominalCompletedCents],
+              ["Dinheiro", data.summary.cashCents],
+              ["Multibanco", data.summary.cardCents],
+              ["Vale/Cupão", data.summary.voucherCents],
+              ["Oferta", data.summary.giftCents],
+              ["Por confirmar", data.summary.pendingPaymentCents],
+            ].map(([label, amount]) => (
+              <div key={String(label)} className="rounded-xl border border-white/10 bg-background/60 p-3">
+                <p className="text-xs uppercase tracking-wider text-gray-500">{label}</p>
+                <p className="mt-2 text-lg font-bold text-white">{formatCents(Number(amount))}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              ["Valor realizado", data.summary.revenueCents],
+              ["Parte dos barbeiros", data.summary.barberRevenueCents],
+              ["Parte do estabelecimento", data.summary.establishmentRevenueCents],
+              ["Comissões", data.summary.commissionCents],
+            ].map(([label, amount]) => (
+              <div key={String(label)} className="rounded-xl border border-white/10 bg-background/60 p-3">
+                <p className="text-xs uppercase tracking-wider text-gray-500">{label}</p>
+                <p className="mt-2 text-lg font-bold text-white">{formatCents(Number(amount))}</p>
+              </div>
+            ))}
           </div>
         </div>
 

@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, Gift, Loader2, type LucideIcon } from "lucide-react";
+import { Banknote, CreditCard, Gift, Loader2, Ticket, type LucideIcon } from "lucide-react";
 import type { AppointmentPaymentMethod } from "@shared/schema";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +21,12 @@ export const appointmentPaymentOptions: Array<{
     label: "Multibanco",
     description: "Conta como valor recebido por cartão ou MB.",
     icon: CreditCard,
+  },
+  {
+    value: "voucher",
+    label: "Vale/Cupão",
+    description: "Cobre o valor total sem reduzir o valor nominal nem a remuneração.",
+    icon: Ticket,
   },
   {
     value: "gift",
