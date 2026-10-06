@@ -1718,32 +1718,16 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/locations", async (req, res) => {
+  app.get("/api/locations", async (_req, res) => {
     const locations = await listLocations(false);
     const visibleLocations = MULTI_LOCATION_CONFIG.enabled
       ? locations
       : locations.filter((location) => location.isDefault);
 
-    if (req.query.purpose !== "booking") {
-      return res.json(visibleLocations);
-    }
-
-    const [barbers, services, assignments] = await Promise.all([storage.getBarbers(), storage.getServices(), storage.getAllBarberServices()]);
-    const barberServices = buildBarberServiceMap(assignments);
-    const visibleBarberIds = new Set(barbers.filter((barber) => barber.isVisible).map((barber) => barber.id));
-    const visibleServiceIds = new Set(services.filter((service) => service.isVisible).map((service) => service.id));
-    const bookableLocations = [];
-    for (const location of visibleLocations) {
-      const [barberIds, serviceIds] = await Promise.all([
-        getBarberIdsForLocation(location.id),
-        getServiceIdsForLocation(location.id),
-      ]);
-      const usableServices = serviceIds.filter((id) => visibleServiceIds.has(id));
-      const hasCompatiblePair = barberIds.some((id) => visibleBarberIds.has(id)
-        && usableServices.some((serviceId) => barberCanPerformService(barberServices, id, serviceId)));
-      if (hasCompatiblePair) bookableLocations.push(location);
-    }
-    return res.json(bookableLocations);
+    // The location is the first public-booking context. Keep every active shop
+    // visible here and let its own catalogue show a clear empty state instead
+    // of silently falling back to another shop or hiding the location.
+    return res.json(visibleLocations);
   });
 
   app.use("/api", async (req, res, next) => {

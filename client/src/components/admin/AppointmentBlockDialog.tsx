@@ -36,6 +36,7 @@ import {
   type PhoneCountryCode,
 } from "@shared/phone-countries";
 import type { ExtraDefinition } from "@shared/schema";
+import type { ShopLocation } from "@shared/locations";
 
 type AppointmentBlockBarberOption = {
   id: number;
@@ -67,6 +68,11 @@ type AppointmentBlockDialogProps = {
   onSubmit: () => void;
   isSubmitting?: boolean;
   locationLogoUrl?: string | null;
+  locations?: ShopLocation[];
+  showLocationSelector?: boolean;
+  onLocationChange?: (locationId: number) => void;
+  isLoadingLocationData?: boolean;
+  hasLocationDataError?: boolean;
 };
 
 export function AppointmentBlockDialog({
@@ -87,6 +93,11 @@ export function AppointmentBlockDialog({
   onSubmit,
   isSubmitting = false,
   locationLogoUrl,
+  locations = [],
+  showLocationSelector = false,
+  onLocationChange,
+  isLoadingLocationData = false,
+  hasLocationDataError = false,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
@@ -251,6 +262,49 @@ export function AppointmentBlockDialog({
 
               {blockData.isManualBooking && (
                 <div className="mt-4 grid gap-3">
+                  {showLocationSelector && (
+                    <div className="space-y-2 rounded-xl border border-primary/20 bg-background/60 px-3 py-3">
+                      <Label htmlFor="manual-booking-location" className="text-sm font-medium text-gray-200">
+                        Localização
+                      </Label>
+                      <Select
+                        value={blockData.locationId ? String(blockData.locationId) : ""}
+                        disabled={isSubmitting}
+                        onValueChange={(value) => onLocationChange?.(Number(value))}
+                      >
+                        <SelectTrigger
+                          id="manual-booking-location"
+                          data-testid="manual-booking-location"
+                          className="h-12 rounded-xl border-white/10 bg-card text-white"
+                        >
+                          <SelectValue placeholder="Selecione a localização" />
+                        </SelectTrigger>
+                        <SelectContent className="border-white/10 bg-card text-white">
+                          {locations.map((location) => (
+                            <SelectItem key={location.id} value={String(location.id)}>
+                              {location.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500">
+                        Os barbeiros, serviços, Extras e horários abaixo pertencem a esta localização.
+                      </p>
+                    </div>
+                  )}
+
+                  {isLoadingLocationData && (
+                    <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs text-primary">
+                      A atualizar os dados desta localização...
+                    </div>
+                  )}
+
+                  {hasLocationDataError && (
+                    <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                      Não foi possível carregar os dados desta localização. Tente mudar novamente ou reabra a marcação.
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>
                       <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
@@ -259,6 +313,7 @@ export function AppointmentBlockDialog({
                     <Switch
                       id="outsideHours"
                       checked={blockData.allowOutsideHours}
+                      disabled={isLoadingLocationData || hasLocationDataError}
                       onCheckedChange={(checked) => onBlockDataChange({
                         ...blockData,
                         allowOutsideHours: checked,
@@ -279,7 +334,7 @@ export function AppointmentBlockDialog({
                     <Switch
                       id="specialTerms"
                       checked={blockData.hasSpecialTerms}
-                      disabled={blockData.isRecurring}
+                      disabled={blockData.isRecurring || isLoadingLocationData || hasLocationDataError}
                       onCheckedChange={(checked) => onBlockDataChange({
                         ...blockData,
                         hasSpecialTerms: checked,
@@ -302,6 +357,7 @@ export function AppointmentBlockDialog({
                     <Switch
                       id="recurring"
                       checked={blockData.isRecurring}
+                      disabled={isLoadingLocationData || hasLocationDataError}
                       onCheckedChange={(checked) => onBlockDataChange({
                         ...blockData,
                         date: checked && blockData.date < today ? today : blockData.date,
@@ -410,8 +466,12 @@ export function AppointmentBlockDialog({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-3">
                 <Label className="text-sm font-medium text-gray-300">Barbeiro</Label>
-                <Select value={blockData.barberId} onValueChange={(value) => onBlockDataChange({ ...blockData, barberId: value })}>
-                  <SelectTrigger className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
+                <Select
+                  value={blockData.barberId}
+                  disabled={isLoadingLocationData || hasLocationDataError}
+                  onValueChange={(value) => onBlockDataChange({ ...blockData, barberId: value })}
+                >
+                  <SelectTrigger data-testid="manual-booking-barber" className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
                     <SelectValue placeholder="Selecione" />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-white/10 text-white">
@@ -420,6 +480,9 @@ export function AppointmentBlockDialog({
                     ))}
                   </SelectContent>
                 </Select>
+                {blockData.isManualBooking && !isLoadingLocationData && !hasLocationDataError && barbers?.length === 0 && (
+                  <p className="text-xs text-red-300">Esta localização não tem barbeiros ativos disponíveis.</p>
+                )}
               </div>
 
               {blockData.isManualBooking && (
@@ -428,6 +491,7 @@ export function AppointmentBlockDialog({
                   {blockData.serviceMode === "existing" ? (
                     <Select
                       value={blockData.serviceId}
+                      disabled={isLoadingLocationData || hasLocationDataError}
                       onValueChange={(value) => {
                         const service = manualBookingServices.find((candidate) => String(candidate.id) === value);
                         onBlockDataChange({
@@ -439,7 +503,7 @@ export function AppointmentBlockDialog({
                         });
                       }}
                     >
-                      <SelectTrigger className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
+                      <SelectTrigger data-testid="manual-booking-service" className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
                         <SelectValue placeholder="Selecione" />
                       </SelectTrigger>
                       <SelectContent className="bg-card border-white/10 text-white">
@@ -507,7 +571,7 @@ export function AppointmentBlockDialog({
                       variant={blockData.times.includes(time) ? "gold" : "outline"}
                       size="sm"
                       className="h-11 rounded-lg text-xs disabled:border-white/5 disabled:bg-black/20 disabled:text-gray-600 disabled:opacity-100 sm:h-10"
-                      disabled={!isAvailable}
+                      disabled={!isAvailable || isLoadingLocationData || hasLocationDataError}
                       aria-pressed={blockData.times.includes(time)}
                       data-availability={isAvailable ? "available" : "unavailable"}
                       title={isAvailable ? undefined : "Indisponível"}
@@ -945,6 +1009,8 @@ export function AppointmentBlockDialog({
             className="h-12 w-full rounded-xl text-base font-bold"
             disabled={
               isSubmitting ||
+              isLoadingLocationData ||
+              hasLocationDataError ||
               isCheckingAvailability ||
               !blockData.barberId ||
               blockData.times.length === 0 ||

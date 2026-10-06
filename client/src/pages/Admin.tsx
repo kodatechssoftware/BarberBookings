@@ -6,7 +6,7 @@ import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
 import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
-import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
+import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { useExtras } from "@/hooks/use-extras";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -1495,6 +1495,7 @@ export default function Admin() {
   const deletingExpenseIdRef = useRef<number | null>(null);
   const businessDashboardRef = useRef<HTMLDivElement>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
+  const activeLocationId = useActiveLocationId();
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
     enabled: user?.authorized === true,
@@ -1536,7 +1537,7 @@ export default function Admin() {
   // existing agenda and normal polling behaviour; errors also release the gate.
   const isLoadingAgenda = isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices;
   const { data: blacklistEntries } = useQuery<any[]>({ 
-    queryKey: ["/api/admin/blacklist"],
+    queryKey: ["/api/admin/blacklist", { locationId: activeLocationId }],
     enabled: user?.role === "admin"
   });
   const { data: auditLogs, isLoading: isLoadingAuditLogs } = useQuery<AuditLogItem[]>({
@@ -1547,7 +1548,6 @@ export default function Admin() {
   const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
   const bookingSlotIntervalMinutes = multiLocationConfig?.bookingSlotIntervalMinutes
     ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
-  const activeLocationId = useActiveLocationId();
   const { data: availableLocations = [] } = useQuery<ShopLocation[]>({
     queryKey: ["/api/account/locations"],
     enabled: user?.authorized === true,
@@ -1555,6 +1555,16 @@ export default function Admin() {
   const activeLocation = availableLocations.find((location) => location.id === activeLocationId)
     ?? availableLocations.find((location) => location.isDefault)
     ?? availableLocations[0];
+  const activeBookingLocations = useMemo(
+    () => availableLocations.filter((location) => location.isActive),
+    [availableLocations],
+  );
+  const preferredManualBookingLocation = activeBookingLocations.find((location) => location.id === activeLocationId)
+    ?? activeBookingLocations.find((location) => location.isDefault)
+    ?? activeBookingLocations[0];
+  const showManualBookingLocationSelector = Boolean(
+    multiLocationConfig?.enabled && activeBookingLocations.length >= 2,
+  );
   useEffect(() => {
     if (!multiLocationConfig?.enabled || !activeLocation) return;
     if (availableLocations.some((location) => location.id === activeLocationId)) return;
@@ -1706,6 +1716,7 @@ export default function Admin() {
   const [isSubmittingBlock, setIsSubmittingBlock] = useState(false);
   const [blockAvailabilitySession, setBlockAvailabilitySession] = useState(0);
   const [blockData, setBlockData] = useState<AppointmentBlockData>({
+    locationId: activeLocationId,
     barberId: "",
     serviceId: "",
     serviceMode: "existing",
@@ -1731,6 +1742,62 @@ export default function Admin() {
     recurringMonths: "6",
   });
   const [manualBookingCompletionNow, setManualBookingCompletionNow] = useState(() => Date.now());
+  const blockLocationId = blockData.isManualBooking
+    ? (blockData.locationId ?? preferredManualBookingLocation?.id ?? activeLocationId)
+    : activeLocationId;
+  const blockLocation = availableLocations.find((location) => location.id === blockLocationId)
+    ?? (blockData.isManualBooking ? undefined : activeLocation);
+  const usesIndependentManualLocationData = Boolean(
+    blockData.isManualBooking
+    && (showManualBookingLocationSelector || blockLocationId !== activeLocationId),
+  );
+  const shouldLoadManualLocationData = Boolean(
+    user?.role === "admin" && isBlocking && usesIndependentManualLocationData && blockLocationId,
+  );
+  const manualLocationBarbersQuery = useBarbers({
+    enabled: shouldLoadManualLocationData,
+    includeHidden: true,
+    locationId: blockLocationId ?? undefined,
+  });
+  const manualLocationServicesQuery = useServices({
+    enabled: shouldLoadManualLocationData,
+    includeHidden: true,
+    locationId: blockLocationId ?? undefined,
+  });
+  const manualLocationBarberAvailabilityQuery = useBarberAvailability({
+    enabled: shouldLoadManualLocationData,
+    locationId: blockLocationId ?? undefined,
+  });
+  const manualLocationShopAvailabilityQuery = useShopAvailability({
+    enabled: shouldLoadManualLocationData,
+    locationId: blockLocationId ?? null,
+  });
+  const manualLocationBlacklistQuery = useQuery<any[]>({
+    queryKey: ["/api/admin/blacklist", { locationId: blockLocationId }],
+    enabled: shouldLoadManualLocationData,
+    queryFn: async () => {
+      const response = await apiFetch("/api/admin/blacklist", {
+        headers: locationHeaders(blockLocationId),
+      });
+      if (!response.ok) throw new Error("Não foi possível carregar a blacklist desta localização.");
+      return response.json();
+    },
+  });
+  const manualLocationBarbers = useMemo(
+    () => (manualLocationBarbersQuery.data || []).filter((barber) => barber.isVisible !== false),
+    [manualLocationBarbersQuery.data],
+  );
+  const blockBarbers = usesIndependentManualLocationData ? manualLocationBarbers : activeBarbers;
+  const blockServices = usesIndependentManualLocationData ? manualLocationServicesQuery.data : services;
+  const blockAvailabilityRows = usesIndependentManualLocationData
+    ? manualLocationBarberAvailabilityQuery.data
+    : allAvailabilityRows;
+  const blockShopAvailabilityRows = usesIndependentManualLocationData
+    ? manualLocationShopAvailabilityQuery.data
+    : shopAvailabilityRows;
+  const manualBookingBlacklistEntries = usesIndependentManualLocationData
+    ? manualLocationBlacklistQuery.data
+    : blacklistEntries;
   const blockAppointmentDate = format(blockData.date, "yyyy-MM-dd");
   const {
     data: blockAppointments,
@@ -1739,6 +1806,7 @@ export default function Admin() {
     scope: "busy",
     date: blockAppointmentDate,
     barberId: blockData.barberId || undefined,
+    locationId: blockLocationId ?? undefined,
     cacheVersion: blockAvailabilitySession,
     refetchInterval: 10000,
   });
@@ -1750,12 +1818,31 @@ export default function Admin() {
   const {
     data: extraDefinitions = [],
     isLoading: isLoadingExtraDefinitions,
+    isFetching: isFetchingExtraDefinitions,
+    isError: isExtraDefinitionsError,
   } = useExtras({
     enabled: user?.role === "admin" && isBlocking && blockData.isManualBooking,
+    locationId: blockLocationId ?? undefined,
   });
   const activeManualBookingExtras = useMemo(
     () => extraDefinitions.filter((extra) => extra.isActive),
     [extraDefinitions],
+  );
+  const isLoadingManualBookingLocationData = shouldLoadManualLocationData && (
+    manualLocationBarbersQuery.isFetching
+    || manualLocationServicesQuery.isFetching
+    || manualLocationBarberAvailabilityQuery.isFetching
+    || manualLocationShopAvailabilityQuery.isFetching
+    || manualLocationBlacklistQuery.isFetching
+    || isFetchingExtraDefinitions
+  );
+  const hasManualBookingLocationDataError = shouldLoadManualLocationData && (
+    manualLocationBarbersQuery.isError
+    || manualLocationServicesQuery.isError
+    || manualLocationBarberAvailabilityQuery.isError
+    || manualLocationShopAvailabilityQuery.isError
+    || manualLocationBlacklistQuery.isError
+    || isExtraDefinitionsError
   );
 
   const [loginData, setLoginData] = useState({ username: "", password: "" });
@@ -1800,6 +1887,7 @@ export default function Admin() {
     setPendingManualBookingBlacklistWarning(null);
     setBlockData((current) => ({
       ...current,
+      locationId: activeLocationId,
       barberId: "",
       serviceId: "",
       serviceMode: "existing",
@@ -2179,6 +2267,9 @@ export default function Admin() {
     ) ? [time] : [];
     setBlockData((current) => ({
       ...current,
+      locationId: mode === "manual"
+        ? (preferredManualBookingLocation?.id ?? activeLocationId)
+        : activeLocationId,
       barberId: barberId || current.barberId,
       serviceId: "",
       serviceMode: "existing",
@@ -2228,6 +2319,30 @@ export default function Admin() {
 
   const openManualBookingAtSlot = (date: Date, time: string, barberId?: number) => {
     openScheduleBlockDialog("manual", barberId ? String(barberId) : getAgendaSelectedBarberId(), date, time);
+  };
+
+  const handleManualBookingLocationChange = (locationId: number) => {
+    if (blockData.locationId === locationId) return;
+    setPendingManualBookingBlacklistWarning(null);
+    setBlockAvailabilitySession((current) => current + 1);
+    setBlockData((current) => ({
+      ...current,
+      locationId,
+      barberId: "",
+      serviceId: "",
+      serviceMode: "existing",
+      customServiceName: "",
+      customDurationMinutes: "30",
+      existingServicePrice: "",
+      customServicePrice: "",
+      extras: [],
+      times: [],
+      allowOutsideHours: false,
+      hasSpecialTerms: false,
+      isAlreadyCompleted: false,
+      paymentMethod: "pending",
+      isRecurring: false,
+    }));
   };
 
   const handleMoveAppointment = async (appointmentId: number, date: Date, time: string, barberId?: number) => {
@@ -2805,7 +2920,7 @@ export default function Admin() {
     const day = date.getDay();
     return periodsForShop({
       dayOfWeek: day,
-      shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+      shopAvailabilityRows: (blockShopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
     }).length === 0;
   };
 
@@ -2819,23 +2934,23 @@ export default function Admin() {
       ? getEffectivePeriodsForBarber({
           barberId: Number(barberId),
           dayOfWeek: day,
-          shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
-          availabilityRows: (allAvailabilityRows as AvailabilityRow[] | undefined) ?? [],
+          shopAvailabilityRows: (blockShopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+          availabilityRows: (blockAvailabilityRows as AvailabilityRow[] | undefined) ?? [],
         })
       : periodsForShop({
           dayOfWeek: day,
-          shopAvailabilityRows: (shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
+          shopAvailabilityRows: (blockShopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
         });
 
     return periods.some((period: any) => startMinutes >= period.start && endMinutes <= period.end);
   };
 
-  const selectedBlockBarber = barbers?.find((barber) => String(barber.id) === blockData.barberId);
+  const selectedBlockBarber = blockBarbers.find((barber) => String(barber.id) === blockData.barberId);
   const manualBookingServices = useMemo(() => {
-    const serviceList = (services || []).filter((service) => service.isVisible !== false);
+    const serviceList = (blockServices || []).filter((service) => service.isVisible !== false);
     if (!blockData.barberId) return serviceList;
     return serviceList.filter((service) => canBarberPerformService(selectedBlockBarber, service.id));
-  }, [blockData.barberId, selectedBlockBarber, services]);
+  }, [blockData.barberId, blockServices, selectedBlockBarber]);
 
   useEffect(() => {
     if (!blockData.isManualBooking || blockData.serviceMode !== "existing" || !blockData.serviceId) return;
@@ -2854,7 +2969,7 @@ export default function Admin() {
       ? parsedCustomBlockDuration
       : 30
     : blockData.isManualBooking && blockData.serviceId
-      ? services?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
+      ? blockServices?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
       : 30;
 
   const manualBookingTimeOptions = useMemo(() => [
@@ -2875,9 +2990,9 @@ export default function Admin() {
     intervalMinutes: bookingSlotIntervalMinutes,
   }), [bookingSlotIntervalMinutes]);
 
-  const activeLocationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
+  const blockLocationTimeZone = blockLocation?.timezone || "Europe/Lisbon";
   const createBlockStartTime = (date: Date, timeStr: string) =>
-    calendarTimeInTimeZone(date, timeStr, activeLocationTimeZone);
+    calendarTimeInTimeZone(date, timeStr, blockLocationTimeZone);
   const canCreateManualBookingAsCompleted = Boolean(
     blockData.isManualBooking &&
     !blockData.isRecurring &&
@@ -2953,18 +3068,18 @@ export default function Admin() {
       });
     });
   }, [
-    allAvailabilityRows,
+    blockAvailabilityRows,
     blockAppointmentList,
     blockData.barberId,
     blockData.date,
     blockData.allowOutsideHours,
     blockData.isManualBooking,
-    activeLocationTimeZone,
+    blockLocationTimeZone,
     hasLoadedBlockAppointments,
     manualBookingOutsideHoursTimeOptions,
     manualBookingTimeOptions,
     selectedBlockDuration,
-    shopAvailabilityRows,
+    blockShopAvailabilityRows,
   ]);
   const availableBlockTimesKey = availableBlockTimes.join("|");
   const selectedBlockTimesKey = blockData.times.join("|");
@@ -2994,7 +3109,7 @@ export default function Admin() {
     const phone = normalizeSupportedPhone(blockData.phone);
     const email = normalizeEmail(blockData.email);
 
-    return blacklistEntries?.find((entry: any) => (
+    return manualBookingBlacklistEntries?.find((entry: any) => (
       (phone && supportedPhonesMatch(entry.phone, phone)) ||
       (email && normalizeEmail(entry.email) === email)
     )) || null;
@@ -3002,6 +3117,19 @@ export default function Admin() {
 
   const handleBlockTime = async (options?: { skipBlacklistCheck?: boolean }) => {
     if (blockSubmissionRef.current) return;
+
+    if (blockData.isManualBooking && (!blockLocationId || !blockLocation?.isActive)) {
+      toast({ title: "Erro", description: "Selecione uma localização ativa.", variant: "destructive" });
+      return;
+    }
+    if (blockData.isManualBooking && (isLoadingManualBookingLocationData || hasManualBookingLocationDataError)) {
+      toast({
+        title: "Dados da localização indisponíveis",
+        description: "Aguarde pelo carregamento ou tente novamente antes de criar a marcação.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (!blockData.barberId) {
       toast({ title: "Erro", description: "Selecione um barbeiro.", variant: "destructive" });
@@ -3146,7 +3274,7 @@ export default function Admin() {
           isAlreadyCompleted: false,
           paymentMethod: "pending",
           hasSpecialTerms: false,
-        });
+        }, { headers: locationHeaders(blockLocationId) });
       } else {
         let datesToBlock = [blockData.date];
         if (blockData.isMultiDay && blockData.endDate > blockData.date) {
@@ -3194,7 +3322,7 @@ export default function Admin() {
             paymentMethod: blockData.isAlreadyCompleted ? blockData.paymentMethod : "pending",
           } : {}),
           ...(blockData.isManualBooking ? { extras: appointmentExtraInputs } : {}),
-        });
+        }, { headers: locationHeaders(blockLocationId) });
       }
       
       toast({ title: "Sucesso", description: "Registo(s) processado(s) com sucesso." });
@@ -3259,7 +3387,12 @@ export default function Admin() {
     setIsResolvingManualBookingBlacklistWarning(true);
     try {
       if (options?.removeFromBlacklist) {
-        await apiRequest("DELETE", `/api/admin/blacklist/${pendingWarning.entryId}`);
+        await apiRequest(
+          "DELETE",
+          `/api/admin/blacklist/${pendingWarning.entryId}`,
+          undefined,
+          { headers: locationHeaders(blockLocationId) },
+        );
         refreshBlacklistData();
       }
 
@@ -3847,7 +3980,7 @@ export default function Admin() {
               }));
             }
           }}
-          barbers={activeBarbers}
+          barbers={blockBarbers}
           manualBookingServices={manualBookingServices}
           extras={activeManualBookingExtras}
           isLoadingExtras={isLoadingExtraDefinitions}
@@ -3861,7 +3994,12 @@ export default function Admin() {
           canCreateAsCompleted={canCreateManualBookingAsCompleted}
           onSubmit={handleBlockTime}
           isSubmitting={isSubmittingBlock}
-          locationLogoUrl={activeLocation?.logoUrl}
+          locationLogoUrl={blockLocation?.logoUrl}
+          locations={activeBookingLocations}
+          showLocationSelector={showManualBookingLocationSelector}
+          onLocationChange={handleManualBookingLocationChange}
+          isLoadingLocationData={isLoadingManualBookingLocationData}
+          hasLocationDataError={hasManualBookingLocationDataError}
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">

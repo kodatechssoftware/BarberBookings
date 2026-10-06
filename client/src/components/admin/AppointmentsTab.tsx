@@ -14,6 +14,7 @@ export type AppointmentStatusFilter = AppointmentStatus | "all";
 export type AppointmentViewMode = "day" | "upcoming";
 
 export type AppointmentBlockData = {
+  locationId: number | null;
   barberId: string;
   serviceId: string;
   serviceMode: "existing" | "custom";

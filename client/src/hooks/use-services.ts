@@ -3,8 +3,9 @@ import { api, type CreateServiceRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
-export function useServices(options?: { enabled?: boolean; includeHidden?: boolean }) {
-  const locationId = useActiveLocationId();
+export function useServices(options?: { enabled?: boolean; includeHidden?: boolean; locationId?: number }) {
+  const activeLocationId = useActiveLocationId();
+  const locationId = options?.locationId ?? activeLocationId;
   return useQuery({
     queryKey: [api.services.list.path, { includeHidden: options?.includeHidden ?? false, locationId }],
     enabled: options?.enabled ?? true,

@@ -427,15 +427,19 @@ async function clickFirstEnabledManualTime(dialog: Locator, excludedTimes: strin
 
 test.describe("public booking flow", () => {
   test("completes a real customer booking and cancellation through the UI", async ({ page, request }) => {
-    const [barbersResponse, servicesResponse] = await Promise.all([
+    const [barbersResponse, servicesResponse, locationsResponse] = await Promise.all([
       request.get("/api/barbers"),
       request.get("/api/services"),
+      request.get("/api/locations?purpose=booking"),
     ]);
     expect(barbersResponse.ok()).toBe(true);
     expect(servicesResponse.ok()).toBe(true);
+    expect(locationsResponse.ok()).toBe(true);
 
     const barbers = await barbersResponse.json();
     const services = await servicesResponse.json();
+    const locations = await locationsResponse.json();
+    expect(locations).toHaveLength(1);
     const barber = barbers.find((item: any) =>
       item.isVisible !== false && services.some((service: any) =>
         !Array.isArray(item.serviceIds) || item.serviceIds.length === 0 || item.serviceIds.includes(service.id),
@@ -468,6 +472,7 @@ test.describe("public booking flow", () => {
     const createResponse = await createResponsePromise;
     expect(createResponse.status(), await createResponse.text()).toBe(201);
     const appointment = await createResponse.json();
+    expect(appointment.locationId).toBe(locations[0].id);
     expect(appointment.whatsappOptIn).toBe(true);
     expect(appointment.whatsappOptInAt).toBeTruthy();
     await expect(page.getByRole("heading", { name: "Marcação Confirmada!" })).toBeVisible();
@@ -638,6 +643,8 @@ test.describe("public booking flow", () => {
     await page.goto("/booking");
 
     await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Mudar loja" })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
     await expectNoBrokenImages(page);
 
@@ -645,6 +652,8 @@ test.describe("public booking flow", () => {
     await page.goto("/booking");
 
     await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Mudar loja" })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
     await expectNoBrokenImages(page);
   });
@@ -1077,6 +1086,7 @@ test.describe("admin navigation", () => {
     await page.getByRole("button", { name: "Marcação manual" }).click();
     const manualDialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(manualDialog).toBeVisible();
+    await expect(manualDialog.getByTestId("manual-booking-location")).toHaveCount(0);
     const todayParts = lisbonDateTimeParts(new Date().toISOString());
     const todayLabel = `${todayParts.day}/${todayParts.month}/${todayParts.year}`;
     await expect(manualDialog.getByRole("button", { name: todayLabel, exact: true })).toBeVisible();

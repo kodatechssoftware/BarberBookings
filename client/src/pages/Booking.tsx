@@ -35,7 +35,7 @@ import {
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
 import { useLocations } from "@/hooks/use-locations";
-import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
+import { setActiveLocationId } from "@/lib/location-context";
 import {
   formatPublicBookingMonthOpeningNotice,
   getPublicBookingMonthOpeningNotice,
@@ -193,14 +193,14 @@ const saveLastBookingPreference = ({
   }
 };
 
-function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
+function getBarberAvatar(barber: { name: string; avatar?: string | null }, locationLogoUrl: string) {
   const customAvatar = barber.avatar?.trim();
   if (customAvatar) return customAvatar;
 
   const name = barber.name.toLowerCase();
   if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
   if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
-  return shopBranding.logoUrl;
+  return locationLogoUrl;
 }
 
 function getBarberAvatarFallback(barber: { name: string }) {
@@ -289,37 +289,60 @@ export default function Booking() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const { data: locations = [], isLoading: loadingLocations, isError: locationsError } = useLocations({ purpose: "booking" });
-  const activeLocationId = useActiveLocationId();
-  const activeLocation = locations.find((location) => location.id === activeLocationId);
+  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
+  const activeLocation = locations.find((location) => location.id === selectedLocationId);
+  const hasMultipleLocations = locations.length > 1;
 
   useEffect(() => {
-    if (locations.length === 1 && !activeLocation) setActiveLocationId(locations[0].id);
-  }, [locations, activeLocation]);
-
-  const previousLocationId = useRef(activeLocationId);
-  useEffect(() => {
-    const previous = previousLocationId.current;
-    previousLocationId.current = activeLocationId;
-    // Initial selection must preserve valid direct booking links and repeat-booking preferences.
-    if (previous === null || previous === activeLocationId) return;
+    if (locations.length === 1) {
+      const [onlyLocation] = locations;
+      if (selectedLocationId !== onlyLocation.id) {
+        setSelectedLocationId(onlyLocation.id);
+        setActiveLocationId(onlyLocation.id);
+      }
+      return;
+    }
+    if (selectedLocationId === null || locations.some((location) => location.id === selectedLocationId)) return;
+    setSelectedLocationId(null);
+    setActiveLocationId(null);
     setSelectedBarberId(null);
     setSelectedServiceId(null);
     setSelectedTime(null);
     setStep(1);
-  }, [activeLocationId]);
+  }, [locations, selectedLocationId]);
 
-  const { data: barbers, isLoading: loadingBarbers } = useBarbers();
-  const { data: services, isLoading: loadingServices } = useServices();
+  const selectBookingLocation = (locationId: number | null) => {
+    setSelectedBarberId(null);
+    setSelectedServiceId(null);
+    setSelectedTime(null);
+    setShowTimeError(false);
+    setStep(1);
+    setSelectedLocationId(locationId);
+    setActiveLocationId(locationId);
+  };
+  const canLoadLocationData = Boolean(activeLocation);
+  const {
+    data: barbers,
+    isLoading: loadingBarbers,
+    isFetching: fetchingBarbers,
+    isError: barbersError,
+  } = useBarbers({ enabled: canLoadLocationData, locationId: activeLocation?.id });
+  const {
+    data: services,
+    isLoading: loadingServices,
+    isFetching: fetchingServices,
+    isError: servicesError,
+  } = useServices({ enabled: canLoadLocationData, locationId: activeLocation?.id });
   const {
     data: availabilityRows,
     isLoading: loadingAvailability,
     isError: availabilityError,
-  } = useBarberAvailability();
+  } = useBarberAvailability({ locationId: activeLocation?.id, enabled: canLoadLocationData });
   const {
     data: shopAvailabilityRows,
     isLoading: loadingShopAvailability,
     isError: shopAvailabilityError,
-  } = useShopAvailability();
+  } = useShopAvailability({ locationId: activeLocation?.id ?? null, enabled: canLoadLocationData });
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const {
     data: runtimeConfig,
@@ -333,7 +356,7 @@ export default function Booking() {
     setSelectedTime(null);
     setStep((currentStep) => Math.min(currentStep, 3));
   }, [bookingSlotIntervalMinutes, runtimeConfig, selectedTime]);
-  const createAppointment = useCreateAppointment();
+  const createAppointment = useCreateAppointment({ locationId: activeLocation?.id });
   const maxPublicBookingDate = useMemo(
     () => parseDateParam(publicBookingWindow?.maxDate ?? null),
     [publicBookingWindow?.maxDate],
@@ -344,6 +367,14 @@ export default function Booking() {
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
   const locationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
+  useEffect(() => {
+    if (!activeLocation || !barbers || selectedBarberId === null || selectedBarberId === 0) return;
+    if (visibleBarbers.some((barber) => barber.id === selectedBarberId)) return;
+    setSelectedBarberId(null);
+    setSelectedServiceId(null);
+    setSelectedTime(null);
+    setStep(1);
+  }, [activeLocation, barbers, selectedBarberId, visibleBarbers]);
   const availableServices = useMemo(() => {
     if (selectedBarberId && selectedBarberId !== 0) {
       return visibleServices.filter((service) => canBarberPerformService(selectedBarber, service.id));
@@ -399,6 +430,7 @@ export default function Booking() {
     isLoading: loadingBookingWindowAppointments,
     isError: bookingWindowAppointmentsError,
   } = usePublicAppointments({
+    locationId: activeLocation?.id,
     barberId: selectedBarberId === 0 ? undefined : selectedBarberId?.toString(),
     startDate: publicBookingWindow?.today,
     endDate: publicBookingWindow?.maxDate,
@@ -412,6 +444,7 @@ export default function Booking() {
     isLoading: loadingSelectedDateAppointments,
     isError: selectedDateAppointmentsError,
   } = usePublicAppointments({
+    locationId: activeLocation?.id,
     barberId: selectedBarberId === 0 ? undefined : selectedBarberId?.toString(),
     date: selectedDate && isPublicDateAllowed(selectedDate) ? format(selectedDate, "yyyy-MM-dd") : undefined,
     enabled: step === 3
@@ -580,7 +613,7 @@ export default function Booking() {
   ]);
 
   const initialAvailabilitySelectionKey = [
-    activeLocationId,
+    activeLocation?.id,
     selectedBarberId,
     selectedServiceId,
     publicBookingWindow?.today,
@@ -588,9 +621,9 @@ export default function Booking() {
   ].join(":");
   const completedInitialAvailabilityKey = useRef<string | null>(null);
   const failedInitialAvailabilityKey = useRef<string | null>(null);
-  const loadingInitialAvailability = loadingBarbers || loadingServices || loadingAvailability
+  const loadingInitialAvailability = loadingBarbers || fetchingBarbers || loadingServices || fetchingServices || loadingAvailability
     || loadingShopAvailability || loadingPublicBookingWindow || loadingRuntimeConfig || loadingBookingWindowAppointments;
-  const initialAvailabilityHasError = availabilityError || shopAvailabilityError
+  const initialAvailabilityHasError = barbersError || servicesError || availabilityError || shopAvailabilityError
     || runtimeConfigError || bookingWindowAppointmentsError;
   const firstAvailableDate = useMemo(() => {
     if (!bookingWindowStart || !maxPublicBookingDate || !selectedService || selectedBarberId === null
@@ -656,7 +689,7 @@ export default function Booking() {
   const handleBack = () => setStep(prev => prev - 1);
 
   const handleSubmit = async () => {
-    if (selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime) {
+    if (!activeLocation || selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime) {
       toast({ title: "Erro", description: "Confirme barbeiro, serviço, data e hora.", variant: "destructive" });
       return;
     }
@@ -728,7 +761,7 @@ export default function Booking() {
     </div>;
   }
 
-  if (locations.length > 1 && !activeLocation) {
+  if (hasMultipleLocations && !activeLocation) {
     return (
       <div className="min-h-screen bg-background px-4 py-10 text-white">
         <div className="mx-auto max-w-5xl">
@@ -737,8 +770,8 @@ export default function Booking() {
           </Button>
           <div className="mb-8 text-center">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Nova marcação</p>
-            <h1 className="mt-2 text-3xl font-display font-bold md:text-5xl">Escolhe a localização</h1>
-            <p className="mt-3 text-gray-400">Os barbeiros, serviços e horários dependem da loja escolhida.</p>
+            <h1 className="mt-2 text-3xl font-display font-bold md:text-5xl">Onde quer marcar?</h1>
+            <p className="mt-3 text-gray-400">Escolha a localização para consultar os barbeiros, serviços e horários dessa loja.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {locations.map((location) => (
@@ -747,11 +780,7 @@ export default function Booking() {
                 type="button"
                 className="min-h-40 rounded-xl border border-white/10 bg-card p-5 text-left transition hover:border-primary hover:bg-primary/5"
                 onClick={() => {
-                  setActiveLocationId(location.id);
-                  setSelectedBarberId(null);
-                  setSelectedServiceId(null);
-                  setSelectedTime(null);
-                  setStep(1);
+                  selectBookingLocation(location.id);
                 }}
               >
                 <MapPin className="mb-4 h-6 w-6 text-primary" />
@@ -827,17 +856,24 @@ export default function Booking() {
             <ChevronLeft className="w-5 h-5" />
           </Button>
           <img
-            src={shopBranding.logoUrl}
+            src={activeLocation?.logoUrl?.trim() || shopBranding.logoUrl}
             alt=""
             aria-hidden="true"
             className="h-9 w-9 shrink-0 rounded-full object-contain"
+            onError={(event) => {
+              const image = event.currentTarget;
+              if (!image.dataset.fallbackApplied) {
+                image.dataset.fallbackApplied = "true";
+                image.src = shopBranding.logoUrl;
+              }
+            }}
           />
           <div className="min-w-0 flex-1">
             <span className="font-display font-bold text-lg">Nova Marcação</span>
-            {locations.length > 1 && activeLocation && <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>{activeLocation.name}</span>}
+            {hasMultipleLocations && activeLocation && <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>{activeLocation.name}</span>}
           </div>
-          {locations.length > 1 && (
-            <Button className="shrink-0" variant="ghost" size="sm" onClick={() => setActiveLocationId(null)}>Mudar loja</Button>
+          {hasMultipleLocations && (
+            <Button className="shrink-0" variant="ghost" size="sm" onClick={() => selectBookingLocation(null)}>Mudar loja</Button>
           )}
         </div>
       </nav>
@@ -862,9 +898,17 @@ export default function Booking() {
                   <p className="text-gray-400">Escolhe com quem queres marcar.</p>
                 </div>
                 
-                {loadingBarbers ? (
+                {loadingBarbers || fetchingBarbers ? (
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 md:gap-6 lg:grid-cols-4">
                     {Array.from({ length: 4 }, (_, i) => <BarberCardSkeleton key={i} />)}
+                  </div>
+                ) : barbersError ? (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-center text-sm text-red-200">
+                    Não foi possível carregar os barbeiros desta localização. Tente novamente dentro de instantes.
+                  </div>
+                ) : visibleBarbers.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-400">
+                    Esta localização ainda não tem barbeiros disponíveis para marcação online.
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-6">
@@ -905,7 +949,10 @@ export default function Booking() {
                     </motion.div>
 
                     {visibleBarbers.map((barber) => {
-                      const avatarSrc = getBarberAvatar(barber);
+                      const avatarSrc = getBarberAvatar(
+                        barber,
+                        activeLocation?.logoUrl?.trim() || shopBranding.logoUrl,
+                      );
                       const fallbackAvatarSrc = getBarberAvatarFallback(barber);
                       return (
                         <motion.div 
@@ -972,9 +1019,13 @@ export default function Booking() {
                   <p className="text-gray-400">O que vamos fazer hoje?</p>
                 </div>
 
-                {loadingServices ? (
+                {loadingServices || fetchingServices ? (
                   <div className="mx-auto max-w-2xl space-y-3 px-1 md:space-y-4 lg:grid lg:max-w-6xl lg:grid-cols-3 lg:gap-4 lg:space-y-0">
                     {Array.from({ length: 3 }, (_, i) => <ServiceCardSkeleton key={i} />)}
+                  </div>
+                ) : servicesError ? (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-center text-sm text-red-200">
+                    Não foi possível carregar os serviços desta localização. Tente novamente dentro de instantes.
                   </div>
                 ) : (
                   <div className={hasVisibleServiceCategories
@@ -995,7 +1046,9 @@ export default function Booking() {
                       : availableServices.map(renderServiceCard)}
                     {availableServices.length === 0 && (
                       <div className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-gray-500">
-                        Este barbeiro não tem serviços disponíveis para marcação online.
+                        {visibleServices.length === 0
+                          ? "Esta localização ainda não tem serviços disponíveis para marcação online."
+                          : "Este barbeiro não tem serviços disponíveis para marcação online."}
                       </div>
                     )}
                   </div>

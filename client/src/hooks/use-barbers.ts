@@ -3,8 +3,9 @@ import { api, buildUrl, type CreateBarberRequest } from "@shared/routes";
 import { apiFetch, toApiUrl } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
-export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolean }) {
-  const locationId = useActiveLocationId();
+export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolean; locationId?: number }) {
+  const activeLocationId = useActiveLocationId();
+  const locationId = options?.locationId ?? activeLocationId;
   return useQuery({
     queryKey: [api.barbers.list.path, { includeHidden: options?.includeHidden ?? false, locationId }],
     enabled: options?.enabled ?? true,

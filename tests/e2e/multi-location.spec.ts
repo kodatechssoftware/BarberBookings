@@ -72,6 +72,9 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   const initial = await (await request.get("/api/admin/locations")).json();
   expect(initial).toHaveLength(1);
   expect(initial[0]).toMatchObject({ isDefault: true, isActive: true });
+  await page.goto("/book");
+  await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
 
   const created: any[] = [];
   for (const [name, city] of [["Porto", "Porto"], ["Braga", "Braga"], ["Coimbra", "Coimbra"]]) {
@@ -109,7 +112,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   const deactivateDefault = await request.patch(`/api/admin/locations/${initial[0].id}`, { data: { isActive: false } });
   expect(deactivateDefault.status()).toBe(409);
   expect(await (await request.get("/api/locations")).json()).toHaveLength(4);
-  expect(await (await request.get("/api/locations?purpose=booking")).json()).toHaveLength(1);
+  expect(await (await request.get("/api/locations?purpose=booking")).json()).toHaveLength(4);
   expect(await (await request.get("/api/account/locations")).json()).toHaveLength(4);
 
   const portoHeaders = { "X-Location-Id": String(created[0].id) };
@@ -153,6 +156,8 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
 
   const defaultServices = await (await request.get("/api/services")).json();
   const defaultBarbers = await (await request.get("/api/barbers")).json();
+  const defaultVisibleBarber = defaultBarbers.find((barber: any) => barber.isVisible !== false);
+  expect(defaultVisibleBarber).toBeTruthy();
   expect(defaultServices.some((service: any) => service.id === portoService.id)).toBe(false);
   expect(defaultServices.every((service: any) => service.category?.id !== portoCategory.id)).toBe(true);
   expect(defaultBarbers.some((barber: any) => barber.id === portoBarber.id)).toBe(false);
@@ -170,7 +175,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   expect(updatePortoHours.ok(), await updatePortoHours.text()).toBe(true);
   expect(await (await request.get("/api/shop/availability", { headers: portoHeaders })).json()).toMatchObject(portoHours);
   expect(await (await request.get("/api/shop/availability")).json()).not.toMatchObject(portoHours);
-  expect(await (await request.get("/api/locations?purpose=booking")).json()).toHaveLength(2);
+  expect(await (await request.get("/api/locations?purpose=booking")).json()).toHaveLength(4);
 
   const startTime = new Date(Date.now() + 14 * 86400000);
   startTime.setUTCHours(10, 0, 0, 0);
@@ -240,9 +245,10 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   await page.evaluate(() => localStorage.removeItem("barberbookings:location-id"));
-  await page.goto("/book");
-  await expect(page.getByRole("heading", { name: "Escolhe a localização" })).toBeVisible();
+  await page.goto(`/book?barberId=${portoBarber.id}&serviceId=${portoService.id}`);
+  await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toBeVisible();
   await page.getByRole("button", { name: /Loja Porto/ }).click();
+  await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
   await expect(page.getByText("Rui Porto", { exact: true })).toBeVisible();
   await expect(page.getByText("Tiago Martins", { exact: true })).not.toBeVisible();
   const changeLocation = await page.getByRole("button", { name: "Mudar loja" }).boundingBox();
@@ -251,6 +257,18 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await page.getByText("Rui Porto", { exact: true }).click();
   await page.getByRole("button", { name: "Seguinte" }).click();
   await expect(page.getByRole("heading", { name: "Categoria Porto QA", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Mudar loja" }).click();
+  await page.getByRole("button", { name: initial[0].name }).click();
+  await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+  await expect(page.getByText("Rui Porto", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(defaultVisibleBarber.name, { exact: true })).toBeVisible();
+  for (const viewport of [
+    { width: 768, height: 1024 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
   expect((await request.delete(`/api/service-categories/${portoCategory.id}`)).ok()).toBe(true);
 
   const invalidEmbed = await request.patch(`/api/admin/locations/${created[0].id}`, {
@@ -873,6 +891,13 @@ test("[multi-location] horário semanal por loja: UI, cache, público, manual e 
     day.setDate(day.getDate() + (index === 0 ? 0 : 3));
     await page.evaluate((id) => localStorage.setItem("barberbookings:location-id", String(id)), shop.id);
     await page.goto(`/book?barberId=${barber.id}&serviceId=${services[index].id}&date=${dateKey(day)}`);
+    await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toBeVisible();
+    await page.getByRole("button", { name: shop.name }).click();
+    await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+    await page.getByText(barber.name, { exact: true }).click();
+    await page.getByRole("button", { name: "Seguinte" }).click();
+    await page.getByText(services[index].name, { exact: true }).click();
+    await page.getByRole("button", { name: "Seguinte" }).click();
     await expect(page.getByRole("heading", { name: "Selecione a Data" })).toBeVisible();
     // The existing booking flow auto-selects the first available date. Select our test date afterwards.
     await page.waitForLoadState("networkidle");
@@ -1240,13 +1265,33 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await page.getByRole("tab", { name: "Agenda" }).click();
   await page.getByRole("button", { name: "Marcação manual" }).click();
   const bookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
+  await expect(bookingDialog.getByTestId("manual-booking-location")).toContainText(shopB.name);
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 768, height: 1024 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await expect.poll(async () => {
+      const dialogBounds = await bookingDialog.boundingBox();
+      return Boolean(
+        dialogBounds
+        && dialogBounds.x >= 0
+        && dialogBounds.x + dialogBounds.width <= viewport.width,
+      );
+    }).toBe(true);
+  }
   await bookingDialog.getByTestId("manual-booking-extras-trigger").click();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeVisible();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toHaveCount(0);
-  await bookingDialog.getByRole("combobox").nth(0).click();
+  await bookingDialog.getByTestId("manual-booking-barber").click();
   await page.getByRole("option", { name: barberB.name, exact: true }).click();
-  await bookingDialog.getByRole("combobox").nth(1).click();
+  await bookingDialog.getByTestId("manual-booking-service").click();
   await page.getByRole("option", { name: serviceB.name, exact: true }).click();
+  await bookingDialog.getByLabel("Nome do cliente", { exact: true }).fill("Cliente mantido entre lojas");
+  await bookingDialog.locator("#manual-booking-phone").fill("912345678");
+  await bookingDialog.getByLabel("Email (opcional)").fill("cliente-mantido@example.test");
   await bookingDialog.getByLabel("Condições especiais desta marcação").click();
   await bookingDialog.locator("#manual-booking-special-price").fill("24,00");
   await bookingDialog.getByRole("button", { name: "Serviço personalizado" }).click();
@@ -1255,23 +1300,35 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await bookingDialog.locator("#manual-booking-custom-price").fill("30,00");
   await bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`).click();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeChecked();
-  await page.evaluate((id) => {
-    localStorage.setItem("barberbookings:location-id", String(id));
-    window.dispatchEvent(new StorageEvent("storage", {
-      key: "barberbookings:location-id",
-      newValue: String(id),
-    }));
-  }, shopA.id);
+  await bookingDialog.getByTestId("manual-booking-location").click();
+  await page.getByRole("option", { name: shopA.name, exact: true }).click();
+  await expect(bookingDialog.getByTestId("manual-booking-barber")).toContainText("Selecione");
+  await expect(bookingDialog.getByTestId("manual-booking-service")).toContainText("Selecione");
+  await expect(bookingDialog.getByLabel("Nome do cliente", { exact: true })).toHaveValue("Cliente mantido entre lojas");
+  await expect(bookingDialog.locator("#manual-booking-phone")).toHaveValue("912345678");
+  await expect(bookingDialog.getByLabel("Email (opcional)")).toHaveValue("cliente-mantido@example.test");
+  await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
+  await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).not.toBeChecked();
+  await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toHaveCount(0);
+  await expect(bookingDialog.getByLabel("Condições especiais desta marcação")).not.toBeChecked();
+  await expect(bookingDialog.getByLabel("Permitir horários fora do horário normal")).not.toBeChecked();
+  await bookingDialog.getByTestId("manual-booking-location").click();
+  await page.getByRole("option", { name: shopB.name, exact: true }).click();
+  await bookingDialog.getByTestId("manual-booking-barber").click();
+  await page.getByRole("option", { name: barberB.name, exact: true }).click();
+  await bookingDialog.getByTestId("manual-booking-service").click();
+  await page.getByRole("option", { name: serviceB.name, exact: true }).click();
+  await bookingDialog.getByLabel("Permitir horários fora do horário normal").click();
+  const availableManualTime = bookingDialog.locator('button[data-availability="available"]').first();
+  await expect(availableManualTime).toBeEnabled();
+  await availableManualTime.click();
+  await bookingDialog.getByTestId("appointment-block-submit").click();
   await expect(bookingDialog).toHaveCount(0);
-  await page.getByRole("button", { name: "Marcação manual" }).click();
-  const reopenedBookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
-  await reopenedBookingDialog.getByTestId("manual-booking-extras-trigger").click();
-  await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
-  await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).not.toBeChecked();
-  await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toHaveCount(0);
-  await expect(reopenedBookingDialog.getByLabel("Condições especiais desta marcação")).not.toBeChecked();
-  await expect(reopenedBookingDialog.getByRole("combobox").nth(1)).toContainText("Selecione");
-  await reopenedBookingDialog.getByRole("button", { name: "Close" }).click();
+  const uiCreatedInB = (await (await request.get("/api/appointments", { headers: headersB })).json())
+    .find((appointment: any) => appointment.customerName === "Cliente mantido entre lojas");
+  expect(uiCreatedInB).toMatchObject({ locationId: shopB.id, barberId: barberB.id, serviceId: serviceB.id });
+  expect((await (await request.get("/api/appointments", { headers: headersA })).json())
+    .some((appointment: any) => appointment.customerName === "Cliente mantido entre lojas")).toBe(false);
 
   expect((await request.patch(`/api/appointments/${localBookingBody.appointments[0].id}/status`, {
     headers: headersB,
@@ -1387,6 +1444,18 @@ test("[multi-location] pending loader uses the appointment location logo and upd
     });
   }
 
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/book");
+  await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toBeVisible();
+  await page.getByRole("button", { name: shopA.name }).click();
+  const publicBookingLogo = page.locator("nav img").first();
+  await expect(publicBookingLogo).toHaveAttribute("src", logoA);
+  await page.getByRole("button", { name: "Mudar loja" }).click();
+  await page.getByRole("button", { name: shopB.name }).click();
+  await expect(publicBookingLogo).toHaveAttribute("src", logoB);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
   await loginAdmin(page.request);
   await page.goto("/admin");
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();

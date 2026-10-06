@@ -116,7 +116,8 @@ function appendAppointmentQuery(path: string, params?: AppointmentQueryParams) {
 }
 
 export function useAppointments(params?: AppointmentQueryParams) {
-  const locationId = useActiveLocationId();
+  const activeLocationId = useActiveLocationId();
+  const locationId = params?.locationId ?? activeLocationId;
   return useQuery<AppointmentRecord[]>({
     queryKey: [api.appointments.list.path, params, { locationId }],
     enabled: params?.enabled ?? true,
@@ -153,13 +154,16 @@ export function usePublicAppointments(params?: AppointmentQueryParams) {
   });
 }
 
-export function useCreateAppointment() {
+export function useCreateAppointment(options?: { locationId?: number }) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (data: CreateAppointmentRequest) => {
       const res = await apiFetch(api.appointments.create.path, {
         method: api.appointments.create.method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(options?.locationId === undefined ? {} : locationHeaders(options.locationId)),
+        },
         body: JSON.stringify(data),
       });
 
