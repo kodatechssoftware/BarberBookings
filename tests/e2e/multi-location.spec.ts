@@ -1207,6 +1207,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await page.getByRole("tab", { name: "Agenda" }).click();
   await page.getByRole("button", { name: "Marcação manual" }).click();
   const bookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
+  await bookingDialog.getByTestId("manual-booking-extras-trigger").click();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toBeVisible();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toHaveCount(0);
   await bookingDialog.getByRole("combobox").nth(0).click();
@@ -1231,6 +1232,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await expect(bookingDialog).toHaveCount(0);
   await page.getByRole("button", { name: "Marcação manual" }).click();
   const reopenedBookingDialog = page.getByRole("dialog", { name: "Marcação manual" });
+  await reopenedBookingDialog.getByTestId("manual-booking-extras-trigger").click();
   await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
   await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).not.toBeChecked();
   await expect(reopenedBookingDialog.getByLabel(`Selecionar Extra ${extraB.name}`)).toHaveCount(0);

@@ -709,17 +709,27 @@ test.describe.serial("manual booking Extras", () => {
     await details.getByRole("button", { name: "Editar", exact: true }).click();
     let editor = page.getByRole("dialog", { name: /Editar marca/ });
     const extrasEditor = editor.getByTestId("appointment-extras-editor");
+    const extrasEditorTrigger = editor.getByTestId("appointment-extras-editor-trigger");
+    await expect(extrasEditorTrigger).toHaveAttribute("aria-expanded", "true");
+    await expect(extrasEditorTrigger).toContainText("Extras (2 selecionados)");
     await expect(extrasEditor.getByLabel(`Selecionar Extra ${variable.name}`)).toBeChecked();
     await expect(extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`)).toBeChecked();
     await expect(extrasEditor.getByText("Inativo · pode remover, mas não voltar a adicionar")).toBeVisible();
     await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toHaveCount(0);
+    await extrasEditorTrigger.click();
+    await expect(extrasEditorTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(extrasEditorTrigger).toContainText("Extras (2 selecionados)");
+    await extrasEditorTrigger.click();
+    await expect(extrasEditor.getByLabel(`Valor do Extra ${variable.name}`)).toHaveValue("10,00");
     await extrasEditor.getByLabel(`Valor do Extra ${variable.name}`).fill("18,00");
     await extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`).click();
+    await expect(extrasEditorTrigger).toContainText("Extras (1 selecionado)");
     await expect(editor.getByTestId("appointment-edit-total")).toContainText("43,00 €");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(editor).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.getByText("Login efetuado com sucesso", { exact: true }).waitFor({ state: "hidden", timeout: 10_000 });
     await editor.screenshot({ path: "test-results/appointment-extras-editor-mobile.png" });
     await editor.getByRole("button", { name: "Guardar alterações" }).click();
     await expect(editor).not.toBeVisible();
@@ -753,7 +763,13 @@ test.describe.serial("manual booking Extras", () => {
     await page.getByRole("button", { name: "Marcação manual" }).click();
     let dialog = page.getByRole("dialog", { name: "Marcação manual" });
     const extrasSection = dialog.getByTestId("manual-booking-extras");
+    const extrasTrigger = dialog.getByTestId("manual-booking-extras-trigger");
     await expect(extrasSection).toBeVisible();
+    await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(extrasTrigger).toContainText("Extras (opcional)");
+    await expect(dialog.getByTestId("manual-booking-extras-content")).not.toBeVisible();
+    await extrasTrigger.press("Enter");
+    await expect(extrasTrigger).toHaveAttribute("aria-expanded", "true");
     await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
     await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).not.toBeChecked();
     await expect(extrasSection.getByLabel(`Selecionar Extra ${inactiveExtra.name}`)).toHaveCount(0);
@@ -761,9 +777,36 @@ test.describe.serial("manual booking Extras", () => {
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
     await extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
+    await expect(extrasTrigger).toContainText("Extras (1 selecionado)");
+    await expect(extrasTrigger).toContainText("Valor por completar");
+    await dialog.getByLabel("Nome do cliente", { exact: true }).fill(`Extra incompleto UI ${Date.now()}`);
+    await clickFirstEnabledManualTime(dialog);
+    await extrasTrigger.click();
+    await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
+    await dialog.getByRole("button", { name: "Criar marcação" }).click();
+    await expect(extrasTrigger).toHaveAttribute("aria-expanded", "true");
+    await expect(extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`)).toBeFocused();
+    await page.getByText("Valor inválido", { exact: true }).waitFor({ state: "hidden", timeout: 10_000 });
     await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
     await extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`).fill("10,00");
+    await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
+    await expect(extrasTrigger).not.toContainText("Valor por completar");
     await expect(extrasSection.getByLabel(`Valor do Extra ${specialExtra.name}`)).toHaveCount(0);
+    await extrasTrigger.click();
+    await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
+    await page.setViewportSize({ width: 820, height: 1080 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await dialog.screenshot({ path: "test-results/manual-booking-extras-collapsed-tablet.png" });
+    await extrasTrigger.click();
+    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`)).toHaveValue("10,00");
+    await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
+    await expect(extrasTrigger).toContainText("Extras (1 selecionado)");
+    await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
+    await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     let summary = dialog.getByTestId("manual-booking-summary");
     await expect(summary.getByText("Serviço", { exact: true })).toBeVisible();
@@ -802,12 +845,16 @@ test.describe.serial("manual booking Extras", () => {
     await expect(specialTermsSwitch).not.toBeChecked();
     await dialog.getByLabel("Repetir marcação").click();
     await expect(dialog.getByTestId("manual-booking-extras")).toBeVisible();
+    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
+    await dialog.getByTestId("manual-booking-extras-trigger").click();
     await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
     await expect(dialog.getByLabel(`Selecionar Extra ${specialExtra.name}`)).not.toBeChecked();
 
     await dialog.getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Marcação manual" }).click();
     dialog = page.getByRole("dialog", { name: "Marcação manual" });
+    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
+    await dialog.getByTestId("manual-booking-extras-trigger").click();
     await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
@@ -829,6 +876,9 @@ test.describe.serial("manual booking Extras", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     summary = dialog.getByTestId("manual-booking-summary");
     await expect(summary.getByText("30,00 €", { exact: true })).toBeVisible();
+    await dialog.getByTestId("manual-booking-extras-trigger").click();
+    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
+    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toContainText("Extras (2 selecionados)");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await dialog.screenshot({ path: "test-results/manual-booking-extras-mobile.png" });
     await dialog.getByRole("button", { name: "Criar marcação" }).click();
@@ -853,6 +903,7 @@ test.describe.serial("manual booking Extras", () => {
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
     await dialog.getByLabel("Condições especiais desta marcação").click();
+    await dialog.getByTestId("manual-booking-extras-trigger").click();
 
     const existingPrice = dialog.locator("#manual-booking-special-price");
     await expect(existingPrice).toHaveValue("15,00");
@@ -953,6 +1004,8 @@ test.describe.serial("manual booking Extras", () => {
     dialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(dialog.getByLabel("Condições especiais desta marcação")).not.toBeChecked();
     await expect(dialog.getByRole("combobox").nth(1)).toContainText("Selecione");
+    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
+    await dialog.getByTestId("manual-booking-extras-trigger").click();
     await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
 
     await selectDialogOption(page, dialog, 0, barber.name);
