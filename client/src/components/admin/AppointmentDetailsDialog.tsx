@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { CheckCircle, Pencil, Phone, User, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown, Pencil, Phone, User, XCircle } from "lucide-react";
 import {
   type AppointmentExtraSnapshot,
   type AppointmentPaymentMethod,
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -156,6 +157,7 @@ function EditAppointmentDialog({
   const [selectedExtras, setSelectedExtras] = useState<AppointmentExtraSelection[]>(
     () => appointmentExtraSelections(appointment),
   );
+  const [isExtrasOpen, setIsExtrasOpen] = useState(() => (appointment.extras ?? []).length > 0);
   const [allowOutsideHours, setAllowOutsideHours] = useState(Boolean(appointment.manualOutsideHours));
   const [isSaving, setIsSaving] = useState(false);
   const isSavingRef = useRef(false);
@@ -283,6 +285,15 @@ function EditAppointmentDialog({
       : parseAppointmentExtraPriceInput(selection.amountEuros);
     return total + (amount ?? existing?.amountCentsSnapshot ?? 0);
   }, 0);
+  const incompleteVariableExtra = selectedExtras.find((selection) => {
+    const definition = extraDefinitionsById.get(selection.extraId);
+    return definition?.isActive && definition.pricingMode === "variable"
+      && parseAppointmentExtraPriceInput(selection.amountEuros) === null;
+  });
+  const selectedExtrasCount = selectedExtras.length;
+  const extrasHeading = selectedExtrasCount === 0
+    ? "Extras (opcional)"
+    : `Extras (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
 
   useEffect(() => {
     if (!open) return;
@@ -312,6 +323,7 @@ function EditAppointmentDialog({
     setCustomDuration(String(appointment.durationMinutes || 30));
     setPriceValue(centsToMoneyInput(appointment.servicePriceCentsSnapshot ?? 0));
     setSelectedExtras(appointmentExtraSelections(appointment));
+    setIsExtrasOpen((appointment.extras ?? []).length > 0);
     setAllowOutsideHours(Boolean(appointment.manualOutsideHours));
   };
 
@@ -376,12 +388,11 @@ function EditAppointmentDialog({
         amountCents: parseAppointmentExtraPriceInput(selection.amountEuros) ?? undefined,
       };
     });
-    const invalidVariableExtra = selectedExtras.some((selection) => {
-      const definition = extraDefinitionsById.get(selection.extraId);
-      return definition?.isActive && definition.pricingMode === "variable"
-        && parseAppointmentExtraPriceInput(selection.amountEuros) === null;
-    });
-    if (invalidVariableExtra) {
+    if (incompleteVariableExtra) {
+      setIsExtrasOpen(true);
+      window.setTimeout(() => {
+        document.getElementById(`edit-appointment-extra-amount-${incompleteVariableExtra.extraId}`)?.focus();
+      }, 0);
       toast({
         title: "Valor de Extra inválido",
         description: "Indique um valor superior a zero para cada Extra variável.",
@@ -578,17 +589,41 @@ function EditAppointmentDialog({
               </div>
             </div>
           )}
-          <div className="space-y-3 rounded-xl border border-white/10 bg-background/30 p-3" data-testid="appointment-extras-editor">
-            <div>
-              <p className="font-semibold text-white">Extras</p>
+          <Collapsible
+            open={isExtrasOpen}
+            onOpenChange={setIsExtrasOpen}
+            className={cn(
+              "overflow-hidden rounded-xl border bg-background/30",
+              incompleteVariableExtra ? "border-amber-400/40" : "border-white/10",
+            )}
+            data-testid="appointment-extras-editor"
+          >
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex min-h-14 w-full items-center justify-between gap-3 px-3 py-3 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                data-testid="appointment-extras-editor-trigger"
+              >
+                <span className="min-w-0">
+                  <span className="block font-semibold text-white">{extrasHeading}</span>
+                  {incompleteVariableExtra && (
+                    <span className="mt-1 flex items-center gap-1.5 text-xs font-medium text-amber-300">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      Valor por completar
+                    </span>
+                  )}
+                </span>
+                <ChevronDown className={cn("h-5 w-5 shrink-0 text-gray-400 transition-transform", isExtrasOpen && "rotate-180")} />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 border-t border-white/10 p-3" data-testid="appointment-extras-editor-content">
               <p className="text-xs text-gray-400">Os valores guardados só mudam quando altera explicitamente a seleção.</p>
-            </div>
-            {isLoadingExtras ? (
-              <p className="text-xs text-gray-500">A carregar Extras...</p>
-            ) : visibleExtraDefinitions.length === 0 && missingSelectedExtras.length === 0 ? (
-              <p className="text-xs text-gray-500">Não existem Extras disponíveis nesta localização.</p>
-            ) : (
-              <div className="space-y-2">
+              {isLoadingExtras ? (
+                <p className="text-xs text-gray-500">A carregar Extras...</p>
+              ) : visibleExtraDefinitions.length === 0 && missingSelectedExtras.length === 0 ? (
+                <p className="text-xs text-gray-500">Não existem Extras disponíveis nesta localização.</p>
+              ) : (
+                <div className="space-y-2">
                 {visibleExtraDefinitions.map((extra) => {
                   const selection = selectedExtras.find((candidate) => candidate.extraId === extra.id);
                   const existing = existingExtrasByDefinitionId.get(extra.id);
@@ -673,9 +708,10 @@ function EditAppointmentDialog({
                     </label>
                   </div>
                 ))}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
           {proposedServicePriceCents !== null && (
             <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3 text-sm" data-testid="appointment-edit-total">
               <div className="flex justify-between gap-4 text-gray-300">

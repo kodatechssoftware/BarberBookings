@@ -1,13 +1,14 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { format, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
-import { AlertTriangle, Calendar as CalendarIcon, User } from "lucide-react";
+import { AlertTriangle, Calendar as CalendarIcon, ChevronDown, User } from "lucide-react";
 import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
 import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -86,6 +87,7 @@ export function AppointmentBlockDialog({
   isSubmitting = false,
 }: AppointmentBlockDialogProps) {
   const [isEmailTouched, setIsEmailTouched] = useState(false);
+  const [isExtrasOpen, setIsExtrasOpen] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking;
   const manualBookingTimeOptions = [
     ...createClockAlignedTimeOptions({
@@ -141,10 +143,23 @@ export function AppointmentBlockDialog({
     (total, extra) => total + (extra.effectiveAmountCents ?? 0),
     0,
   );
+  const incompleteVariableExtra = selectedExtraRows.find((extra) =>
+    extra.pricingMode === "variable" && extra.effectiveAmountCents === null);
+  const selectedExtrasCount = blockData.extras.length;
+  const extrasHeading = selectedExtrasCount === 0
+    ? "Extras (opcional)"
+    : `Extras (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
 
   useEffect(() => {
-    if (!open) setIsEmailTouched(false);
+    if (!open) {
+      setIsEmailTouched(false);
+      setIsExtrasOpen(false);
+    }
   }, [open]);
+
+  useEffect(() => {
+    if (!blockData.isManualBooking || blockData.isRecurring) setIsExtrasOpen(false);
+  }, [blockData.isManualBooking, blockData.isRecurring]);
 
   useEffect(() => {
     onBlockDataChange((current) => {
@@ -684,15 +699,39 @@ export function AppointmentBlockDialog({
             )}
 
             {blockData.isManualBooking && !blockData.isRecurring && (isLoadingExtras || extras.length > 0) && (
-              <div className="space-y-3 rounded-xl border border-white/10 bg-background/30 p-4" data-testid="manual-booking-extras">
-                <div>
-                  <p className="font-bold text-white">Extras</p>
-                  <p className="mt-1 text-xs text-gray-400">Opcional. Selecione um ou vários Extras para esta marcação.</p>
-                </div>
-                {isLoadingExtras ? (
-                  <p className="text-xs text-gray-500">A carregar Extras...</p>
-                ) : (
-                  <div className="space-y-2">
+              <Collapsible
+                open={isExtrasOpen}
+                onOpenChange={setIsExtrasOpen}
+                className={cn(
+                  "overflow-hidden rounded-xl border bg-background/30",
+                  incompleteVariableExtra ? "border-amber-400/40" : "border-white/10",
+                )}
+                data-testid="manual-booking-extras"
+              >
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex min-h-14 w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                    data-testid="manual-booking-extras-trigger"
+                  >
+                    <span className="min-w-0">
+                      <span className="block font-bold text-white">{extrasHeading}</span>
+                      {incompleteVariableExtra && (
+                        <span className="mt-1 flex items-center gap-1.5 text-xs font-medium text-amber-300">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                          Valor por completar
+                        </span>
+                      )}
+                    </span>
+                    <ChevronDown className={cn("h-5 w-5 shrink-0 text-gray-400 transition-transform", isExtrasOpen && "rotate-180")} />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-3 border-t border-white/10 p-4" data-testid="manual-booking-extras-content">
+                  <p className="text-xs text-gray-400">Selecione um ou vários Extras para esta marcação.</p>
+                  {isLoadingExtras ? (
+                    <p className="text-xs text-gray-500">A carregar Extras...</p>
+                  ) : (
+                    <div className="space-y-2">
                     {extras.map((extra) => {
                       const checkboxId = `manual-booking-extra-${extra.id}`;
                       const amountId = `manual-booking-extra-amount-${extra.id}`;
@@ -761,9 +800,10 @@ export function AppointmentBlockDialog({
                         </div>
                       );
                     })}
-                  </div>
-                )}
-              </div>
+                    </div>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
             )}
 
             {blockData.isManualBooking && effectiveServicePriceCents !== null && effectiveServiceName && (
@@ -913,6 +953,12 @@ export function AppointmentBlockDialog({
             }
             onClick={() => {
               if (blockData.isManualBooking) setIsEmailTouched(true);
+              if (incompleteVariableExtra) {
+                setIsExtrasOpen(true);
+                window.setTimeout(() => {
+                  document.getElementById(`manual-booking-extra-amount-${incompleteVariableExtra.id}`)?.focus();
+                }, 0);
+              }
               onSubmit();
             }}
           >
