@@ -11,6 +11,7 @@ import {
   preloadReschedulePage,
 } from "@/lib/page-preloads";
 import { applyShopBrandingToDocument } from "@/lib/branding";
+import { BusinessConfigProvider } from "@/business/BusinessConfigProvider";
 
 const Home = lazy(() => import("@/pages/Home"));
 const Booking = lazy(preloadBookingPage);
@@ -56,10 +57,12 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Router />
-      </TooltipProvider>
+      <BusinessConfigProvider loadingFallback={<PageLoader />}>
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </BusinessConfigProvider>
     </QueryClientProvider>
   );
 }

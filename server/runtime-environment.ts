@@ -1,6 +1,6 @@
-import { parseBookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
 import { authRuntimeMode } from "./auth-runtime";
 import { validateBootstrapTokenConfiguration } from "./auth-bootstrap";
+import { resolveBusinessRuntimeConfig } from "./business-runtime-config";
 
 export { authRuntimeMode };
 
@@ -11,6 +11,13 @@ export const isDevelopmentDeployment =
 
 export const isProductionDeployment =
   process.env.NODE_ENV === "production" && appEnvironment === "production";
+
+const businessRuntimeResolution = resolveBusinessRuntimeConfig(process.env, {
+  productionDeployment: isProductionDeployment,
+});
+
+export const resolvedBusinessConfig = businessRuntimeResolution.config;
+let businessRuntimeWarningsLogged = false;
 
 function explicitBoolean(name: string) {
   const value = process.env[name]?.trim().toLowerCase();
@@ -31,14 +38,20 @@ export const appointmentNotificationWorkerEnabled =
 export const recurringWhatsappNotificationsEnabled =
   explicitBoolean("META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED") ?? false;
 
-export const bookingSlotIntervalMinutes = parseBookingSlotIntervalMinutes(
-  process.env.BOOKING_SLOT_INTERVAL_MINUTES,
-);
+export const bookingSlotIntervalMinutes =
+  resolvedBusinessConfig.runtime.bookingSlotIntervalMinutes;
 
 export function validateRuntimeConfiguration() {
   validateBootstrapTokenConfiguration();
   if (process.env.NODE_ENV === "production" && !["development", "production"].includes(appEnvironment || "")) {
     throw new Error("APP_ENV must be explicitly set to development or production when NODE_ENV=production.");
+  }
+
+  if (!businessRuntimeWarningsLogged) {
+    businessRuntimeResolution.warnings.forEach((warning) => {
+      console.warn(`[runtime-config] ${warning}`);
+    });
+    businessRuntimeWarningsLogged = true;
   }
 
   if (!isProductionDeployment) return;

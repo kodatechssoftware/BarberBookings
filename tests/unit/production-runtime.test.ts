@@ -6,6 +6,7 @@ const baseEnvironment = {
   ...process.env,
   NODE_ENV: "production",
   APP_ENV: "production",
+  BUSINESS_VERTICAL: "barber",
   PUBLIC_URL: "https://bookings.example.test",
   SESSION_SECRET: "production-test-secret-with-more-than-32-characters",
   MULTI_LOCATION_ENABLED: "false",
@@ -105,6 +106,16 @@ test("Production rejects ambiguous APP_ENV, localhost URL and weak session secre
   assert.throws(() => evaluate({ ...baseEnvironment, APP_ENV: "" }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, PUBLIC_URL: "http://localhost:5000" }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, SESSION_SECRET: "short" }, "m.validateRuntimeConfiguration()"));
+});
+
+test("Production requires a supported explicit business vertical", () => {
+  const missing = { ...baseEnvironment };
+  delete missing.BUSINESS_VERTICAL;
+  assert.throws(() => evaluate(missing, "m.validateRuntimeConfiguration()"));
+  assert.throws(() => evaluate(
+    { ...baseEnvironment, BUSINESS_VERTICAL: "beauty2" },
+    "m.validateRuntimeConfiguration()",
+  ));
 });
 
 test("Production refuses partially activated outbox, Meta and webhook capabilities", () => {

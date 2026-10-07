@@ -29,6 +29,23 @@ test("Production-equivalent runtime remains single-location and keeps external f
     maxLocations: 1,
     bookingSlotIntervalMinutes: Number(process.env.BOOKING_SLOT_INTERVAL_MINUTES || 30),
   });
+  const runtimeConfigResponse = await request.get("/api/runtime-config");
+  expect(runtimeConfigResponse.ok()).toBe(true);
+  const runtimeConfig = await runtimeConfigResponse.json();
+  expect(runtimeConfig).toMatchObject({
+    schemaVersion: 1,
+    vertical: "barber",
+    booking: { flow: ["professional", "service", "datetime", "customer"] },
+    features: { multiLocation: false, workspaceRent: true },
+    theme: { id: "classic-gold" },
+    runtime: {
+      multiLocation: { enabled: false, maxLocations: 1 },
+      bookingSlotIntervalMinutes: Number(process.env.BOOKING_SLOT_INTERVAL_MINUTES || 30),
+    },
+  });
+  expect(JSON.stringify(runtimeConfig)).not.toMatch(
+    /DATABASE_URL|SESSION_SECRET|ACCESS_TOKEN|RESEND_API_KEY/,
+  );
   const locations = await request.get("/api/locations");
   expect((await locations.json())).toHaveLength(1);
 

@@ -40,7 +40,7 @@ const timedPaths = new Set([
   "/api/admin/audit-logs", "/api/admin/blacklist", "/api/admin/expenses",
   "/api/appointments", "/api/barbers", "/api/barbers/availability",
   "/api/services", "/api/locations", "/api/shop/availability",
-  "/api/multi-location/config",
+  "/api/multi-location/config", "/api/runtime-config",
 ]);
 
 export function createRequestTimings(method: string, path: string): RequestTimings {

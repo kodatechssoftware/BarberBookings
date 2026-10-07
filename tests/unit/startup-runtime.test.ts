@@ -19,7 +19,7 @@ for (const [appEnv, flag, expected] of [
     let buffer = "";
     const child = spawn(process.execPath, ["dist/index.cjs"], { cwd: process.cwd(), windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"], env: {
-        ...process.env, NODE_ENV: "production", APP_ENV: appEnv, PERFORMANCE_TIMINGS_ENABLED: flag,
+        ...process.env, NODE_ENV: "production", APP_ENV: appEnv, BUSINESS_VERTICAL: "barber", PERFORMANCE_TIMINGS_ENABLED: flag,
         PORT: String(port), USE_MEMORY_STORAGE: "true", DATABASE_URL: "postgresql://unused:unused@127.0.0.1:1/unused",
         DEMO_MODE: "false", MULTI_LOCATION_ENABLED: "false", MAX_LOCATIONS: "1", DATABASE_POOL_MAX: "4",
         PUBLIC_URL: "https://bookings.example.test", ALLOWED_ORIGINS: base,

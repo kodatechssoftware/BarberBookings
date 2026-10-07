@@ -16,6 +16,7 @@ export default defineConfig({
     env: {
       NODE_ENV: "production",
       APP_ENV: "production",
+      BUSINESS_VERTICAL: "barber",
       USE_MEMORY_STORAGE: "true",
       MULTI_LOCATION_ENABLED: "false",
       MAX_LOCATIONS: "1",

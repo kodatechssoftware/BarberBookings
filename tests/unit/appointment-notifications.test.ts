@@ -1054,6 +1054,6 @@ test("webhook rejects unexpected WABA and Phone Number ID", async () => {
 
 test("production environment does not activate Development deployment", () => {
   const output = execFileSync(process.execPath, ["--import", "tsx", "--eval", "import('./server/runtime-environment.ts').then(m=>console.log(m.isDevelopmentDeployment))"],
-    { cwd: process.cwd(), env: { ...process.env, NODE_ENV: "production", APP_ENV: "production" }, encoding: "utf8" }).trim();
+    { cwd: process.cwd(), env: { ...process.env, NODE_ENV: "production", APP_ENV: "production", BUSINESS_VERTICAL: "barber" }, encoding: "utf8" }).trim();
   assert.equal(output, "false");
 });

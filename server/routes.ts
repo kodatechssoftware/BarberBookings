@@ -39,6 +39,7 @@ import {
   appointmentNotificationEventsEnabled,
   bookingSlotIntervalMinutes,
   isDevelopmentDeployment,
+  resolvedBusinessConfig,
 } from "./runtime-environment";
 import {
   createDefaultCompensationRule as defaultCompensationRule,
@@ -113,7 +114,6 @@ import {
   isDateWithinPublicBookingWindow,
   PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
 } from "@shared/public-booking-window";
-import { parseMultiLocationConfig } from "@shared/multi-location-config";
 import { locationInputSchema, locationUpdateSchema } from "@shared/locations";
 import {
   assignBarberToLocation,
@@ -218,7 +218,7 @@ const PostgresSessionStore = connectPg(session);
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY = process.env.PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY;
 const PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED = process.env.PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED === "true";
-const MULTI_LOCATION_CONFIG = parseMultiLocationConfig(process.env);
+const MULTI_LOCATION_CONFIG = resolvedBusinessConfig.runtime.multiLocation;
 const canonicalLoginRateLimiter = createFixedWindowRateLimiter({
   maxAttempts: 10,
   windowMs: 15 * 60 * 1_000,
@@ -1958,6 +1958,10 @@ export async function registerRoutes(
     } catch (error) {
       return sendCanonicalBootstrapError(res, error);
     }
+  });
+
+  app.get("/api/runtime-config", (_req, res) => {
+    res.json(resolvedBusinessConfig);
   });
 
   app.get("/api/locations", async (_req, res) => {
