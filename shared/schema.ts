@@ -365,6 +365,14 @@ export const serviceLocations = appPgTable("service_locations", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.serviceId, table.locationId] }),
+  priceOverrideCheck: check(
+    "service_locations_price_override_check",
+    sql`${table.priceOverride} IS NULL OR ${table.priceOverride} >= 0`,
+  ),
+  durationOverrideCheck: check(
+    "service_locations_duration_override_check",
+    sql`${table.durationOverride} IS NULL OR ${table.durationOverride} > 0`,
+  ),
 }));
 
 export const barberInvites = appPgTable("barber_invites", {
@@ -726,11 +734,19 @@ export const insertWhatsappMessageSchema = createInsertSchema(whatsappMessages).
 
 export type Barber = typeof barbers.$inferSelect;
 export type Service = typeof services.$inferSelect;
+export type ServiceLocationOffer = typeof serviceLocations.$inferSelect;
 export type ServiceCategory = typeof serviceCategories.$inferSelect;
 export type ServiceCategorySummary = Pick<ServiceCategory, "id" | "name" | "sortOrder">;
 export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
   categoryId?: number | null;
   category?: ServiceCategorySummary | null;
+  locationId?: number;
+  isActive?: boolean;
+  priceOverride?: number | null;
+  durationOverride?: number | null;
+  basePrice?: number;
+  baseDuration?: number;
+  baseIsVisible?: boolean | null;
 };
 export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;

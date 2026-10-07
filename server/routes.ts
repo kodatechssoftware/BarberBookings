@@ -23,6 +23,9 @@ import {
   serviceCategoryCreateInputSchema,
   serviceCategoryOrderInputSchema,
   serviceCategoryUpdateInputSchema,
+  serviceLocationOfferInputSchema,
+  serviceLocationOfferUpdateSchema,
+  serviceUpdateInputSchema,
 } from "@shared/routes";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -116,18 +119,24 @@ import { locationInputSchema, locationUpdateSchema } from "@shared/locations";
 import {
   assignBarberToLocation,
   assignServiceToLocation,
+  deleteServiceLocationOffers,
   createLocation,
   getBarberIdsForLocation,
   getDefaultLocation,
   getLocation,
   getLocationCountsForBarbers,
   getLocationIdsForBarber,
+  getLocationIdsForService,
+  getServiceLocationOffer,
+  getServiceLocationOffersForLocation,
   getServiceIdsForLocation,
   listLocations,
   removeBarberFromLocation,
+  removeServiceFromLocation,
   updateLocation,
 } from "./location-store";
 import { getPublicBaseUrl } from "./public-url";
+import { resolveServiceLocationTerms } from "@shared/service-location-terms";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -833,11 +842,61 @@ function hasDatabaseErrorCode(error: unknown, expectedCode: string) {
   return false;
 }
 
-function serializeServiceCatalogueItem(item: ServiceCatalogueItem, includeInactiveAssignment: boolean) {
-  const { categoryId, category, ...legacyService } = item;
-  if (category) return { ...legacyService, categoryId, category };
-  if (includeInactiveAssignment && categoryId !== null) return { ...legacyService, categoryId };
-  return legacyService;
+function serializeServiceCatalogueItem(item: ServiceCatalogueItem, includeAdminOfferFields: boolean) {
+  const {
+    categoryId,
+    category,
+    priceOverride,
+    durationOverride,
+    basePrice,
+    baseDuration,
+    baseIsVisible,
+    ...effectiveService
+  } = item;
+  const adminOfferFields = includeAdminOfferFields
+    ? { priceOverride, durationOverride, basePrice, baseDuration, baseIsVisible }
+    : {};
+  if (category) return { ...effectiveService, ...adminOfferFields, categoryId, category };
+  if (includeAdminOfferFields && categoryId !== null) {
+    return { ...effectiveService, ...adminOfferFields, categoryId };
+  }
+  return { ...effectiveService, ...adminOfferFields };
+}
+
+async function loadLocationServiceCatalogue(locationId: number, includeInactive = false) {
+  const [allServices, offers] = await Promise.all([
+    storage.getServicesWithCategories(),
+    getServiceLocationOffersForLocation(locationId, includeInactive),
+  ]);
+  const offersByServiceId = new Map(offers.map((offer) => [offer.serviceId, offer]));
+
+  return allServices.flatMap((service): ServiceCatalogueItem[] => {
+    const offer = offersByServiceId.get(service.id);
+    const terms = resolveServiceLocationTerms(locationId, service, offer);
+    if (!terms || (!includeInactive && !terms.isActive)) return [];
+    return [{
+      ...service,
+      locationId,
+      isActive: terms.isActive,
+      isVisible: terms.isActive,
+      price: terms.priceCents,
+      duration: terms.durationMinutes,
+      priceOverride: terms.priceOverride,
+      durationOverride: terms.durationOverride,
+      basePrice: terms.basePrice,
+      baseDuration: terms.baseDuration,
+      baseIsVisible: service.isVisible,
+    }];
+  });
+}
+
+async function loadUnassignedServicesForLocation(locationId: number) {
+  const [allServices, assignedServiceIds] = await Promise.all([
+    storage.getServicesWithCategories(),
+    getServiceIdsForLocation(locationId, true),
+  ]);
+  const assigned = new Set(assignedServiceIds);
+  return allServices.filter((service) => !assigned.has(service.id));
 }
 
 async function validateServiceCategoryAssignment(categoryId: number | null | undefined, currentCategoryId?: number | null) {
@@ -1095,7 +1154,9 @@ async function freezeUniversalBarberServiceAssignments(existingServiceIds: numbe
       .map(async (barber) => {
         if (!MULTI_LOCATION_CONFIG.enabled) return storage.replaceBarberServices(barber.id, existingServiceIds);
         const locationIds = await getLocationIdsForBarber(barber.id);
-        const assignedServices = await Promise.all(locationIds.map(getServiceIdsForLocation));
+        const assignedServices = await Promise.all(locationIds.map((assignedLocationId) => (
+          getServiceIdsForLocation(assignedLocationId)
+        )));
         return storage.replaceBarberServices(barber.id, Array.from(new Set(assignedServices.flat())));
       }),
   );
@@ -1441,9 +1502,10 @@ function parseCustomAppointmentDuration(value: unknown) {
 }
 
 function resolveEffectiveServiceTerms(
-  _locationId: number,
-  service: { id: number; name: string; duration: number; price: number },
+  locationId: number,
+  service: Pick<ServiceCatalogueItem, "id" | "name" | "duration" | "price" | "locationId" | "isActive">,
 ) {
+  if (service.locationId !== locationId) return null;
   return {
     serviceId: service.id,
     name: service.name,
@@ -2943,16 +3005,19 @@ export async function registerRoutes(
       const locationServiceIds = await getServiceIdsForLocation(locationId);
       const existingServiceIds = locationServiceIds ?? (await storage.getServices()).map((service) => service.id);
       await freezeUniversalBarberServiceAssignments(existingServiceIds, locationId);
-      const service = await storage.createService(input);
-      await assignServiceToLocation(service.id, locationId);
+      const { isVisible, ...serviceInput } = input;
+      const service = await storage.createService({ ...serviceInput, isVisible: true });
+      await assignServiceToLocation(service.id, locationId, { isActive: isVisible ?? true });
+      const effectiveService = (await loadLocationServiceCatalogue(locationId, true))
+        .find((item) => item.id === service.id)!;
       await recordAuditLog(req, {
         action: "service.created",
         entityType: "service",
         entityId: service.id,
         summary: `Serviço criado: ${service.name}`,
-        metadata: { duration: service.duration, price: service.price },
+        metadata: { locationId, duration: effectiveService.duration, price: effectiveService.price },
       });
-      res.status(201).json(service);
+      res.status(201).json(effectiveService);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -2972,26 +3037,63 @@ export async function registerRoutes(
 
   app.patch("/api/services/:id", requireAdmin, async (req, res) => {
     try {
-      const input = insertServiceSchema.partial().parse(req.body);
+      const input = serviceUpdateInputSchema.parse(req.body);
       const serviceId = parsePositiveInteger(req.params.id);
       if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
-      const locationServiceIds = await getServiceIdsForLocation(Number(res.locals.locationId));
-      if (locationServiceIds !== undefined && !locationServiceIds.includes(serviceId)) return res.status(404).json({ message: "Serviço não encontrado" });
+      const locationId = Number(res.locals.locationId);
+      const currentOffer = await getServiceLocationOffer(serviceId, locationId);
+      if (!currentOffer) return res.status(404).json({ message: "Serviço não encontrado" });
       const currentService = await storage.getService(serviceId);
       if (!currentService) return res.status(404).json({ message: "Serviço não encontrado" });
       if (Object.prototype.hasOwnProperty.call(input, "categoryId")) {
         await validateServiceCategoryAssignment(input.categoryId, currentService.categoryId);
       }
-      const service = await storage.updateService(serviceId, input);
+      const {
+        priceOverride,
+        durationOverride,
+        isActive,
+        isVisible,
+        price,
+        duration,
+        ...identityPatch
+      } = input;
+      const globalPatch: Partial<typeof input> = { ...identityPatch };
+      if (!MULTI_LOCATION_CONFIG.enabled) {
+        if (price !== undefined) globalPatch.price = price;
+        if (duration !== undefined) globalPatch.duration = duration;
+      }
+      const hasGlobalPatch = Object.keys(globalPatch).length > 0;
+      const service = hasGlobalPatch
+        ? await storage.updateService(serviceId, globalPatch)
+        : currentService;
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
+
+      const localPriceOverride = MULTI_LOCATION_CONFIG.enabled
+        ? priceOverride !== undefined ? priceOverride : price
+        : undefined;
+      const localDurationOverride = MULTI_LOCATION_CONFIG.enabled
+        ? durationOverride !== undefined ? durationOverride : duration
+        : undefined;
+      const localActive = isActive !== undefined
+        ? isActive
+        : isVisible === null || isVisible === undefined ? undefined : isVisible;
+      if (localPriceOverride !== undefined || localDurationOverride !== undefined || localActive !== undefined) {
+        await assignServiceToLocation(serviceId, locationId, {
+          ...(localPriceOverride !== undefined ? { priceOverride: localPriceOverride } : {}),
+          ...(localDurationOverride !== undefined ? { durationOverride: localDurationOverride } : {}),
+          ...(localActive !== undefined ? { isActive: localActive } : {}),
+        });
+      }
+      const effectiveService = (await loadLocationServiceCatalogue(locationId, true))
+        .find((item) => item.id === serviceId)!;
       await recordAuditLog(req, {
         action: "service.updated",
         entityType: "service",
         entityId: service.id,
         summary: `Serviço atualizado: ${service.name}`,
-        metadata: { fields: Object.keys(req.body || {}) },
+        metadata: { locationId, fields: Object.keys(req.body || {}) },
       });
-      res.json(service);
+      res.json(effectiveService);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
@@ -3015,20 +3117,46 @@ export async function registerRoutes(
       if (serviceId === null) {
         return res.status(400).json({ message: "Serviço inválido." });
       }
-      const locationServiceIds = await getServiceIdsForLocation(Number(res.locals.locationId));
-      if (locationServiceIds !== undefined && !locationServiceIds.includes(serviceId)) {
-        return res.status(404).json({ message: "Serviço não encontrado" });
-      }
+      const locationId = Number(res.locals.locationId);
+      const currentOffer = await getServiceLocationOffer(serviceId, locationId);
+      if (!currentOffer) return res.status(404).json({ message: "Serviço não encontrado" });
       const service = await storage.getService(serviceId);
       if (!service) return res.status(404).json({ message: "Serviço não encontrado" });
+
+      const [locationIds, appointments] = await Promise.all([
+        getLocationIdsForService(serviceId, true),
+        storage.getAppointments(),
+      ]);
+      const hasOtherAssignments = locationIds.some((id) => id !== locationId);
+      const hasHistory = appointments.some((appointment) => appointment.serviceId === serviceId);
+      if (hasOtherAssignments || hasHistory) {
+        await removeServiceFromLocation(serviceId, locationId);
+        await recordAuditLog(req, {
+          action: "service.unassigned",
+          entityType: "service",
+          entityId: serviceId,
+          summary: MULTI_LOCATION_CONFIG.enabled
+            ? `Serviço retirado desta loja: ${service.name}`
+            : `Serviço arquivado: ${service.name}`,
+          metadata: { locationId, hasOtherAssignments, hasHistory },
+        });
+        return res.json({
+          message: MULTI_LOCATION_CONFIG.enabled
+            ? "Serviço desativado apenas nesta localização."
+            : "Serviço arquivado para preservar o histórico.",
+          mode: "deactivated",
+        });
+      }
+
       await storage.deleteService(serviceId);
+      await deleteServiceLocationOffers(serviceId);
       await recordAuditLog(req, {
         action: "service.deleted",
         entityType: "service",
         entityId: serviceId,
         summary: `Serviço removido: ${service?.name || serviceId}`,
       });
-      res.json({ message: "Serviço removido" });
+      res.json({ message: "Serviço removido", mode: "deleted" });
     } catch (error) {
       if ((error as { code?: string } | null)?.code === "SERVICE_HAS_FUTURE_APPOINTMENTS") {
         return res.status(409).json({
@@ -3037,6 +3165,107 @@ export async function registerRoutes(
       }
       res.status(500).json({ message: "Erro ao remover serviço" });
     }
+  });
+
+  app.get("/api/admin/services/available", requireAdmin, async (_req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Associação de serviços não disponível." });
+    }
+    const locationId = Number(res.locals.locationId);
+    const services = await loadUnassignedServicesForLocation(locationId);
+    return res.json(services.map((service) => ({
+      ...serializeServiceCatalogueItem(service, true),
+      basePrice: service.price,
+      baseDuration: service.duration,
+      baseIsVisible: service.isVisible,
+    })));
+  });
+
+  app.post("/api/admin/service-locations", requireAdmin, async (req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Associação de serviços não disponível." });
+    }
+    try {
+      const input = serviceLocationOfferInputSchema.parse(req.body);
+      const locationId = Number(res.locals.locationId);
+      const service = await storage.getService(input.serviceId);
+      if (!service) return res.status(404).json({ message: "Serviço não encontrado." });
+      if (await getServiceLocationOffer(input.serviceId, locationId)) {
+        return res.status(409).json({ message: "O serviço já está associado a esta localização." });
+      }
+      await assignServiceToLocation(input.serviceId, locationId, input);
+      const effectiveService = (await loadLocationServiceCatalogue(locationId, true))
+        .find((item) => item.id === input.serviceId)!;
+      await recordAuditLog(req, {
+        action: "service.assigned",
+        entityType: "service",
+        entityId: input.serviceId,
+        summary: `Serviço associado a esta loja: ${service.name}`,
+        metadata: { locationId, priceOverride: input.priceOverride ?? null, durationOverride: input.durationOverride ?? null },
+      });
+      return res.status(201).json(effectiveService);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      throw error;
+    }
+  });
+
+  app.patch("/api/admin/service-locations/:serviceId", requireAdmin, async (req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Associação de serviços não disponível." });
+    }
+    try {
+      const serviceId = parsePositiveInteger(req.params.serviceId);
+      if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
+      const input = serviceLocationOfferUpdateSchema.parse(req.body);
+      if (Object.keys(input).length === 0) return res.status(400).json({ message: "Indique uma alteração." });
+      const locationId = Number(res.locals.locationId);
+      if (!await getServiceLocationOffer(serviceId, locationId)) {
+        return res.status(404).json({ message: "Serviço não encontrado nesta localização." });
+      }
+      await assignServiceToLocation(serviceId, locationId, input);
+      const effectiveService = (await loadLocationServiceCatalogue(locationId, true))
+        .find((item) => item.id === serviceId)!;
+      await recordAuditLog(req, {
+        action: input.isActive === true
+          ? "service.activated"
+          : input.isActive === false ? "service.deactivated" : "service.offer_updated",
+        entityType: "service",
+        entityId: serviceId,
+        summary: `Oferta do serviço atualizada nesta loja: ${effectiveService.name}`,
+        metadata: { locationId, fields: Object.keys(input) },
+      });
+      return res.json(effectiveService);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/admin/service-locations/:serviceId", requireAdmin, async (req, res) => {
+    if (!MULTI_LOCATION_CONFIG.enabled) {
+      return res.status(404).json({ message: "Associação de serviços não disponível." });
+    }
+    const serviceId = parsePositiveInteger(req.params.serviceId);
+    if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
+    const locationId = Number(res.locals.locationId);
+    const service = await storage.getService(serviceId);
+    if (!service || !await getServiceLocationOffer(serviceId, locationId)) {
+      return res.status(404).json({ message: "Serviço não encontrado nesta localização." });
+    }
+    await removeServiceFromLocation(serviceId, locationId);
+    await recordAuditLog(req, {
+      action: "service.deactivated",
+      entityType: "service",
+      entityId: serviceId,
+      summary: `Serviço desativado nesta loja: ${service.name}`,
+      metadata: { locationId },
+    });
+    return res.json({ message: "Serviço desativado nesta localização." });
   });
 
   // === ADMIN MGMT ===
@@ -3277,18 +3506,11 @@ export async function registerRoutes(
 
   // === SERVICES ===
   app.get(api.services.list.path, async (req, res) => {
-    const allServices = await storage.getServicesWithCategories();
-    const locationServiceIds = MULTI_LOCATION_CONFIG.enabled
-      ? await getServiceIdsForLocation(Number(res.locals.locationId))
-      : undefined;
-    const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-    const services = allServices.filter((service) => !allowedServices || allowedServices.has(service.id));
     const appSession = getAppSession(req);
     const includeHidden = req.query.includeHidden === "true" &&
       Boolean(appSession.adminId || appSession.barberId);
-
-    const visibleServices = includeHidden ? services : services.filter((service) => service.isVisible);
-    res.json(visibleServices.map((service) => serializeServiceCatalogueItem(service, includeHidden)));
+    const services = await loadLocationServiceCatalogue(Number(res.locals.locationId), includeHidden);
+    res.json(services.map((service) => serializeServiceCatalogueItem(service, includeHidden)));
   });
 
   // === APPOINTMENTS ===
@@ -3389,14 +3611,15 @@ export async function registerRoutes(
       if (!isValidOptionalEmail(input.customerEmail)) {
         return res.status(400).json({ message: emailValidationMessage, field: "customerEmail" });
       }
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
-      const allowedServiceIds = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-      const services = (await storage.getServices()).filter((service) => !allowedServiceIds || allowedServiceIds.has(service.id));
-      const requestedService = services.find((service) => service.id === input.serviceId && service.isVisible);
+      const services = await loadLocationServiceCatalogue(locationId);
+      const requestedService = services.find((service) => service.id === input.serviceId && service.isActive);
       if (!requestedService) {
         return res.status(400).json({ message: "Serviço indisponível para marcação online." });
       }
       const requestedServiceTerms = resolveEffectiveServiceTerms(locationId, requestedService);
+      if (!requestedServiceTerms) {
+        return res.status(400).json({ message: "Serviço indisponível para marcação online." });
+      }
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const requestedDuration = requestedServiceTerms.durationMinutes;
       const requestedEndTime = new Date(input.startTime.getTime() + requestedDuration * 60000);
@@ -3747,9 +3970,7 @@ export async function registerRoutes(
       const manualWhatsappOptInAt = manualWhatsappOptIn ? new Date() : null;
       const appointments: Array<Parameters<typeof storage.createAppointment>[0]> = [];
       const conflicts = [];
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
-      const allowedServiceIds = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-      const services = (await storage.getServices()).filter((service) => !allowedServiceIds || allowedServiceIds.has(service.id));
+      const services = await loadLocationServiceCatalogue(locationId);
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const selectedService = serviceIdNumber === null
         ? undefined
@@ -4101,7 +4322,7 @@ export async function registerRoutes(
         .map((barber) => barber.id),
     );
     const serviceDurations = new Map(
-      (await storage.getServices()).map((service) => [service.id, service.duration]),
+      (await loadLocationServiceCatalogue(locationId, true)).map((service) => [service.id, service.duration]),
     );
     const publicAppointments = appointments
       .filter((app) => app.status === "booked" && visibleBarberIds.has(app.barberId))
@@ -4176,9 +4397,7 @@ export async function registerRoutes(
       const startTimeChanged = hasStartTimePatch
         && newStartTime.getTime() !== new Date(currentApp.startTime).getTime();
       const newBarberId = hasBarberPatch ? Number(barberId) : currentApp.barberId;
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
-      const allowedServiceIds = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-      const services = (await storage.getServices()).filter((service) => !allowedServiceIds || allowedServiceIds.has(service.id));
+      const services = await loadLocationServiceCatalogue(locationId, true);
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const serviceNames = new Map(services.map((service) => [service.id, service.name]));
       const servicePrices = new Map(services.map((service) => [service.id, service.price]));
@@ -4301,6 +4520,9 @@ export async function registerRoutes(
           finalDuration = customDuration;
         } else if (selectedService) {
           const terms = resolveEffectiveServiceTerms(locationId, selectedService);
+          if (!terms) {
+            return res.status(400).json({ message: "Serviço indisponível nesta localização." });
+          }
           if (switchingCatalogueService || !hasAppointmentServiceTermsSnapshot(currentApp)) {
             finalServiceName = terms.name;
             finalServicePrice = terms.priceCents;
@@ -4478,7 +4700,10 @@ export async function registerRoutes(
       if (!currentApp || currentApp.locationId !== Number(res.locals.locationId)) return res.status(404).json({ message: "Marcação não encontrada" });
 
       if (status === "completed" || status === "no_show") {
-        const serviceDurations = new Map((await storage.getServices()).map((service) => [service.id, service.duration]));
+        const serviceDurations = new Map(
+          (await loadLocationServiceCatalogue(currentApp.locationId, true))
+            .map((service) => [service.id, service.duration]),
+        );
         const timingError = getAppointmentStatusTimingError(currentApp, status, serviceDurations);
         if (timingError) {
           return res.status(400).json({ message: timingError });
@@ -4622,7 +4847,7 @@ export async function registerRoutes(
         return sendPublicBookingWindowClosed(res);
       }
 
-      const services = await storage.getServices();
+      const services = await loadLocationServiceCatalogue(appointment.locationId, true);
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const duration = getEffectiveAppointmentDurationMinutes(appointment, serviceDurations);
       if (appointment.serviceId) {
@@ -4782,17 +5007,14 @@ export async function registerRoutes(
       ? Number(appSession.barberId)
       : requestedBarberId ?? undefined;
 
-    const [allAppointments, rawBarbers, rawServices, locationBarberIds, locationServiceIds] = await Promise.all([
+    const [allAppointments, rawBarbers, allServices, locationBarberIds] = await Promise.all([
       storage.getAppointments(barberId, undefined, locationId),
       storage.getBarbers(),
-      storage.getServices(),
+      loadLocationServiceCatalogue(locationId, true),
       getBarberIdsForLocation(locationId, true),
-      getServiceIdsForLocation(locationId),
     ]);
     const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
-    const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
     const allBarbers = rawBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
-    const allServices = rawServices.filter((service) => !allowedServices || allowedServices.has(service.id));
 
     const visibleBarbers = appSession.role === "barber"
       ? allBarbers.filter((barber) => barber.id === barberId)
@@ -5170,16 +5392,12 @@ export async function registerRoutes(
     const appSession = getAppSession(req);
     const barberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
     const locationId = Number(res.locals.locationId);
-    const [locationBarberIds, locationServiceIds] = await Promise.all([
-      getBarberIdsForLocation(locationId, true),
-      getServiceIdsForLocation(locationId),
-    ]);
+    const locationBarberIds = await getBarberIdsForLocation(locationId, true);
     const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
-    const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
     const [allAppointments, allBarbers, allServices] = await Promise.all([
       storage.getAppointments(barberId, undefined, locationId),
       storage.getBarbers(),
-      storage.getServices(),
+      loadLocationServiceCatalogue(locationId, true),
     ]);
     const anchorAppointment = options.appointmentId === undefined
       ? undefined
@@ -5196,9 +5414,8 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Indique um telemóvel ou email." });
     }
     const locationBarbers = allBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
-    const locationServices = allServices.filter((service) => !allowedServices || allowedServices.has(service.id));
-    const locationServiceNames = new Map(locationServices.map((service) => [service.id, service.name]));
-    const locationServicePrices = new Map(locationServices.map((service) => [service.id, service.price]));
+    const locationServiceNames = new Map(allServices.map((service) => [service.id, service.name]));
+    const locationServicePrices = new Map(allServices.map((service) => [service.id, service.price]));
 
     const matchingAppointments = (phone || email
       ? allAppointments.filter((appointment) => customerIdentityMatches(appointment, phone, email, customerNameKey))
@@ -5477,9 +5694,9 @@ export async function registerRoutes(
 
     try {
       const locationId = Number(res.locals.locationId);
-      const [rawBarbers, rawServices, allAppointments, compensationRules, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
+      const [rawBarbers, effectiveServices, allAppointments, compensationRules, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
         storage.getBarbers(),
-        storage.getServices(),
+        loadLocationServiceCatalogue(locationId, true),
         storage.getAppointments(selectedBarberId, undefined, locationId),
         storage.getBarberCompensationRules(selectedBarberId),
         storage.getBusinessExpenses({ startDate: startDateKey, endDate: endDateKey, locationId }),
@@ -5488,8 +5705,8 @@ export async function registerRoutes(
       ]);
       const activeLocationBarberIdSet = new Set(activeLocationBarberIds);
       const barbersById = new Map(rawBarbers.map((barber) => [barber.id, barber]));
-      const serviceNames = new Map(rawServices.map((service) => [service.id, service.name]));
-      const servicePrices = new Map(rawServices.map((service) => [service.id, service.price]));
+      const serviceNames = new Map(effectiveServices.map((service) => [service.id, service.name]));
+      const servicePrices = new Map(effectiveServices.map((service) => [service.id, service.price]));
       const selectedBarber = selectedBarberId ? barbersById.get(selectedBarberId) : undefined;
 
       type ExportSummaryRow = {
@@ -6952,7 +7169,7 @@ async function synchronizePowerhouseDemoData() {
   await Promise.all(
     existingServices
       .filter((service) => LEGACY_DEMO_SERVICE_NAMES.includes(service.name) && !claimedServiceIds.has(service.id))
-      .map((service) => storage.updateService(service.id, { isVisible: false })),
+      .map((service) => removeServiceFromLocation(service.id, defaultLocation.id)),
   );
   await replaceBarberServicesForLocation(primaryBarber.id, desiredServiceIds, defaultLocation.id);
 }

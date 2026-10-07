@@ -42,6 +42,23 @@ export const barberInputSchema = barberProfileInputSchema.merge(barberCompensati
 export type CreateBarberRequest = z.infer<typeof barberInputSchema>;
 export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
+export const serviceLocationOfferInputSchema = z.object({
+  serviceId: z.number().int().positive(),
+  priceOverride: z.number().int().min(0).max(1_000_000).nullable().optional(),
+  durationOverride: z.number().int().min(1).max(720).nullable().optional(),
+  isActive: z.boolean().optional(),
+}).strict();
+export const serviceLocationOfferUpdateSchema = serviceLocationOfferInputSchema
+  .omit({ serviceId: true })
+  .partial()
+  .strict();
+export const serviceUpdateInputSchema = insertServiceSchema.partial().extend({
+  isActive: z.boolean().optional(),
+  priceOverride: z.number().int().min(0).max(1_000_000).nullable().optional(),
+  durationOverride: z.number().int().min(1).max(720).nullable().optional(),
+}).strict();
+export type ServiceLocationOfferInput = z.infer<typeof serviceLocationOfferInputSchema>;
+export type ServiceLocationOfferUpdate = z.infer<typeof serviceLocationOfferUpdateSchema>;
 export const serviceCategoryCreateInputSchema = insertServiceCategorySchema.pick({ name: true }).strict();
 export const serviceCategoryUpdateInputSchema = insertServiceCategorySchema.pick({ name: true, isActive: true }).partial().strict();
 export const serviceCategoryOrderInputSchema = z.object({

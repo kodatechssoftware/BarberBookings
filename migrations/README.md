@@ -40,6 +40,11 @@ appointment payment-method constraint with `voucher`. It does not rewrite
 legacy appointments or introduce split payments; a voucher settles the full
 nominal appointment value while remaining distinct from cash/card receipts and
 from a gifted service.
+Migration `0012_service_location_offers.sql` moves the effective visibility of
+each service from the legacy global flag to its existing `service_locations`
+assignment. It preserves hidden services by marking their current assignments
+inactive, then leaves the legacy global flag enabled. Price and duration data,
+appointments, and service identities are not rewritten.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

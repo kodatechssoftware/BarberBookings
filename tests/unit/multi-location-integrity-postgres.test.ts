@@ -132,8 +132,10 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
       VALUES ($1, $2, true), ($1, $3, true)
     `, [barberId, locationA, locationB]);
     await pool.query(`
-      INSERT INTO service_locations (service_id, location_id, is_active)
-      VALUES ($1, $2, true), ($1, $3, true)
+      INSERT INTO service_locations (
+        service_id, location_id, is_active, price_override, duration_override
+      )
+      VALUES ($1, $2, true, NULL, NULL), ($1, $3, true, 1800, 45)
     `, [serviceId, locationA, locationB]);
     await pool.query("INSERT INTO barber_services (barber_id, service_id) VALUES ($1, $2)", [barberId, serviceId]);
 
@@ -145,6 +147,81 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
     ]);
     applicationPool = dbModule.pool;
     const storage = new DatabaseStorage();
+    const [offerA] = await locationStore.getServiceLocationOffersForLocation(locationA);
+    assert.deepEqual({
+      serviceId: offerA.serviceId,
+      locationId: offerA.locationId,
+      isActive: offerA.isActive,
+      priceOverride: offerA.priceOverride,
+      durationOverride: offerA.durationOverride,
+    }, { serviceId, locationId: locationA, isActive: true, priceOverride: null, durationOverride: null });
+    const [offerB] = await locationStore.getServiceLocationOffersForLocation(locationB);
+    assert.deepEqual({
+      serviceId: offerB.serviceId,
+      locationId: offerB.locationId,
+      isActive: offerB.isActive,
+      priceOverride: offerB.priceOverride,
+      durationOverride: offerB.durationOverride,
+    }, { serviceId, locationId: locationB, isActive: true, priceOverride: 1800, durationOverride: 45 });
+    await locationStore.assignServiceToLocation(serviceId, locationA, {
+      priceOverride: 1600,
+      durationOverride: 35,
+    });
+    const updatedOfferA = await locationStore.getServiceLocationOffer(serviceId, locationA);
+    assert.deepEqual({
+      isActive: updatedOfferA?.isActive,
+      priceOverride: updatedOfferA?.priceOverride,
+      durationOverride: updatedOfferA?.durationOverride,
+    }, { isActive: true, priceOverride: 1600, durationOverride: 35 });
+    const unchangedOfferB = await locationStore.getServiceLocationOffer(serviceId, locationB);
+    assert.deepEqual({
+      isActive: unchangedOfferB?.isActive,
+      priceOverride: unchangedOfferB?.priceOverride,
+      durationOverride: unchangedOfferB?.durationOverride,
+    }, { isActive: true, priceOverride: 1800, durationOverride: 45 });
+    await locationStore.removeServiceFromLocation(serviceId, locationB);
+    await locationStore.assignServiceToLocation(serviceId, locationB, { priceOverride: 1900 });
+    const inactiveOfferB = await locationStore.getServiceLocationOffer(serviceId, locationB);
+    assert.deepEqual({
+      isActive: inactiveOfferB?.isActive,
+      priceOverride: inactiveOfferB?.priceOverride,
+      durationOverride: inactiveOfferB?.durationOverride,
+    }, { isActive: false, priceOverride: 1900, durationOverride: 45 },
+    "updating local terms must not reactivate an inactive offer implicitly");
+    await locationStore.assignServiceToLocation(serviceId, locationB, { isActive: true, priceOverride: 1800 });
+    await assert.rejects(
+      pool.query(
+        "UPDATE service_locations SET price_override = -1 WHERE service_id = $1 AND location_id = $2",
+        [serviceId, locationB],
+      ),
+      (error: any) => error?.code === "23514",
+      "PostgreSQL must reject negative location prices",
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE service_locations SET duration_override = 0 WHERE service_id = $1 AND location_id = $2",
+        [serviceId, locationB],
+      ),
+      (error: any) => error?.code === "23514",
+      "PostgreSQL must reject non-positive location durations",
+    );
+    const removableServiceId = Number((await pool.query(`
+      INSERT INTO services (name, price, duration, is_visible)
+      VALUES ('Serviço sem histórico', 1200, 20, true) RETURNING id
+    `)).rows[0].id);
+    await pool.query(`
+      INSERT INTO service_locations (service_id, location_id, is_active)
+      VALUES ($1, $2, true)
+    `, [removableServiceId, locationA]);
+    await storage.deleteService(removableServiceId);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM services WHERE id = $1",
+      [removableServiceId],
+    )).rows[0].count), 0, "a service without history can be deleted physically");
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM service_locations WHERE service_id = $1",
+      [removableServiceId],
+    )).rows[0].count), 0, "physical deletion removes its location offers atomically");
     let tokenSequence = 0;
     const createAt = (locationId: number, startTime: Date) => storage.createAppointment({
       locationId,

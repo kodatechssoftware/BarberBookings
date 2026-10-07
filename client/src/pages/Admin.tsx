@@ -41,6 +41,7 @@ import {
 } from "@/components/admin/AppointmentDetailsDialog";
 import { LocationsTab } from "@/components/admin/LocationsTab";
 import { AssociateBarberDialog } from "@/components/admin/AssociateBarberDialog";
+import { AssociateServiceDialog } from "@/components/admin/AssociateServiceDialog";
 import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
 import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesManager";
 import { ExtrasManager } from "@/components/admin/ExtrasManager";
@@ -895,6 +896,13 @@ type ServiceListItem = {
   price: number;
   duration?: number;
   isVisible?: boolean | null;
+  isActive?: boolean;
+  locationId?: number;
+  priceOverride?: number | null;
+  durationOverride?: number | null;
+  basePrice?: number;
+  baseDuration?: number;
+  baseIsVisible?: boolean | null;
   categoryId?: number | null;
   category?: { id: number; name: string; sortOrder: number } | null;
 };
@@ -4676,6 +4684,12 @@ export default function Admin() {
                     isError={isServiceCategoriesError}
                   />
                 )}
+                {user?.role === "admin" && multiLocationConfig?.enabled && (
+                  <AssociateServiceDialog
+                    locationName={activeLocation?.name}
+                    onChanged={refreshBookableLocationsCache}
+                  />
+                )}
                 <Dialog open={isAddingService} onOpenChange={(open) => {
                   if (!open && addServiceSubmissionRef.current) return;
                   setIsAddingService(open);
@@ -4777,7 +4791,8 @@ export default function Admin() {
               {services?.map(service => {
                 const assignedCategory = serviceCategories.find((category) => category.id === service.categoryId);
                 const hasBookableBarber = activeBarbers.some((barber) => canBarberPerformService(barber, service.id));
-                const showMissingBarberWarning = service.isVisible !== false
+                const isServiceActiveHere = service.isActive ?? service.isVisible !== false;
+                const showMissingBarberWarning = isServiceActiveHere
                   && !isLoadingBarbers
                   && !isBarbersError
                   && !hasBookableBarber;
@@ -4827,6 +4842,14 @@ export default function Admin() {
                         <DialogContent className="bg-card border-white/10 text-white">
                           <DialogHeader><DialogTitle>Editar Serviço</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4" data-edit-service-form>
+                            {multiLocationConfig?.enabled && (
+                              <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">
+                                <p className="font-semibold">Dados globais</p>
+                                <p className="mt-1 text-xs leading-relaxed text-amber-100/80">
+                                  Nome, descrição, nome na agenda e categoria são partilhados. Alterá-los afeta todas as lojas associadas.
+                                </p>
+                              </div>
+                            )}
                             <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>
                             <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>
                             <div>
@@ -4838,8 +4861,6 @@ export default function Admin() {
                                 maxLength={40}
                               />
                             </div>
-                            <div><Label>Preço (€)</Label><Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" /></div>
-                            <div><Label>Duração (Min)</Label><Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" /></div>
                             {serviceCategories.length > 0 && (
                               <div>
                                 <Label>Categoria</Label>
@@ -4866,6 +4887,24 @@ export default function Admin() {
                                 </Select>
                               </div>
                             )}
+                            {multiLocationConfig?.enabled && (
+                              <div className="border-t border-white/10 pt-4">
+                                <p className="font-semibold text-white">Nesta loja</p>
+                                <p className="mt-1 text-xs text-gray-400">
+                                  O preço e a duração seguintes aplicam-se apenas a {activeLocation?.name || "esta loja"}.
+                                </p>
+                              </div>
+                            )}
+                            <div>
+                              <Label htmlFor={`edit-service-price-${service.id}`}>{multiLocationConfig?.enabled ? "Preço nesta loja (€)" : "Preço (€)"}</Label>
+                              <Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" />
+                              {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Valor base global: {((service.basePrice ?? service.price) / 100).toFixed(2)} €</p>}
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? "Duração nesta loja (Min)" : "Duração (Min)"}</Label>
+                              <Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" />
+                              {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Duração base global: {service.baseDuration ?? service.duration} min</p>}
+                            </div>
                             <Button variant="gold" className="w-full" disabled={savingServiceId === service.id} onClick={async (event) => {
                               if (savingServiceIdRef.current !== null) return;
                               savingServiceIdRef.current = service.id;
@@ -4880,7 +4919,9 @@ export default function Admin() {
                                 const categoryId = Object.prototype.hasOwnProperty.call(serviceCategoryDrafts, service.id)
                                   ? serviceCategoryDrafts[service.id]
                                   : service.categoryId ?? null;
-                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, { name, description, agendaLabel, price, duration, categoryId });
+                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, multiLocationConfig?.enabled
+                                  ? { name, description, agendaLabel, priceOverride: price, durationOverride: duration, categoryId }
+                                  : { name, description, agendaLabel, price, duration, categoryId });
                                 await assertServiceAgendaLabelPersisted(response, agendaLabel);
                                 queryClient.invalidateQueries({ queryKey: ["/api/services"] });
                                 queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
@@ -4902,9 +4943,11 @@ export default function Admin() {
                         </DialogContent>
                       </Dialog>
                       <ConfirmAction
-                        title={`Remover ${service.name}?`}
-                        description="As marcações antigas ficam guardadas, mas este serviço deixa de estar disponível."
-                        confirmLabel="Remover"
+                        title={multiLocationConfig?.enabled ? `Retirar ${service.name} desta loja?` : `Remover ${service.name}?`}
+                        description={multiLocationConfig?.enabled
+                          ? `O serviço deixa de estar disponível em ${activeLocation?.name || "esta loja"}, sem afetar as outras lojas nem as marcações antigas.`
+                          : "As marcações antigas ficam guardadas, mas este serviço deixa de estar disponível."}
+                        confirmLabel={multiLocationConfig?.enabled ? "Retirar desta loja" : "Remover"}
                         confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onConfirm={async () => {
                           try {
@@ -4913,14 +4956,14 @@ export default function Admin() {
                             queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
                             refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                            toast({ title: "Sucesso", description: "Serviço removido." });
+                            toast({ title: "Sucesso", description: multiLocationConfig?.enabled ? "Serviço retirado desta loja." : "Serviço removido." });
                           } catch {
                             toast({ title: "Erro", description: "Não foi possível remover o serviço. Verifique se existem marcações associadas.", variant: "destructive" });
                           }
                         }}
                       >
                         <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400">
-                          Remover
+                          {multiLocationConfig?.enabled ? "Retirar" : "Remover"}
                         </Button>
                       </ConfirmAction>
                       <Button
@@ -4929,13 +4972,17 @@ export default function Admin() {
                         className="h-8 text-[10px] text-gray-400 border-white/5"
                         onClick={async () => {
                           try {
-                            await apiRequest("PATCH", `/api/services/${service.id}`, { isVisible: !service.isVisible });
+                            await apiRequest("PATCH", `/api/services/${service.id}`, multiLocationConfig?.enabled
+                              ? { isActive: !isServiceActiveHere }
+                              : { isVisible: !isServiceActiveHere });
                             queryClient.invalidateQueries({ queryKey: ["/api/services"] });
                             refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
                               title: "Sucesso",
-                              description: service.isVisible ? "Serviço ocultado." : "Serviço visível no site.",
+                              description: isServiceActiveHere
+                                ? (multiLocationConfig?.enabled ? "Serviço ocultado nesta loja." : "Serviço ocultado.")
+                                : (multiLocationConfig?.enabled ? "Serviço ativo nesta loja." : "Serviço visível no site."),
                             });
                           } catch (err: any) {
                             toast({
@@ -4946,7 +4993,9 @@ export default function Admin() {
                           }
                         }}
                       >
-                        {service.isVisible ? "Visível" : "Oculto"}
+                        {isServiceActiveHere
+                          ? (multiLocationConfig?.enabled ? "Ativo nesta loja" : "Visível")
+                          : (multiLocationConfig?.enabled ? "Inativo nesta loja" : "Oculto")}
                       </Button>
                     </div>
                   </CardContent>

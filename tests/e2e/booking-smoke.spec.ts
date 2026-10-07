@@ -5809,10 +5809,6 @@ test.describe("booking rules", () => {
     });
     expect(hiddenServiceResponse.status(), await hiddenServiceResponse.text()).toBe(201);
     const hiddenService = await hiddenServiceResponse.json();
-    const assignResponse = await request.patch(`/api/barbers/${visibleBarber.id}/services`, {
-      data: { serviceIds: Array.from(new Set([...visibleServices.map((service: any) => service.id), hiddenService.id])) },
-    });
-    expect(assignResponse.ok(), await assignResponse.text()).toBe(true);
 
     const hiddenBarberBooking = await request.post("/api/appointments", {
       data: {
@@ -6374,7 +6370,7 @@ test.describe("booking rules", () => {
     }
   });
 
-  test("protects services used by future bookings and reports missing services", async ({ request }) => {
+  test("archives services used by bookings and reports missing services", async ({ request }) => {
     await loginAdminRequest(request);
     const suffix = Date.now();
     const createServiceResponse = await request.post("/api/services", {
@@ -6418,10 +6414,13 @@ test.describe("booking rules", () => {
 
     try {
       const protectedDeleteResponse = await request.delete(`/api/services/${service.id}`);
-      expect(protectedDeleteResponse.status(), await protectedDeleteResponse.text()).toBe(409);
+      expect(protectedDeleteResponse.status(), await protectedDeleteResponse.text()).toBe(200);
+      expect(await protectedDeleteResponse.json()).toMatchObject({ mode: "deactivated" });
 
       const stillPresentResponse = await request.get("/api/services?includeHidden=true");
-      expect((await stillPresentResponse.json()).some((item: any) => item.id === service.id)).toBe(true);
+      expect((await stillPresentResponse.json()).find((item: any) => item.id === service.id)).toMatchObject({
+        isActive: false,
+      });
     } finally {
       await request.patch(`/api/appointments/${appointment.id}/status`, {
         data: { status: "cancelled" },

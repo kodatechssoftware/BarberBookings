@@ -17,6 +17,7 @@ import {
   customerNotes,
   locations,
   barberLocations,
+  serviceLocations,
   auditLogs,
   barberCompensationRules,
   businessExpenses,
@@ -992,11 +993,13 @@ export class DatabaseStorage implements IStorage {
       throw error;
     }
 
-    await db.delete(barberServices).where(eq(barberServices.serviceId, id));
-    // Set serviceId to null for all appointments linked to this service
-    await db.update(appointments).set({ serviceId: null }).where(eq(appointments.serviceId, id));
-    // Now we can safely delete the service
-    await db.delete(services).where(eq(services.id, id));
+    await db.transaction(async (tx) => {
+      await tx.delete(barberServices).where(eq(barberServices.serviceId, id));
+      await tx.delete(serviceLocations).where(eq(serviceLocations.serviceId, id));
+      // Set serviceId to null for all appointments linked to this service.
+      await tx.update(appointments).set({ serviceId: null }).where(eq(appointments.serviceId, id));
+      await tx.delete(services).where(eq(services.id, id));
+    });
   }
 
   async getServiceCategories(options?: { includeInactive?: boolean }): Promise<ServiceCategory[]> {

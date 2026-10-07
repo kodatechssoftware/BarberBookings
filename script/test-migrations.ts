@@ -32,6 +32,7 @@ const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbo
 const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
 const preLocationBrandingMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-location-branding-"));
 const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-voucher-payment-"));
+const preServiceLocationOffersMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-location-offers-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -92,6 +93,21 @@ for (const file of [
   "0010_location_branding.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preVoucherPaymentMigrationsDirectory, file));
+}
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+  "0008_appointment_extras.sql",
+  "0009_customer_notes_contact_identity.sql",
+  "0010_location_branding.sql",
+  "0011_appointment_voucher_payment.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preServiceLocationOffersMigrationsDirectory, file));
 }
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -197,7 +213,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 11, "a fresh empty application schema must apply migrations 0001 through 0011");
+  assert.equal(freshRun.applied.length, 12, "a fresh empty application schema must apply migrations 0001 through 0012");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -220,7 +236,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 11);
+  assert.equal(secondFreshRun.alreadyApplied, 12);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -571,7 +587,11 @@ try {
   assert.equal(secondLocationBrandingRun.applied.length, 0);
   assert.equal(secondLocationBrandingRun.alreadyApplied, 10);
   const releaseDataBeforeVoucherMigration = await captureReleaseData();
-  const voucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const voucherMigrationRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preServiceLocationOffersMigrationsDirectory,
+  });
   assert.deepEqual(voucherMigrationRun.applied, ["0011_appointment_voucher_payment.sql"]);
   assert.equal(voucherMigrationRun.alreadyApplied, 10);
   assert.deepEqual(
@@ -592,9 +612,37 @@ try {
     /appointments_payment_method_check/,
   );
   await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'pending' WHERE id = 1`);
-  const secondVoucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondVoucherMigrationRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preServiceLocationOffersMigrationsDirectory,
+  });
   assert.equal(secondVoucherMigrationRun.applied.length, 0);
   assert.equal(secondVoucherMigrationRun.alreadyApplied, 11);
+  const serviceOfferIdentityBefore = (await pool.query(`
+    SELECT id, name, description, agenda_label, price, duration
+    FROM ${table("services")} ORDER BY id
+  `)).rows;
+  const serviceLocationOffersRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(serviceLocationOffersRun.applied, ["0012_service_location_offers.sql"]);
+  assert.equal(serviceLocationOffersRun.alreadyApplied, 11);
+  assert.deepEqual((await pool.query(`
+    SELECT id, name, description, agenda_label, price, duration
+    FROM ${table("services")} ORDER BY id
+  `)).rows, serviceOfferIdentityBefore, "migration 0012 must preserve service identity and commercial base values");
+  assert.deepEqual((await pool.query(`
+    SELECT service_id, is_active
+    FROM ${table("service_locations")} ORDER BY service_id
+  `)).rows.map((row) => ({ service_id: Number(row.service_id), is_active: row.is_active })), [
+    { service_id: 1, is_active: true },
+    { service_id: 2, is_active: false },
+  ], "migration 0012 must preserve legacy visibility per location");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("services")} WHERE is_visible = false
+  `)).rows[0].count), 0, "migration 0012 must retire the legacy global visibility switch");
+  const secondServiceOfferRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondServiceOfferRun.applied.length, 0);
+  assert.equal(secondServiceOfferRun.alreadyApplied, 12);
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
@@ -1232,7 +1280,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010/0011, voucher payments, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010/0011/0012, location-specific service offers, voucher payments, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1243,4 +1291,5 @@ try {
   await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
   await rm(preLocationBrandingMigrationsDirectory, { recursive: true, force: true });
   await rm(preVoucherPaymentMigrationsDirectory, { recursive: true, force: true });
+  await rm(preServiceLocationOffersMigrationsDirectory, { recursive: true, force: true });
 }

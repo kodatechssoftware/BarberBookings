@@ -1609,3 +1609,320 @@ test("[multi-location] pending loader uses the appointment location logo and upd
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
   await assertAppointmentPendingLogo(appointmentFixtures[0], "/images/logo.jpg");
 });
+
+test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja", async ({ page, request, playwright, baseURL }) => {
+  test.setTimeout(120_000);
+  const [shopA, shopB] = await ensureLocations(request, 2);
+  if (!shopB.isActive) {
+    const activation = await request.patch(`/api/admin/locations/${shopB.id}`, { data: { isActive: true } });
+    expect(activation.ok(), await activation.text()).toBe(true);
+  }
+  const headersA = { "X-Location-Id": String(shopA.id) };
+  const headersB = { "X-Location-Id": String(shopB.id) };
+  const suffix = Date.now();
+  const serviceName = `Serviço partilhado ${suffix}`;
+
+  const createServiceResponse = await request.post("/api/services", {
+    headers: headersA,
+    data: {
+      name: serviceName,
+      description: "Identidade global com oferta local",
+      price: 1500,
+      duration: 30,
+      isVisible: true,
+    },
+  });
+  expect(createServiceResponse.status(), await createServiceResponse.text()).toBe(201);
+  const service = await createServiceResponse.json();
+  expect(service).toMatchObject({
+    name: serviceName,
+    locationId: shopA.id,
+    price: 1500,
+    duration: 30,
+    priceOverride: null,
+    durationOverride: null,
+  });
+
+  // The small Admin flow associates the existing global identity with shop B.
+  await loginAdmin(page.request);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/admin");
+  await page.evaluate((locationId) => {
+    localStorage.setItem("barberbookings:location-id", String(locationId));
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: "barberbookings:location-id",
+      newValue: String(locationId),
+    }));
+  }, shopB.id);
+  await page.getByRole("tab", { name: "Serviços", exact: true }).click();
+  await page.getByRole("button", { name: "Associar serviço existente" }).click();
+  const associationDialog = page.getByRole("dialog", { name: new RegExp("Associar serviço") });
+  await associationDialog.getByRole("combobox").click();
+  await page.getByRole("option", { name: serviceName, exact: true }).click();
+  await expect(associationDialog.getByLabel("Preço nesta loja (€)")).toHaveValue("15,00");
+  await expect(associationDialog.getByLabel("Duração nesta loja (min)")).toHaveValue("30");
+  await associationDialog.getByLabel("Preço nesta loja (€)").fill("18,00");
+  await associationDialog.getByLabel("Duração nesta loja (min)").fill("45");
+  await associationDialog.getByRole("button", { name: "Associar nesta loja", exact: true }).click();
+  await expect(associationDialog).not.toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const adminServiceCard = page.getByTestId(`admin-service-card-${service.id}`);
+  await expect(adminServiceCard).toContainText("18.00€");
+  await expect(adminServiceCard).toContainText("45 min");
+  await adminServiceCard.getByRole("button", { name: "Editar", exact: true }).click();
+  const editDialog = page.getByRole("dialog", { name: "Editar Serviço" });
+  await expect(editDialog.getByText("Dados globais", { exact: true })).toBeVisible();
+  await expect(editDialog.getByText("Nesta loja", { exact: true })).toBeVisible();
+  await expect(editDialog.locator(`#edit-service-price-${service.id}`)).toHaveValue("18");
+  await expect(editDialog.locator(`#edit-service-dur-${service.id}`)).toHaveValue("45");
+  await page.keyboard.press("Escape");
+  await expect(editDialog).not.toBeVisible();
+
+  const catalogueA = await (await request.get("/api/services?includeHidden=true", { headers: headersA })).json();
+  const catalogueB = await (await request.get("/api/services?includeHidden=true", { headers: headersB })).json();
+  const serviceA = catalogueA.find((item: any) => item.id === service.id);
+  const serviceB = catalogueB.find((item: any) => item.id === service.id);
+  expect(serviceA).toMatchObject({ locationId: shopA.id, price: 1500, duration: 30, isActive: true });
+  expect(serviceB).toMatchObject({
+    locationId: shopB.id,
+    price: 1800,
+    duration: 45,
+    priceOverride: 1800,
+    durationOverride: 45,
+    basePrice: 1500,
+    baseDuration: 30,
+    isActive: true,
+  });
+
+  const barberResponse = await request.post("/api/barbers", {
+    headers: headersA,
+    data: {
+      name: `Barbeiro serviço partilhado ${suffix}`,
+      specialty: "Serviços por localização",
+      color: "#315A7D",
+      isVisible: true,
+      serviceIds: [service.id],
+    },
+  });
+  expect(barberResponse.status(), await barberResponse.text()).toBe(201);
+  const barber = await barberResponse.json();
+  const associateBarber = await request.post("/api/admin/location-barbers", {
+    headers: headersB,
+    data: { barberId: barber.id },
+  });
+  expect(associateBarber.status(), await associateBarber.text()).toBe(201);
+
+  const guest = await playwright.request.newContext({ baseURL });
+  try {
+    const publicCatalogueA = await (await guest.get("/api/services", { headers: headersA })).json();
+    const publicCatalogueB = await (await guest.get("/api/services", { headers: headersB })).json();
+    expect(publicCatalogueA.find((item: any) => item.id === service.id)).toMatchObject({ price: 1500, duration: 30 });
+    expect(publicCatalogueB.find((item: any) => item.id === service.id)).toMatchObject({ price: 1800, duration: 45 });
+  } finally {
+    await guest.dispose();
+  }
+
+  const publicDate = new Date(Date.now() + 600 * 86400000);
+  publicDate.setUTCHours(9, 0, 0, 0);
+  const publicWeekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Lisbon",
+    weekday: "short",
+  }).format(publicDate);
+  const weekdayNumber = ({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 } as Record<string, number>)[publicWeekday];
+  for (const headers of [headersA, headersB]) {
+    const shopSchedule = await request.patch("/api/shop/availability", {
+      headers,
+      data: [{ dayOfWeek: weekdayNumber, startTime: "08:00", endTime: "18:00", isOpen: true }],
+    });
+    expect(shopSchedule.ok(), await shopSchedule.text()).toBe(true);
+    const barberSchedule = await request.patch(`/api/barbers/${barber.id}/availability`, {
+      headers,
+      data: [{ dayOfWeek: weekdayNumber, startTime: "08:00", endTime: "18:00", isWorking: true }],
+    });
+    expect(barberSchedule.ok(), await barberSchedule.text()).toBe(true);
+  }
+  const publicBookingA = await request.post("/api/appointments", { headers: headersA, data: {
+    barberId: barber.id,
+    serviceId: service.id,
+    startTime: publicDate.toISOString(),
+    customerName: `Booking A ${suffix}`,
+    customerPhone: "+351912650201",
+  } });
+  expect(publicBookingA.status(), await publicBookingA.text()).toBe(201);
+  expect(await publicBookingA.json()).toMatchObject({
+    servicePriceCentsSnapshot: 1500,
+    durationMinutes: 30,
+  });
+  const publicBookingB = await request.post("/api/appointments", { headers: headersB, data: {
+    barberId: barber.id,
+    serviceId: service.id,
+    startTime: new Date(publicDate.getTime() + 2 * 3600000).toISOString(),
+    customerName: `Booking B ${suffix}`,
+    customerPhone: "+351912650202",
+  } });
+  expect(publicBookingB.status(), await publicBookingB.text()).toBe(201);
+  expect(await publicBookingB.json()).toMatchObject({
+    servicePriceCentsSnapshot: 1800,
+    durationMinutes: 45,
+  });
+
+  // Booking renders the same identity with each shop's commercial terms.
+  for (const [shop, expectedPrice, expectedDuration] of [
+    [shopA, "15.00€", "30 min"],
+    [shopB, "18.00€", "45 min"],
+  ] as const) {
+    await page.goto("/book");
+    await page.getByRole("button", { name: shop.name }).click();
+    await page.getByText(barber.name, { exact: true }).click();
+    await page.getByRole("button", { name: "Seguinte", exact: true }).click();
+    const serviceCard = page.getByText(serviceName, { exact: true }).locator("xpath=ancestor::div[contains(@class,'items-stretch')]");
+    await expect(serviceCard).toContainText(expectedDuration);
+    await expect(serviceCard).toContainText(expectedPrice);
+  }
+
+  const availabilityDate = new Date(Date.now() + 40 * 86400000);
+  const dayOfWeek = availabilityDate.getDay();
+  const availabilityRows = [{
+    barberId: barber.id,
+    dayOfWeek,
+    startTime: "09:00",
+    endTime: "10:30",
+    isWorking: true,
+  }];
+  const shopAvailabilityRows = [{ dayOfWeek, startTime: "09:00", endTime: "10:30", isOpen: true }];
+  const availableStartsA = getAvailableTimeSlots({
+    selectedService: serviceA,
+    selectedDate: availabilityDate,
+    selectedBarberId: barber.id,
+    visibleBarbers: [barber],
+    availabilityRows,
+    shopAvailabilityRows,
+    existingAppointments: [],
+    now: new Date(0),
+    timeZone: "Europe/Lisbon",
+  }).filter((slot) => slot.available).map((slot) => slot.time);
+  const availableStartsB = getAvailableTimeSlots({
+    selectedService: serviceB,
+    selectedDate: availabilityDate,
+    selectedBarberId: barber.id,
+    visibleBarbers: [barber],
+    availabilityRows,
+    shopAvailabilityRows,
+    existingAppointments: [],
+    now: new Date(0),
+    timeZone: "Europe/Lisbon",
+  }).filter((slot) => slot.available).map((slot) => slot.time);
+  expect(availableStartsA).toContain("10:00");
+  expect(availableStartsB).not.toContain("10:00");
+
+  const createManual = async (
+    headers: Record<string, string>,
+    startTime: Date,
+    name: string,
+    completed = false,
+  ) => {
+    const response = await request.post("/api/appointments/block", { headers, data: {
+      barberId: barber.id,
+      serviceId: service.id,
+      startTime: startTime.toISOString(),
+      name,
+      phone: `+35191${String(Math.abs(startTime.getTime())).slice(-7)}`,
+      customerEmail: "",
+      isManualBooking: true,
+      isRecurring: false,
+      allowOutsideHours: true,
+      ...(completed ? { isAlreadyCompleted: true, paymentMethod: "cash" } : {}),
+    } });
+    expect(response.status(), await response.text()).toBe(201);
+    return (await response.json()).appointments[0];
+  };
+
+  const futureA = new Date(Date.now() + 500 * 86400000);
+  futureA.setUTCHours(9, 0, 0, 0);
+  const futureB = new Date(futureA.getTime() + 2 * 3600000);
+  const bookedA = await createManual(headersA, futureA, `Cliente A ${suffix}`);
+  const bookedB = await createManual(headersB, futureB, `Cliente B ${suffix}`);
+  expect(bookedA).toMatchObject({
+    locationId: shopA.id,
+    serviceId: service.id,
+    serviceNameSnapshot: serviceName,
+    servicePriceCentsSnapshot: 1500,
+    durationMinutes: 30,
+  });
+  expect(bookedB).toMatchObject({
+    locationId: shopB.id,
+    serviceId: service.id,
+    serviceNameSnapshot: serviceName,
+    servicePriceCentsSnapshot: 1800,
+    durationMinutes: 45,
+  });
+
+  const historicalAStart = new Date("2020-04-14T08:00:00.000Z");
+  const historicalBStart = new Date("2020-04-14T10:00:00.000Z");
+  const historicalA = await createManual(headersA, historicalAStart, `Histórico A ${suffix}`, true);
+  const historicalB = await createManual(headersB, historicalBStart, `Histórico B ${suffix}`, true);
+
+  const updateA = await request.patch(`/api/services/${service.id}`, {
+    headers: headersA,
+    data: { priceOverride: 1600, durationOverride: 35 },
+  });
+  expect(updateA.ok(), await updateA.text()).toBe(true);
+  expect(await updateA.json()).toMatchObject({ price: 1600, duration: 35 });
+  expect((await (await request.get("/api/services", { headers: headersB })).json())
+    .find((item: any) => item.id === service.id)).toMatchObject({ price: 1800, duration: 45 });
+
+  const historyA = await request.get(`/api/admin/customers/history?appointmentId=${historicalA.id}`, { headers: headersA });
+  expect(historyA.ok(), await historyA.text()).toBe(true);
+  expect((await historyA.json()).appointments.find((item: any) => item.id === historicalA.id)).toMatchObject({
+    serviceName: serviceName,
+    servicePrice: 1500,
+    durationMinutes: 30,
+  });
+
+  for (const [headers, expectedRevenue] of [[headersA, 1500], [headersB, 1800]] as const) {
+    const dashboardResponse = await request.get(
+      "/api/admin/dashboard?startDate=2020-04-14&endDate=2020-04-14",
+      { headers },
+    );
+    expect(dashboardResponse.ok(), await dashboardResponse.text()).toBe(true);
+    expect((await dashboardResponse.json()).summary).toMatchObject({
+      appointments: 1,
+      completed: 1,
+      revenueCents: expectedRevenue,
+    });
+
+    const exportResponse = await request.get(
+      "/api/admin/export?startDate=2020-04-14&endDate=2020-04-14",
+      { headers },
+    );
+    expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exportResponse.body());
+    const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
+    const headersRow = getHeaderRow(detail, "Data do serviço").values as unknown[];
+    const serviceValueColumn = headersRow.indexOf("Valor serviço (€)");
+    expect(detail.getColumn(serviceValueColumn).values).toContain(expectedRevenue / 100);
+  }
+
+  const hideA = await request.patch(`/api/services/${service.id}`, {
+    headers: headersA,
+    data: { isActive: false },
+  });
+  expect(hideA.ok(), await hideA.text()).toBe(true);
+  expect((await (await request.get("/api/services", { headers: headersA })).json()).some((item: any) => item.id === service.id)).toBe(false);
+  expect((await (await request.get("/api/services", { headers: headersB })).json()).some((item: any) => item.id === service.id)).toBe(true);
+  const reactivateA = await request.patch(`/api/admin/service-locations/${service.id}`, {
+    headers: headersA,
+    data: { isActive: true },
+  });
+  expect(reactivateA.ok(), await reactivateA.text()).toBe(true);
+
+  const removeA = await request.delete(`/api/services/${service.id}`, { headers: headersA });
+  expect(removeA.ok(), await removeA.text()).toBe(true);
+  expect(await removeA.json()).toMatchObject({ mode: "deactivated" });
+  expect((await (await request.get("/api/services", { headers: headersA })).json()).some((item: any) => item.id === service.id)).toBe(false);
+  expect((await (await request.get("/api/services", { headers: headersB })).json()).some((item: any) => item.id === service.id)).toBe(true);
+  expect(historicalB).toMatchObject({ servicePriceCentsSnapshot: 1800, durationMinutes: 45 });
+});

@@ -65,7 +65,30 @@ let memoryLocations: ShopLocation[] = [{
 }];
 const memoryBarberLocations = new Map<number, Set<number>>();
 const memoryInactiveBarberLocations = new Map<number, Set<number>>();
-const memoryServiceLocations = new Map<number, Set<number>>();
+export type ServiceLocationOfferRecord = {
+  serviceId: number;
+  locationId: number;
+  isActive: boolean;
+  priceOverride: number | null;
+  durationOverride: number | null;
+  createdAt: Date;
+};
+const memoryServiceLocationOffers = new Map<string, ServiceLocationOfferRecord>();
+
+function serviceLocationOfferKey(serviceId: number, locationId: number) {
+  return `${serviceId}:${locationId}`;
+}
+
+function mapServiceLocationOffer(row: any): ServiceLocationOfferRecord {
+  return {
+    serviceId: Number(row.service_id),
+    locationId: Number(row.location_id),
+    isActive: Boolean(row.is_active),
+    priceOverride: row.price_override === null || row.price_override === undefined ? null : Number(row.price_override),
+    durationOverride: row.duration_override === null || row.duration_override === undefined ? null : Number(row.duration_override),
+    createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+  };
+}
 
 export async function listLocations(includeInactive = false) {
   if (useMemoryStorage) {
@@ -108,17 +131,36 @@ export async function getBarberIdsForLocation(locationId: number, includeInactiv
   return result.rows.map((row) => Number(row.barber_id));
 }
 
-export async function getServiceIdsForLocation(locationId: number) {
+export async function getServiceLocationOffersForLocation(locationId: number, includeInactive = false) {
   if (useMemoryStorage) {
-    const assigned = memoryServiceLocations.get(locationId);
-    return Array.from(assigned ?? []);
+    return Array.from(memoryServiceLocationOffers.values())
+      .filter((offer) => offer.locationId === locationId && (includeInactive || offer.isActive))
+      .sort((left, right) => left.serviceId - right.serviceId);
   }
-  const result = await pool.query<{ service_id: number }>(`
-    SELECT service_id FROM ${serviceLocationsTable}
-    WHERE location_id = $1 AND is_active = true
+  const result = await pool.query(`
+    SELECT service_id, location_id, is_active, price_override, duration_override, created_at
+    FROM ${serviceLocationsTable}
+    WHERE location_id = $1 ${includeInactive ? "" : "AND is_active = true"}
     ORDER BY service_id
   `, [locationId]);
-  return result.rows.map((row) => Number(row.service_id));
+  return result.rows.map(mapServiceLocationOffer);
+}
+
+export async function getServiceLocationOffer(serviceId: number, locationId: number) {
+  if (useMemoryStorage) {
+    return memoryServiceLocationOffers.get(serviceLocationOfferKey(serviceId, locationId));
+  }
+  const result = await pool.query(`
+    SELECT service_id, location_id, is_active, price_override, duration_override, created_at
+    FROM ${serviceLocationsTable}
+    WHERE service_id = $1 AND location_id = $2
+  `, [serviceId, locationId]);
+  return result.rowCount ? mapServiceLocationOffer(result.rows[0]) : undefined;
+}
+
+export async function getServiceIdsForLocation(locationId: number, includeInactive = false) {
+  return (await getServiceLocationOffersForLocation(locationId, includeInactive))
+    .map((offer) => offer.serviceId);
 }
 
 export async function getLocationIdsForBarber(barberId: number) {
@@ -159,15 +201,16 @@ export async function getLocationCountsForBarbers(barberIds: number[]) {
   return counts;
 }
 
-export async function getLocationIdsForService(serviceId: number) {
+export async function getLocationIdsForService(serviceId: number, includeInactive = false) {
   if (useMemoryStorage) {
-    return Array.from(memoryServiceLocations.entries())
-      .filter(([, serviceIds]) => serviceIds.has(serviceId))
-      .map(([locationId]) => locationId);
+    return Array.from(memoryServiceLocationOffers.values())
+      .filter((offer) => offer.serviceId === serviceId && (includeInactive || offer.isActive))
+      .map((offer) => offer.locationId)
+      .sort((left, right) => left - right);
   }
   const result = await pool.query<{ location_id: number }>(`
     SELECT location_id FROM ${serviceLocationsTable}
-    WHERE service_id = $1 AND is_active = true
+    WHERE service_id = $1 ${includeInactive ? "" : "AND is_active = true"}
     ORDER BY location_id
   `, [serviceId]);
   return result.rows.map((row) => Number(row.location_id));
@@ -188,18 +231,46 @@ export async function assignBarberToLocation(barberId: number, locationId: numbe
   `, [barberId, locationId]);
 }
 
-export async function assignServiceToLocation(serviceId: number, locationId: number) {
+export async function assignServiceToLocation(
+  serviceId: number,
+  locationId: number,
+  input: { isActive?: boolean; priceOverride?: number | null; durationOverride?: number | null } = {},
+) {
   if (useMemoryStorage) {
-    const assigned = memoryServiceLocations.get(locationId) ?? new Set<number>();
-    assigned.add(serviceId);
-    memoryServiceLocations.set(locationId, assigned);
-    return;
+    const key = serviceLocationOfferKey(serviceId, locationId);
+    const existing = memoryServiceLocationOffers.get(key);
+    const offer: ServiceLocationOfferRecord = {
+      serviceId,
+      locationId,
+      isActive: input.isActive === undefined ? existing?.isActive ?? true : input.isActive,
+      priceOverride: input.priceOverride === undefined ? existing?.priceOverride ?? null : input.priceOverride,
+      durationOverride: input.durationOverride === undefined ? existing?.durationOverride ?? null : input.durationOverride,
+      createdAt: existing?.createdAt ?? new Date(),
+    };
+    memoryServiceLocationOffers.set(key, offer);
+    return offer;
   }
-  await pool.query(`
-    INSERT INTO ${serviceLocationsTable} (service_id, location_id, is_active)
-    VALUES ($1, $2, true)
-    ON CONFLICT (service_id, location_id) DO UPDATE SET is_active = true
-  `, [serviceId, locationId]);
+  const result = await pool.query(`
+    INSERT INTO ${serviceLocationsTable} (
+      service_id, location_id, is_active, price_override, duration_override
+    )
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (service_id, location_id) DO UPDATE SET
+      is_active = CASE WHEN $6 THEN EXCLUDED.is_active ELSE ${serviceLocationsTable}.is_active END,
+      price_override = CASE WHEN $7 THEN EXCLUDED.price_override ELSE ${serviceLocationsTable}.price_override END,
+      duration_override = CASE WHEN $8 THEN EXCLUDED.duration_override ELSE ${serviceLocationsTable}.duration_override END
+    RETURNING service_id, location_id, is_active, price_override, duration_override, created_at
+  `, [
+    serviceId,
+    locationId,
+    input.isActive ?? true,
+    input.priceOverride ?? null,
+    input.durationOverride ?? null,
+    input.isActive !== undefined,
+    input.priceOverride !== undefined,
+    input.durationOverride !== undefined,
+  ]);
+  return mapServiceLocationOffer(result.rows[0]);
 }
 
 export async function removeBarberFromLocation(barberId: number, locationId: number) {
@@ -247,14 +318,30 @@ export async function removeBarberFromLocation(barberId: number, locationId: num
 
 export async function removeServiceFromLocation(serviceId: number, locationId: number) {
   if (useMemoryStorage) {
-    memoryServiceLocations.get(locationId)?.delete(serviceId);
-    return;
+    const key = serviceLocationOfferKey(serviceId, locationId);
+    const existing = memoryServiceLocationOffers.get(key);
+    if (!existing) return undefined;
+    const updated = { ...existing, isActive: false };
+    memoryServiceLocationOffers.set(key, updated);
+    return updated;
   }
-  await pool.query(`
+  const result = await pool.query(`
     UPDATE ${serviceLocationsTable}
     SET is_active = false
     WHERE service_id = $1 AND location_id = $2
+    RETURNING service_id, location_id, is_active, price_override, duration_override, created_at
   `, [serviceId, locationId]);
+  return result.rowCount ? mapServiceLocationOffer(result.rows[0]) : undefined;
+}
+
+export async function deleteServiceLocationOffers(serviceId: number) {
+  if (useMemoryStorage) {
+    for (const [key, offer] of Array.from(memoryServiceLocationOffers.entries())) {
+      if (offer.serviceId === serviceId) memoryServiceLocationOffers.delete(key);
+    }
+    return;
+  }
+  await pool.query(`DELETE FROM ${serviceLocationsTable} WHERE service_id = $1`, [serviceId]);
 }
 
 function chooseUniqueSlug(name: string, locations: Array<{ id: number; slug: string }>, existingId?: number) {
