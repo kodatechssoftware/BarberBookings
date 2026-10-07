@@ -25,10 +25,33 @@ function collectStrings(value: unknown): string[] {
   return [];
 }
 
-test("Barber and Beauty implement the complete typed Booking copy contract", () => {
+test("Barber and Beauty implement the complete typed business copy contract", () => {
   assert.deepEqual(collectShape(beautyBusinessCopy), collectShape(barberBusinessCopy));
   assert.ok(collectStrings(barberBusinessCopy).every((value) => value.trim().length > 0));
   assert.ok(collectStrings(beautyBusinessCopy).every((value) => value.trim().length > 0));
+});
+
+test("Barber Admin and Agenda keep the existing terminology", () => {
+  const { admin, agenda } = barberBusinessCopy;
+  assert.equal(admin.team.heading, "Equipa de Barbeiros");
+  assert.equal(admin.team.add, "Adicionar Barbeiro");
+  assert.equal(admin.schedules.establishmentBaseHeading, "Horário base da barbearia");
+  assert.equal(admin.compensation.workspaceRentModel, "Aluguer fixo de cadeira");
+  assert.equal(agenda.professional.allFilter, "Todos os barbeiros");
+  assert.equal(agenda.professional.filterPlaceholder, "Filtrar barbeiro");
+  assert.equal(agenda.professional.label, "Barbeiro");
+});
+
+test("Beauty Admin and Agenda use neutral professional and establishment terminology", () => {
+  const { admin, agenda } = beautyBusinessCopy;
+  assert.equal(admin.team.heading, "Equipa de Profissionais");
+  assert.equal(admin.team.add, "Adicionar Profissional");
+  assert.equal(admin.schedules.establishmentBaseHeading, "Horário base do estabelecimento");
+  assert.equal(admin.compensation.workspaceRentModel, "Renda fixa de espaço");
+  assert.equal(admin.extras.followCompensation, "Segue a regra de compensação do profissional");
+  assert.equal(agenda.professional.allFilter, "Todos os profissionais");
+  assert.equal(agenda.professional.filterPlaceholder, "Filtrar profissional");
+  assert.equal(agenda.professional.label, "Profissional");
 });
 
 test("Barber Booking keeps the existing public wording", () => {

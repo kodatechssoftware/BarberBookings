@@ -3,7 +3,13 @@ import { barberBusinessCopy } from "./barber.pt";
 import { beautyBusinessCopy } from "./beauty.pt";
 import type { BusinessCopy } from "./types";
 
-export { formatBusinessCopy, type BookingCopy, type BusinessCopy } from "./types";
+export {
+  formatBusinessCopy,
+  type AdminCopy,
+  type AgendaCopy,
+  type BookingCopy,
+  type BusinessCopy,
+} from "./types";
 
 export const businessCopy = {
   barber: barberBusinessCopy,

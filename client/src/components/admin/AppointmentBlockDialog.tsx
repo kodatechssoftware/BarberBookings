@@ -37,6 +37,7 @@ import {
 } from "@shared/phone-countries";
 import type { ExtraDefinition } from "@shared/schema";
 import type { ShopLocation } from "@shared/locations";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 type AppointmentBlockBarberOption = {
   id: number;
@@ -99,6 +100,7 @@ export function AppointmentBlockDialog({
   isLoadingLocationData = false,
   hasLocationDataError = false,
 }: AppointmentBlockDialogProps) {
+  const agendaCopy = useBusinessCopy().agenda;
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking;
@@ -224,7 +226,7 @@ export function AppointmentBlockDialog({
           <DialogDescription className="text-sm text-gray-400">
             {blockData.isManualBooking
               ? "Crie uma marcação que chegou por chamada ou mensagem diretamente na agenda."
-              : "Bloqueie horas, férias ou ausências sem alterar o horário base da barbearia."}
+              : agendaCopy.blockEstablishmentHelp}
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-5 py-5 sm:px-6">
@@ -241,7 +243,7 @@ export function AppointmentBlockDialog({
                   <p className="mt-1 whitespace-normal break-words text-xs text-gray-400">
                     {blockData.isManualBooking
                       ? "Para clientes que entraram por contacto direto e precisam de ficar registados."
-                      : "Pausas, férias, almoço maior ou fecho excecional para um barbeiro."}
+                      : agendaCopy.blockProfessionalHelp}
                   </p>
                 </div>
               </div>
@@ -288,7 +290,7 @@ export function AppointmentBlockDialog({
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-gray-500">
-                        Os barbeiros, serviços, Extras e horários abaixo pertencem a esta localização.
+                        {agendaCopy.locationScope}
                       </p>
                     </div>
                   )}
@@ -308,7 +310,7 @@ export function AppointmentBlockDialog({
                   <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>
                       <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
-                      <p className="text-xs text-gray-500">Ative apenas quando precisar de registar uma marcação num horário em que o barbeiro normalmente não trabalha.</p>
+                      <p className="text-xs text-gray-500">{agendaCopy.outsideHoursCreateHelp}</p>
                     </div>
                     <Switch
                       id="outsideHours"
@@ -465,13 +467,13 @@ export function AppointmentBlockDialog({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-3">
-                <Label className="text-sm font-medium text-gray-300">Barbeiro</Label>
+                <Label className="text-sm font-medium text-gray-300">{agendaCopy.professional.label}</Label>
                 <Select
                   value={blockData.barberId}
                   disabled={isLoadingLocationData || hasLocationDataError}
                   onValueChange={(value) => onBlockDataChange({ ...blockData, barberId: value })}
                 >
-                  <SelectTrigger data-testid="manual-booking-barber" className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
+                  <SelectTrigger aria-label={agendaCopy.professional.label} data-testid="manual-booking-barber" className="h-12 rounded-xl border-white/10 bg-background/50 text-white">
                     <SelectValue placeholder="Selecione" />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-white/10 text-white">
@@ -481,7 +483,7 @@ export function AppointmentBlockDialog({
                   </SelectContent>
                 </Select>
                 {blockData.isManualBooking && !isLoadingLocationData && !hasLocationDataError && barbers?.length === 0 && (
-                  <p className="text-xs text-red-300">Esta localização não tem barbeiros ativos disponíveis.</p>
+                  <p className="text-xs text-red-300">{agendaCopy.noProfessionalsAtLocation}</p>
                 )}
               </div>
 
@@ -518,7 +520,7 @@ export function AppointmentBlockDialog({
                     </div>
                   )}
                   {blockData.barberId && manualBookingServices.length === 0 && (
-                    <p className="text-xs text-red-300">Este barbeiro não tem serviços associados.</p>
+                    <p className="text-xs text-red-300">{agendaCopy.professional.noServices}</p>
                   )}
                 </div>
               )}
@@ -556,7 +558,7 @@ export function AppointmentBlockDialog({
 
               {!blockData.barberId && (
                 <div className="rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-xs text-primary">
-                  Escolha primeiro o barbeiro para ver apenas horas livres.
+                  {agendaCopy.professional.chooseFirst}
                 </div>
               )}
 
@@ -591,7 +593,7 @@ export function AppointmentBlockDialog({
 
               {!isCheckingAvailability && availableBlockTimes.length === 0 && blockData.barberId && (
                 <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-                  Não há horas disponíveis para este dia e barbeiro.
+                  {agendaCopy.professional.noAvailability}
                 </div>
               )}
             </div>

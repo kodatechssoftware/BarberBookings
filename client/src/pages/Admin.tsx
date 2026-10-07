@@ -101,6 +101,8 @@ import {
 } from "@shared/appointment-service-terms";
 import type { EffectiveAccess } from "@shared/auth";
 import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy, type AdminCopy } from "@shared/business/copy/types";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -1063,9 +1065,9 @@ function getBarberCompensationPayload(data: BarberCompensationFormData) {
   };
 }
 
-function getCompensationSummary(barber: BarberListItem) {
+function getCompensationSummary(barber: BarberListItem, copy: AdminCopy["compensation"]) {
   if (barber.compensationModel === "commission") {
-    return `Comissão: ${barber.commissionPercent ?? 0}% dos serviços concluídos`;
+    return formatBusinessCopy(copy.commissionSummary, { percent: barber.commissionPercent ?? 0 });
   }
 
   if (barber.compensationModel === "chair_rent") {
@@ -1074,7 +1076,10 @@ function getCompensationSummary(barber: BarberListItem) {
       : barber.chairRentPeriod === "week"
         ? "semana trabalhada"
         : "mês trabalhado";
-    return `Aluguer de cadeira: ${formatCents(barber.chairRentCents || 0)} por ${periodLabel}`;
+    return formatBusinessCopy(copy.workspaceRentSummary, {
+      amount: formatCents(barber.chairRentCents || 0),
+      period: periodLabel,
+    });
   }
 
   return "Sem cálculo financeiro no relatório";
@@ -1146,6 +1151,7 @@ function BarberServicesPicker({
   selectedServiceIds: number[];
   onChange: (serviceIds: number[]) => void;
 }) {
+  const copy = useBusinessCopy().admin.team;
   const allServices = services || [];
 
   if (allServices.length === 0) {
@@ -1160,7 +1166,7 @@ function BarberServicesPicker({
     <div className="space-y-2">
       <div>
         <Label>Serviços que executa</Label>
-        <p className="text-xs text-gray-500">Configuração exclusiva da loja em gestão. Pode selecionar todos, alguns ou nenhum.</p>
+        <p className="text-xs text-gray-500">{copy.serviceSelectionHelp}</p>
       </div>
       <div className="grid gap-2 rounded-lg border border-white/10 bg-background/50 p-3 sm:grid-cols-2">
         {allServices.map((service) => {
@@ -1202,12 +1208,13 @@ function BarberCompensationFields({
   value: BarberCompensationFormData;
   onChange: (value: BarberCompensationFormData) => void;
 }) {
+  const copy = useBusinessCopy().admin.compensation;
   const setValue = (patch: Partial<BarberCompensationFormData>) => onChange({ ...value, ...patch });
 
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-background/50 p-3">
       <div>
-        <Label>Modelo financeiro — nesta loja</Label>
+        <Label>{copy.modelLabel}</Label>
         <p className="text-xs text-gray-500">
           Esta regra entra em vigor a partir do momento em que guardar. O histórico anterior mantém a regra antiga no Excel.
         </p>
@@ -1222,29 +1229,29 @@ function BarberCompensationFields({
         <SelectContent className="border-white/10 bg-card text-white">
           <SelectItem value="none">Sem cálculo financeiro</SelectItem>
           <SelectItem value="commission">Comissão percentual</SelectItem>
-          <SelectItem value="chair_rent">Aluguer fixo de cadeira</SelectItem>
+          <SelectItem value="chair_rent">{copy.workspaceRentModel}</SelectItem>
         </SelectContent>
       </Select>
 
       <div className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs leading-relaxed text-gray-400">
         {value.compensationModel === "commission" ? (
           <span>
-            O relatório calcula para o barbeiro a percentagem indicada sobre os serviços concluídos. A barbearia fica com o restante.
+            {copy.commissionHelp}
           </span>
         ) : value.compensationModel === "chair_rent" ? (
           <span>
-            O barbeiro mantém a receita dos serviços concluídos e o relatório desconta o aluguer fixo uma vez por período trabalhado.
+            {copy.workspaceRentHelp}
           </span>
         ) : (
           <span>
-            O relatório mostra a receita da barbearia sem calcular pagamentos ao barbeiro.
+            {copy.noneHelp}
           </span>
         )}
       </div>
 
       {value.compensationModel === "commission" ? (
         <div className="space-y-2">
-          <Label>Percentagem do barbeiro (%)</Label>
+          <Label>{copy.professionalPercentLabel}</Label>
           <Input
             type="number"
             min="0"
@@ -1261,7 +1268,7 @@ function BarberCompensationFields({
       {value.compensationModel === "chair_rent" ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label>Valor do aluguer (€)</Label>
+            <Label>{copy.workspaceRentAmountLabel}</Label>
             <Input
               inputMode="decimal"
               value={value.chairRentAmount}
@@ -1443,6 +1450,9 @@ function validateAvailabilityForm(form: AvailabilityForm) {
 }
 
 export default function Admin() {
+  const businessCopy = useBusinessCopy();
+  const adminCopy = businessCopy.admin;
+  const agendaCopy = businessCopy.agenda;
   const [user, setUser] = useState<AdminUser | null>(null);
   const sessionExpiryHandledRef = useRef(false);
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -2095,9 +2105,9 @@ export default function Admin() {
         serviceIds: [],
         ...defaultBarberCompensationFormData,
       });
-      toast({ title: "Sucesso", description: "Barbeiro adicionado com sucesso." });
+      toast({ title: "Sucesso", description: adminCopy.team.createSuccess });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Erro ao adicionar barbeiro.", variant: "destructive" });
+      toast({ title: "Erro", description: err.message || adminCopy.team.createError, variant: "destructive" });
     } finally {
       addBarberSubmissionRef.current = false;
       setIsCreatingBarber(false);
@@ -2389,9 +2399,9 @@ export default function Admin() {
       await apiRequest("PATCH", "/api/shop/availability", rows);
       queryClient.invalidateQueries({ queryKey: ["/api/shop/availability"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-      toast({ title: "Sucesso", description: "Horário da barbearia atualizado." });
+      toast({ title: "Sucesso", description: adminCopy.schedules.establishmentSaved });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Não foi possível guardar o horário da barbearia.", variant: "destructive" });
+      toast({ title: "Erro", description: err.message || adminCopy.schedules.establishmentSaveError, variant: "destructive" });
     } finally {
       setIsSavingShopAvailability(false);
     }
@@ -2683,7 +2693,7 @@ export default function Admin() {
     queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
     if (selectedBarberFilter === String(barber.id)) setSelectedBarberFilter("all");
     if (dashboardBarberFilter === String(barber.id)) setDashboardBarberFilter("all");
-    toast({ title: "Sucesso", description: result?.message || "Barbeiro removido." });
+    toast({ title: "Sucesso", description: result?.message || adminCopy.team.removeSuccess });
   };
 
   const updateBarberVisibility = async (barber: BarberListItem, isVisible: boolean) => {
@@ -2698,8 +2708,8 @@ export default function Admin() {
     toast({
       title: "Sucesso",
       description: isVisible
-        ? "Barbeiro reativado e visível na operação."
-        : "Barbeiro arquivado. Não aparece no site nem recebe novas reservas.",
+        ? adminCopy.team.reactivated
+        : adminCopy.team.archived,
     });
   };
 
@@ -2815,8 +2825,8 @@ export default function Admin() {
     const missingAppointment = futureRemovalAppointments.find((appointment) => !barberReassignments[appointment.id]);
     if (missingAppointment) {
       toast({
-        title: "Falta escolher barbeiro",
-        description: `Escolha um novo barbeiro para ${missingAppointment.customerName}.`,
+        title: adminCopy.team.missingReplacementTitle,
+        description: formatBusinessCopy(adminCopy.team.missingReplacementDescription, { customerName: missingAppointment.customerName }),
         variant: "destructive",
       });
       return;
@@ -2833,7 +2843,7 @@ export default function Admin() {
       closeBarberRemovalFlow();
       toast({
         title: "Marcações reatribuídas",
-        description: "As marcações futuras foram passadas para outro barbeiro.",
+        description: adminCopy.team.futureReassigned,
       });
     } catch (err: any) {
       toast({
@@ -2851,8 +2861,8 @@ export default function Admin() {
     const missingAppointment = absenceConflict.appointments.find((appointment) => !barberReassignments[appointment.id]);
     if (missingAppointment) {
       toast({
-        title: "Falta escolher barbeiro",
-        description: `Escolha um novo barbeiro para ${missingAppointment.customerName}.`,
+        title: adminCopy.team.missingReplacementTitle,
+        description: formatBusinessCopy(adminCopy.team.missingReplacementDescription, { customerName: missingAppointment.customerName }),
         variant: "destructive",
       });
       return;
@@ -3311,7 +3321,7 @@ export default function Admin() {
     }
 
     if (!blockData.barberId) {
-      toast({ title: "Erro", description: "Selecione um barbeiro.", variant: "destructive" });
+      toast({ title: "Erro", description: agendaCopy.professional.selectRequired, variant: "destructive" });
       return;
     }
     if (blockData.times.length === 0) {
@@ -3604,7 +3614,7 @@ export default function Admin() {
               className="mx-auto mb-2 h-20 w-20 rounded-full object-contain"
             />
             <CardTitle className="text-2xl font-display font-bold text-center text-white">{shopBranding.name}</CardTitle>
-            <p className="text-center text-gray-400 text-sm mt-2">Acesso para Administradores e Barbeiros</p>
+            <p className="text-center text-gray-400 text-sm mt-2">{adminCopy.auth.accessAudience}</p>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleLogin} className="space-y-4">
@@ -3617,7 +3627,7 @@ export default function Admin() {
                 <Input type="password" value={loginData.password} onChange={(e) => setLoginData({...loginData, password: e.target.value})} className="bg-background border-white/10 text-white" autoComplete="current-password" required />
               </div>
               <Button type="submit" variant="gold" className="w-full" disabled={isLoggingIn}>{isLoggingIn ? "A entrar..." : "Entrar"}</Button>
-              <p className="text-[10px] text-gray-500 text-center">Barbeiros devem definir a palavra-passe através do convite enviado pelo administrador.</p>
+              <p className="text-[10px] text-gray-500 text-center">{adminCopy.auth.passwordInviteHelp}</p>
             </form>
           </CardContent>
         </Card>
@@ -3647,7 +3657,7 @@ export default function Admin() {
           </div>
           {multiLocationConfig?.enabled && availableLocations.length > 0 && (
             <div className="w-full lg:w-80">
-              <Label htmlFor="managed-location" className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-500">Loja em gestão</Label>
+              <Label htmlFor="managed-location" className="mb-2 block text-xs font-semibold uppercase tracking-widest text-gray-500">{adminCopy.locations.managedLabel}</Label>
               <Select
                 value={String(activeLocation?.id ?? "")}
                 onValueChange={(value) => {
@@ -3742,7 +3752,7 @@ export default function Admin() {
                       <div>
                         <Label className="text-sm font-semibold text-white">Notas do cliente</Label>
                         <p className="text-xs text-gray-400">
-                          Preferências de corte, hábitos de visita, barbeiro preferido ou cuidados a lembrar.
+                          {agendaCopy.historyNotesHelp}
                         </p>
                       </div>
                       {customerHistory.notes?.updatedAt && (
@@ -3755,7 +3765,7 @@ export default function Admin() {
                       value={customerNotes}
                       onChange={(e) => setCustomerNotes(e.target.value)}
                       maxLength={1200}
-                      placeholder="Ex.: Degradê médio, máquina 0.5 dos lados, prefere Bruno, costuma vir a cada 3 semanas."
+                      placeholder={agendaCopy.historyNotesPlaceholder}
                       className="min-h-[110px] scroll-mb-24 resize-y border-white/10 bg-background text-white placeholder:text-gray-600"
                     />
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -3825,7 +3835,7 @@ export default function Admin() {
             <div className="space-y-5 pt-2">
               <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-4">
                 <p className="text-sm text-amber-100">
-                  Este barbeiro ainda tem {futureRemovalAppointments.length} marcação(ões) futura(s). Escolha outro barbeiro para cada uma antes de remover.
+                  {formatBusinessCopy(adminCopy.team.removeConflict, { count: futureRemovalAppointments.length })}
                 </p>
               </div>
 
@@ -3833,7 +3843,7 @@ export default function Admin() {
                 <Label>Atribuir todas as compatíveis a</Label>
                 <Select onValueChange={handleBulkReassignmentChange}>
                   <SelectTrigger className="bg-background border-white/10">
-                    <SelectValue placeholder="Escolher barbeiro" />
+                    <SelectValue placeholder={adminCopy.team.chooseReplacement} />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-white/10 text-white">
                     {(barbers || [])
@@ -3853,7 +3863,7 @@ export default function Admin() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-gray-500">
-                  Só aparecem barbeiros que fazem o serviço, trabalham nesse horário e não têm marcação sobreposta.
+                  {adminCopy.team.replacementHelp}
                 </p>
               </div>
 
@@ -3871,7 +3881,7 @@ export default function Admin() {
                       </div>
 
                       <div className="space-y-2">
-                        <Label className="text-xs text-gray-400">Novo barbeiro</Label>
+                        <Label className="text-xs text-gray-400">{adminCopy.team.replacementLabel}</Label>
                         <Select
                           value={barberReassignments[appointment.id]}
                           onValueChange={(value) => setBarberReassignments((current) => ({
@@ -3933,7 +3943,7 @@ export default function Admin() {
             <div className="space-y-5 pt-2">
               <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-4">
                 <p className="text-sm text-amber-100">
-                  Este período ainda tem {absenceConflict?.appointments.length ?? 0} marcação(ões). Escolha outro barbeiro antes de guardar a ausência.
+                  {formatBusinessCopy(adminCopy.team.absenceConflict, { count: absenceConflict?.appointments.length ?? 0 })}
                 </p>
               </div>
 
@@ -3951,7 +3961,7 @@ export default function Admin() {
                       </div>
 
                       <div className="space-y-2">
-                        <Label className="text-xs text-gray-400">Novo barbeiro</Label>
+                        <Label className="text-xs text-gray-400">{adminCopy.team.replacementLabel}</Label>
                         <Select
                           value={barberReassignments[appointment.id]}
                           onValueChange={(value) => setBarberReassignments((current) => ({
@@ -4325,9 +4335,9 @@ export default function Admin() {
           <TabsContent value="barbers" className="outline-none">
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-xl font-bold text-white">Equipa de Barbeiros</h2>
+                <h2 className="text-xl font-bold text-white">{adminCopy.team.heading}</h2>
                 <p className="text-sm text-gray-400">
-                  Barbeiros ativos aparecem no site, na agenda e nas reservas.
+                  {adminCopy.team.description}
                 </p>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -4353,7 +4363,7 @@ export default function Admin() {
               }}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="gap-2">
-                    <Plus className="w-4 h-4" /> Adicionar Barbeiro
+                    <Plus className="w-4 h-4" /> {adminCopy.team.add}
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
@@ -4427,7 +4437,7 @@ export default function Admin() {
                       onClick={handleAddBarber}
                     >
                       {isCreatingBarber ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Criar Barbeiro
+                      {adminCopy.team.create}
                     </Button>
                   </div>
                 </DialogContent>
@@ -4453,7 +4463,7 @@ export default function Admin() {
                         try {
                           await openBarberRemovalFlow(barber);
                         } catch (err: any) {
-                          toast({ title: "Erro", description: err.message || "Não foi possível remover o barbeiro.", variant: "destructive" });
+                          toast({ title: "Erro", description: err.message || adminCopy.team.removeError, variant: "destructive" });
                         }
                       }}
                     >
@@ -4474,13 +4484,13 @@ export default function Admin() {
                     </div>
                     <p className="text-sm text-primary mb-2">{barber.specialty}</p>
                     {multiLocationConfig?.enabled && (barber.locationCount ?? 0) > 1 && (
-                      <p className="mb-3 text-xs text-gray-400">Partilhado entre lojas: perfil e acesso comuns; serviços, horário e modelo financeiro próprios de cada loja.</p>
+                      <p className="mb-3 text-xs text-gray-400">{adminCopy.team.sharedAcrossLocations}</p>
                     )}
                     <p className="mb-3 line-clamp-2 text-xs text-gray-400">
                       {formatBarberServicesSummary(barber, services)}
                     </p>
                     {canSeeCompensation && <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
-                      {getCompensationSummary(barber)}
+                      {getCompensationSummary(barber, adminCopy.compensation)}
                     </p>}
                     {usesCanonicalAuth && canManageUsers && (
                       <div className="mb-3 flex flex-col gap-2 rounded-lg border border-white/10 bg-background/40 p-3 text-xs min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
@@ -4515,7 +4525,7 @@ export default function Admin() {
                           <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
                         </DialogTrigger>
                         <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
-                          <DialogHeader><DialogTitle>Editar Barbeiro</DialogTitle></DialogHeader>
+                          <DialogHeader><DialogTitle>{adminCopy.team.edit}</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4" data-edit-barber-form>
                             {canManageTeamGlobal && <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>}
                             {canManageTeamGlobal && <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>}
@@ -4528,7 +4538,7 @@ export default function Admin() {
                                 maxLength={1000}
                               />
                               <p className="text-xs leading-relaxed text-gray-400">
-                                Este texto aparece na apresentação pública do barbeiro.
+                                {adminCopy.team.publicPresentationHelp}
                               </p>
                             </div>}
                             {canManageTeamGlobal && canManageUsers && <div className="space-y-2">
@@ -4643,13 +4653,13 @@ export default function Admin() {
                                   toast({
                                     title: "Sucesso",
                                     description: updatedBarber.accessReset
-                                      ? "Email atualizado. O acesso anterior foi revogado; crie um novo convite para o barbeiro."
-                                      : "Barbeiro atualizado.",
+                                      ? adminCopy.team.updateEmailChanged
+                                      : adminCopy.team.updateSuccess,
                                   });
                                 } catch (err: any) {
                                   toast({
                                     title: "Erro",
-                                    description: err.message || "Não foi possível atualizar o barbeiro.",
+                                    description: err.message || adminCopy.team.updateError,
                                     variant: "destructive",
                                   });
                                 } finally {
@@ -4695,12 +4705,12 @@ export default function Admin() {
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
                               title: "Sucesso",
-                              description: barber.isVisible ? "Barbeiro ocultado." : "Barbeiro visível no site.",
+                              description: barber.isVisible ? adminCopy.team.hidden : adminCopy.team.visible,
                             });
                           } catch (err: any) {
                             toast({
                               title: "Erro",
-                              description: err.message || "Não foi possível atualizar a visibilidade do barbeiro.",
+                              description: err.message || adminCopy.team.visibilityError,
                               variant: "destructive",
                             });
                           }
@@ -4716,7 +4726,7 @@ export default function Admin() {
             {activeBarbers.length === 0 && (isLoadingBarbers || isFetchingBarbers) ? (
               <div className="mt-6 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                A carregar barbeiros...
+                {adminCopy.team.loading}
               </div>
             ) : null}
             {activeBarbers.length === 0 && isBarbersError ? (
@@ -4726,13 +4736,13 @@ export default function Admin() {
             ) : null}
             {activeBarbers.length === 0 && !isLoadingBarbers && !isFetchingBarbers && !isBarbersError ? (
               <div className="mt-6 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
-                Não há barbeiros ativos neste momento.
+                {adminCopy.team.empty}
               </div>
             ) : null}
             {showArchivedBarbers && archivedBarbers.length > 0 ? (
               <div className="mt-8 space-y-3">
                 <div>
-                  <h3 className="text-base font-semibold text-white">Barbeiros arquivados</h3>
+                  <h3 className="text-base font-semibold text-white">{adminCopy.team.archivedHeading}</h3>
                   <p className="text-sm text-gray-400">
                     Ficam guardados para histórico e relatórios, mas não aparecem no site, na agenda nem nas novas reservas.
                   </p>
@@ -4759,7 +4769,7 @@ export default function Admin() {
                           } catch (err: any) {
                             toast({
                               title: "Erro",
-                              description: err.message || "Não foi possível reativar o barbeiro.",
+                              description: err.message || adminCopy.team.reactivateError,
                               variant: "destructive",
                             });
                           }
@@ -5080,7 +5090,7 @@ export default function Admin() {
                     {showMissingBarberWarning && (
                       <div className="mb-4 flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200" role="status">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                        <span>Para este serviço aparecer nas marcações online, associe-o a pelo menos um barbeiro visível na área Equipa.</span>
+                        <span>{adminCopy.services.professionalAssociationHelp}</span>
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2">
@@ -5104,7 +5114,7 @@ export default function Admin() {
                               <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">
                                 <p className="font-semibold">Dados globais</p>
                                 <p className="mt-1 text-xs leading-relaxed text-amber-100/80">
-                                  Nome, descrição, nome na agenda e categoria são partilhados. Alterá-los afeta todas as lojas associadas.
+                                  {adminCopy.services.globalSharedHelp}
                                 </p>
                               </div>
                             )}
@@ -5147,19 +5157,21 @@ export default function Admin() {
                             )}
                             {canManageCatalogLocation && multiLocationConfig?.enabled && (
                               <div className="border-t border-white/10 pt-4">
-                                <p className="font-semibold text-white">Nesta loja</p>
+                                <p className="font-semibold text-white">{adminCopy.services.localSectionHeading}</p>
                                 <p className="mt-1 text-xs text-gray-400">
-                                  O preço e a duração seguintes aplicam-se apenas a {activeLocation?.name || "esta loja"}.
+                                  {formatBusinessCopy(adminCopy.services.localTermsDescription, {
+                                    location: activeLocation?.name || adminCopy.services.localSectionHeading.toLocaleLowerCase("pt-PT"),
+                                  })}
                                 </p>
                               </div>
                             )}
                             {canManageCatalogLocation && <div>
-                              <Label htmlFor={`edit-service-price-${service.id}`}>{multiLocationConfig?.enabled ? "Preço nesta loja (€)" : "Preço (€)"}</Label>
+                              <Label htmlFor={`edit-service-price-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localPriceLabel : "Preço (€)"}</Label>
                               <Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" />
                               {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Valor base global: {((service.basePrice ?? service.price) / 100).toFixed(2)} €</p>}
                             </div>}
                             {canManageCatalogLocation && <div>
-                              <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? "Duração nesta loja (Min)" : "Duração (Min)"}</Label>
+                              <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localDurationLabel : "Duração (Min)"}</Label>
                               <Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" />
                               {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Duração base global: {service.baseDuration ?? service.duration} min</p>}
                             </div>}
@@ -5208,12 +5220,14 @@ export default function Admin() {
                       </Dialog>
                       {(multiLocationConfig?.enabled ? canManageCatalogLocation : canManageCatalogGlobal && canManageCatalogLocation) && <ConfirmAction
                         title={multiLocationConfig?.enabled
-                          ? `Retirar ${service.name} desta loja?`
+                          ? formatBusinessCopy(adminCopy.services.removeFromLocationTitle, { service: service.name })
                           : `Remover ${service.name}?`}
                         description={multiLocationConfig?.enabled
-                          ? `O serviço deixa de estar disponível em ${activeLocation?.name || "esta loja"}, sem afetar as outras lojas nem as marcações antigas.`
+                          ? formatBusinessCopy(adminCopy.services.removeFromLocationDescription, {
+                              location: activeLocation?.name || adminCopy.services.localSectionHeading.toLocaleLowerCase("pt-PT"),
+                            })
                           : "As marcações antigas ficam guardadas, mas este serviço deixa de estar disponível."}
-                        confirmLabel={multiLocationConfig?.enabled ? "Retirar desta loja" : "Remover"}
+                        confirmLabel={multiLocationConfig?.enabled ? adminCopy.services.removeFromLocationConfirm : "Remover"}
                         confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onConfirm={async () => {
                           try {
@@ -5222,7 +5236,7 @@ export default function Admin() {
                             queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
                             refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                            toast({ title: "Sucesso", description: multiLocationConfig?.enabled ? "Serviço retirado desta loja." : "Serviço removido." });
+                            toast({ title: "Sucesso", description: multiLocationConfig?.enabled ? adminCopy.services.removedFromLocation : "Serviço removido." });
                           } catch {
                             toast({ title: "Erro", description: "Não foi possível remover o serviço. Verifique se existem marcações associadas.", variant: "destructive" });
                           }
@@ -5247,8 +5261,8 @@ export default function Admin() {
                             toast({
                               title: "Sucesso",
                               description: isServiceActiveHere
-                                ? (multiLocationConfig?.enabled ? "Serviço ocultado nesta loja." : "Serviço ocultado.")
-                                : (multiLocationConfig?.enabled ? "Serviço ativo nesta loja." : "Serviço visível no site."),
+                                ? (multiLocationConfig?.enabled ? adminCopy.services.hiddenAtLocation : "Serviço ocultado.")
+                                : (multiLocationConfig?.enabled ? adminCopy.services.activeAtLocation : "Serviço visível no site."),
                             });
                           } catch (err: any) {
                             toast({
@@ -5260,8 +5274,8 @@ export default function Admin() {
                         }}
                       >
                         {isServiceActiveHere
-                          ? (multiLocationConfig?.enabled ? "Ativo nesta loja" : "Visível")
-                          : (multiLocationConfig?.enabled ? "Inativo nesta loja" : "Oculto")}
+                          ? (multiLocationConfig?.enabled ? adminCopy.services.activeAtLocationStatus : "Visível")
+                          : (multiLocationConfig?.enabled ? adminCopy.services.inactiveAtLocationStatus : "Oculto")}
                       </Button>}
                     </div>
                   </CardContent>
@@ -5299,10 +5313,10 @@ export default function Admin() {
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <CardTitle className="flex items-center gap-2 text-xl font-bold">
-                      <CalendarIcon className="h-5 w-5 text-primary" /> Horário base da barbearia
+                      <CalendarIcon className="h-5 w-5 text-primary" /> {adminCopy.schedules.establishmentBaseHeading}
                     </CardTitle>
                     <p className="mt-2 max-w-2xl text-sm text-gray-400">
-                      Este horário define quando a loja aceita marcações. Ausências, férias e ajustes pontuais são geridos na Agenda.
+                      {adminCopy.schedules.establishmentDescription}
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
@@ -5441,7 +5455,7 @@ export default function Admin() {
                           </div>
                         ) : (
                           <div className="mt-4 rounded-lg border border-dashed border-white/10 px-3 py-3 text-sm text-gray-500">
-                            Loja fechada neste dia.
+                            {adminCopy.schedules.establishmentClosedDay}
                           </div>
                         )}
                       </div>

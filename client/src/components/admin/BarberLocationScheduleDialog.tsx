@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button-custom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 
 type Props = {
   barber: { id: number; name: string };
@@ -22,19 +24,22 @@ const clockTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padSt
 
 // Mounted only in multi-location, keyed by location + barber by the caller.
 export function BarberLocationScheduleDialog({ barber, location }: Props) {
+  const copy = useBusinessCopy().admin.schedules;
   const [open, setOpen] = useState(false);
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild>
-      <Button variant="outline" size="sm" className="mb-3 w-full border-white/10" aria-label={`Horário de ${barber.name} nesta loja`}>
-        <Clock className="mr-2 h-4 w-4" /> Horário nesta loja
+      <Button variant="outline" size="sm" className="mb-3 w-full border-white/10" aria-label={formatBusinessCopy(copy.locationProfessionalAria, { name: barber.name })}>
+        <Clock className="mr-2 h-4 w-4" /> {copy.locationProfessionalTrigger}
       </Button>
     </DialogTrigger>
     <DialogContent className="max-h-[90dvh] w-[95vw] max-w-xl overflow-y-auto border-white/10 bg-card text-white">
       <DialogHeader>
-        <DialogTitle>Horário de {barber.name}</DialogTitle>
+        <DialogTitle>{formatBusinessCopy(copy.locationProfessionalTitle, { name: barber.name })}</DialogTitle>
         <DialogDescription className="break-words">
-          {location.name} · {location.timezone}. Horário semanal fixo, apenas nesta loja.
-          A disponibilidade respeita também o horário da loja e as marcações do barbeiro em todas as lojas.
+          {formatBusinessCopy(copy.locationProfessionalDescription, {
+            location: location.name,
+            timezone: location.timezone,
+          })}
         </DialogDescription>
       </DialogHeader>
       {open && <LoadSchedule barber={barber} location={location} onSaved={() => setOpen(false)} />}
@@ -43,12 +48,13 @@ export function BarberLocationScheduleDialog({ barber, location }: Props) {
 }
 
 function LoadSchedule({ barber, location, onSaved }: Props & { onSaved: () => void }) {
+  const copy = useBusinessCopy().admin.schedules;
   const path = `/api/barbers/${barber.id}/availability`;
   const schedule = useQuery<ScheduleRow[]>({
     queryKey: [path, { locationId: location.id }], staleTime: 0,
     queryFn: async ({ signal }) => {
       const response = await apiFetch(path, { signal, headers: locationHeaders(location.id) });
-      if (!response.ok) throw new Error("Não foi possível carregar o horário do barbeiro.");
+      if (!response.ok) throw new Error(copy.loadProfessionalError);
       return response.json();
     },
   });
@@ -56,7 +62,7 @@ function LoadSchedule({ barber, location, onSaved }: Props & { onSaved: () => vo
     queryKey: ["/api/shop/availability", { locationId: location.id }], staleTime: 0,
     queryFn: async ({ signal }) => {
       const response = await apiFetch("/api/shop/availability", { signal, headers: locationHeaders(location.id) });
-      if (!response.ok) throw new Error("Não foi possível carregar o horário da loja.");
+      if (!response.ok) throw new Error(copy.establishmentLoadError);
       return response.json();
     },
   });
@@ -69,6 +75,7 @@ function LoadSchedule({ barber, location, onSaved }: Props & { onSaved: () => vo
 function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
   rows: ScheduleRow[]; shopRows: ShopAvailabilityRow[]; onSaved: () => void;
 }) {
+  const copy = useBusinessCopy().admin.schedules;
   const { toast } = useToast();
   const savingRef = useRef(false);
   const [days, setDays] = useState(() => weekdays.map((_, dayOfWeek) => {
@@ -96,7 +103,13 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
         void queryClient.invalidateQueries({ queryKey: [path, { locationId: location.id }] });
       }
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-      toast({ title: "Horário guardado", description: `${barber.name} — ${location.name}. As outras lojas não foram alteradas.` });
+      toast({
+        title: "Horário guardado",
+        description: formatBusinessCopy(copy.locationScheduleSaved, {
+          name: barber.name,
+          location: location.name,
+        }),
+      });
     },
   });
   const submitSchedule = (data: ScheduleRow[]) => {
@@ -116,7 +129,7 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
       ? day.periods.map((period) => ({ ...period, dayOfWeek, isWorking: true }))
       : [{ dayOfWeek, startTime: "09:00", endTime: "19:00", isWorking: false }]));
   }}>
-    <p className="text-sm text-gray-400">{rows.length ? "Horário próprio nesta loja." : "Sem horário próprio: segue atualmente o horário da loja. Guardar cria um horário próprio."}</p>
+    <p className="text-sm text-gray-400">{rows.length ? copy.ownLocationSchedule : copy.inheritedLocationSchedule}</p>
     <fieldset disabled={save.isPending} className="min-w-0 space-y-3">
       {dayOrder.map((day) => <section key={day} className="min-w-0 space-y-2 rounded-lg border border-white/10 p-3" aria-label={weekdays[day]}>
         <div className="flex items-center justify-between gap-2">
@@ -134,11 +147,11 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
             <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={`Remover período ${index + 1} ${weekdays[day]}`} disabled={days[day].periods.length === 1} onClick={() => updateDay(day, { periods: days[day].periods.filter((_, rowIndex) => rowIndex !== index) })}><Trash2 className="h-4 w-4" /></Button>
           </div>)}
           <Button type="button" variant="ghost" size="sm" onClick={() => updateDay(day, { periods: [...days[day].periods, { startTime: "14:00", endTime: "19:00" }] })}><Plus className="mr-1 h-3 w-3" />Adicionar período</Button>
-        </> : <p className="text-xs text-gray-400">Não trabalha nesta loja.</p>}
+        </> : <p className="text-xs text-gray-400">{copy.notWorkingAtLocation}</p>}
       </section>)}
       <div className="flex flex-col gap-2 sm:flex-row">
-        <Button type="submit" variant="gold" className="flex-1">{save.isPending ? "A guardar…" : "Guardar horário nesta loja"}</Button>
-        <Button type="button" variant="outline" onClick={() => submitSchedule([])}>Usar horário da loja</Button>
+        <Button type="submit" variant="gold" className="flex-1">{save.isPending ? "A guardar…" : copy.saveLocationSchedule}</Button>
+        <Button type="button" variant="outline" onClick={() => submitSchedule([])}>{copy.useEstablishmentSchedule}</Button>
       </div>
     </fieldset>
     {save.isError && <p role="alert" className="text-sm text-red-400">{save.error.message}</p>}

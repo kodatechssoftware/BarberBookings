@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/utils";
 import type { AppointmentStatus } from "@/hooks/use-appointments";
 import { shopBranding } from "@/lib/branding";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { getAgendaServiceLabel } from "@shared/agenda-service-label";
 
 export type WeeklyAgendaAppointment = {
   id: number;
@@ -436,52 +438,13 @@ function formatAppointmentCount(count: number) {
   return `${count} ${count === 1 ? "marcação" : "marcações"}`;
 }
 
-function getCompactBarberName(name?: string | null) {
-  return name?.trim().split(/\s+/)[0] || "Barbeiro";
+function getCompactBarberName(name: string | null | undefined, fallbackName: string) {
+  return name?.trim().split(/\s+/)[0] || fallbackName;
 }
 
 function getDailyAppointmentLabel(count: number) {
   if (count === 0) return "Livre";
   return `${count} no dia`;
-}
-
-function normalizeServiceNameForBadge(serviceName?: string | null) {
-  return (serviceName || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function getServiceBadge(service?: WeeklyAgendaService, serviceNameSnapshot?: string | null) {
-  const snapshotName = serviceNameSnapshot?.trim();
-  const customAgendaLabel = !snapshotName || snapshotName === service?.name?.trim()
-    ? service?.agendaLabel?.trim()
-    : null;
-  if (customAgendaLabel) return customAgendaLabel;
-
-  const serviceName = snapshotName || service?.name?.trim();
-  const normalizedName = normalizeServiceNameForBadge(serviceName);
-  const hasBarba = normalizedName.includes("barba");
-  const hasDegrade = normalizedName.includes("degrade");
-  const hasSimples = normalizedName.includes("simples");
-  const hasHairService =
-    normalizedName.includes("corte") || normalizedName.includes("cabelo") || hasDegrade || hasSimples;
-
-  const haircutLabel = hasDegrade ? "Corte degradê" : hasSimples ? "Corte simples" : hasHairService ? "Corte" : "";
-
-  if (haircutLabel && hasBarba) {
-    return `${haircutLabel} + barba`;
-  }
-
-  if (haircutLabel) {
-    return haircutLabel;
-  }
-
-  if (hasBarba) {
-    return "Barba";
-  }
-
-  return serviceName || "Serviço";
 }
 
 export function getAppointmentContactLinks(phone: string) {
@@ -543,6 +506,7 @@ export function WeeklyAgenda({
   onSelectAppointment: (appointment: WeeklyAgendaAppointment) => void;
   getStatusLabel: (status: string) => string;
 }) {
+  const agendaCopy = useBusinessCopy().agenda;
   const [selectedCrowdedGroup, setSelectedCrowdedGroup] = useState<WeeklyAgendaCrowdedGroup | null>(null);
   const [internalWeekStartDate, setInternalWeekStartDate] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const visibleWeekStartDate = weekStartDate || internalWeekStartDate;
@@ -685,7 +649,7 @@ export function WeeklyAgenda({
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
     const color = normalizeBarberColor(barber?.color);
-    const serviceBadge = getServiceBadge(service, appointment.serviceNameSnapshot);
+    const serviceBadge = getAgendaServiceLabel(service, appointment.serviceNameSnapshot);
     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
     return (
@@ -747,7 +711,7 @@ export function WeeklyAgenda({
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
             <p className="truncate text-sm font-semibold text-white">{appointment.customerName}</p>
           </div>
-          <p className="mt-1 truncate text-xs text-gray-400">{barber?.name || "Barbeiro"} · {getServiceBadge(service, appointment.serviceNameSnapshot)}</p>
+          <p className="mt-1 truncate text-xs text-gray-400">{barber?.name || agendaCopy.professional.fallbackName} · {getAgendaServiceLabel(service, appointment.serviceNameSnapshot)}</p>
         </div>
       </button>
     );
@@ -795,11 +759,11 @@ export function WeeklyAgenda({
           <div className="grid gap-2 sm:grid-cols-2 lg:max-w-xl">
             {canFilterBarbers ? (
               <Select value={selectedBarberFilter} onValueChange={onBarberFilterChange}>
-                <SelectTrigger className="h-10 border-white/10 bg-background/60 text-white">
-                  <SelectValue placeholder="Filtrar barbeiro" />
+                <SelectTrigger aria-label={agendaCopy.professional.filterPlaceholder} className="h-10 border-white/10 bg-background/60 text-white">
+                  <SelectValue placeholder={agendaCopy.professional.filterPlaceholder} />
                 </SelectTrigger>
                 <SelectContent className="border-white/10 bg-card text-white">
-                  <SelectItem value="all">Todos os barbeiros</SelectItem>
+                  <SelectItem value="all">{agendaCopy.professional.allFilter}</SelectItem>
                   {barbers?.map((barber) => (
                     <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>
                   ))}
@@ -807,7 +771,7 @@ export function WeeklyAgenda({
               </Select>
             ) : (
               <div className="flex h-10 items-center rounded-md border border-white/10 bg-background/60 px-3 text-sm font-semibold text-primary">
-                {barbers?.[0]?.name || "Barbeiro"}
+                {barbers?.[0]?.name || agendaCopy.professional.fallbackName}
               </div>
             )}
             <Select value={selectedStatusFilter} onValueChange={(value) => onStatusFilterChange(value as AppointmentStatusFilter)}>
@@ -977,7 +941,7 @@ export function WeeklyAgenda({
 
                   {resourceBarbers.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-gray-500">
-                      Não há barbeiros ativos para mostrar na agenda.
+                      {agendaCopy.professional.empty}
                     </div>
                   ) : (
                     <div className="weekly-agenda-horizontal-scroll" data-testid="day-agenda-grid">
@@ -1084,7 +1048,7 @@ export function WeeklyAgenda({
                                   const laneWidth = 100 / layout.laneCount;
                                   const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                                   const color = normalizeBarberColor(barber.color);
-                                  const serviceBadge = getServiceBadge(service, appointment.serviceNameSnapshot);
+                                  const serviceBadge = getAgendaServiceLabel(service, appointment.serviceNameSnapshot);
                                   const isCompact = height < 46 || laneWidth < 55;
                                   const isTiny = height < 32;
                                   const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
@@ -1290,7 +1254,7 @@ export function WeeklyAgenda({
                                                 style={{ backgroundColor: barberColor }}
                                               />
                                               <span className="min-w-0 truncate">
-                                                {getCompactBarberName(barber?.name)} · {appointment.customerName}
+                                                {getCompactBarberName(barber?.name, agendaCopy.professional.fallbackName)} · {appointment.customerName}
                                               </span>
                                             </span>
                                           );
@@ -1364,7 +1328,7 @@ export function WeeklyAgenda({
                                               style={{ backgroundColor: barberColor }}
                                             />
                                             <span className="min-w-0 truncate">
-                                              {getCompactBarberName(barber?.name)} · {appointment.customerName}
+                                              {getCompactBarberName(barber?.name, agendaCopy.professional.fallbackName)} · {appointment.customerName}
                                             </span>
                                           </span>
                                         );
@@ -1411,7 +1375,7 @@ export function WeeklyAgenda({
                             const barber = barbersById.get(appointment.barberId);
                             const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                             const color = normalizeBarberColor(barber?.color);
-                            const serviceBadge = getServiceBadge(service, appointment.serviceNameSnapshot);
+                            const serviceBadge = getAgendaServiceLabel(service, appointment.serviceNameSnapshot);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
                             return (

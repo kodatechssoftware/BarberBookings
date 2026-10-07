@@ -91,8 +91,144 @@ export type BookingCopy = {
   };
 };
 
+export type AgendaCopy = {
+  professional: {
+    label: string;
+    fallbackName: string;
+    filterPlaceholder: string;
+    allFilter: string;
+    empty: string;
+    selectRequired: string;
+    chooseFirst: string;
+    noAvailability: string;
+    noServices: string;
+    noCompatibleServices: string;
+    invalidAppointment: string;
+    incompatibleService: string;
+    unavailableForEdit: string;
+    otherOwnerNotice: string;
+  };
+  locationScope: string;
+  blockEstablishmentHelp: string;
+  blockProfessionalHelp: string;
+  noProfessionalsAtLocation: string;
+  outsideHoursCreateHelp: string;
+  outsideHoursEditHelp: string;
+  historyNotesHelp: string;
+  historyNotesPlaceholder: string;
+  appointmentNotesPlaceholder: string;
+};
+
+export type AdminCopy = {
+  auth: {
+    accessAudience: string;
+    passwordInviteHelp: string;
+  };
+  team: {
+    heading: string;
+    description: string;
+    add: string;
+    create: string;
+    edit: string;
+    loading: string;
+    empty: string;
+    archivedHeading: string;
+    publicPresentationHelp: string;
+    createSuccess: string;
+    createError: string;
+    removeSuccess: string;
+    removeError: string;
+    reactivated: string;
+    archived: string;
+    updateSuccess: string;
+    updateEmailChanged: string;
+    updateError: string;
+    hidden: string;
+    visible: string;
+    visibilityError: string;
+    reactivateError: string;
+    removeConflict: string;
+    absenceConflict: string;
+    chooseReplacement: string;
+    replacementLabel: string;
+    replacementHelp: string;
+    missingReplacementTitle: string;
+    missingReplacementDescription: string;
+    futureReassigned: string;
+    associateTrigger: string;
+    associateTitle: string;
+    associateDescription: string;
+    associateSuccessTitle: string;
+    associateSuccessDescription: string;
+    associateEmpty: string;
+    associateAria: string;
+    associatePlaceholder: string;
+    associateAction: string;
+    serviceSelectionHelp: string;
+    sharedAcrossLocations: string;
+  };
+  compensation: {
+    modelLabel: string;
+    commissionSummary: string;
+    workspaceRentSummary: string;
+    workspaceRentModel: string;
+    commissionHelp: string;
+    workspaceRentHelp: string;
+    noneHelp: string;
+    professionalPercentLabel: string;
+    workspaceRentAmountLabel: string;
+  };
+  schedules: {
+    establishmentBaseHeading: string;
+    establishmentSaved: string;
+    establishmentSaveError: string;
+    establishmentLoadError: string;
+    establishmentDescription: string;
+    establishmentClosedDay: string;
+    locationProfessionalAria: string;
+    locationProfessionalTrigger: string;
+    locationProfessionalTitle: string;
+    locationProfessionalDescription: string;
+    loadProfessionalError: string;
+    ownLocationSchedule: string;
+    inheritedLocationSchedule: string;
+    notWorkingAtLocation: string;
+    saveLocationSchedule: string;
+    useEstablishmentSchedule: string;
+    locationScheduleSaved: string;
+  };
+  locations: {
+    description: string;
+    managedLabel: string;
+    namePlaceholder: string;
+  };
+  services: {
+    professionalAssociationHelp: string;
+    globalSharedHelp: string;
+    localSectionHeading: string;
+    localTermsDescription: string;
+    localPriceLabel: string;
+    localDurationLabel: string;
+    removeFromLocationTitle: string;
+    removeFromLocationDescription: string;
+    removeFromLocationConfirm: string;
+    removedFromLocation: string;
+    hiddenAtLocation: string;
+    activeAtLocation: string;
+    activeAtLocationStatus: string;
+    inactiveAtLocationStatus: string;
+  };
+  extras: {
+    followCompensation: string;
+    professional: string;
+    establishment: string;
+  };
+};
+
 export type BusinessCopy = {
   booking: BookingCopy;
+  agenda: AgendaCopy;
+  admin: AdminCopy;
 };
 
 export function formatBusinessCopy(

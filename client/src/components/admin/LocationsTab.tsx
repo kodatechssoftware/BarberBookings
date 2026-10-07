@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 type LocationForm = {
   name: string;
@@ -38,6 +39,7 @@ const emptyForm: LocationForm = {
 };
 
 export function LocationsTab({ maxLocations }: { maxLocations: number }) {
+  const copy = useBusinessCopy().admin.locations;
   const { toast } = useToast();
   const [editing, setEditing] = useState<ShopLocation | null>(null);
   const [open, setOpen] = useState(false);
@@ -109,7 +111,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
         <div>
           <h2 className="text-xl font-bold text-white">Localizações</h2>
           <p className="mt-1 max-w-2xl text-sm text-gray-400">
-            Configure as lojas da barbearia. Uma nova localização fica oculta até ser ativada.
+            {copy.description}
           </p>
         </div>
         <Button
@@ -174,7 +176,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
           <div className="grid gap-4 py-2 sm:grid-cols-2">
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="location-name">Nome da localização</Label>
-              <Input id="location-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Ex.: Loja de Paranhos" maxLength={120} />
+              <Input id="location-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={copy.namePlaceholder} maxLength={120} />
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="location-address">Morada completa</Label>

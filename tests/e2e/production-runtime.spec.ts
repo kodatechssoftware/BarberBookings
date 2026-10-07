@@ -42,6 +42,16 @@ test("Production-equivalent runtime remains single-location and keeps external f
           anyAvailable: "Qualquer barbeiro livre",
         },
       },
+      agenda: {
+        professional: {
+          allFilter: "Todos os barbeiros",
+        },
+      },
+      admin: {
+        team: {
+          heading: "Equipa de Barbeiros",
+        },
+      },
     },
     booking: { flow: ["professional", "service", "datetime", "customer"] },
     features: { multiLocation: false, workspaceRent: true },

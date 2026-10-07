@@ -26,12 +26,7 @@ import {
   normalizeMoneyInput,
 } from "@/lib/money-input";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-
-const financialRuleLabels: Record<ExtraFinancialRule, string> = {
-  follow_compensation: "Segue a regra de compensação do barbeiro",
-  barber: "100% para o barbeiro",
-  establishment: "100% para o estabelecimento",
-};
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 type ExtraForm = {
   name: string;
@@ -55,6 +50,12 @@ const euroFormatter = new Intl.NumberFormat("pt-PT", {
 });
 
 export function ExtrasManager({ enabled }: { enabled: boolean }) {
+  const copy = useBusinessCopy().admin.extras;
+  const financialRuleLabels: Record<ExtraFinancialRule, string> = {
+    follow_compensation: copy.followCompensation,
+    barber: copy.professional,
+    establishment: copy.establishment,
+  };
   const { toast } = useToast();
   const { data: extras = [], isLoading, isError, refetch } = useExtras({ enabled });
   const [dialogOpen, setDialogOpen] = useState(false);

@@ -1999,8 +1999,8 @@ test.describe("admin navigation", () => {
 
     const madeixasServiceResponse = await request.post("/api/services", {
       data: {
-        name: "Madeixas QA",
-        description: "Teste de etiqueta automatica",
+        name: "Corte Degradê + Barba QA",
+        description: "Teste de fallback sem heurística de domínio",
         price: 1000,
         duration: 60,
       },
@@ -2055,7 +2055,7 @@ test.describe("admin navigation", () => {
 
     const automaticAgendaAppointment = page.locator("button:visible").filter({ hasText: "Cliente Madeixas" }).first();
     await expect(automaticAgendaAppointment).toBeVisible();
-    await expect(automaticAgendaAppointment).toContainText("Madeixas QA");
+    await expect(automaticAgendaAppointment).toContainText("Corte Degradê + Barba QA");
     await expect(automaticAgendaAppointment).not.toContainText("Serviço");
 
     await expect.poll(async () => agendaAppointment.evaluate((element) => {

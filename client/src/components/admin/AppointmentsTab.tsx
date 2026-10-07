@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { AppointmentDaySummary } from "@/components/admin/AppointmentDaySummary";
 import { getAppointmentContactLinks, type WeeklyAgendaAppointment } from "@/components/admin/WeeklyAgenda";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 export type AppointmentStatusFilter = AppointmentStatus | "all";
 export type AppointmentViewMode = "day" | "upcoming";
@@ -127,16 +128,18 @@ export function AppointmentsTab({
   getStatusLabel,
   getStatusClass,
 }: AppointmentsTabProps) {
+  const agendaCopy = useBusinessCopy().agenda;
+
   return (
     <>
       <div className="grid gap-3 rounded-2xl border border-white/10 bg-card/80 p-3 shadow-lg shadow-black/10 backdrop-blur sm:flex sm:flex-wrap sm:items-center sm:rounded-xl">
         {canFilterProfessionals ? (
           <Select value={selectedBarberFilter} onValueChange={onSelectedBarberFilterChange}>
-            <SelectTrigger className="h-11 w-full border-white/10 bg-background/60 text-white sm:w-[180px]">
-              <SelectValue placeholder="Filtrar por barbeiro" />
+            <SelectTrigger aria-label={agendaCopy.professional.filterPlaceholder} className="h-11 w-full border-white/10 bg-background/60 text-white sm:w-[180px]">
+              <SelectValue placeholder={agendaCopy.professional.filterPlaceholder} />
             </SelectTrigger>
             <SelectContent className="bg-card border-white/10 text-white">
-              <SelectItem value="all">Todos os barbeiros</SelectItem>
+              <SelectItem value="all">{agendaCopy.professional.allFilter}</SelectItem>
               {barbers?.map((barber) => (
                 <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>
               ))}
@@ -253,7 +256,7 @@ export function AppointmentsTab({
                 <div className="hidden grid-cols-[120px_1.2fr_1fr_1fr_130px] gap-4 border-b border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500 md:grid">
                   <span>Quando</span>
                   <span>Cliente</span>
-                  <span>Barbeiro</span>
+                  <span>{agendaCopy.professional.label}</span>
                   <span>Serviço</span>
                   <span className="text-right">Estado</span>
                 </div>
@@ -283,7 +286,7 @@ export function AppointmentsTab({
                           <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
                         </div>
                         <div className="min-w-0">
-                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Barbeiro</p>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">{agendaCopy.professional.label}</p>
                           <p className="truncate text-sm text-gray-300">{getBarberName(appointment.barberId)}</p>
                         </div>
                         <div className="min-w-0">

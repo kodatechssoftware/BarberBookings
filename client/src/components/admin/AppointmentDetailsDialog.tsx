@@ -55,6 +55,7 @@ import {
   type BookingSlotIntervalMinutes,
 } from "@shared/booking-slot-interval";
 import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 type AdminAppointment = {
   id: number;
@@ -141,6 +142,7 @@ function EditAppointmentDialog({
   disabled?: boolean;
   locationLogoUrl?: string | null;
 }) {
+  const agendaCopy = useBusinessCopy().agenda;
   const isCustomAppointment = appointment.serviceId === null
     && appointment.serviceNameSnapshot != null
     && appointment.servicePriceCentsSnapshot != null;
@@ -343,7 +345,7 @@ function EditAppointmentDialog({
     const priceCents = parseAppointmentPriceInput(priceValue);
 
     if (Number.isNaN(newStartTime.getTime()) || !Number.isFinite(parsedBarberId)) {
-      toast({ title: "Erro", description: "Verifique a data, hora e barbeiro.", variant: "destructive" });
+      toast({ title: "Erro", description: agendaCopy.professional.invalidAppointment, variant: "destructive" });
       return;
     }
 
@@ -361,7 +363,7 @@ function EditAppointmentDialog({
     }
 
     if (!hasCompatibleService) {
-      toast({ title: "Serviço inválido", description: "Escolha um serviço compatível com o barbeiro.", variant: "destructive" });
+      toast({ title: "Serviço inválido", description: agendaCopy.professional.incompatibleService, variant: "destructive" });
       return;
     }
     if (serviceId === "custom") {
@@ -481,20 +483,20 @@ function EditAppointmentDialog({
           <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
             <div>
               <Label htmlFor="edit-outside-hours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
-              <p className="text-xs text-gray-500">Ative apenas quando precisar de mover esta marcação para um horário em que o barbeiro normalmente não trabalha.</p>
+              <p className="text-xs text-gray-500">{agendaCopy.outsideHoursEditHelp}</p>
             </div>
             <Switch id="edit-outside-hours" checked={allowOutsideHours} onCheckedChange={setAllowOutsideHours} />
           </div>
           <div className="space-y-2">
-            <Label>Barbeiro</Label>
+            <Label>{agendaCopy.professional.label}</Label>
             <Select value={barberId} onValueChange={setBarberId}>
-              <SelectTrigger aria-label="Barbeiro" className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label={agendaCopy.professional.label} className="bg-background border-white/10 text-white"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-card border-white/10 text-white">
                 {availableBarbers.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}
               </SelectContent>
             </Select>
             {availableBarbers.length === 0 && (
-              <p className="text-xs text-red-300">Nenhum barbeiro disponÃ­vel para esta data, hora e serviÃ§o.</p>
+              <p className="text-xs text-red-300">{agendaCopy.professional.unavailableForEdit}</p>
             )}
           </div>
           <div className="space-y-2">
@@ -523,7 +525,7 @@ function EditAppointmentDialog({
               </SelectContent>
             </Select>
             {compatibleServices.length === 0 && !canUseNoService && (
-              <p className="text-xs text-red-300">Este barbeiro não tem serviços compatíveis.</p>
+              <p className="text-xs text-red-300">{agendaCopy.professional.noCompatibleServices}</p>
             )}
           </div>
           {serviceId === "custom" && (
@@ -865,6 +867,7 @@ export function AppointmentDetailsDialog({
   pendingAction?: AppointmentMutationPendingAction | null;
   locationLogoUrl?: string | null;
 }) {
+  const agendaCopy = useBusinessCopy().agenda;
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
   const [isLoadingCustomerNotes, setIsLoadingCustomerNotes] = useState(false);
@@ -1018,7 +1021,7 @@ export function AppointmentDetailsDialog({
 
             <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
               <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
-                <p className="text-xs uppercase tracking-widest text-gray-500">Barbeiro</p>
+                <p className="text-xs uppercase tracking-widest text-gray-500">{agendaCopy.professional.label}</p>
                 <p className="mt-1 font-semibold text-white">{getBarberName(appointment.barberId)}</p>
               </div>
               <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
@@ -1085,7 +1088,7 @@ export function AppointmentDetailsDialog({
                   onChange={(event) => setCustomerNotes(event.target.value)}
                   maxLength={1200}
                   disabled={!canManageCustomerNotes || isLoadingCustomerNotes || isAppointmentMutationPending}
-                  placeholder="Ex.: prefere máquina 0.5, costuma atrasar 10 min, quer sempre barba curta."
+                  placeholder={agendaCopy.appointmentNotesPlaceholder}
                   className="mt-3 min-h-[96px] scroll-mb-24 resize-y border-white/10 bg-card text-white placeholder:text-gray-600"
                 />
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1114,7 +1117,7 @@ export function AppointmentDetailsDialog({
           </div>
           ) : (
             <div className="rounded-2xl border border-white/10 bg-background/50 p-4 text-sm text-gray-400">
-              Esta marcação pertence a outro barbeiro. Pode consultar o horário, o cliente e o serviço para coordenar a agenda, mas apenas o barbeiro responsável ou um administrador pode gerir os detalhes.
+              {agendaCopy.professional.otherOwnerNotice}
             </div>
           )}
 

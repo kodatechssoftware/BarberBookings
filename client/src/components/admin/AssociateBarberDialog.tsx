@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button-custom";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 export function AssociateBarberDialog() {
+  const copy = useBusinessCopy().admin.team;
   const [open, setOpen] = useState(false);
   const [barberId, setBarberId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -27,7 +29,7 @@ export function AssociateBarberDialog() {
         .map((path) => queryClient.invalidateQueries({ queryKey: [path] })));
       setOpen(false);
       setBarberId("");
-      toast({ title: "Barbeiro associado", description: "Configure os serviços e o horário do barbeiro nesta loja." });
+      toast({ title: copy.associateSuccessTitle, description: copy.associateSuccessDescription });
     } catch (error) {
       toast({ title: "Não foi possível associar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
     } finally {
@@ -39,18 +41,18 @@ export function AssociateBarberDialog() {
     if (!nextOpen && savingRef.current) return;
     setOpen(nextOpen);
   }}>
-    <DialogTrigger asChild><Button variant="outline">Associar barbeiro existente</Button></DialogTrigger>
+    <DialogTrigger asChild><Button variant="outline">{copy.associateTrigger}</Button></DialogTrigger>
     <DialogContent className="w-[95vw] max-w-lg border-white/10 bg-card text-white">
-      <DialogHeader><DialogTitle>Associar barbeiro a esta loja</DialogTitle>
-        <DialogDescription>O perfil, o acesso e as condições financeiras são comuns às lojas. O barbeiro começa sem serviços nesta loja; configure depois os serviços e o horário locais.</DialogDescription>
+      <DialogHeader><DialogTitle>{copy.associateTitle}</DialogTitle>
+        <DialogDescription>{copy.associateDescription}</DialogDescription>
       </DialogHeader>
       {isLoading ? <p>A carregar equipa…</p> : isError ? <p>Não foi possível carregar a equipa.</p> : barbers.length === 0 ?
-        <p className="text-sm text-gray-400">Não existem outros barbeiros disponíveis para associar.</p> :
+        <p className="text-sm text-gray-400">{copy.associateEmpty}</p> :
         <Select value={barberId} onValueChange={setBarberId}>
-          <SelectTrigger aria-label="Barbeiro a associar"><SelectValue placeholder="Escolha o barbeiro" /></SelectTrigger>
+          <SelectTrigger aria-label={copy.associateAria}><SelectValue placeholder={copy.associatePlaceholder} /></SelectTrigger>
           <SelectContent>{barbers.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}</SelectContent>
         </Select>}
-      <Button variant="gold" disabled={!barberId || saving} onClick={associate}>{saving ? "A associar…" : "Associar à loja"}</Button>
+      <Button variant="gold" disabled={!barberId || saving} onClick={associate}>{saving ? "A associar…" : copy.associateAction}</Button>
     </DialogContent>
   </Dialog>;
 }
