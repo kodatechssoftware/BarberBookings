@@ -9,6 +9,7 @@ import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
 import { createMigrationSubsetThrough } from "../helpers/migration-subset";
+import { installCurrentLocationFinanceSchema } from "../helpers/current-postgres-location-schema";
 
 async function availablePort() {
   const server = net.createServer();
@@ -85,6 +86,7 @@ test("real PostgreSQL rolls back the complete appointment PATCH when Extra valid
         MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
       },
     });
+    await installCurrentLocationFinanceSchema(pool);
 
     const locationId = Number((await pool.query("SELECT id FROM locations WHERE is_default = true")).rows[0].id);
     const barberId = Number((await pool.query(`

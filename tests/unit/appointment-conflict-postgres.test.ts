@@ -9,6 +9,7 @@ import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
 import { createMigrationSubsetThrough } from "../helpers/migration-subset";
+import { installCurrentLocationFinanceSchema } from "../helpers/current-postgres-location-schema";
 
 async function availablePort() {
   const server = net.createServer();
@@ -147,6 +148,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
         MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
       },
     });
+    await installCurrentLocationFinanceSchema(pool);
 
     const baseUrl = `http://127.0.0.1:${appPort}`;
     const startApplication = async () => {

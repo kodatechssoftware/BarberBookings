@@ -76,6 +76,10 @@ import {
   assignBarberToLocation as assignBarberToLocationRecord,
   getServiceIdsForLocation,
 } from "./location-store";
+import {
+  createAppointmentCompensationSnapshot,
+  getCompensationRuleForDate,
+} from "./appointment-finance";
 
 export type AppointmentNotificationEventType =
   | "appointment_confirmation"
@@ -637,7 +641,7 @@ export interface IStorage {
   createAuditLog(log: CreateAuditLogRequest): Promise<AuditLog>;
 
   // Barber compensation
-  getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]>;
+  getBarberCompensationRules(barberId?: number, locationId?: number): Promise<BarberCompensationRule[]>;
   createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule>;
 
   // Business expenses
@@ -924,13 +928,20 @@ export class DatabaseStorage implements IStorage {
       .where(eq(appointments.barberId, id))
       .limit(1);
 
-    if (historicalAppointment) {
+    const [historicalCompensation] = await db
+      .select({ id: barberCompensationRules.id })
+      .from(barberCompensationRules)
+      .where(eq(barberCompensationRules.barberId, id))
+      .limit(1);
+
+    if (historicalAppointment || historicalCompensation) {
       await db.update(barbers).set({ isVisible: false }).where(eq(barbers.id, id));
       return "hidden";
     }
 
     await db.delete(barberServices).where(eq(barberServices.barberId, id));
     await db.delete(barberAvailability).where(eq(barberAvailability.barberId, id));
+    await db.delete(barberLocations).where(eq(barberLocations.barberId, id));
     await db.delete(barbers).where(eq(barbers.id, id));
     return "deleted";
   }
@@ -1201,6 +1212,22 @@ export class DatabaseStorage implements IStorage {
       .orderBy(appointmentExtras.appointmentId, appointmentExtras.position);
   }
 
+  private async resolveAppointmentCompensationSnapshot(
+    tx: Pick<typeof db, "select">,
+    appointment: Pick<Appointment, "barberId" | "locationId" | "startTime">,
+  ) {
+    const rules = await tx.select().from(barberCompensationRules).where(and(
+      eq(barberCompensationRules.barberId, appointment.barberId),
+      eq(barberCompensationRules.locationId, appointment.locationId),
+    )).orderBy(desc(barberCompensationRules.effectiveFrom), desc(barberCompensationRules.id));
+    return createAppointmentCompensationSnapshot(getCompensationRuleForDate(
+      rules,
+      appointment.barberId,
+      appointment.locationId,
+      toAppointmentDate(appointment.startTime),
+    ));
+  }
+
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
     const [createdAppointment] = await this.createAppointments([appointment]);
     return createdAppointment;
@@ -1239,8 +1266,18 @@ export class DatabaseStorage implements IStorage {
           await this.assertNoAppointmentConflict(tx, appointment);
           const { notificationEventType, extras: _extras, ...appointmentValues } = appointment;
           const notificationRevision = notificationEventType ? 1 : 0;
+          const locationId = appointment.locationId ?? 1;
+          const compensationSnapshot = appointment.status === "completed"
+            ? await this.resolveAppointmentCompensationSnapshot(tx, {
+                barberId: appointment.barberId,
+                locationId,
+                startTime: appointment.startTime,
+              })
+            : {};
           const [newAppointment] = await tx.insert(appointments).values({
             ...appointmentValues,
+            ...compensationSnapshot,
+            locationId,
             notificationRevision,
             whatsappOptInAt: appointment.whatsappOptIn
               ? appointment.whatsappOptInAt ?? new Date()
@@ -1298,6 +1335,9 @@ export class DatabaseStorage implements IStorage {
           ...current,
           ...appointment,
         };
+        const compensationSnapshot = candidate.status === "completed" && !current.compensationModelSnapshot
+          ? await this.resolveAppointmentCompensationSnapshot(tx, candidate)
+          : {};
 
         if (shouldProtectAppointment(candidate.status)) {
           const introducesBookedOccupancy = current.status !== "booked"
@@ -1312,7 +1352,7 @@ export class DatabaseStorage implements IStorage {
 
         const [updated] = await tx
           .update(appointments)
-          .set(appointment)
+          .set({ ...appointment, ...compensationSnapshot })
           .where(and(...appointmentConditions))
           .returning();
         if (updated && current.seriesId) {
@@ -1349,6 +1389,9 @@ export class DatabaseStorage implements IStorage {
 
         const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
         const changes = getAppointmentUpdateChanges(current, safePatch);
+        const compensationSnapshot = changes.candidate.status === "completed" && !current.compensationModelSnapshot
+          ? await this.resolveAppointmentCompensationSnapshot(tx, changes.candidate)
+          : {};
         const currentExtras = extras === undefined
           ? []
           : await tx.select().from(appointmentExtras)
@@ -1396,6 +1439,7 @@ export class DatabaseStorage implements IStorage {
         if (changes.changedFields.length > 0) {
           const [updatedAppointment] = await tx.update(appointments).set({
             ...safePatch,
+            ...compensationSnapshot,
             notificationRevision: nextRevision,
           }).where(and(...appointmentConditions)).returning();
           if (!updatedAppointment) return undefined;
@@ -1495,6 +1539,9 @@ export class DatabaseStorage implements IStorage {
       const [current] = await tx.select().from(appointments)
         .where(and(eq(appointments.id, id), eq(appointments.status, currentStatus))).limit(1);
       if (!current) return undefined;
+      const compensationSnapshot = status === "completed" && !current.compensationModelSnapshot
+        ? await this.resolveAppointmentCompensationSnapshot(tx, current)
+        : {};
       if (status === "booked" && current.status !== "booked") {
         await this.lockAndValidateAppointmentScopes(tx, [current]);
         await this.lockAppointmentDay(tx, current.barberId, current.startTime);
@@ -1502,7 +1549,7 @@ export class DatabaseStorage implements IStorage {
       }
       const [updated] = await tx
         .update(appointments)
-        .set({ ...updateData, notificationRevision: sql`${appointments.notificationRevision} + 1` })
+        .set({ ...updateData, ...compensationSnapshot, notificationRevision: sql`${appointments.notificationRevision} + 1` })
         .where(and(eq(appointments.id, id), eq(appointments.status, currentStatus)))
         .returning();
       if (updated && current.seriesId) {
@@ -1977,19 +2024,21 @@ export class DatabaseStorage implements IStorage {
     return entry;
   }
 
-  async getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]> {
-    const query = db
-      .select()
-      .from(barberCompensationRules)
-      .orderBy(barberCompensationRules.barberId, desc(barberCompensationRules.effectiveFrom), desc(barberCompensationRules.id));
-
-    if (barberId === undefined) return await query;
-
+  async getBarberCompensationRules(barberId?: number, locationId?: number): Promise<BarberCompensationRule[]> {
+    const conditions = [
+      ...(barberId === undefined ? [] : [eq(barberCompensationRules.barberId, barberId)]),
+      ...(locationId === undefined ? [] : [eq(barberCompensationRules.locationId, locationId)]),
+    ];
     return await db
       .select()
       .from(barberCompensationRules)
-      .where(eq(barberCompensationRules.barberId, barberId))
-      .orderBy(desc(barberCompensationRules.effectiveFrom), desc(barberCompensationRules.id));
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(
+        barberCompensationRules.barberId,
+        barberCompensationRules.locationId,
+        desc(barberCompensationRules.effectiveFrom),
+        desc(barberCompensationRules.id),
+      );
   }
 
   async createBarberCompensationRule(rule: CreateBarberCompensationRuleRequest): Promise<BarberCompensationRule> {
@@ -2472,7 +2521,8 @@ export class MemoryStorage implements IStorage {
       error.code = "BARBER_HAS_FUTURE_APPOINTMENTS";
       throw error;
     }
-    if (this.appointments.some((appointment) => appointment.barberId === id)) {
+    if (this.appointments.some((appointment) => appointment.barberId === id)
+      || this.barberCompensationRules.some((rule) => rule.barberId === id)) {
       this.barbers = this.barbers.map((barber) =>
         barber.id === id ? { ...barber, isVisible: false } : barber,
       );
@@ -2749,6 +2799,17 @@ export class MemoryStorage implements IStorage {
     return this.appointments.find((appointment) => appointment.cancelToken === token);
   }
 
+  private resolveAppointmentCompensationSnapshot(
+    appointment: Pick<Appointment, "barberId" | "locationId" | "startTime">,
+  ) {
+    return createAppointmentCompensationSnapshot(getCompensationRuleForDate(
+      this.barberCompensationRules,
+      appointment.barberId,
+      appointment.locationId,
+      toAppointmentDate(appointment.startTime),
+    ));
+  }
+
   async createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment> {
     const [createdAppointment] = await this.createAppointments([appointment]);
     return createdAppointment;
@@ -2774,9 +2835,23 @@ export class MemoryStorage implements IStorage {
           appointment.extras ?? [],
         );
         const notificationRevision = appointment.notificationEventType ? 1 : 0;
+        const locationId = appointment.locationId ?? 1;
+        const compensationSnapshot = appointment.status === "completed"
+          ? this.resolveAppointmentCompensationSnapshot({
+              barberId: appointment.barberId,
+              locationId,
+              startTime: appointment.startTime,
+            })
+          : {
+              compensationRuleIdSnapshot: null,
+              compensationModelSnapshot: null,
+              commissionPercentSnapshot: null,
+              chairRentCentsSnapshot: null,
+              chairRentPeriodSnapshot: null,
+            };
         const newAppointment: Appointment = {
           id: this.nextIds.appointment++,
-          locationId: appointment.locationId ?? 1,
+          locationId,
           barberId: appointment.barberId,
           serviceId: appointment.serviceId ?? null,
           startTime: appointment.startTime,
@@ -2786,6 +2861,7 @@ export class MemoryStorage implements IStorage {
           durationMinutes: appointment.durationMinutes,
           serviceNameSnapshot: appointment.serviceNameSnapshot ?? null,
           servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot ?? null,
+          ...compensationSnapshot,
           manualOutsideHours: appointment.manualOutsideHours ?? false,
           status: appointment.status ?? "booked",
           paymentMethod: appointment.paymentMethod ?? "pending",
@@ -2871,6 +2947,11 @@ export class MemoryStorage implements IStorage {
           durationMinutes: appointment.durationMinutes, status: appointment.status ?? "booked",
           serviceNameSnapshot: appointment.serviceNameSnapshot ?? null,
           servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot ?? null,
+          compensationRuleIdSnapshot: null,
+          compensationModelSnapshot: null,
+          commissionPercentSnapshot: null,
+          chairRentCentsSnapshot: null,
+          chairRentPeriodSnapshot: null,
           manualOutsideHours: appointment.manualOutsideHours ?? false,
           paymentMethod: appointment.paymentMethod ?? "pending", cancelToken: appointment.cancelToken,
           cancelledAt: null, depositRequired: appointment.depositRequired ?? false,
@@ -2926,7 +3007,11 @@ export class MemoryStorage implements IStorage {
     if (index === -1) return undefined;
     if (expectedStatus && this.appointments[index].status !== expectedStatus) return undefined;
     const current = this.appointments[index];
-    const updatedAppointment = { ...current, ...appointment };
+    const candidate = { ...current, ...appointment };
+    const compensationSnapshot = candidate.status === "completed" && !current.compensationModelSnapshot
+      ? this.resolveAppointmentCompensationSnapshot(candidate)
+      : {};
+    const updatedAppointment = { ...candidate, ...compensationSnapshot };
     this.assertNoAppointmentConflict(updatedAppointment, id);
     this.appointments[index] = updatedAppointment;
     if (current.seriesId) {
@@ -2949,6 +3034,9 @@ export class MemoryStorage implements IStorage {
     if (expectedStatus && current.status !== expectedStatus) return undefined;
     const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
     const changes = getAppointmentUpdateChanges(current, safePatch);
+    const compensationSnapshot = changes.candidate.status === "completed" && !current.compensationModelSnapshot
+      ? this.resolveAppointmentCompensationSnapshot(changes.candidate)
+      : {};
     const currentExtras = extras === undefined
       ? []
       : this.appointmentExtras
@@ -2981,6 +3069,7 @@ export class MemoryStorage implements IStorage {
     const updated: Appointment = changes.changedFields.length > 0
       ? {
           ...changes.candidate,
+          ...compensationSnapshot,
           notificationRevision: notificationContextChanged
             ? current.notificationRevision + 1
             : current.notificationRevision,
@@ -3447,11 +3536,13 @@ export class MemoryStorage implements IStorage {
     return entry;
   }
 
-  async getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]> {
+  async getBarberCompensationRules(barberId?: number, locationId?: number): Promise<BarberCompensationRule[]> {
     return this.barberCompensationRules
-      .filter((rule) => barberId === undefined || rule.barberId === barberId)
+      .filter((rule) => (barberId === undefined || rule.barberId === barberId)
+        && (locationId === undefined || rule.locationId === locationId))
       .sort((a, b) =>
         a.barberId - b.barberId ||
+        a.locationId - b.locationId ||
         new Date(b.effectiveFrom).getTime() - new Date(a.effectiveFrom).getTime() ||
         b.id - a.id,
       );
@@ -3461,6 +3552,7 @@ export class MemoryStorage implements IStorage {
     const created: BarberCompensationRule = {
       id: this.nextIds.barberCompensationRule++,
       barberId: rule.barberId,
+      locationId: rule.locationId,
       model: rule.model ?? "none",
       commissionPercent: rule.commissionPercent ?? null,
       chairRentCents: rule.chairRentCents ?? null,

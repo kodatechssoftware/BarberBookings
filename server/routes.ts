@@ -41,7 +41,6 @@ import {
   isDevelopmentDeployment,
 } from "./runtime-environment";
 import {
-  calculateAppointmentsFinancials,
   createDefaultCompensationRule as defaultCompensationRule,
   loadAppointmentsFinancials,
   type AppointmentFinancialResult,
@@ -1068,9 +1067,10 @@ function compensationRulesMatch(
 
 function attachCompensationRule<T extends { id: number }>(
   barber: T,
+  locationId: number,
   rule?: BarberCompensationRule,
 ) {
-  const activeRule = rule || defaultCompensationRule(barber.id);
+  const activeRule = rule || defaultCompensationRule(barber.id, locationId);
   return {
     ...barber,
     compensationModel: activeRule.model,
@@ -1082,17 +1082,24 @@ function attachCompensationRule<T extends { id: number }>(
 
 async function saveBarberCompensationRuleIfNeeded(
   barberId: number,
+  locationId: number,
   input: BarberCompensationInput,
   effectiveFrom = new Date(),
 ) {
-  const nextRule = normalizeBarberCompensationInput(input);
-  const [currentRule] = await storage.getBarberCompensationRules(barberId);
+  const [currentRule] = await storage.getBarberCompensationRules(barberId, locationId);
+  const nextRule = normalizeBarberCompensationInput({
+    compensationModel: input.compensationModel ?? currentRule?.model ?? "none",
+    commissionPercent: input.commissionPercent ?? currentRule?.commissionPercent ?? null,
+    chairRentCents: input.chairRentCents ?? currentRule?.chairRentCents ?? null,
+    chairRentPeriod: input.chairRentPeriod ?? currentRule?.chairRentPeriod ?? null,
+  });
   if (currentRule && compensationRulesMatch(currentRule, nextRule)) {
     return currentRule;
   }
 
   return storage.createBarberCompensationRule({
     barberId,
+    locationId,
     ...nextRule,
     effectiveFrom,
   });
@@ -1106,7 +1113,7 @@ async function getBarbersWithServiceIds(
   const [barbers, serviceRows, compensationRows] = await Promise.all([
     storage.getBarbers({ avatarReferences }),
     storage.getAllBarberServices(locationId),
-    storage.getBarberCompensationRules(),
+    storage.getBarberCompensationRules(undefined, locationId),
   ]);
   const [locationBarberIds, locationServiceIds, activeLocationBarberIds] = await Promise.all([
     getBarberIdsForLocation(locationId, true),
@@ -1130,7 +1137,7 @@ async function getBarbersWithServiceIds(
     const serviceIds = (barberServiceMap.get(barber.id) || [])
       .filter((id) => allowedServices.has(id));
     return {
-      ...attachCompensationRule(barber, currentCompensationByBarberId.get(barber.id)),
+      ...attachCompensationRule(barber, locationId, currentCompensationByBarberId.get(barber.id)),
       isVisible: barber.isVisible !== false && activeBarberIds.has(barber.id),
       locationCount: locationCounts.get(barber.id) ?? 0,
       serviceIds,
@@ -2391,11 +2398,6 @@ export async function registerRoutes(
     const locationId = Number(res.locals.locationId);
     const barber = await storage.getBarber(barberId);
     if (!barber || barber.isVisible === false) return res.status(404).json({ message: "Barbeiro indisponível." });
-    const assignedLocations = await getLocationIdsForBarber(barberId);
-    const [compensation] = await storage.getBarberCompensationRules(barberId);
-    if (assignedLocations.some((id) => id !== locationId) && compensation?.model === "chair_rent") {
-      return res.status(409).json({ message: "O aluguer de cadeira ainda não permite partilha entre lojas. Defina outro modelo de remuneração antes de associar o barbeiro." });
-    }
     const previouslyAssociated = (await getBarberIdsForLocation(locationId, true)).includes(barberId);
     if (previouslyAssociated) {
       // Reactivation keeps the previous local selection.
@@ -2404,6 +2406,14 @@ export async function registerRoutes(
       // Deny by default when sharing an existing barber with a new shop. The
       // administrator explicitly chooses the local services afterwards.
       await storage.assignBarberToLocationWithServices(barberId, locationId, []);
+    }
+    if ((await storage.getBarberCompensationRules(barberId, locationId)).length === 0) {
+      await saveBarberCompensationRuleIfNeeded(
+        barberId,
+        locationId,
+        { compensationModel: "none" },
+        new Date(0),
+      );
     }
     await recordAuditLog(req, {
       action: "barber.location_assigned", entityType: "barber", entityId: barberId,
@@ -2436,12 +2446,12 @@ export async function registerRoutes(
       const barber = await storage.createBarber(normalizedBarberInput);
       const selectedServiceIds = normalizedServiceIds ?? locationServiceIds;
       await storage.assignBarberToLocationWithServices(barber.id, locationId, selectedServiceIds);
-      const compensationRule = await saveBarberCompensationRuleIfNeeded(barber.id, {
+      const compensationRule = await saveBarberCompensationRuleIfNeeded(barber.id, locationId, {
         compensationModel,
         commissionPercent,
         chairRentCents,
         chairRentPeriod,
-      });
+      }, new Date(0));
       await recordAuditLog(req, {
         action: "barber.created",
         entityType: "barber",
@@ -2450,7 +2460,7 @@ export async function registerRoutes(
         metadata: { serviceIds: selectedServiceIds, compensationModel: compensationRule.model },
       });
       res.status(201).json({
-        ...attachCompensationRule(barber, compensationRule),
+        ...attachCompensationRule(barber, locationId, compensationRule),
         serviceIds: selectedServiceIds,
         allServicesAllowed: locationServiceIds.length > 0 && selectedServiceIds.length === locationServiceIds.length,
       });
@@ -2504,10 +2514,6 @@ export async function registerRoutes(
         ? (normalizedBarberPatch.email?.trim().toLowerCase() || null)
         : currentEmail;
       const emailChanged = emailWasProvided && nextEmail !== currentEmail;
-      if (MULTI_LOCATION_CONFIG.enabled && compensationModel === "chair_rent"
-        && (await getLocationIdsForBarber(barberId)).length > 1) {
-        return res.status(400).json({ message: "O aluguer de cadeira ainda não está disponível para barbeiros partilhados entre lojas." });
-      }
       const locationServiceIds = await getServiceIdsForLocation(locationId, true);
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds, locationServiceIds);
       if (normalizedServiceIds && locationServiceIds !== undefined && normalizedServiceIds.some((id) => !locationServiceIds.includes(id))) {
@@ -2546,13 +2552,14 @@ export async function registerRoutes(
         chairRentPeriod,
       ].some((value) => value !== undefined);
       const compensationRule = hasCompensationPatch
-        ? await saveBarberCompensationRuleIfNeeded(barberId, {
+        ? await saveBarberCompensationRuleIfNeeded(barberId, locationId, {
           compensationModel,
           commissionPercent,
           chairRentCents,
           chairRentPeriod,
         })
-        : (await storage.getBarberCompensationRules(barberId))[0] || defaultCompensationRule(barberId);
+        : (await storage.getBarberCompensationRules(barberId, locationId))[0]
+          || defaultCompensationRule(barberId, locationId);
 
       if (normalizedServiceIds !== undefined) {
         await replaceBarberServicesForLocation(barberId, normalizedServiceIds, locationId);
@@ -2584,7 +2591,7 @@ export async function registerRoutes(
       });
       const currentVisible = updatedBarber.isVisible !== false && await isBarberAssignedToLocation(barberId, locationId);
       res.json({
-        ...sanitizeBarberForResponse(attachCompensationRule(updatedBarber, compensationRule), true, true),
+        ...sanitizeBarberForResponse(attachCompensationRule(updatedBarber, locationId, compensationRule), true, true),
         isVisible: currentVisible,
         serviceIds: currentServiceIds,
         accessReset: emailChanged,
@@ -3453,9 +3460,9 @@ export async function registerRoutes(
     const allServiceIds = await storage.getBarberServiceIds(barber.id, locationId);
     const serviceIds = allServiceIds
       .filter((serviceId) => !allowedServices || allowedServices.has(serviceId));
-    const [compensationRule] = await storage.getBarberCompensationRules(barber.id);
+    const [compensationRule] = await storage.getBarberCompensationRules(barber.id, locationId);
     res.json(sanitizeBarberForResponse({
-      ...attachCompensationRule(barber, compensationRule),
+      ...attachCompensationRule(barber, locationId, compensationRule),
       serviceIds,
       allServicesAllowed: locationServiceIds.length > 0 && serviceIds.length === locationServiceIds.length,
     }, includePrivateFields, isAdminSession));
@@ -5658,11 +5665,10 @@ export async function registerRoutes(
 
     try {
       const locationId = Number(res.locals.locationId);
-      const [rawBarbers, effectiveServices, allAppointments, compensationRules, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
+      const [rawBarbers, effectiveServices, allAppointments, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
         storage.getBarbers(),
         loadLocationServiceCatalogue(locationId, true),
         storage.getAppointments(selectedBarberId, undefined, locationId),
-        storage.getBarberCompensationRules(selectedBarberId),
         storage.getBusinessExpenses({ startDate: startDateKey, endDate: endDateKey, locationId }),
         getBarberIdsForLocation(locationId),
         getLocation(locationId, true),
@@ -5773,15 +5779,7 @@ export async function registerRoutes(
         }
       }
 
-      const appointmentExtras = await storage.getAppointmentExtras(
-        rangeAppointments.map((appointment) => appointment.id),
-      );
-      const reportFinancials = calculateAppointmentsFinancials({
-        appointments: rangeAppointments,
-        appointmentExtras,
-        servicePrices,
-        compensationRules,
-      });
+      const reportFinancials = await loadAppointmentsFinancials(storage, rangeAppointments, servicePrices);
       const formatExtraAmount = (amountCents: number) =>
         `${(amountCents / 100).toFixed(2).replace(".", ",")} €`;
       const describeExtras = (financial: AppointmentFinancialResult) => {
@@ -5791,7 +5789,6 @@ export async function registerRoutes(
         return labels.length > 0 ? labels.join("; ") : null;
       };
       const appointmentsById = new Map(rangeAppointments.map((appointment) => [appointment.id, appointment]));
-      const compensationRulesById = new Map(compensationRules.map((rule) => [rule.id, rule]));
       const completedServiceAmountCents = reportFinancials.appointments.reduce(
         (total, financial) => total + (appointmentsById.get(financial.appointmentId)?.status === "completed"
           ? financial.serviceAmountCents
@@ -6558,10 +6555,8 @@ export async function registerRoutes(
           const endTime = new Date(startTime.getTime() + appointment.durationMinutes * 60000);
           const barber = barbersById.get(appointment.barberId);
           const financial = reportFinancials.byAppointmentId.get(appointment.id)!;
-          const compensationRule = compensationRulesById.get(financial.compensationRuleId)
-            || defaultCompensationRule(appointment.barberId);
           const commissionRate = financial.compensationModel === "commission"
-            ? (compensationRule.commissionPercent || 0) / 100
+            ? (financial.commissionPercent || 0) / 100
             : null;
 
           return [

@@ -1,8 +1,8 @@
-import { format, startOfDay } from "date-fns";
 import {
   getAppointmentPriceCents,
   type AppointmentServiceTermsLike,
 } from "@shared/appointment-service-terms";
+import { getCalendarDateInTimeZone } from "@shared/public-booking-window";
 import type {
   Appointment,
   AppointmentExtra,
@@ -29,8 +29,11 @@ export type AppointmentFinancialResult = {
   appointmentId: number;
   locationId: number;
   barberId: number;
-  compensationRuleId: number;
+  compensationRuleId: number | null;
   compensationModel: BarberCompensationModel;
+  commissionPercent: number | null;
+  chairRentCents: number | null;
+  chairRentPeriod: ChairRentPeriod | null;
   serviceAmountCents: number;
   extrasAmountCents: number;
   totalAmountCents: number;
@@ -71,7 +74,8 @@ export type AppointmentsFinancialResult = {
 
 export type AppointmentFinanceDataSource = {
   getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]>;
-  getBarberCompensationRules(barberId?: number): Promise<BarberCompensationRule[]>;
+  getBarberCompensationRules(barberId?: number, locationId?: number): Promise<BarberCompensationRule[]>;
+  getAppointments?(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]>;
 };
 
 type CalculateAppointmentsFinancialsInput = {
@@ -79,6 +83,7 @@ type CalculateAppointmentsFinancialsInput = {
   appointmentExtras: readonly AppointmentExtra[];
   servicePrices: ReadonlyMap<number, number>;
   compensationRules: readonly BarberCompensationRule[];
+  chairRentAnchorAppointmentIds?: ReadonlySet<number>;
 };
 
 type CalculateAppointmentFinancialsInput = {
@@ -88,10 +93,11 @@ type CalculateAppointmentFinancialsInput = {
   compensationRules?: readonly BarberCompensationRule[];
 };
 
-export function createDefaultCompensationRule(barberId: number): BarberCompensationRule {
+export function createDefaultCompensationRule(barberId: number, locationId: number): BarberCompensationRule {
   return {
     id: 0,
     barberId,
+    locationId,
     model: "none",
     commissionPercent: null,
     chairRentCents: null,
@@ -104,24 +110,80 @@ export function createDefaultCompensationRule(barberId: number): BarberCompensat
 export function getCompensationRuleForDate(
   rules: readonly BarberCompensationRule[],
   barberId: number,
+  locationId: number,
   date: Date,
 ) {
   const timestamp = date.getTime();
   const barberRules = rules
-    .filter((candidate) => candidate.barberId === barberId)
+    .filter((candidate) => candidate.barberId === barberId && candidate.locationId === locationId)
     .sort((left, right) => new Date(right.effectiveFrom).getTime() - new Date(left.effectiveFrom).getTime());
   const rule = barberRules.find((candidate) => new Date(candidate.effectiveFrom).getTime() <= timestamp);
-  return rule || barberRules[barberRules.length - 1] || createDefaultCompensationRule(barberId);
+  return rule || createDefaultCompensationRule(barberId, locationId);
 }
 
-export function getChairRentUnitKey(date: Date, period: ChairRentPeriod) {
-  if (period === "day") return format(date, "yyyy-MM-dd");
-  if (period === "week") {
-    const weekStart = startOfDay(date);
-    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
-    return format(weekStart, "yyyy-MM-dd");
+export function getCompensationRuleForAppointment(
+  rules: readonly BarberCompensationRule[],
+  appointment: Pick<Appointment,
+    "barberId" | "locationId" | "startTime" | "compensationRuleIdSnapshot" |
+    "compensationModelSnapshot" | "commissionPercentSnapshot" |
+    "chairRentCentsSnapshot" | "chairRentPeriodSnapshot">,
+): BarberCompensationRule {
+  if (appointment.compensationModelSnapshot) {
+    return {
+      id: appointment.compensationRuleIdSnapshot ?? 0,
+      barberId: appointment.barberId,
+      locationId: appointment.locationId,
+      model: appointment.compensationModelSnapshot,
+      commissionPercent: appointment.commissionPercentSnapshot,
+      chairRentCents: appointment.chairRentCentsSnapshot,
+      chairRentPeriod: appointment.chairRentPeriodSnapshot,
+      effectiveFrom: new Date(0),
+      createdAt: new Date(0),
+    };
   }
-  return format(date, "yyyy-MM");
+  return getCompensationRuleForDate(
+    rules,
+    appointment.barberId,
+    appointment.locationId,
+    new Date(appointment.startTime),
+  );
+}
+
+export function createAppointmentCompensationSnapshot(
+  rule: BarberCompensationRule,
+): Pick<Appointment,
+  "compensationRuleIdSnapshot" | "compensationModelSnapshot" |
+  "commissionPercentSnapshot" | "chairRentCentsSnapshot" | "chairRentPeriodSnapshot"> {
+  return {
+    compensationRuleIdSnapshot: rule.id > 0 ? rule.id : null,
+    compensationModelSnapshot: rule.model,
+    commissionPercentSnapshot: rule.model === "commission" ? rule.commissionPercent : null,
+    chairRentCentsSnapshot: rule.model === "chair_rent" ? rule.chairRentCents : null,
+    chairRentPeriodSnapshot: rule.model === "chair_rent" ? rule.chairRentPeriod : null,
+  };
+}
+
+const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon";
+
+function calendarDateKey(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+export function getChairRentUnitKey(
+  date: Date,
+  period: ChairRentPeriod,
+  timeZone = SHOP_TIME_ZONE,
+) {
+  const calendarDate = getCalendarDateInTimeZone(date, timeZone);
+  if (period === "day") {
+    return calendarDateKey(calendarDate.year, calendarDate.month, calendarDate.day);
+  }
+  if (period === "week") {
+    const value = new Date(Date.UTC(calendarDate.year, calendarDate.month - 1, calendarDate.day));
+    value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7));
+    return calendarDateKey(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate());
+  }
+  return `${calendarDate.year}-${String(calendarDate.month).padStart(2, "0")}`;
 }
 
 function roundPercentageCents(amountCents: number, percent: number) {
@@ -256,8 +318,11 @@ function calculateBaseAppointmentFinancials(
     appointmentId: appointment.id,
     locationId: appointment.locationId,
     barberId: appointment.barberId,
-    compensationRuleId: compensationRule.id,
+    compensationRuleId: compensationRule.id > 0 ? compensationRule.id : null,
     compensationModel: compensationRule.model,
+    commissionPercent: compensationRule.commissionPercent,
+    chairRentCents: compensationRule.chairRentCents,
+    chairRentPeriod: compensationRule.chairRentPeriod,
     serviceAmountCents,
     extrasAmountCents,
     totalAmountCents,
@@ -277,6 +342,7 @@ export function calculateAppointmentsFinancials({
   appointmentExtras,
   servicePrices,
   compensationRules,
+  chairRentAnchorAppointmentIds,
 }: CalculateAppointmentsFinancialsInput): AppointmentsFinancialResult {
   const appointmentIds = new Set(appointments.map((appointment) => appointment.id));
   const extrasByAppointment = new Map<number, AppointmentExtra[]>();
@@ -289,11 +355,7 @@ export function calculateAppointmentsFinancials({
 
   const rulesByAppointment = new Map<number, BarberCompensationRule>();
   const results = appointments.map((appointment) => {
-    const rule = getCompensationRuleForDate(
-      compensationRules,
-      appointment.barberId,
-      new Date(appointment.startTime),
-    );
+    const rule = getCompensationRuleForAppointment(compensationRules, appointment);
     rulesByAppointment.set(appointment.id, rule);
     return calculateBaseAppointmentFinancials(
       appointment,
@@ -312,7 +374,8 @@ export function calculateAppointmentsFinancials({
     const rule = rulesByAppointment.get(appointment.id)!;
     if (appointment.status !== "completed" || rule.model !== "chair_rent") continue;
     const rentPeriod = rule.chairRentPeriod || "month";
-    const rentKey = `${rule.id}:${rentPeriod}:${getChairRentUnitKey(new Date(appointment.startTime), rentPeriod)}`;
+    if (chairRentAnchorAppointmentIds && !chairRentAnchorAppointmentIds.has(appointment.id)) continue;
+    const rentKey = `${appointment.barberId}:${appointment.locationId}:${rentPeriod}:${getChairRentUnitKey(new Date(appointment.startTime), rentPeriod)}`;
     if (chairRentKeys.has(rentKey)) continue;
     chairRentKeys.add(rentKey);
     const chairRentAmountCents = rule.chairRentCents || 0;
@@ -340,6 +403,27 @@ export function calculateAppointmentsFinancials({
     commissionAmountCents: sum(results, (result) => result.commissionAmountCents),
     chairRentAmountCents: sum(results, (result) => result.chairRentAmountCents),
   };
+}
+
+export function getChairRentAnchorAppointmentIds(
+  appointments: readonly Appointment[],
+  compensationRules: readonly BarberCompensationRule[],
+) {
+  const keys = new Set<string>();
+  const anchors = new Set<number>();
+  const chronological = [...appointments].sort((left, right) =>
+    new Date(left.startTime).getTime() - new Date(right.startTime).getTime() || left.id - right.id);
+  for (const appointment of chronological) {
+    if (appointment.status !== "completed") continue;
+    const rule = getCompensationRuleForAppointment(compensationRules, appointment);
+    if (rule.model !== "chair_rent") continue;
+    const period = rule.chairRentPeriod || "month";
+    const key = `${appointment.barberId}:${appointment.locationId}:${period}:${getChairRentUnitKey(new Date(appointment.startTime), period)}`;
+    if (keys.has(key)) continue;
+    keys.add(key);
+    anchors.add(appointment.id);
+  }
+  return anchors;
 }
 
 export function calculateAppointmentFinancials({
@@ -374,10 +458,20 @@ export async function loadAppointmentsFinancials(
     source.getAppointmentExtras(appointmentIds),
     source.getBarberCompensationRules(),
   ]);
+  let chairRentAnchorAppointmentIds: ReadonlySet<number> | undefined;
+  if (source.getAppointments) {
+    const locationIds = Array.from(new Set(appointments.map((appointment) => appointment.locationId)));
+    const relevantBarberIds = new Set(appointments.map((appointment) => appointment.barberId));
+    const locationAppointments = (await Promise.all(
+      locationIds.map((locationId) => source.getAppointments!(undefined, undefined, locationId)),
+    )).flat().filter((appointment) => relevantBarberIds.has(appointment.barberId));
+    chairRentAnchorAppointmentIds = getChairRentAnchorAppointmentIds(locationAppointments, compensationRules);
+  }
   return calculateAppointmentsFinancials({
     appointments,
     appointmentExtras,
     servicePrices,
     compensationRules,
+    chairRentAnchorAppointmentIds,
   });
 }

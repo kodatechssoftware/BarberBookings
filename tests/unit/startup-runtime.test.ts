@@ -63,10 +63,12 @@ for (const [appEnv, flag, expected] of [
       const names = records.map((r) => r.phase);
       for (const phase of ["process-origin", "db-pool-configuration", "runtime-validation",
         "ensureServiceAgendaLabelColumn", "ensureAppointmentPaymentMethodColumn", "ensureBarberServicesTable",
-        "ensureBarberCompensationRulesTable", "ensureBusinessExpensesTable", "ensureAppointmentOverlapProtection",
+        "ensureBusinessExpensesTable", "ensureAppointmentOverlapProtection",
         "repairKnownTextEncodingArtifacts", "session-store-initialization", "seedDatabase", "registerRoutes",
         "workers", "static-setup", "http-configuration", "http-final-configuration", "total-before-listen",
         "http-listen", "starting-to-listen", "listening"] as const) assert.ok(names.includes(phase), phase);
+      assert.equal(names.includes("ensureBarberCompensationRulesTable"), false,
+        "versioned compensation migrations must replace the startup DDL ensure");
       assert.ok(names.indexOf("repairKnownTextEncodingArtifacts") < names.indexOf("registerRoutes"));
       assert.ok(names.indexOf("registerRoutes") < names.indexOf("total-before-listen"));
       assert.ok(names.indexOf("total-before-listen") < names.indexOf("http-listen"));

@@ -22,7 +22,7 @@ const chairRentPeriodSchema = z.enum(chairRentPeriods);
 const barberCompensationInputSchema = z.object({
   compensationModel: compensationModelSchema.optional(),
   commissionPercent: z.number().min(0).max(100).nullable().optional(),
-  chairRentCents: z.number().int().min(0).nullable().optional(),
+  chairRentCents: z.number().int().min(1).nullable().optional(),
   chairRentPeriod: chairRentPeriodSchema.nullable().optional(),
 });
 

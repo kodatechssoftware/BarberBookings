@@ -216,6 +216,11 @@ export const appointments = appPgTable("appointments", {
   durationMinutes: integer("duration_minutes").default(30).notNull(),
   serviceNameSnapshot: text("service_name_snapshot"),
   servicePriceCentsSnapshot: integer("service_price_cents_snapshot"),
+  compensationRuleIdSnapshot: integer("compensation_rule_id_snapshot"),
+  compensationModelSnapshot: text("compensation_model_snapshot", { enum: barberCompensationModels }),
+  commissionPercentSnapshot: integer("commission_percent_snapshot"),
+  chairRentCentsSnapshot: integer("chair_rent_cents_snapshot"),
+  chairRentPeriodSnapshot: text("chair_rent_period_snapshot", { enum: chairRentPeriods }),
   manualOutsideHours: boolean("manual_outside_hours").default(false).notNull(),
   status: text("status", { enum: appointmentStatuses }).default("booked").notNull(),
   cancelToken: text("cancel_token").notNull(),
@@ -232,6 +237,11 @@ export const appointments = appPgTable("appointments", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   seriesOccurrenceIdx: uniqueIndex("appointments_series_occurrence_idx").on(table.seriesId, table.seriesOccurrenceIndex),
+  compensationRuleSnapshotFk: foreignKey({
+    name: "appointments_compensation_rule_snapshot_fkey",
+    columns: [table.compensationRuleIdSnapshot, table.barberId, table.locationId],
+    foreignColumns: [barberCompensationRules.id, barberCompensationRules.barberId, barberCompensationRules.locationId],
+  }).onDelete("restrict"),
   serviceSnapshotPairCheck: check("appointments_service_snapshot_pair_check", sql`
     (${table.serviceNameSnapshot} IS NULL AND ${table.servicePriceCentsSnapshot} IS NULL)
     OR (${table.serviceNameSnapshot} IS NOT NULL AND ${table.servicePriceCentsSnapshot} IS NOT NULL)
@@ -243,6 +253,27 @@ export const appointments = appPgTable("appointments", {
   servicePriceSnapshotCheck: check("appointments_service_price_snapshot_check", sql`
     ${table.servicePriceCentsSnapshot} IS NULL
     OR (${table.servicePriceCentsSnapshot} >= 0 AND ${table.servicePriceCentsSnapshot} <= 1000000)
+  `),
+  compensationSnapshotCheck: check("appointments_compensation_snapshot_check", sql`
+    (${table.compensationModelSnapshot} IS NULL
+      AND ${table.compensationRuleIdSnapshot} IS NULL
+      AND ${table.commissionPercentSnapshot} IS NULL
+      AND ${table.chairRentCentsSnapshot} IS NULL
+      AND ${table.chairRentPeriodSnapshot} IS NULL)
+    OR (${table.compensationModelSnapshot} = 'none'
+      AND ${table.commissionPercentSnapshot} IS NULL
+      AND ${table.chairRentCentsSnapshot} IS NULL
+      AND ${table.chairRentPeriodSnapshot} IS NULL)
+    OR (${table.compensationModelSnapshot} = 'commission'
+      AND ${table.compensationRuleIdSnapshot} IS NOT NULL
+      AND ${table.commissionPercentSnapshot} BETWEEN 0 AND 100
+      AND ${table.chairRentCentsSnapshot} IS NULL
+      AND ${table.chairRentPeriodSnapshot} IS NULL)
+    OR (${table.compensationModelSnapshot} = 'chair_rent'
+      AND ${table.compensationRuleIdSnapshot} IS NOT NULL
+      AND ${table.commissionPercentSnapshot} IS NULL
+      AND ${table.chairRentCentsSnapshot} > 0
+      AND ${table.chairRentPeriodSnapshot} IN ('day', 'week', 'month'))
   `),
 }));
 
@@ -445,14 +476,43 @@ export const auditLogs = appPgTable("audit_logs", {
 
 export const barberCompensationRules = appPgTable("barber_compensation_rules", {
   id: idColumn("barber_compensation_rules_id_seq"),
-  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  barberId: integer("barber_id").references(() => barbers.id, { onDelete: "cascade" }).notNull(),
+  locationId: integer("location_id").notNull(),
   model: text("model", { enum: barberCompensationModels }).default("none").notNull(),
   commissionPercent: integer("commission_percent"),
   chairRentCents: integer("chair_rent_cents"),
   chairRentPeriod: text("chair_rent_period", { enum: chairRentPeriods }),
   effectiveFrom: timestamp("effective_from").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  barberLocationFk: foreignKey({
+    name: "barber_compensation_rules_barber_location_fkey",
+    columns: [table.barberId, table.locationId],
+    foreignColumns: [barberLocations.barberId, barberLocations.locationId],
+  }).onDelete("restrict"),
+  effectiveUnique: uniqueIndex("barber_compensation_rules_barber_location_effective_uidx")
+    .on(table.barberId, table.locationId, table.effectiveFrom),
+  snapshotIdentityUnique: uniqueIndex("barber_compensation_rules_snapshot_identity_uidx")
+    .on(table.id, table.barberId, table.locationId),
+  effectiveIdx: index("barber_compensation_rules_barber_location_effective_idx")
+    .on(table.barberId, table.locationId, table.effectiveFrom),
+  modelCheck: check("barber_compensation_rules_model_check",
+    sql`${table.model} IN ('none', 'commission', 'chair_rent')`),
+  valuesCheck: check("barber_compensation_rules_values_check", sql`
+    (${table.model} = 'none'
+      AND ${table.commissionPercent} IS NULL
+      AND ${table.chairRentCents} IS NULL
+      AND ${table.chairRentPeriod} IS NULL)
+    OR (${table.model} = 'commission'
+      AND ${table.commissionPercent} BETWEEN 0 AND 100
+      AND ${table.chairRentCents} IS NULL
+      AND ${table.chairRentPeriod} IS NULL)
+    OR (${table.model} = 'chair_rent'
+      AND ${table.commissionPercent} IS NULL
+      AND ${table.chairRentCents} > 0
+      AND ${table.chairRentPeriod} IN ('day', 'week', 'month'))
+  `),
+}));
 
 export const businessExpenses = appPgTable("business_expenses", {
   id: idColumn("business_expenses_id_seq"),
@@ -616,6 +676,10 @@ export const barberCompensationRulesRelations = relations(barberCompensationRule
   barber: one(barbers, {
     fields: [barberCompensationRules.barberId],
     references: [barbers.id],
+  }),
+  location: one(locations, {
+    fields: [barberCompensationRules.locationId],
+    references: [locations.id],
   }),
 }));
 

@@ -9,6 +9,7 @@ import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
 import { createMigrationSubsetThrough } from "../helpers/migration-subset";
+import { installCurrentLocationFinanceSchema } from "../helpers/current-postgres-location-schema";
 
 async function availablePort() {
   const server = net.createServer();
@@ -116,6 +117,7 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
         MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
       },
     });
+    await installCurrentLocationFinanceSchema(pool);
 
     const locationA = Number((await pool.query("SELECT id FROM locations WHERE is_default = true")).rows[0].id);
     const locationB = Number((await pool.query(`
@@ -145,6 +147,12 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
       "INSERT INTO barber_services (barber_id, service_id, location_id) VALUES ($1, $2, $3), ($1, $2, $4)",
       [barberId, serviceId, locationA, locationB],
     );
+    const barberServiceConstraints = new Set((await pool.query(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'barber_services'::regclass
+    `)).rows.map((row) => String(row.conname)));
+    assert.ok(barberServiceConstraints.has("barber_services_service_location_fkey"),
+      `missing local service FK; found ${Array.from(barberServiceConstraints).join(", ")}`);
 
     Object.assign(process.env, environment);
     const [{ DatabaseStorage, isAppointmentConflictError, isAppointmentLocationIntegrityError }, locationStore, dbModule] = await Promise.all([

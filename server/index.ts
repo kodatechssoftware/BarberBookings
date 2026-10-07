@@ -11,7 +11,6 @@ import { startAppointmentNotificationWorker } from "./appointment-notifications"
 import {
   ensureAppointmentOverlapProtection,
   ensureAppointmentPaymentMethodColumn,
-  ensureBarberCompensationRulesTable,
   ensureBarberServicesTable,
   ensureBusinessExpensesTable,
   ensureServiceAgendaLabelColumn,
@@ -192,7 +191,6 @@ finishHttpConfiguration();
   await startupTimings.measure("ensureServiceAgendaLabelColumn", ensureServiceAgendaLabelColumn);
   await startupTimings.measure("ensureAppointmentPaymentMethodColumn", ensureAppointmentPaymentMethodColumn);
   await startupTimings.measure("ensureBarberServicesTable", ensureBarberServicesTable);
-  await startupTimings.measure("ensureBarberCompensationRulesTable", ensureBarberCompensationRulesTable);
   await startupTimings.measure("ensureBusinessExpensesTable", ensureBusinessExpensesTable);
   await startupTimings.measure("ensureAppointmentOverlapProtection", ensureAppointmentOverlapProtection);
   const repairedEncodingRows = await startupTimings.measure("repairKnownTextEncodingArtifacts", repairKnownTextEncodingArtifacts);

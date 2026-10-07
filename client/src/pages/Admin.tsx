@@ -1198,7 +1198,7 @@ function BarberCompensationFields({
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-background/50 p-3">
       <div>
-        <Label>Modelo financeiro</Label>
+        <Label>Modelo financeiro — nesta loja</Label>
         <p className="text-xs text-gray-500">
           Esta regra entra em vigor a partir do momento em que guardar. O histórico anterior mantém a regra antiga no Excel.
         </p>
@@ -4283,7 +4283,7 @@ export default function Admin() {
                     </div>
                     <p className="text-sm text-primary mb-2">{barber.specialty}</p>
                     {multiLocationConfig?.enabled && (barber.locationCount ?? 0) > 1 && (
-                      <p className="mb-3 text-xs text-gray-400">Partilhado entre lojas: perfil, acesso e remuneração comuns; serviços e horário próprios de cada loja.</p>
+                      <p className="mb-3 text-xs text-gray-400">Partilhado entre lojas: perfil e acesso comuns; serviços, horário e modelo financeiro próprios de cada loja.</p>
                     )}
                     <p className="mb-3 line-clamp-2 text-xs text-gray-400">
                       {formatBarberServicesSummary(barber, services)}

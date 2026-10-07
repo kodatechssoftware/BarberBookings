@@ -52,6 +52,12 @@ legacy barbers with zero rows receive their currently implied local services.
 Inactive location associations are preserved for future reactivation. The
 migration stops and rolls back if an explicit legacy permission has no common
 location, rather than silently discarding it.
+Migration `0014_barber_location_compensation.sql` converts the effective-dated
+barber compensation history from a global barber rule into explicit rules per
+barber and location. It copies `none` and commission histories to every known
+location, including inactive historical associations, but stops and rolls back
+for ambiguous shared chair-rent histories. It also adds database constraints
+and immutable compensation snapshots for newly completed appointments.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

@@ -11,7 +11,7 @@ type Phase =
   | "db-pool-configuration" | "http-configuration" | "runtime-validation"
   | "starting-to-listen" | "ensureServiceAgendaLabelColumn"
   | "ensureAppointmentPaymentMethodColumn" | "ensureBarberServicesTable"
-  | "ensureBarberCompensationRulesTable" | "ensureBusinessExpensesTable"
+  | "ensureBusinessExpensesTable"
   | "ensureAppointmentOverlapProtection" | "repairKnownTextEncodingArtifacts"
   | "registerRoutes" | "session-store-initialization" | "ensureSessionStoreTable"
   | "seedDatabase" | "seed.hasData" | "seed.admin-read" | "seed.demo-sync"

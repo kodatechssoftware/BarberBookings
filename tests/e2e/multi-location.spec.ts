@@ -2064,3 +2064,80 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
   expect((await (await request.get("/api/services", { headers: headersB })).json()).some((item: any) => item.id === service.id)).toBe(true);
   expect(historicalB).toMatchObject({ servicePriceCentsSnapshot: 1800, durationMinutes: 45 });
 });
+
+test("[multi-location] compensation is configured independently for each shop", async ({ request }) => {
+  const locations = await ensureLocations(request, 2);
+  const locationA = locations.find((location: any) => location.isDefault) ?? locations[0];
+  const locationB = locations.find((location: any) => location.id !== locationA.id);
+  expect(locationB).toBeTruthy();
+  if (!locationB.isActive) {
+    const activation = await request.patch(`/api/admin/locations/${locationB.id}`, { data: { isActive: true } });
+    expect(activation.ok(), await activation.text()).toBe(true);
+  }
+
+  const suffix = Date.now();
+  const createResponse = await request.post("/api/barbers", {
+    headers: { "X-Location-Id": String(locationA.id) },
+    data: {
+      name: `Compensação local QA ${suffix}`,
+      specialty: "Financeiro multi-location",
+      color: "#345678",
+      isVisible: true,
+      compensationModel: "commission",
+      commissionPercent: 50,
+    },
+  });
+  expect(createResponse.status(), await createResponse.text()).toBe(201);
+  const barber = await createResponse.json();
+
+  const associateResponse = await request.post("/api/admin/location-barbers", {
+    headers: { "X-Location-Id": String(locationB.id) },
+    data: { barberId: barber.id },
+  });
+  expect(associateResponse.status(), await associateResponse.text()).toBe(201);
+  const initialB = await (await request.get(`/api/barbers/${barber.id}`, {
+    headers: { "X-Location-Id": String(locationB.id) },
+  })).json();
+  expect(initialB).toMatchObject({ compensationModel: "none", commissionPercent: null });
+
+  const chairResponse = await request.patch(`/api/barbers/${barber.id}`, {
+    headers: { "X-Location-Id": String(locationB.id) },
+    data: {
+      compensationModel: "chair_rent",
+      chairRentCents: 25000,
+      chairRentPeriod: "month",
+    },
+  });
+  expect(chairResponse.ok(), await chairResponse.text()).toBe(true);
+
+  const updateA = await request.patch(`/api/barbers/${barber.id}`, {
+    headers: { "X-Location-Id": String(locationA.id) },
+    data: { compensationModel: "commission", commissionPercent: 60 },
+  });
+  expect(updateA.ok(), await updateA.text()).toBe(true);
+
+  const [configuredA, configuredB] = await Promise.all([
+    request.get(`/api/barbers/${barber.id}`, { headers: { "X-Location-Id": String(locationA.id) } }),
+    request.get(`/api/barbers/${barber.id}`, { headers: { "X-Location-Id": String(locationB.id) } }),
+  ]);
+  expect(configuredA.ok(), await configuredA.text()).toBe(true);
+  expect(configuredB.ok(), await configuredB.text()).toBe(true);
+  expect(await configuredA.json()).toMatchObject({
+    compensationModel: "commission",
+    commissionPercent: 60,
+    chairRentCents: null,
+  });
+  expect(await configuredB.json()).toMatchObject({
+    compensationModel: "chair_rent",
+    commissionPercent: null,
+    chairRentCents: 25000,
+    chairRentPeriod: "month",
+  });
+
+  expect((await request.patch(`/api/barbers/${barber.id}`, {
+    headers: { "X-Location-Id": String(locationB.id) }, data: { isVisible: false },
+  })).ok()).toBe(true);
+  expect((await request.patch(`/api/barbers/${barber.id}`, {
+    headers: { "X-Location-Id": String(locationA.id) }, data: { isVisible: false },
+  })).ok()).toBe(true);
+});

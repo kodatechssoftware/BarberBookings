@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   calculateAppointmentFinancials,
   calculateAppointmentsFinancials,
+  getChairRentUnitKey,
   loadAppointmentsFinancials,
 } from "../../server/appointment-finance";
 import { MemoryStorage } from "../../server/storage";
@@ -33,6 +34,11 @@ function appointment(overrides: Partial<Appointment> = {}): Appointment {
     serviceNameSnapshot: null,
     servicePriceCentsSnapshot: null,
     manualOutsideHours: false,
+    compensationRuleIdSnapshot: null,
+    compensationModelSnapshot: null,
+    commissionPercentSnapshot: null,
+    chairRentCentsSnapshot: null,
+    chairRentPeriodSnapshot: null,
     status: "completed",
     cancelToken: `finance-${id}`,
     cancelledAt: null,
@@ -75,6 +81,7 @@ function compensationRule(
   return {
     id: overrides.id ?? (model === "commission" ? 1 : model === "chair_rent" ? 2 : 3),
     barberId: 10,
+    locationId: 1,
     model,
     commissionPercent: model === "commission" ? 40 : null,
     chairRentCents: model === "chair_rent" ? 500 : null,
@@ -408,7 +415,7 @@ test("historical rules, locations and snapshot-only Extras remain isolated", () 
     servicePrices,
     compensationRules: [
       compensationRule("commission", { id: 31, commissionPercent: 40, effectiveFrom: new Date("2034-01-01T00:00:00.000Z") }),
-      compensationRule("commission", { id: 32, commissionPercent: 50, effectiveFrom: new Date("2035-01-01T00:00:00.000Z") }),
+      compensationRule("commission", { id: 32, locationId: 2, commissionPercent: 50, effectiveFrom: new Date("2035-01-01T00:00:00.000Z") }),
     ],
   });
   assert.equal(result.byAppointmentId.get(oldAppointment.id)?.barberAmountCents, 1000);
@@ -416,6 +423,122 @@ test("historical rules, locations and snapshot-only Extras remain isolated", () 
   assert.equal(result.byAppointmentId.get(oldAppointment.id)?.lines[1].nameSnapshot, "Nome histórico A");
   assert.equal(result.byAppointmentId.get(newAppointment.id)?.lines[1].nameSnapshot, "Nome histórico B");
   assert.equal(result.extrasAmountCents, 3000);
+});
+
+test("compensation is resolved independently for the same barber in each location", () => {
+  const locationA = appointment({ id: 301, locationId: 1 });
+  const locationB = appointment({ id: 302, locationId: 2 });
+  const result = calculateAppointmentsFinancials({
+    appointments: [locationA, locationB],
+    appointmentExtras: [],
+    servicePrices,
+    compensationRules: [
+      compensationRule("commission", { id: 41, locationId: 1, commissionPercent: 50 }),
+      compensationRule("commission", { id: 42, locationId: 2, commissionPercent: 60 }),
+    ],
+  });
+
+  assert.equal(result.byAppointmentId.get(locationA.id)?.barberAmountCents, 750);
+  assert.equal(result.byAppointmentId.get(locationB.id)?.barberAmountCents, 900);
+});
+
+test("commission and chair rent can coexist for one barber in different locations", () => {
+  const locationA = appointment({ id: 311, locationId: 1 });
+  const locationB = appointment({ id: 312, locationId: 2 });
+  const result = calculateAppointmentsFinancials({
+    appointments: [locationA, locationB],
+    appointmentExtras: [extra(locationA.id, 1000, "follow_compensation"), extra(locationB.id, 1000, "follow_compensation")],
+    servicePrices,
+    compensationRules: [
+      compensationRule("commission", { id: 51, locationId: 1, commissionPercent: 50 }),
+      compensationRule("chair_rent", { id: 52, locationId: 2, chairRentCents: 500, chairRentPeriod: "month" }),
+    ],
+  });
+
+  assert.deepEqual({
+    locationABarber: result.byAppointmentId.get(locationA.id)?.barberAmountCents,
+    locationACommission: result.byAppointmentId.get(locationA.id)?.commissionAmountCents,
+    locationBBarber: result.byAppointmentId.get(locationB.id)?.barberAmountCents,
+    locationBChairRent: result.byAppointmentId.get(locationB.id)?.chairRentAmountCents,
+  }, { locationABarber: 1250, locationACommission: 1250, locationBBarber: 2000, locationBChairRent: 500 });
+});
+
+test("an appointment before the first local rule safely resolves to none", () => {
+  const beforeFirstRule = appointment({ id: 321, startTime: new Date("2029-01-01T10:00:00.000Z") });
+  const result = calculateAppointmentFinancials({
+    appointment: beforeFirstRule,
+    servicePrices,
+    compensationRules: [compensationRule("commission", { effectiveFrom: new Date("2030-01-01T00:00:00.000Z") })],
+  });
+
+  assert.equal(result.compensationModel, "none");
+  assert.equal(result.barberAmountCents, 0);
+  assert.equal(result.establishmentAmountCents, 1500);
+});
+
+test("a completed appointment snapshot remains immutable after later rule changes", () => {
+  const snapshotted = appointment({
+    id: 331,
+    compensationRuleIdSnapshot: 61,
+    compensationModelSnapshot: "commission",
+    commissionPercentSnapshot: 50,
+  });
+  const result = calculateAppointmentFinancials({
+    appointment: snapshotted,
+    servicePrices,
+    compensationRules: [compensationRule("commission", { id: 62, commissionPercent: 80 })],
+  });
+
+  assert.equal(result.compensationRuleId, 61);
+  assert.equal(result.commissionPercent, 50);
+  assert.equal(result.barberAmountCents, 750);
+});
+
+test("chair rent is charged independently per location and period", () => {
+  const januaryA = appointment({ id: 341, locationId: 1, startTime: new Date("2035-01-10T10:00:00.000Z") });
+  const januaryB = appointment({ id: 342, locationId: 2, startTime: new Date("2035-01-10T10:00:00.000Z") });
+  const laterA = appointment({ id: 343, locationId: 1, startTime: new Date("2035-01-20T10:00:00.000Z") });
+  const result = calculateAppointmentsFinancials({
+    appointments: [laterA, januaryB, januaryA],
+    appointmentExtras: [],
+    servicePrices,
+    compensationRules: [
+      compensationRule("chair_rent", { id: 71, locationId: 1, chairRentCents: 500, chairRentPeriod: "month" }),
+      compensationRule("chair_rent", { id: 72, locationId: 2, chairRentCents: 700, chairRentPeriod: "month" }),
+    ],
+  });
+
+  assert.equal(result.chairRentAmountCents, 1200);
+  assert.equal(result.byAppointmentId.get(januaryA.id)?.chairRentAmountCents, 500);
+  assert.equal(result.byAppointmentId.get(januaryB.id)?.chairRentAmountCents, 700);
+  assert.equal(result.byAppointmentId.get(laterA.id)?.chairRentAmountCents, 0);
+});
+
+test("chair-rent day, week and month units use stable calendar boundaries", () => {
+  assert.equal(getChairRentUnitKey(new Date("2035-01-15T10:00:00.000Z"), "day"), "2035-01-15");
+  assert.equal(getChairRentUnitKey(new Date("2035-01-17T10:00:00.000Z"), "week"), "2035-01-15");
+  assert.equal(getChairRentUnitKey(new Date("2035-01-31T23:00:00.000Z"), "month"), "2035-01");
+  assert.equal(
+    getChairRentUnitKey(new Date("2035-07-31T23:30:00.000Z"), "month", "Europe/Lisbon"),
+    "2035-08",
+  );
+});
+
+test("partial reports never charge chair rent again after the period anchor", async () => {
+  const first = appointment({ id: 351, startTime: new Date("2035-01-02T10:00:00.000Z") });
+  const later = appointment({ id: 352, startTime: new Date("2035-01-20T10:00:00.000Z") });
+  const rule = compensationRule("chair_rent", { id: 81, chairRentCents: 500, chairRentPeriod: "month" });
+  const source = {
+    async getAppointmentExtras() { return []; },
+    async getBarberCompensationRules() { return [rule]; },
+    async getAppointments() { return [first, later]; },
+  };
+
+  const full = await loadAppointmentsFinancials(source, [first, later], servicePrices);
+  const partial = await loadAppointmentsFinancials(source, [later], servicePrices);
+  assert.equal(full.chairRentAmountCents, 500);
+  assert.equal(full.byAppointmentId.get(first.id)?.chairRentAmountCents, 500);
+  assert.equal(partial.chairRentAmountCents, 0);
 });
 
 test("batch loader performs one Extras read and one compensation read for many appointments", async () => {
@@ -466,6 +589,7 @@ test("MemoryStorage batch inputs produce snapshot-based financial results after 
     cancelToken: "memory-finance",
     extras: [{ extraId: variable.id, amountCents: 1000 }, { extraId: fixed.id }],
   });
+  await storage.createBarberCompensationRule(compensationRule("commission", { barberId: 10 }));
   await storage.updateAppointmentStatus(created.id, "completed", "cash");
   await storage.updateExtraDefinition(variable.id, 1, {
     name: "Deslocação alterada",
@@ -476,7 +600,6 @@ test("MemoryStorage batch inputs produce snapshot-based financial results after 
     amountCents: 900,
     financialRule: "barber",
   });
-  await storage.createBarberCompensationRule(compensationRule("commission", { barberId: 10 }));
   const [completed] = (await storage.getAppointments()).filter((candidate) => candidate.id === created.id);
   const result = await loadAppointmentsFinancials(storage, [completed], servicePrices);
   assert.deepEqual({
@@ -501,4 +624,42 @@ test("MemoryStorage batch inputs produce snapshot-based financial results after 
     fixedAmount: 500,
     fixedRule: "establishment",
   });
+});
+
+test("MemoryStorage snapshots compensation on direct completion and later completion", async () => {
+  const storage = new MemoryStorage();
+  const rule = await storage.createBarberCompensationRule(compensationRule("commission", {
+    barberId: 77,
+    locationId: 5,
+    commissionPercent: 55,
+  }));
+  const createInput = {
+    locationId: 5,
+    barberId: 77,
+    serviceId: 20,
+    customerEmail: null,
+    customerPhone: "910000077",
+    durationMinutes: 30,
+  } as const;
+  const direct = await storage.createAppointment({
+    ...createInput,
+    startTime: new Date("2035-05-10T10:00:00.000Z"),
+    customerName: "Conclusão direta",
+    cancelToken: "finance-direct-completed",
+    status: "completed",
+    paymentMethod: "voucher",
+  });
+  const booked = await storage.createAppointment({
+    ...createInput,
+    startTime: new Date("2035-05-10T11:00:00.000Z"),
+    customerName: "Conclusão posterior",
+    cancelToken: "finance-later-completed",
+  });
+  const later = await storage.updateAppointmentStatus(booked.id, "completed", "cash");
+
+  for (const completed of [direct, later!]) {
+    assert.equal(completed.compensationRuleIdSnapshot, rule.id);
+    assert.equal(completed.compensationModelSnapshot, "commission");
+    assert.equal(completed.commissionPercentSnapshot, 55);
+  }
 });
