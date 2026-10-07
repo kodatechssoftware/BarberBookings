@@ -420,7 +420,7 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
 
   const primaryHeaders = { "X-Location-Id": String(initial[0].id) };
   const sharedBarber = defaultBarbers[0];
-  const primaryService = defaultServices.find((service: any) => !sharedBarber.serviceIds.length || sharedBarber.serviceIds.includes(service.id));
+  const primaryService = defaultServices.find((service: any) => sharedBarber.serviceIds.includes(service.id));
   expect(primaryService).toBeTruthy();
 
   // Associate through the UI, retaining the barber's services in the original shop.
@@ -431,9 +431,37 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   await page.getByRole("option", { name: sharedBarber.name, exact: true }).click();
   await associateDialog.getByRole("button", { name: "Associar à loja", exact: true }).click();
   await expect(associateDialog).not.toBeVisible();
-  const inPorto = await (await request.get(`/api/barbers/${sharedBarber.id}`, { headers: portoHeaders })).json();
+  const initiallyInPorto = await (await request.get(`/api/barbers/${sharedBarber.id}`, { headers: portoHeaders })).json();
   const inPrimary = await (await request.get(`/api/barbers/${sharedBarber.id}`, { headers: primaryHeaders })).json();
-  expect(inPorto.serviceIds).toContain(portoService.id);
+  expect(initiallyInPorto.serviceIds).toEqual([]);
+  const configurePortoServices = await request.patch(`/api/barbers/${sharedBarber.id}/services`, {
+    headers: portoHeaders,
+    data: { serviceIds: [portoService.id] },
+  });
+  expect(configurePortoServices.ok(), await configurePortoServices.text()).toBe(true);
+
+  // The Admin picker edits only the active shop and explicitly supports zero services.
+  await page.reload();
+  await page.getByRole("tab", { name: "Equipa", exact: true }).click();
+  const sharedBarberCard = page.locator(`[data-testid="team-barber-card"][data-barber-id="${sharedBarber.id}"]`);
+  await sharedBarberCard.getByRole("button", { name: "Editar", exact: true }).click();
+  const editSharedBarberDialog = page.getByRole("dialog", { name: "Editar Barbeiro" });
+  const portoServiceOption = editSharedBarberDialog.locator("label").filter({ hasText: portoService.name });
+  await expect(portoServiceOption.getByRole("checkbox")).toBeChecked();
+  await portoServiceOption.getByRole("checkbox").click();
+  await editSharedBarberDialog.getByRole("button", { name: "Guardar", exact: true }).click();
+  await expect(editSharedBarberDialog).not.toBeVisible();
+  expect((await (await request.get(`/api/barbers/${sharedBarber.id}`, { headers: portoHeaders })).json()).serviceIds).toEqual([]);
+  expect((await (await request.get(`/api/barbers/${sharedBarber.id}`, { headers: primaryHeaders })).json()).serviceIds)
+    .toContain(primaryService.id);
+  const restorePortoServices = await request.patch(`/api/barbers/${sharedBarber.id}/services`, {
+    headers: portoHeaders,
+    data: { serviceIds: [portoService.id] },
+  });
+  expect(restorePortoServices.ok(), await restorePortoServices.text()).toBe(true);
+
+  const inPorto = await (await request.get(`/api/barbers/${sharedBarber.id}`, { headers: portoHeaders })).json();
+  expect(inPorto.serviceIds).toEqual([portoService.id]);
   expect(inPrimary.serviceIds).toContain(primaryService.id);
   expect(inPrimary.serviceIds).not.toContain(portoService.id);
   const barberFilterDate = new Date().toISOString().slice(0, 10);
@@ -1713,6 +1741,10 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
     data: { barberId: barber.id },
   });
   expect(associateBarber.status(), await associateBarber.text()).toBe(201);
+  expect((await (await request.get(`/api/barbers/${barber.id}`, { headers: headersA })).json()).serviceIds)
+    .toContain(service.id);
+  expect((await (await request.get(`/api/barbers/${barber.id}`, { headers: headersB })).json()).serviceIds)
+    .not.toContain(service.id);
 
   const guest = await playwright.request.newContext({ baseURL });
   try {
@@ -1743,6 +1775,29 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
     });
     expect(barberSchedule.ok(), await barberSchedule.text()).toBe(true);
   }
+  const deniedDirectB = await request.post("/api/appointments", { headers: headersB, data: {
+    barberId: barber.id,
+    serviceId: service.id,
+    startTime: new Date(publicDate.getTime() + 60 * 60000).toISOString(),
+    customerName: `Booking B negado ${suffix}`,
+    customerPhone: "+351912650209",
+  } });
+  expect(deniedDirectB.status()).toBe(400);
+  expect(await deniedDirectB.json()).toMatchObject({ message: "Este barbeiro não executa o serviço escolhido." });
+  const deniedAnyB = await request.post("/api/appointments", { headers: headersB, data: {
+    barberId: 0,
+    serviceId: service.id,
+    startTime: new Date(publicDate.getTime() + 60 * 60000).toISOString(),
+    customerName: `Booking qualquer B negado ${suffix}`,
+    customerPhone: "+351912650208",
+  } });
+  expect(deniedAnyB.status()).toBe(409);
+
+  const configureBarberB = await request.patch(`/api/barbers/${barber.id}/services`, {
+    headers: headersB,
+    data: { serviceIds: [service.id] },
+  });
+  expect(configureBarberB.ok(), await configureBarberB.text()).toBe(true);
   const publicBookingA = await request.post("/api/appointments", { headers: headersA, data: {
     barberId: barber.id,
     serviceId: service.id,
@@ -1751,7 +1806,8 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
     customerPhone: "+351912650201",
   } });
   expect(publicBookingA.status(), await publicBookingA.text()).toBe(201);
-  expect(await publicBookingA.json()).toMatchObject({
+  const publicAppointmentA = await publicBookingA.json();
+  expect(publicAppointmentA).toMatchObject({
     servicePriceCentsSnapshot: 1500,
     durationMinutes: 30,
   });
@@ -1873,6 +1929,77 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
   expect((await (await request.get("/api/services", { headers: headersB })).json())
     .find((item: any) => item.id === service.id)).toMatchObject({ price: 1800, duration: 45 });
 
+  const removeBarberServiceA = await request.patch(`/api/barbers/${barber.id}/services`, {
+    headers: headersA,
+    data: { serviceIds: [] },
+  });
+  expect(removeBarberServiceA.ok(), await removeBarberServiceA.text()).toBe(true);
+  expect((await (await request.get(`/api/barbers/${barber.id}`, { headers: headersA })).json()).serviceIds).toEqual([]);
+  expect((await (await request.get(`/api/barbers/${barber.id}`, { headers: headersB })).json()).serviceIds)
+    .toContain(service.id);
+  const rejectedManualA = await request.post("/api/appointments/block", { headers: headersA, data: {
+    barberId: barber.id,
+    serviceId: service.id,
+    startTime: new Date(futureA.getTime() + 4 * 3600000).toISOString(),
+    name: `Manual A negado ${suffix}`,
+    phone: "+351912650207",
+    customerEmail: "",
+    isManualBooking: true,
+    isRecurring: false,
+    allowOutsideHours: true,
+  } });
+  expect(rejectedManualA.status()).toBe(400);
+  expect(await rejectedManualA.json()).toMatchObject({ message: "Este barbeiro não executa o serviço escolhido." });
+  const rejectedEditA = await request.patch(`/api/appointments/${bookedA.id}`, {
+    headers: headersA,
+    data: { startTime: new Date(futureA.getTime() + 5 * 3600000).toISOString() },
+  });
+  expect(rejectedEditA.status()).toBe(400);
+
+  const unqualifiedBarberResponse = await request.post("/api/barbers", {
+    headers: headersA,
+    data: {
+      name: `Barbeiro sem servicos ${suffix}`,
+      specialty: "Sem servicos nesta loja",
+      color: "#4A5568",
+      isVisible: true,
+      serviceIds: [],
+    },
+  });
+  expect(unqualifiedBarberResponse.status(), await unqualifiedBarberResponse.text()).toBe(201);
+  const unqualifiedBarber = await unqualifiedBarberResponse.json();
+  expect(unqualifiedBarber.serviceIds).toEqual([]);
+  const rejectedReassignmentA = await request.patch(`/api/appointments/${bookedA.id}`, {
+    headers: headersA,
+    data: { barberId: unqualifiedBarber.id },
+  });
+  expect(rejectedReassignmentA.status()).toBe(400);
+
+  const allLocalServiceIdsA = catalogueA.map((item: any) => item.id);
+  const selectAllServicesA = await request.patch(`/api/barbers/${unqualifiedBarber.id}/services`, {
+    headers: headersA,
+    data: { serviceIds: allLocalServiceIdsA },
+  });
+  expect(selectAllServicesA.ok(), await selectAllServicesA.text()).toBe(true);
+  expect(await (await request.get(`/api/barbers/${unqualifiedBarber.id}`, { headers: headersA })).json())
+    .toMatchObject({ serviceIds: expect.arrayContaining(allLocalServiceIdsA), allServicesAllowed: true });
+  const restoreNoServicesA = await request.patch(`/api/barbers/${unqualifiedBarber.id}/services`, {
+    headers: headersA,
+    data: { serviceIds: [] },
+  });
+  expect(restoreNoServicesA.ok(), await restoreNoServicesA.text()).toBe(true);
+
+  const rejectedTokenRescheduleA = await request.post(`/api/appointments/reschedule/${publicAppointmentA.cancelToken}`, {
+    data: { startTime: new Date(publicDate.getTime() + 5 * 3600000).toISOString() },
+  });
+  expect(rejectedTokenRescheduleA.status()).toBe(400);
+
+  const restoreBarberServiceA = await request.patch(`/api/barbers/${barber.id}/services`, {
+    headers: headersA,
+    data: { serviceIds: [service.id] },
+  });
+  expect(restoreBarberServiceA.ok(), await restoreBarberServiceA.text()).toBe(true);
+
   const historyA = await request.get(`/api/admin/customers/history?appointmentId=${historicalA.id}`, { headers: headersA });
   expect(historyA.ok(), await historyA.text()).toBe(true);
   expect((await historyA.json()).appointments.find((item: any) => item.id === historicalA.id)).toMatchObject({
@@ -1913,11 +2040,22 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
   expect(hideA.ok(), await hideA.text()).toBe(true);
   expect((await (await request.get("/api/services", { headers: headersA })).json()).some((item: any) => item.id === service.id)).toBe(false);
   expect((await (await request.get("/api/services", { headers: headersB })).json()).some((item: any) => item.id === service.id)).toBe(true);
+  expect((await (await request.get(`/api/barbers/${barber.id}`, { headers: headersA })).json()).serviceIds)
+    .toContain(service.id);
+  const inactiveGuest = await playwright.request.newContext({ baseURL });
+  try {
+    const publicBarberA = await (await inactiveGuest.get(`/api/barbers/${barber.id}`, { headers: headersA })).json();
+    expect(publicBarberA.serviceIds).toEqual([]);
+  } finally {
+    await inactiveGuest.dispose();
+  }
   const reactivateA = await request.patch(`/api/admin/service-locations/${service.id}`, {
     headers: headersA,
     data: { isActive: true },
   });
   expect(reactivateA.ok(), await reactivateA.text()).toBe(true);
+  expect((await (await request.get(`/api/barbers/${barber.id}`, { headers: headersA })).json()).serviceIds)
+    .toContain(service.id);
 
   const removeA = await request.delete(`/api/services/${service.id}`, { headers: headersA });
   expect(removeA.ok(), await removeA.text()).toBe(true);

@@ -1,4 +1,4 @@
-import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb, check } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb, check, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
@@ -340,13 +340,6 @@ export const barberAvailability = appPgTable("barber_availability", {
   isWorking: boolean("is_working").default(true).notNull(),
 });
 
-export const barberServices = appPgTable("barber_services", {
-  barberId: integer("barber_id").references(() => barbers.id).notNull(),
-  serviceId: integer("service_id").references(() => services.id).notNull(),
-}, (table) => ({
-  pk: primaryKey({ columns: [table.barberId, table.serviceId] }),
-}));
-
 export const barberLocations = appPgTable("barber_locations", {
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
   locationId: integer("location_id").references(() => locations.id).notNull(),
@@ -373,6 +366,28 @@ export const serviceLocations = appPgTable("service_locations", {
     "service_locations_duration_override_check",
     sql`${table.durationOverride} IS NULL OR ${table.durationOverride} > 0`,
   ),
+}));
+
+export const barberServices = appPgTable("barber_services", {
+  barberId: integer("barber_id").references(() => barbers.id).notNull(),
+  serviceId: integer("service_id").references(() => services.id).notNull(),
+  locationId: integer("location_id").references(() => locations.id).notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.barberId, table.serviceId, table.locationId] }),
+  barberLocationFk: foreignKey({
+    name: "barber_services_barber_location_fkey",
+    columns: [table.barberId, table.locationId],
+    foreignColumns: [barberLocations.barberId, barberLocations.locationId],
+  }).onDelete("cascade"),
+  serviceLocationFk: foreignKey({
+    name: "barber_services_service_location_fkey",
+    columns: [table.serviceId, table.locationId],
+    foreignColumns: [serviceLocations.serviceId, serviceLocations.locationId],
+  }).onDelete("cascade"),
+  locationBarberIdx: index("barber_services_location_barber_idx")
+    .on(table.locationId, table.barberId, table.serviceId),
+  locationServiceIdx: index("barber_services_location_service_idx")
+    .on(table.locationId, table.serviceId, table.barberId),
 }));
 
 export const barberInvites = appPgTable("barber_invites", {
@@ -590,6 +605,10 @@ export const barberServicesRelations = relations(barberServices, ({ one }) => ({
   service: one(services, {
     fields: [barberServices.serviceId],
     references: [services.id],
+  }),
+  location: one(locations, {
+    fields: [barberServices.locationId],
+    references: [locations.id],
   }),
 }));
 

@@ -8,6 +8,7 @@ import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
+import { createMigrationSubsetThrough } from "../helpers/migration-subset";
 
 async function availablePort() {
   const server = net.createServer();
@@ -45,6 +46,7 @@ test("real PostgreSQL rolls back the complete appointment PATCH when Extra valid
   let postgresStarted = false;
   let pool: pg.Pool | undefined;
   let applicationPool: pg.Pool | undefined;
+  let migrationsDirectory: string | undefined;
 
   try {
     await postgres.initialise();
@@ -72,8 +74,10 @@ test("real PostgreSQL rolls back the complete appointment PATCH when Extra valid
 
     await runCommand(process.execPath, [path.resolve("node_modules/drizzle-kit/bin.cjs"), "push", "--force"], environment);
     pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
+    migrationsDirectory = await createMigrationSubsetThrough("0012_service_location_offers.sql");
     await runSchemaMigrations(pool, {
       schemaName: "public",
+      migrationsDirectory,
       environment: {
         ...environment,
         MIGRATION_DEFAULT_LOCATION_NAME: "Appointment Extras Test",
@@ -93,7 +97,10 @@ test("real PostgreSQL rolls back the complete appointment PATCH when Extra valid
     `)).rows[0].id);
     await pool.query("INSERT INTO barber_locations (barber_id, location_id, is_active) VALUES ($1, $2, true)", [barberId, locationId]);
     await pool.query("INSERT INTO service_locations (service_id, location_id, is_active) VALUES ($1, $2, true)", [serviceId, locationId]);
-    await pool.query("INSERT INTO barber_services (barber_id, service_id) VALUES ($1, $2)", [barberId, serviceId]);
+    await pool.query(
+      "INSERT INTO barber_services (barber_id, service_id, location_id) VALUES ($1, $2, $3)",
+      [barberId, serviceId, locationId],
+    );
 
     Object.assign(process.env, environment);
     const [{ DatabaseStorage }, dbModule] = await Promise.all([
@@ -182,6 +189,7 @@ test("real PostgreSQL rolls back the complete appointment PATCH when Extra valid
     if (applicationPool) await applicationPool.end().catch(() => undefined);
     if (pool) await pool.end().catch(() => undefined);
     if (postgresStarted) await postgres.stop().catch(() => undefined);
+    if (migrationsDirectory) await rm(migrationsDirectory, { recursive: true, force: true }).catch(() => undefined);
     await rm(databaseDir, { recursive: true, force: true }).catch(() => undefined);
   }
 });

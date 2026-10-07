@@ -72,6 +72,10 @@ import { eq, and, or, inArray, gte, gt, lt, isNull, sql, desc, getTableColumns, 
 import { barberAvatarReference, INLINE_BARBER_AVATAR_PATTERN } from "./barber-avatars";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
+import {
+  assignBarberToLocation as assignBarberToLocationRecord,
+  getServiceIdsForLocation,
+} from "./location-store";
 
 export type AppointmentNotificationEventType =
   | "appointment_confirmation"
@@ -611,9 +615,10 @@ export interface IStorage {
   getBarberAvailability(barberId: number, locationId?: number): Promise<BarberAvailability[]>;
   getAllBarberAvailability(locationId?: number): Promise<BarberAvailability[]>;
   replaceBarberAvailability(barberId: number, rows: Omit<CreateBarberAvailabilityRequest, "barberId">[], locationId?: number): Promise<BarberAvailability[]>;
-  getAllBarberServices(): Promise<BarberService[]>;
-  getBarberServiceIds(barberId: number): Promise<number[]>;
-  replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]>;
+  getAllBarberServices(locationId: number): Promise<BarberService[]>;
+  getBarberServiceIds(barberId: number, locationId: number): Promise<number[]>;
+  replaceBarberServices(barberId: number, locationId: number, serviceIds: number[]): Promise<BarberService[]>;
+  assignBarberToLocationWithServices(barberId: number, locationId: number, serviceIds: number[]): Promise<BarberService[]>;
 
   // Barber invites
   createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite>;
@@ -1779,26 +1784,33 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getAllBarberServices(): Promise<BarberService[]> {
+  async getAllBarberServices(locationId: number): Promise<BarberService[]> {
     return await db
       .select()
       .from(barberServices)
+      .where(eq(barberServices.locationId, locationId))
       .orderBy(barberServices.barberId, barberServices.serviceId);
   }
 
-  async getBarberServiceIds(barberId: number): Promise<number[]> {
+  async getBarberServiceIds(barberId: number, locationId: number): Promise<number[]> {
     const rows = await db
       .select({ serviceId: barberServices.serviceId })
       .from(barberServices)
-      .where(eq(barberServices.barberId, barberId))
+      .where(and(
+        eq(barberServices.barberId, barberId),
+        eq(barberServices.locationId, locationId),
+      ))
       .orderBy(barberServices.serviceId);
 
     return rows.map((row) => row.serviceId);
   }
 
-  async replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]> {
+  async replaceBarberServices(barberId: number, locationId: number, serviceIds: number[]): Promise<BarberService[]> {
     return await db.transaction(async (tx) => {
-      await tx.delete(barberServices).where(eq(barberServices.barberId, barberId));
+      await tx.delete(barberServices).where(and(
+        eq(barberServices.barberId, barberId),
+        eq(barberServices.locationId, locationId),
+      ));
 
       const uniqueServiceIds = Array.from(new Set(serviceIds));
       if (uniqueServiceIds.length === 0) {
@@ -1807,7 +1819,35 @@ export class DatabaseStorage implements IStorage {
 
       return await tx
         .insert(barberServices)
-        .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId } satisfies CreateBarberServiceRequest)))
+        .values(uniqueServiceIds.map((serviceId) => ({
+          barberId,
+          serviceId,
+          locationId,
+        } satisfies CreateBarberServiceRequest)))
+        .returning();
+    });
+  }
+
+  async assignBarberToLocationWithServices(
+    barberId: number,
+    locationId: number,
+    serviceIds: number[],
+  ): Promise<BarberService[]> {
+    return await db.transaction(async (tx) => {
+      await tx.insert(barberLocations)
+        .values({ barberId, locationId, isActive: true })
+        .onConflictDoUpdate({
+          target: [barberLocations.barberId, barberLocations.locationId],
+          set: { isActive: true },
+        });
+      await tx.delete(barberServices).where(and(
+        eq(barberServices.barberId, barberId),
+        eq(barberServices.locationId, locationId),
+      ));
+      const uniqueServiceIds = Array.from(new Set(serviceIds));
+      if (uniqueServiceIds.length === 0) return [];
+      return await tx.insert(barberServices)
+        .values(uniqueServiceIds.map((serviceId) => ({ barberId, serviceId, locationId })))
         .returning();
     });
   }
@@ -3228,24 +3268,48 @@ export class MemoryStorage implements IStorage {
     return createdRows;
   }
 
-  async getAllBarberServices(): Promise<BarberService[]> {
+  async getAllBarberServices(locationId: number): Promise<BarberService[]> {
     return [...this.barberServices].sort(
       (a, b) => a.barberId - b.barberId || a.serviceId - b.serviceId,
-    );
+    ).filter((row) => row.locationId === locationId);
   }
 
-  async getBarberServiceIds(barberId: number): Promise<number[]> {
+  async getBarberServiceIds(barberId: number, locationId: number): Promise<number[]> {
     return this.barberServices
-      .filter((row) => row.barberId === barberId)
+      .filter((row) => row.barberId === barberId && row.locationId === locationId)
       .map((row) => row.serviceId)
       .sort((a, b) => a - b);
   }
 
-  async replaceBarberServices(barberId: number, serviceIds: number[]): Promise<BarberService[]> {
-    this.barberServices = this.barberServices.filter((row) => row.barberId !== barberId);
-    const createdRows = Array.from(new Set(serviceIds)).map((serviceId) => ({ barberId, serviceId }));
+  async replaceBarberServices(barberId: number, locationId: number, serviceIds: number[]): Promise<BarberService[]> {
+    const allowedServiceIds = new Set(await getServiceIdsForLocation(locationId, true));
+    const uniqueServiceIds = Array.from(new Set(serviceIds));
+    if (uniqueServiceIds.some((serviceId) => !allowedServiceIds.has(serviceId))) {
+      const error = new Error("Barber service is not assigned to this location") as Error & { code?: string };
+      error.code = "23503";
+      throw error;
+    }
+    this.barberServices = this.barberServices.filter((row) =>
+      row.barberId !== barberId || row.locationId !== locationId
+    );
+    const createdRows = uniqueServiceIds.map((serviceId) => ({ barberId, serviceId, locationId }));
     this.barberServices.push(...createdRows);
     return createdRows;
+  }
+
+  async assignBarberToLocationWithServices(
+    barberId: number,
+    locationId: number,
+    serviceIds: number[],
+  ): Promise<BarberService[]> {
+    const allowedServiceIds = new Set(await getServiceIdsForLocation(locationId, true));
+    if (serviceIds.some((serviceId) => !allowedServiceIds.has(serviceId))) {
+      const error = new Error("Barber service is not assigned to this location") as Error & { code?: string };
+      error.code = "23503";
+      throw error;
+    }
+    await assignBarberToLocationRecord(barberId, locationId);
+    return this.replaceBarberServices(barberId, locationId, serviceIds);
   }
 
   async createBarberInvite(invite: CreateBarberInviteRequest): Promise<BarberInvite> {

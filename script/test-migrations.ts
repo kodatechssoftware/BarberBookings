@@ -33,6 +33,7 @@ const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdi
 const preLocationBrandingMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-location-branding-"));
 const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-voucher-payment-"));
 const preServiceLocationOffersMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-location-offers-"));
+const preBarberServicesLocationMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-barber-services-location-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -108,6 +109,22 @@ for (const file of [
   "0011_appointment_voucher_payment.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preServiceLocationOffersMigrationsDirectory, file));
+}
+for (const file of [
+  "0001_multi_location_foundation.sql",
+  "0002_whatsapp_messages.sql",
+  "0003_appointment_notification_outbox.sql",
+  "0004_appointment_series.sql",
+  "0005_service_categories.sql",
+  "0006_customer_notes_location.sql",
+  "0007_appointment_service_snapshots.sql",
+  "0008_appointment_extras.sql",
+  "0009_customer_notes_contact_identity.sql",
+  "0010_location_branding.sql",
+  "0011_appointment_voucher_payment.sql",
+  "0012_service_location_offers.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preBarberServicesLocationMigrationsDirectory, file));
 }
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -213,7 +230,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 12, "a fresh empty application schema must apply migrations 0001 through 0012");
+  assert.equal(freshRun.applied.length, 13, "a fresh empty application schema must apply migrations 0001 through 0013");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -230,13 +247,19 @@ try {
     WHERE table_schema = $1 AND table_name = 'locations'
   `, [freshSchema])).rows;
   assert.ok(freshLocationColumns.some((column) => column.column_name === "logo_url" && column.is_nullable === "YES"));
+  const freshBarberServiceColumns = (await pool.query(`
+    SELECT column_name, is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'barber_services'
+  `, [freshSchema])).rows;
+  assert.ok(freshBarberServiceColumns.some((column) => column.column_name === "location_id" && column.is_nullable === "NO"));
   const secondFreshRun = await runSchemaMigrations(pool, {
     schemaName: freshSchema,
     environment,
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 12);
+  assert.equal(secondFreshRun.alreadyApplied, 13);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -623,7 +646,11 @@ try {
     SELECT id, name, description, agenda_label, price, duration
     FROM ${table("services")} ORDER BY id
   `)).rows;
-  const serviceLocationOffersRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const serviceLocationOffersRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preBarberServicesLocationMigrationsDirectory,
+  });
   assert.deepEqual(serviceLocationOffersRun.applied, ["0012_service_location_offers.sql"]);
   assert.equal(serviceLocationOffersRun.alreadyApplied, 11);
   assert.deepEqual((await pool.query(`
@@ -640,9 +667,123 @@ try {
   assert.equal(Number((await pool.query(`
     SELECT count(*) AS count FROM ${table("services")} WHERE is_visible = false
   `)).rows[0].count), 0, "migration 0012 must retire the legacy global visibility switch");
-  const secondServiceOfferRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  const secondServiceOfferRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory: preBarberServicesLocationMigrationsDirectory,
+  });
   assert.equal(secondServiceOfferRun.applied.length, 0);
   assert.equal(secondServiceOfferRun.alreadyApplied, 12);
+
+  const secondLocationId = Number((await pool.query(`
+    INSERT INTO ${table("locations")} (name, slug, address, timezone, is_active, is_default, sort_order)
+    VALUES ('Loja secundária', 'secundaria', 'Morada B', 'Europe/Lisbon', true, false, 1)
+    RETURNING id
+  `)).rows[0].id);
+  await pool.query(`
+    INSERT INTO ${table("barber_locations")} (barber_id, location_id, is_active)
+    VALUES (1, $1, true)
+  `, [secondLocationId]);
+  await pool.query(`
+    INSERT INTO ${table("service_locations")} (service_id, location_id, is_active)
+    VALUES (1, $1, true), (2, $1, false)
+  `, [secondLocationId]);
+  const universalBarberId = Number((await pool.query(`
+    INSERT INTO ${table("barbers")} (name, specialty, color, is_visible)
+    VALUES ('Barbeiro universal legacy', 'Todos', '#445566', true)
+    RETURNING id
+  `)).rows[0].id);
+  await pool.query(`
+    INSERT INTO ${table("barber_locations")} (barber_id, location_id, is_active)
+    VALUES ($1, $2, true), ($1, $3, false)
+  `, [universalBarberId, defaultLocation.id, secondLocationId]);
+
+  const orphanBarberId = Number((await pool.query(`
+    INSERT INTO ${table("barbers")} (name, specialty, color, is_visible)
+    VALUES ('Barbeiro sem localização comum', 'Legacy', '#556677', true)
+    RETURNING id
+  `)).rows[0].id);
+  const orphanServiceId = Number((await pool.query(`
+    INSERT INTO ${table("services")} (name, price, duration, is_visible)
+    VALUES ('Serviço sem localização comum', 1000, 20, true)
+    RETURNING id
+  `)).rows[0].id);
+  await pool.query(`INSERT INTO ${table("barber_services")} (barber_id, service_id) VALUES ($1, $2)`, [
+    orphanBarberId,
+    orphanServiceId,
+  ]);
+  await assert.rejects(
+    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory }),
+    /no common location exists/,
+    "migration 0013 must stop instead of discarding an unmappable legacy relation",
+  );
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'barber_services' AND column_name = 'location_id'
+  `, [schema])).rows[0].count), 0, "a failed 0013 migration must roll back the table replacement");
+  await pool.query(`DELETE FROM ${table("barber_services")} WHERE barber_id = $1 AND service_id = $2`, [orphanBarberId, orphanServiceId]);
+  await pool.query(`DELETE FROM ${table("barbers")} WHERE id = $1`, [orphanBarberId]);
+  await pool.query(`DELETE FROM ${table("services")} WHERE id = $1`, [orphanServiceId]);
+
+  const barberServicesLocationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.deepEqual(barberServicesLocationRun.applied, ["0013_barber_services_location.sql"]);
+  assert.equal(barberServicesLocationRun.alreadyApplied, 12);
+  assert.deepEqual((await pool.query(`
+    SELECT barber_id, service_id, location_id
+    FROM ${table("barber_services")}
+    WHERE barber_id = 1
+    ORDER BY service_id, location_id
+  `)).rows.map((row) => ({
+    barberId: Number(row.barber_id),
+    serviceId: Number(row.service_id),
+    locationId: Number(row.location_id),
+  })), [
+    { barberId: 1, serviceId: 1, locationId: Number(defaultLocation.id) },
+    { barberId: 1, serviceId: 1, locationId: secondLocationId },
+  ], "an explicit legacy assignment must expand only across common locations");
+  assert.deepEqual((await pool.query(`
+    SELECT service_id, location_id
+    FROM ${table("barber_services")}
+    WHERE barber_id = $1
+    ORDER BY service_id, location_id
+  `, [universalBarberId])).rows.map((row) => ({
+    serviceId: Number(row.service_id),
+    locationId: Number(row.location_id),
+  })), [
+    { serviceId: 1, locationId: Number(defaultLocation.id) },
+    { serviceId: 1, locationId: secondLocationId },
+    { serviceId: 2, locationId: Number(defaultLocation.id) },
+    { serviceId: 2, locationId: secondLocationId },
+  ], "a zero-row legacy barber must receive every local service, including inactive configuration");
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("barber_services")} (barber_id, service_id, location_id) VALUES (1, 1, $1)`, [defaultLocation.id]),
+    (error: any) => error?.code === "23505",
+  );
+  const unassignedBarberId = Number((await pool.query(`
+    INSERT INTO ${table("barbers")} (name, specialty, color, is_visible)
+    VALUES ('Sem associação local', 'Constraint', '#667788', true) RETURNING id
+  `)).rows[0].id);
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("barber_services")} (barber_id, service_id, location_id) VALUES ($1, 1, $2)`, [unassignedBarberId, defaultLocation.id]),
+    (error: any) => error?.code === "23503",
+    "the composite barber/location FK must reject cross-location authorization",
+  );
+  const unassignedServiceId = Number((await pool.query(`
+    INSERT INTO ${table("services")} (name, price, duration, is_visible)
+    VALUES ('Sem oferta local', 1000, 20, true) RETURNING id
+  `)).rows[0].id);
+  await assert.rejects(
+    pool.query(`INSERT INTO ${table("barber_services")} (barber_id, service_id, location_id) VALUES (1, $1, $2)`, [unassignedServiceId, defaultLocation.id]),
+    (error: any) => error?.code === "23503",
+    "the composite service/location FK must reject cross-location authorization",
+  );
+  await pool.query(`DELETE FROM ${table("barbers")} WHERE id = $1`, [unassignedBarberId]);
+  await pool.query(`DELETE FROM ${table("services")} WHERE id = $1`, [unassignedServiceId]);
+  const secondBarberServicesLocationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
+  assert.equal(secondBarberServicesLocationRun.applied.length, 0);
+  assert.equal(secondBarberServicesLocationRun.alreadyApplied, 13);
+
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
@@ -656,15 +797,11 @@ try {
     "extra_definitions_location_name_ci_idx", "extra_definitions_location_active_order_idx",
     "appointment_extras_pkey", "appointment_extras_appointment_position_unique",
     "appointment_extras_extra_definition_id_idx",
+    "barber_services_location_barber_idx", "barber_services_location_service_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
   assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
     "the legacy global customer-note identity index must be removed");
 
-  const secondLocationId = Number((await pool.query(`
-    INSERT INTO ${table("locations")} (name, slug, address, timezone, is_active, is_default, sort_order)
-    VALUES ('Loja secundária', 'secundaria', 'Morada B', 'Europe/Lisbon', true, false, 1)
-    RETURNING id
-  `)).rows[0].id);
   await pool.query(`
     INSERT INTO ${table("customer_notes")} (location_id, phone, customer_name_key, email, email_key, notes)
     VALUES ($1, '910000000', 'cliente original', 'cliente@example.test', 'cliente@example.test', 'Nota independente B')
@@ -1280,7 +1417,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010/0011/0012, location-specific service offers, voucher payments, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0010/0011/0012/0013, location-specific service offers and barber permissions, voucher payments, location branding, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1292,4 +1429,5 @@ try {
   await rm(preLocationBrandingMigrationsDirectory, { recursive: true, force: true });
   await rm(preVoucherPaymentMigrationsDirectory, { recursive: true, force: true });
   await rm(preServiceLocationOffersMigrationsDirectory, { recursive: true, force: true });
+  await rm(preBarberServicesLocationMigrationsDirectory, { recursive: true, force: true });
 }

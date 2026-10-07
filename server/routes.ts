@@ -772,7 +772,7 @@ function barberCanPerformService(
 ) {
   if (!serviceId) return true;
   const serviceIds = barberServiceMap.get(barberId) || [];
-  return serviceIds.length === 0 || serviceIds.includes(serviceId);
+  return serviceIds.includes(serviceId);
 }
 
 async function normalizeBarberServiceIds(serviceIds: number[] | undefined, allowedServiceIds?: number[]) {
@@ -788,10 +788,7 @@ async function normalizeBarberServiceIds(serviceIds: number[] | undefined, allow
     throw new Error("Serviço inválido para este barbeiro.");
   }
 
-  if (MULTI_LOCATION_CONFIG.enabled && allowedServiceIds !== undefined) {
-    return uniqueServiceIds.length === 0 ? validServiceIds : uniqueServiceIds;
-  }
-  return uniqueServiceIds.length >= validServiceIds.length ? [] : uniqueServiceIds;
+  return uniqueServiceIds;
 }
 
 function normalizeBarberEmail<T extends { email?: string | null }>(barberInput: T) {
@@ -1101,24 +1098,26 @@ async function saveBarberCompensationRuleIfNeeded(
   });
 }
 
-async function getBarbersWithServiceIds(locationId?: number, avatarReferences = false) {
+async function getBarbersWithServiceIds(
+  locationId: number,
+  avatarReferences = false,
+  includeInactiveServices = false,
+) {
   const [barbers, serviceRows, compensationRows] = await Promise.all([
     storage.getBarbers({ avatarReferences }),
-    storage.getAllBarberServices(),
+    storage.getAllBarberServices(locationId),
     storage.getBarberCompensationRules(),
   ]);
-  const [locationBarberIds, locationServiceIds, activeLocationBarberIds] = locationId === undefined
-    ? [undefined, undefined, undefined]
-    : await Promise.all([
-      getBarberIdsForLocation(locationId, true), getServiceIdsForLocation(locationId), getBarberIdsForLocation(locationId),
-    ]);
-  const activeBarberIds = activeLocationBarberIds === undefined ? undefined : new Set(activeLocationBarberIds);
-  const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
-  const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-  const scopedBarbers = barbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
-  const locationCounts = locationId === undefined
-    ? undefined
-    : await getLocationCountsForBarbers(scopedBarbers.map((barber) => barber.id));
+  const [locationBarberIds, locationServiceIds, activeLocationBarberIds] = await Promise.all([
+    getBarberIdsForLocation(locationId, true),
+    getServiceIdsForLocation(locationId, includeInactiveServices),
+    getBarberIdsForLocation(locationId),
+  ]);
+  const activeBarberIds = new Set(activeLocationBarberIds);
+  const allowedBarbers = new Set(locationBarberIds);
+  const allowedServices = new Set(locationServiceIds);
+  const scopedBarbers = barbers.filter((barber) => allowedBarbers.has(barber.id));
+  const locationCounts = await getLocationCountsForBarbers(scopedBarbers.map((barber) => barber.id));
   const barberServiceMap = buildBarberServiceMap(serviceRows);
   const currentCompensationByBarberId = new Map<number, BarberCompensationRule>();
   compensationRows.forEach((rule) => {
@@ -1127,83 +1126,40 @@ async function getBarbersWithServiceIds(locationId?: number, avatarReferences = 
     }
   });
 
-  return scopedBarbers.map((barber) => ({
-    ...attachCompensationRule(barber, currentCompensationByBarberId.get(barber.id)),
-    isVisible: barber.isVisible !== false && (!activeBarberIds || activeBarberIds.has(barber.id)),
-    locationCount: locationCounts === undefined ? 1 : locationCounts.get(barber.id) ?? 0,
-    serviceIds: (barberServiceMap.get(barber.id) || []).filter((id) => !allowedServices || allowedServices.has(id)),
-    allServicesAllowed: (barberServiceMap.get(barber.id) || []).length === 0,
-  }));
-}
-
-async function freezeUniversalBarberServiceAssignments(existingServiceIds: number[], locationId?: number) {
-  if (existingServiceIds.length === 0) return;
-
-  const [barbers, serviceRows, locationBarberIds] = await Promise.all([
-    storage.getBarbers(),
-    storage.getAllBarberServices(),
-    locationId === undefined ? Promise.resolve(undefined) : getBarberIdsForLocation(locationId),
-  ]);
-  const barberServiceMap = buildBarberServiceMap(serviceRows);
-  const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
-
-  await Promise.all(
-    barbers
-      .filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id))
-      .filter((barber) => (barberServiceMap.get(barber.id) || []).length === 0)
-      .map(async (barber) => {
-        if (!MULTI_LOCATION_CONFIG.enabled) return storage.replaceBarberServices(barber.id, existingServiceIds);
-        const locationIds = await getLocationIdsForBarber(barber.id);
-        const assignedServices = await Promise.all(locationIds.map((assignedLocationId) => (
-          getServiceIdsForLocation(assignedLocationId)
-        )));
-        return storage.replaceBarberServices(barber.id, Array.from(new Set(assignedServices.flat())));
-      }),
-  );
+  return scopedBarbers.map((barber) => {
+    const serviceIds = (barberServiceMap.get(barber.id) || [])
+      .filter((id) => allowedServices.has(id));
+    return {
+      ...attachCompensationRule(barber, currentCompensationByBarberId.get(barber.id)),
+      isVisible: barber.isVisible !== false && activeBarberIds.has(barber.id),
+      locationCount: locationCounts.get(barber.id) ?? 0,
+      serviceIds,
+      allServicesAllowed: locationServiceIds.length > 0 && serviceIds.length === locationServiceIds.length,
+    };
+  });
 }
 
 async function isBarberAssignedToLocation(barberId: number, locationId: number, includeInactive = false) {
   const barberIds = await getBarberIdsForLocation(locationId, includeInactive);
-  return barberIds === undefined || barberIds.includes(barberId);
+  return barberIds.includes(barberId);
 }
 
 async function isServiceAssignedToLocation(serviceId: number, locationId: number) {
   const serviceIds = await getServiceIdsForLocation(locationId);
-  return serviceIds === undefined || serviceIds.includes(serviceId);
+  return serviceIds.includes(serviceId);
 }
 
 async function replaceBarberServicesForLocation(
   barberId: number,
   selectedServiceIds: number[],
   locationId: number,
-  isNewBarber = false,
 ) {
-  if (!MULTI_LOCATION_CONFIG.enabled) {
-    await storage.replaceBarberServices(barberId, selectedServiceIds);
-    return selectedServiceIds;
+  const validLocationServiceIds = new Set(await getServiceIdsForLocation(locationId, true));
+  if (selectedServiceIds.some((serviceId) => !validLocationServiceIds.has(serviceId))) {
+    throw new Error("Serviço inválido para este barbeiro.");
   }
-
-  const [allServices, currentServiceIds, locationServiceIds] = await Promise.all([
-    storage.getServices(),
-    storage.getBarberServiceIds(barberId),
-    getServiceIdsForLocation(locationId),
-  ]);
-  const validLocationServiceIds = locationServiceIds ?? allServices.map((service) => service.id);
-  const locationServiceSet = new Set(validLocationServiceIds);
-  const materializedSelection = selectedServiceIds.length === 0
-    ? validLocationServiceIds
-    : selectedServiceIds;
-  const effectiveCurrentIds = isNewBarber
-    ? []
-    : currentServiceIds.length === 0
-      ? allServices.map((service) => service.id)
-      : currentServiceIds;
-  const preservedIds = effectiveCurrentIds.filter((serviceId) => !locationServiceSet.has(serviceId));
-  await storage.replaceBarberServices(
-    barberId,
-    Array.from(new Set([...preservedIds, ...materializedSelection])),
-  );
-  return materializedSelection;
+  await storage.replaceBarberServices(barberId, locationId, selectedServiceIds);
+  return selectedServiceIds;
 }
 
 function sanitizeBarberForResponse<T extends {
@@ -2440,10 +2396,15 @@ export async function registerRoutes(
     if (assignedLocations.some((id) => id !== locationId) && compensation?.model === "chair_rent") {
       return res.status(409).json({ message: "O aluguer de cadeira ainda não permite partilha entre lojas. Defina outro modelo de remuneração antes de associar o barbeiro." });
     }
-    const serviceIds = await getServiceIdsForLocation(locationId);
-    if (!serviceIds.length) return res.status(400).json({ message: "Crie primeiro os serviços desta loja." });
-    await replaceBarberServicesForLocation(barberId, serviceIds, locationId);
-    await assignBarberToLocation(barberId, locationId);
+    const previouslyAssociated = (await getBarberIdsForLocation(locationId, true)).includes(barberId);
+    if (previouslyAssociated) {
+      // Reactivation keeps the previous local selection.
+      await assignBarberToLocation(barberId, locationId);
+    } else {
+      // Deny by default when sharing an existing barber with a new shop. The
+      // administrator explicitly chooses the local services afterwards.
+      await storage.assignBarberToLocationWithServices(barberId, locationId, []);
+    }
     await recordAuditLog(req, {
       action: "barber.location_assigned", entityType: "barber", entityId: barberId,
       summary: `${barber.name} associado à localização`, metadata: { locationId },
@@ -2464,7 +2425,7 @@ export async function registerRoutes(
       } = input;
       const normalizedBarberInput = normalizeBarberEmail(barberInput);
       const locationId = Number(res.locals.locationId);
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
+      const locationServiceIds = await getServiceIdsForLocation(locationId, true);
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds, locationServiceIds);
       if (normalizedServiceIds && locationServiceIds !== undefined && normalizedServiceIds.some((id) => !locationServiceIds.includes(id))) {
         return res.status(400).json({ message: "Serviço inválido para esta localização." });
@@ -2473,26 +2434,25 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Já existe um barbeiro com este email." });
       }
       const barber = await storage.createBarber(normalizedBarberInput);
-      await assignBarberToLocation(barber.id, locationId);
+      const selectedServiceIds = normalizedServiceIds ?? locationServiceIds;
+      await storage.assignBarberToLocationWithServices(barber.id, locationId, selectedServiceIds);
       const compensationRule = await saveBarberCompensationRuleIfNeeded(barber.id, {
         compensationModel,
         commissionPercent,
         chairRentCents,
         chairRentPeriod,
       });
-      if (normalizedServiceIds !== undefined) {
-        await replaceBarberServicesForLocation(barber.id, normalizedServiceIds, locationId, true);
-      }
       await recordAuditLog(req, {
         action: "barber.created",
         entityType: "barber",
         entityId: barber.id,
         summary: `Barbeiro criado: ${barber.name}`,
-        metadata: { serviceIds: normalizedServiceIds || [], compensationModel: compensationRule.model },
+        metadata: { serviceIds: selectedServiceIds, compensationModel: compensationRule.model },
       });
       res.status(201).json({
         ...attachCompensationRule(barber, compensationRule),
-        serviceIds: normalizedServiceIds || [],
+        serviceIds: selectedServiceIds,
+        allServicesAllowed: locationServiceIds.length > 0 && selectedServiceIds.length === locationServiceIds.length,
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -2548,7 +2508,7 @@ export async function registerRoutes(
         && (await getLocationIdsForBarber(barberId)).length > 1) {
         return res.status(400).json({ message: "O aluguer de cadeira ainda não está disponível para barbeiros partilhados entre lojas." });
       }
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
+      const locationServiceIds = await getServiceIdsForLocation(locationId, true);
       const normalizedServiceIds = await normalizeBarberServiceIds(serviceIds, locationServiceIds);
       if (normalizedServiceIds && locationServiceIds !== undefined && normalizedServiceIds.some((id) => !locationServiceIds.includes(id))) {
         return res.status(400).json({ message: "Serviço inválido para esta localização." });
@@ -2598,7 +2558,7 @@ export async function registerRoutes(
         await replaceBarberServicesForLocation(barberId, normalizedServiceIds, locationId);
       }
 
-      const storedServiceIds = normalizedServiceIds ?? await storage.getBarberServiceIds(barberId);
+      const storedServiceIds = normalizedServiceIds ?? await storage.getBarberServiceIds(barberId, locationId);
       const allowedCurrentServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
       const currentServiceIds = storedServiceIds.filter((serviceId) =>
         !allowedCurrentServices || allowedCurrentServices.has(serviceId),
@@ -2663,7 +2623,7 @@ export async function registerRoutes(
       const parsed = z.object({
         serviceIds: z.array(z.number().int().positive()),
       }).parse(req.body);
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
+      const locationServiceIds = await getServiceIdsForLocation(locationId, true);
       const normalizedServiceIds = await normalizeBarberServiceIds(parsed.serviceIds, locationServiceIds);
       const savedServiceIds = await replaceBarberServicesForLocation(
         barberId,
@@ -3002,9 +2962,6 @@ export async function registerRoutes(
       const input = insertServiceSchema.parse(req.body);
       await validateServiceCategoryAssignment(input.categoryId);
       const locationId = Number(res.locals.locationId);
-      const locationServiceIds = await getServiceIdsForLocation(locationId);
-      const existingServiceIds = locationServiceIds ?? (await storage.getServices()).map((service) => service.id);
-      await freezeUniversalBarberServiceAssignments(existingServiceIds, locationId);
       const { isVisible, ...serviceInput } = input;
       const service = await storage.createService({ ...serviceInput, isVisible: true });
       await assignServiceToLocation(service.id, locationId, { isActive: isVisible ?? true });
@@ -3300,11 +3257,11 @@ export async function registerRoutes(
     const locationId = Number(res.locals.locationId);
     // Opt-in preserves the API contract for older clients still using inline photos.
     const avatarReferences = req.query.avatarMode === "reference";
-    const barbers = await getBarbersWithServiceIds(MULTI_LOCATION_CONFIG.enabled ? locationId : undefined, avatarReferences);
     const appSession = getAppSession(req);
     const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
     const ownBarberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
     const includeHidden = req.query.includeHidden === "true" && isAdminSession;
+    const barbers = await getBarbersWithServiceIds(locationId, avatarReferences, includeHidden);
     const visibleBarbers = includeHidden
       ? barbers
       : barbers.filter((barber) => barber.isVisible || barber.id === ownBarberId);
@@ -3491,16 +3448,16 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
 
-    const locationServiceIds = await getServiceIdsForLocation(locationId);
+    const locationServiceIds = await getServiceIdsForLocation(locationId, isAdminSession);
     const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
-    const allServiceIds = await storage.getBarberServiceIds(barber.id);
+    const allServiceIds = await storage.getBarberServiceIds(barber.id, locationId);
     const serviceIds = allServiceIds
       .filter((serviceId) => !allowedServices || allowedServices.has(serviceId));
     const [compensationRule] = await storage.getBarberCompensationRules(barber.id);
     res.json(sanitizeBarberForResponse({
       ...attachCompensationRule(barber, compensationRule),
       serviceIds,
-      allServicesAllowed: allServiceIds.length === 0,
+      allServicesAllowed: locationServiceIds.length > 0 && serviceIds.length === locationServiceIds.length,
     }, includePrivateFields, isAdminSession));
   });
 
@@ -3625,7 +3582,7 @@ export async function registerRoutes(
       const requestedEndTime = new Date(input.startTime.getTime() + requestedDuration * 60000);
       const dateStr = getShopDateParts(input.startTime).dateKey;
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(input.customerPhone);
-      const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
+      const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
       // Check for blacklist
       const isBlacklisted = await storage.isBlacklisted(normalizedCustomerEmail || undefined, normalizedCustomerPhone);
       if (isBlacklisted) {
@@ -4010,7 +3967,7 @@ export async function registerRoutes(
         ? isCustomService ? parsedManualPrice : hasManualPrice ? parsedManualPrice : selectedServiceTerms?.priceCents ?? null
         : null;
       if (isManualBooking && serviceIdNumber) {
-        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
+        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
         if (!barberCanPerformService(barberServiceMap, barberIdNumber, serviceIdNumber)) {
           return res.status(400).json({ message: "Este barbeiro não executa o serviço escolhido." });
         }
@@ -4477,7 +4434,10 @@ export async function registerRoutes(
         ? null
         : services.find((service) => service.id === newServiceId) || null;
       if (selectedService) {
-        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
+        if (hasScheduleOrTermsPatch && selectedService.isActive === false) {
+          return res.status(400).json({ message: "Serviço indisponível para novas marcações." });
+        }
+        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
         if (!barberCanPerformService(barberServiceMap, newBarberId, selectedService.id)) {
           return res.status(400).json({ message: "Este barbeiro não executa o serviço desta marcação." });
         }
@@ -4851,7 +4811,11 @@ export async function registerRoutes(
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const duration = getEffectiveAppointmentDurationMinutes(appointment, serviceDurations);
       if (appointment.serviceId) {
-        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices());
+        const selectedService = services.find((service) => service.id === appointment.serviceId);
+        if (!selectedService || selectedService.isActive === false) {
+          return res.status(400).json({ message: "O serviço desta marcação já não está disponível nesta localização." });
+        }
+        const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(appointment.locationId));
         if (!barberCanPerformService(barberServiceMap, appointment.barberId, appointment.serviceId)) {
           return res.status(400).json({ message: "Este barbeiro já não executa o serviço desta marcação." });
         }
@@ -7300,6 +7264,10 @@ async function seedDatabase() {
   }
   for (const service of seededServices) {
     await assignServiceToLocation(service.id, defaultLocation.id);
+  }
+  const seededServiceIds = seededServices.map((service) => service.id);
+  for (const barber of await storage.getBarbers()) {
+    await replaceBarberServicesForLocation(barber.id, seededServiceIds, defaultLocation.id);
   }
 
   if (!configuredAdminPassword) {

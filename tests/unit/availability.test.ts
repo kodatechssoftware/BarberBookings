@@ -2,14 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   calendarTimeInTimeZone,
+  canBarberPerformService,
   findFirstAvailableDate,
   hasAppointmentIntervalConflict,
   type ShopAvailabilityRow,
 } from "../../client/src/lib/availability";
 
+test("barber service permissions are explicit and an empty list denies the service", () => {
+  assert.equal(canBarberPerformService({ id: 1, serviceIds: [10] }, 10), true);
+  assert.equal(canBarberPerformService({ id: 1, serviceIds: [10] }, 11), false);
+  assert.equal(canBarberPerformService({ id: 1, serviceIds: [] }, 10), false);
+  assert.equal(canBarberPerformService({ id: 1 }, 10), false);
+});
+
 const timeZone = "Europe/Lisbon";
 const service = { id: 1, duration: 30 };
-const barbers = [{ id: 1 }];
+const barbers = [{ id: 1, serviceIds: [service.id] }];
 const date = (year: number, month: number, day: number) => new Date(year, month - 1, day);
 const dateKey = (value: Date | null) => value
   ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`

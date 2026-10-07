@@ -8,6 +8,7 @@ import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
+import { createMigrationSubsetThrough } from "../helpers/migration-subset";
 
 async function availablePort() {
   const server = net.createServer();
@@ -89,6 +90,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
   let applicationPool: pg.Pool | undefined;
   let serverProcess: ReturnType<typeof spawn> | undefined;
   let serverOutput = "";
+  let migrationsDirectory: string | undefined;
 
   try {
     await postgres.initialise();
@@ -134,8 +136,10 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
     );
 
     pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
+    migrationsDirectory = await createMigrationSubsetThrough("0012_service_location_offers.sql");
     await runSchemaMigrations(pool, {
       schemaName: "public",
+      migrationsDirectory,
       environment: {
         ...environment,
         MIGRATION_DEFAULT_LOCATION_NAME: "Conflict Test Shop",
@@ -566,6 +570,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
     if (applicationPool) await applicationPool.end();
     if (pool) await pool.end();
     if (postgresStarted) await postgres.stop();
+    if (migrationsDirectory) await rm(migrationsDirectory, { recursive: true, force: true });
     await rm(databaseDir, { recursive: true, force: true });
   }
 });

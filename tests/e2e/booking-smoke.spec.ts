@@ -6142,7 +6142,7 @@ test.describe("booking rules", () => {
       selectedService: { id: 1, duration: 30 },
       selectedDate,
       selectedBarberId: 1,
-      visibleBarbers: [{ id: 1, serviceIds: [] }],
+      visibleBarbers: [{ id: 1, serviceIds: [1] }],
       availabilityRows: [],
       shopAvailabilityRows: [
         { dayOfWeek: 4, startTime: "09:00", endTime: "13:00", isOpen: true },

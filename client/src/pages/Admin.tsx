@@ -1102,8 +1102,8 @@ function getAllServiceIds(services?: ServiceListItem[]) {
 }
 
 function normalizeServiceSelection(selectedServiceIds: number[], allServiceIds: number[]) {
-  const uniqueSelectedIds = Array.from(new Set(selectedServiceIds));
-  return uniqueSelectedIds.length >= allServiceIds.length ? [] : uniqueSelectedIds;
+  const allowedServiceIds = new Set(allServiceIds);
+  return Array.from(new Set(selectedServiceIds)).filter((serviceId) => allowedServiceIds.has(serviceId));
 }
 
 function getEffectiveServiceSelection(
@@ -1111,7 +1111,7 @@ function getEffectiveServiceSelection(
   services?: ServiceListItem[],
 ) {
   const allServiceIds = getAllServiceIds(services);
-  if (!explicitServiceIds || explicitServiceIds.length === 0) return allServiceIds;
+  if (!explicitServiceIds) return allServiceIds;
   return explicitServiceIds.filter((serviceId) => allServiceIds.includes(serviceId));
 }
 
@@ -1121,16 +1121,11 @@ function formatBarberServicesSummary(
 ) {
   const allServices = services || [];
   const serviceIds = barber.serviceIds || [];
-  if (allServices.length === 0 || (serviceIds.length === 0 && barber.allServicesAllowed === false)) return "Sem serviços ativos";
-  if (allServices.length === 0 || serviceIds.length === 0 || serviceIds.length >= allServices.length) {
+  if (allServices.length === 0 || serviceIds.length === 0) return "Sem serviços";
+  if (serviceIds.length >= allServices.length) {
     return "Todos os serviços";
   }
-
-  const names = allServices
-    .filter((service) => serviceIds.includes(service.id))
-    .map((service) => service.name);
-
-  return names.length > 0 ? names.join(", ") : "Sem serviços ativos";
+  return `${serviceIds.length} ${serviceIds.length === 1 ? "serviço" : "serviços"}`;
 }
 
 function BarberServicesPicker({
@@ -1156,25 +1151,21 @@ function BarberServicesPicker({
     <div className="space-y-2">
       <div>
         <Label>Serviços que executa</Label>
-        <p className="text-xs text-gray-500">Deixe todos ativos quando não há restrição.</p>
+        <p className="text-xs text-gray-500">Configuração exclusiva da loja em gestão. Pode selecionar todos, alguns ou nenhum.</p>
       </div>
       <div className="grid gap-2 rounded-lg border border-white/10 bg-background/50 p-3 sm:grid-cols-2">
         {allServices.map((service) => {
           const checked = selectedServiceIds.includes(service.id);
-          const isOnlySelected = checked && selectedServiceIds.length <= 1;
-
           return (
             <label
               key={service.id}
               className={cn(
                 "flex cursor-pointer items-start gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2 text-sm text-white transition-colors hover:bg-white/[0.06]",
                 checked && "border-primary/40 bg-primary/10",
-                isOnlySelected && "cursor-not-allowed opacity-70",
               )}
             >
               <Checkbox
                 checked={checked}
-                disabled={isOnlySelected}
                 onCheckedChange={(value) => {
                   const next = value
                     ? Array.from(new Set([...selectedServiceIds, service.id]))
@@ -4161,6 +4152,12 @@ export default function Admin() {
               {multiLocationConfig?.enabled && <AssociateBarberDialog key={activeLocationId} />}
               <Dialog open={isAddingBarber} onOpenChange={(open) => {
                 if (!open && addBarberSubmissionRef.current) return;
+                if (open) {
+                  setBarberFormData((current) => ({
+                    ...current,
+                    serviceIds: getAllServiceIds(services),
+                  }));
+                }
                 setIsAddingBarber(open);
               }}>
                 <DialogTrigger asChild>

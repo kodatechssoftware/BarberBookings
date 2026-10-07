@@ -8,6 +8,7 @@ import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
+import { createMigrationSubsetThrough } from "../helpers/migration-subset";
 
 async function availablePort() {
   const server = net.createServer();
@@ -76,6 +77,7 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
   let postgresStarted = false;
   let pool: pg.Pool | undefined;
   let applicationPool: pg.Pool | undefined;
+  let migrationsDirectory: string | undefined;
 
   try {
     await postgres.initialise();
@@ -103,8 +105,10 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
 
     await runCommand(process.execPath, [path.resolve("node_modules/drizzle-kit/bin.cjs"), "push", "--force"], environment);
     pool = new pg.Pool({ connectionString: databaseUrl, max: 8 });
+    migrationsDirectory = await createMigrationSubsetThrough("0012_service_location_offers.sql");
     await runSchemaMigrations(pool, {
       schemaName: "public",
+      migrationsDirectory,
       environment: {
         ...environment,
         MIGRATION_DEFAULT_LOCATION_NAME: "Loja A",
@@ -137,7 +141,10 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
       )
       VALUES ($1, $2, true, NULL, NULL), ($1, $3, true, 1800, 45)
     `, [serviceId, locationA, locationB]);
-    await pool.query("INSERT INTO barber_services (barber_id, service_id) VALUES ($1, $2)", [barberId, serviceId]);
+    await pool.query(
+      "INSERT INTO barber_services (barber_id, service_id, location_id) VALUES ($1, $2, $3), ($1, $2, $4)",
+      [barberId, serviceId, locationA, locationB],
+    );
 
     Object.assign(process.env, environment);
     const [{ DatabaseStorage, isAppointmentConflictError, isAppointmentLocationIntegrityError }, locationStore, dbModule] = await Promise.all([
@@ -147,6 +154,41 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
     ]);
     applicationPool = dbModule.pool;
     const storage = new DatabaseStorage();
+    assert.deepEqual(await storage.getBarberServiceIds(barberId, locationA), [serviceId]);
+    assert.deepEqual(await storage.getBarberServiceIds(barberId, locationB), [serviceId]);
+    await storage.replaceBarberServices(barberId, locationA, []);
+    assert.deepEqual(await storage.getBarberServiceIds(barberId, locationA), []);
+    assert.deepEqual(
+      await storage.getBarberServiceIds(barberId, locationB),
+      [serviceId],
+      "replacing a barber's services in shop A must preserve shop B",
+    );
+    await storage.replaceBarberServices(barberId, locationA, [serviceId]);
+
+    const assignedAtomicallyBarberId = Number((await pool.query(`
+      INSERT INTO barbers (name, specialty, color, is_visible)
+      VALUES ('Barbeiro transacional', 'Corte', '#334455', true) RETURNING id
+    `)).rows[0].id);
+    await storage.assignBarberToLocationWithServices(assignedAtomicallyBarberId, locationA, [serviceId]);
+    assert.deepEqual(await storage.getBarberServiceIds(assignedAtomicallyBarberId, locationA), [serviceId]);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM barber_locations
+      WHERE barber_id = $1 AND location_id = $2 AND is_active = true
+    `, [assignedAtomicallyBarberId, locationA])).rows[0].count), 1);
+
+    const rejectedAtomicallyBarberId = Number((await pool.query(`
+      INSERT INTO barbers (name, specialty, color, is_visible)
+      VALUES ('Barbeiro rollback', 'Corte', '#556677', true) RETURNING id
+    `)).rows[0].id);
+    await assert.rejects(
+      storage.assignBarberToLocationWithServices(rejectedAtomicallyBarberId, locationA, [999999]),
+      (error: any) => error?.cause?.code === "23503" || error?.code === "23503",
+      "an invalid local service must roll back the new barber/location association",
+    );
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM barber_locations
+      WHERE barber_id = $1 AND location_id = $2
+    `, [rejectedAtomicallyBarberId, locationA])).rows[0].count), 0);
     const [offerA] = await locationStore.getServiceLocationOffersForLocation(locationA);
     assert.deepEqual({
       serviceId: offerA.serviceId,
@@ -333,6 +375,7 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
     if (applicationPool) await applicationPool.end();
     if (pool) await pool.end();
     if (postgresStarted) await postgres.stop().catch(() => undefined);
+    if (migrationsDirectory) await rm(migrationsDirectory, { recursive: true, force: true });
     await rm(databaseDir, { recursive: true, force: true });
   }
 });

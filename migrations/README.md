@@ -45,6 +45,13 @@ each service from the legacy global flag to its existing `service_locations`
 assignment. It preserves hidden services by marking their current assignments
 inactive, then leaves the legacy global flag enabled. Price and duration data,
 appointments, and service identities are not rewritten.
+Migration `0013_barber_services_location.sql` replaces the global
+barber/service permission with explicit per-location rows. Existing explicit
+permissions are expanded only to locations shared by the barber and service;
+legacy barbers with zero rows receive their currently implied local services.
+Inactive location associations are preserved for future reactivation. The
+migration stops and rolls back if an explicit legacy permission has no common
+location, rather than silently discarding it.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

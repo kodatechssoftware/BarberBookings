@@ -315,14 +315,26 @@ export async function ensureBarberServicesTable() {
   const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_services")}`;
   const qualifiedBarbersTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barbers")}`;
   const qualifiedServicesTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("services")}`;
+  const qualifiedLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("locations")}`;
+  const qualifiedBarberLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("barber_locations")}`;
+  const qualifiedServiceLocationsTable = `${quoteIdentifier(schemaName)}.${quoteIdentifier("service_locations")}`;
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${qualifiedTableName} (
       barber_id integer NOT NULL REFERENCES ${qualifiedBarbersTable}(id) ON DELETE CASCADE,
       service_id integer NOT NULL REFERENCES ${qualifiedServicesTable}(id) ON DELETE CASCADE,
-      PRIMARY KEY (barber_id, service_id)
+      location_id integer NOT NULL REFERENCES ${qualifiedLocationsTable}(id) ON DELETE RESTRICT,
+      PRIMARY KEY (barber_id, service_id, location_id),
+      FOREIGN KEY (barber_id, location_id)
+        REFERENCES ${qualifiedBarberLocationsTable}(barber_id, location_id) ON DELETE CASCADE,
+      FOREIGN KEY (service_id, location_id)
+        REFERENCES ${qualifiedServiceLocationsTable}(service_id, location_id) ON DELETE CASCADE
     )
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS barber_services_location_barber_idx
+    ON ${qualifiedTableName} (location_id, barber_id, service_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS barber_services_location_service_idx
+    ON ${qualifiedTableName} (location_id, service_id, barber_id)`);
 }
 
 const knownTextEncodingRepairs = [

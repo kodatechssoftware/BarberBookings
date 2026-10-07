@@ -42,7 +42,7 @@ export function AssociateBarberDialog() {
     <DialogTrigger asChild><Button variant="outline">Associar barbeiro existente</Button></DialogTrigger>
     <DialogContent className="w-[95vw] max-w-lg border-white/10 bg-card text-white">
       <DialogHeader><DialogTitle>Associar barbeiro a esta loja</DialogTitle>
-        <DialogDescription>O perfil, o acesso e as condições financeiras são comuns às lojas. Os serviços e o horário são configurados em cada loja.</DialogDescription>
+        <DialogDescription>O perfil, o acesso e as condições financeiras são comuns às lojas. O barbeiro começa sem serviços nesta loja; configure depois os serviços e o horário locais.</DialogDescription>
       </DialogHeader>
       {isLoading ? <p>A carregar equipa…</p> : isError ? <p>Não foi possível carregar a equipa.</p> : barbers.length === 0 ?
         <p className="text-sm text-gray-400">Não existem outros barbeiros disponíveis para associar.</p> :

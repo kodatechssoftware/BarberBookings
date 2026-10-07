@@ -77,7 +77,7 @@ export function calendarTimeInTimeZone(date: Date, time: string, timeZone: strin
 export function canBarberPerformService(barber: BarberOption | undefined | null, serviceId?: number | null) {
   if (!barber || !serviceId) return true;
   const serviceIds = barber.serviceIds ?? [];
-  return (barber.allServicesAllowed !== false && serviceIds.length === 0) || serviceIds.includes(serviceId);
+  return serviceIds.includes(serviceId);
 }
 
 export function hasAppointmentIntervalConflict({
