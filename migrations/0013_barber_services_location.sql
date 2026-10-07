@@ -65,8 +65,56 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE {{schema}}.barber_services
   ADD COLUMN location_id integer;
 
-ALTER TABLE {{schema}}.barber_services
-  DROP CONSTRAINT barber_services_pkey;
+-- Drizzle-generated legacy schemas use a descriptive primary-key name while
+-- older SQL fixtures use PostgreSQL's default barber_services_pkey. Resolve
+-- the constraint by its semantics instead of assuming either identifier.
+DO $migration$
+DECLARE
+  primary_key_count integer;
+  primary_key_name text;
+  primary_key_columns text[];
+BEGIN
+  SELECT count(*)
+  INTO primary_key_count
+  FROM pg_constraint AS constraint_record
+  WHERE constraint_record.conrelid = '{{schema}}.barber_services'::regclass
+    AND constraint_record.contype = 'p';
+
+  IF primary_key_count <> 1 THEN
+    RAISE EXCEPTION
+      'Cannot migrate barber_services: expected exactly one primary key on (barber_id, service_id), found %.',
+      primary_key_count
+      USING ERRCODE = '23514';
+  END IF;
+
+  SELECT
+    constraint_record.conname,
+    array_agg(attribute_record.attname::text ORDER BY key_column.ordinality)
+  INTO primary_key_name, primary_key_columns
+  FROM pg_constraint AS constraint_record
+  CROSS JOIN LATERAL unnest(constraint_record.conkey)
+    WITH ORDINALITY AS key_column(attnum, ordinality)
+  INNER JOIN pg_attribute AS attribute_record
+    ON attribute_record.attrelid = constraint_record.conrelid
+   AND attribute_record.attnum = key_column.attnum
+  WHERE constraint_record.conrelid = '{{schema}}.barber_services'::regclass
+    AND constraint_record.contype = 'p'
+  GROUP BY constraint_record.oid, constraint_record.conname;
+
+  IF primary_key_columns IS DISTINCT FROM ARRAY['barber_id', 'service_id']::text[] THEN
+    RAISE EXCEPTION
+      'Cannot migrate barber_services: primary key "%" has columns %, expected {barber_id,service_id}.',
+      primary_key_name,
+      primary_key_columns
+      USING ERRCODE = '23514';
+  END IF;
+
+  EXECUTE format(
+    'ALTER TABLE %s DROP CONSTRAINT %I',
+    '{{schema}}.barber_services'::regclass,
+    primary_key_name
+  );
+END $migration$;
 
 DELETE FROM {{schema}}.barber_services;
 
