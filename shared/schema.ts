@@ -255,7 +255,7 @@ export const appointments = appPgTable("appointments", {
     OR (${table.servicePriceCentsSnapshot} >= 0 AND ${table.servicePriceCentsSnapshot} <= 1000000)
   `),
   compensationSnapshotCheck: check("appointments_compensation_snapshot_check", sql`
-    (${table.compensationModelSnapshot} IS NULL
+    ((${table.compensationModelSnapshot} IS NULL
       AND ${table.compensationRuleIdSnapshot} IS NULL
       AND ${table.commissionPercentSnapshot} IS NULL
       AND ${table.chairRentCentsSnapshot} IS NULL
@@ -274,6 +274,7 @@ export const appointments = appPgTable("appointments", {
       AND ${table.commissionPercentSnapshot} IS NULL
       AND ${table.chairRentCentsSnapshot} > 0
       AND ${table.chairRentPeriodSnapshot} IN ('day', 'week', 'month'))
+    ) IS TRUE
   `),
 }));
 
@@ -499,7 +500,7 @@ export const barberCompensationRules = appPgTable("barber_compensation_rules", {
   modelCheck: check("barber_compensation_rules_model_check",
     sql`${table.model} IN ('none', 'commission', 'chair_rent')`),
   valuesCheck: check("barber_compensation_rules_values_check", sql`
-    (${table.model} = 'none'
+    ((${table.model} = 'none'
       AND ${table.commissionPercent} IS NULL
       AND ${table.chairRentCents} IS NULL
       AND ${table.chairRentPeriod} IS NULL)
@@ -511,6 +512,7 @@ export const barberCompensationRules = appPgTable("barber_compensation_rules", {
       AND ${table.commissionPercent} IS NULL
       AND ${table.chairRentCents} > 0
       AND ${table.chairRentPeriod} IN ('day', 'week', 'month'))
+    ) IS TRUE
   `),
 }));
 

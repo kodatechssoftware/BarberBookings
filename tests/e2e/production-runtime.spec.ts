@@ -37,6 +37,14 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(await servicesSpoofed.json()).toEqual(await servicesDefault.json());
 
   const authHeaders = await login(request);
+  const singleLocationServiceAssociation = await request.post("/api/admin/service-locations", {
+    headers: authHeaders,
+    data: {},
+  });
+  expect(singleLocationServiceAssociation.status()).toBe(404);
+  expect(await singleLocationServiceAssociation.json()).toEqual({
+    message: "Associação de serviços não disponível.",
+  });
   for (const endpoint of [
     "/api/admin/locations",
     "/api/admin/dev/whatsapp/meta/test/1",

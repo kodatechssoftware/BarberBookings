@@ -1671,6 +1671,60 @@ test("[multi-location] o mesmo serviço usa preço e duração efetivos por loja
     durationOverride: null,
   });
 
+  const locationGuardServiceResponse = await request.post("/api/services", {
+    headers: headersA,
+    data: {
+      name: `Serviço para validar localização ${suffix}`,
+      price: 1200,
+      duration: 30,
+      isVisible: true,
+    },
+  });
+  expect(locationGuardServiceResponse.status(), await locationGuardServiceResponse.text()).toBe(201);
+  const locationGuardService = await locationGuardServiceResponse.json();
+
+  for (const operation of [
+    request.post("/api/admin/service-locations", {
+      data: { serviceId: locationGuardService.id },
+    }),
+    request.patch(`/api/admin/service-locations/${locationGuardService.id}`, {
+      data: { isActive: false },
+    }),
+    request.delete(`/api/admin/service-locations/${locationGuardService.id}`),
+  ]) {
+    const response = await operation;
+    expect(response.status(), await response.text()).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "LOCATION_REQUIRED" });
+  }
+
+  const invalidLocationHeader = await request.post("/api/admin/service-locations", {
+    headers: { "X-Location-Id": "invalid" },
+    data: { serviceId: locationGuardService.id },
+  });
+  expect(invalidLocationHeader.status(), await invalidLocationHeader.text()).toBe(400);
+
+  const missingLocation = await request.post("/api/admin/service-locations", {
+    headers: { "X-Location-Id": "2147483647" },
+    data: { serviceId: locationGuardService.id },
+  });
+  expect(missingLocation.status(), await missingLocation.text()).toBe(404);
+
+  const validAssociation = await request.post("/api/admin/service-locations", {
+    headers: headersB,
+    data: { serviceId: locationGuardService.id, priceOverride: 1400, durationOverride: 40 },
+  });
+  expect(validAssociation.status(), await validAssociation.text()).toBe(201);
+  const validAssociationUpdate = await request.patch(
+    `/api/admin/service-locations/${locationGuardService.id}`,
+    { headers: headersB, data: { isActive: false } },
+  );
+  expect(validAssociationUpdate.status(), await validAssociationUpdate.text()).toBe(200);
+  const validAssociationRemoval = await request.delete(
+    `/api/admin/service-locations/${locationGuardService.id}`,
+    { headers: headersB },
+  );
+  expect(validAssociationRemoval.status(), await validAssociationRemoval.text()).toBe(200);
+
   // The small Admin flow associates the existing global identity with shop B.
   await loginAdmin(page.request);
   await page.setViewportSize({ width: 390, height: 844 });

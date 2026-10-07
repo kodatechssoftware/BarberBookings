@@ -123,7 +123,7 @@ BEGIN
   SELECT id
   INTO invalid_rule_id
   FROM {{schema}}.barber_compensation_rules
-  WHERE NOT (
+  WHERE (
     (model = 'none'
       AND commission_percent IS NULL
       AND chair_rent_cents IS NULL
@@ -136,7 +136,7 @@ BEGIN
       AND commission_percent IS NULL
       AND chair_rent_cents > 0
       AND chair_rent_period IN ('day', 'week', 'month'))
-  )
+  ) IS NOT TRUE
   ORDER BY id
   LIMIT 1;
 
@@ -159,7 +159,7 @@ ALTER TABLE {{schema}}.barber_compensation_rules
   ADD CONSTRAINT barber_compensation_rules_model_check
     CHECK (model IN ('none', 'commission', 'chair_rent')),
   ADD CONSTRAINT barber_compensation_rules_values_check
-    CHECK (
+    CHECK ((
       (model = 'none'
         AND commission_percent IS NULL
         AND chair_rent_cents IS NULL
@@ -172,7 +172,7 @@ ALTER TABLE {{schema}}.barber_compensation_rules
         AND commission_percent IS NULL
         AND chair_rent_cents > 0
         AND chair_rent_period IN ('day', 'week', 'month'))
-    );
+    ) IS TRUE);
 
 CREATE UNIQUE INDEX barber_compensation_rules_barber_location_effective_uidx
   ON {{schema}}.barber_compensation_rules
@@ -201,7 +201,7 @@ ALTER TABLE {{schema}}.appointments
     REFERENCES {{schema}}.barber_compensation_rules (id, barber_id, location_id)
     ON DELETE RESTRICT,
   ADD CONSTRAINT appointments_compensation_snapshot_check
-    CHECK (
+    CHECK ((
       (compensation_model_snapshot IS NULL
         AND compensation_rule_id_snapshot IS NULL
         AND commission_percent_snapshot IS NULL
@@ -221,4 +221,4 @@ ALTER TABLE {{schema}}.appointments
         AND commission_percent_snapshot IS NULL
         AND chair_rent_cents_snapshot > 0
         AND chair_rent_period_snapshot IN ('day', 'week', 'month'))
-    );
+    ) IS TRUE);

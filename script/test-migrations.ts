@@ -847,6 +847,22 @@ try {
   await pool.query(`
     INSERT INTO ${table("barber_compensation_rules")} (
       barber_id, model, commission_percent, effective_from
+    ) VALUES (1, 'commission', NULL, '2028-01-01 00:00:00')
+  `);
+  await assert.rejects(
+    runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory }),
+    /Cannot migrate invalid barber_compensation_rules row/,
+    "migration 0014 must reject legacy NULLs that make the financial expression UNKNOWN",
+  );
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'barber_compensation_rules' AND column_name = 'location_id'
+  `, [schema])).rows[0].count), 0, "an invalid legacy rule must roll back migration 0014");
+
+  await pool.query(`DELETE FROM ${table("barber_compensation_rules")}`);
+  await pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, model, commission_percent, effective_from
     ) VALUES
       (1, 'commission', 40, '2029-01-01 00:00:00'),
       (1, 'commission', 50, '2030-01-01 00:00:00'),
@@ -895,8 +911,69 @@ try {
   await assert.rejects(pool.query(`
     INSERT INTO ${table("barber_compensation_rules")} (
       barber_id, location_id, model, commission_percent, effective_from
+    ) VALUES (1, $1, 'commission', NULL, '2031-01-02')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "commission rules must reject a NULL percentage");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, location_id, model, chair_rent_cents, chair_rent_period, effective_from
+    ) VALUES (1, $1, 'chair_rent', NULL, 'month', '2031-01-03')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "chair-rent rules must reject a NULL amount");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, location_id, model, chair_rent_cents, chair_rent_period, effective_from
+    ) VALUES (1, $1, 'chair_rent', 25000, NULL, '2031-01-04')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "chair-rent rules must reject a NULL period");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, location_id, model, commission_percent, effective_from
+    ) VALUES (1, $1, 'none', 50, '2031-01-05')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "none rules must reject financial values");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, location_id, model, commission_percent, chair_rent_cents, chair_rent_period, effective_from
+    ) VALUES (1, $1, 'commission', 50, 25000, 'month', '2031-01-06')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "commission rules must reject chair-rent values");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, location_id, model, commission_percent, chair_rent_cents, chair_rent_period, effective_from
+    ) VALUES (1, $1, 'chair_rent', 50, 25000, 'month', '2031-01-07')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "chair-rent rules must reject commission values");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("barber_compensation_rules")} (
+      barber_id, location_id, model, commission_percent, effective_from
     ) VALUES (1, $1, 'commission', 55, '2030-01-01')
   `, [defaultLocation.id]), (error: any) => error?.code === "23505");
+
+  const defaultLocationRuleId = Number((await pool.query(`
+    SELECT id FROM ${table("barber_compensation_rules")}
+    WHERE barber_id = 1 AND location_id = $1 AND commission_percent = 40
+  `, [defaultLocation.id])).rows[0].id);
+  const invalidSnapshotCases = [
+    ["commission", null, null, null, "commission snapshots must reject a NULL percentage"],
+    ["chair_rent", null, null, "month", "chair-rent snapshots must reject a NULL amount"],
+    ["chair_rent", null, 25000, null, "chair-rent snapshots must reject a NULL period"],
+    ["none", 50, null, null, "none snapshots must reject financial values"],
+    ["commission", 50, 25000, "month", "commission snapshots must reject chair-rent values"],
+    ["chair_rent", 50, 25000, "month", "chair-rent snapshots must reject commission values"],
+  ] as const;
+  for (const [model, commissionPercent, chairRentCents, chairRentPeriod, message] of invalidSnapshotCases) {
+    await assert.rejects(pool.query(`
+      UPDATE ${table("appointments")}
+      SET compensation_rule_id_snapshot = $1,
+          compensation_model_snapshot = $2,
+          commission_percent_snapshot = $3,
+          chair_rent_cents_snapshot = $4,
+          chair_rent_period_snapshot = $5
+      WHERE id = 1
+    `, [model === "none" ? null : defaultLocationRuleId, model, commissionPercent, chairRentCents, chairRentPeriod]),
+    (error: any) => error?.code === "23514", message);
+  }
 
   const secondLocationRuleId = Number((await pool.query(`
     SELECT id FROM ${table("barber_compensation_rules")}

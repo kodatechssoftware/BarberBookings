@@ -940,6 +940,7 @@ function isLocationSensitiveMutation(req: Request) {
     /^\/admin\/extras(?:\/\d+)?$/,
     /^\/admin\/expenses(?:\/\d+)?$/,
     /^\/admin\/location-barbers$/,
+    /^\/admin\/service-locations(?:\/\d+)?$/,
     /^\/barbers(?:\/\d+(?:\/(?:services|availability|reset-password|invite))?)?$/,
     /^\/services(?:\/\d+)?$/,
     /^\/shop\/availability$/,
