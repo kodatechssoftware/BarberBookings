@@ -42,6 +42,8 @@ import {
 } from "@shared/public-booking-window";
 import type { ServiceCatalogueItem } from "@shared/schema";
 import { groupServicesForDisplay } from "@/lib/service-groups";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy";
 
 type BookingPreference = {
   step: number;
@@ -260,8 +262,13 @@ const BookingEmptyState = ({ children, tone = "neutral" }: { children: ReactNode
 );
 
 // Step components
-const StepIndicator = ({ currentStep }: { currentStep: number }) => {
-  const steps = ["Barbeiro", "Serviço", "Data e hora", "Detalhes"];
+const StepIndicator = ({
+  currentStep,
+  steps,
+}: {
+  currentStep: number;
+  steps: readonly [string, string, string, string];
+}) => {
   return (
     <div data-testid="booking-stepper" className="mx-auto mb-7 w-full max-w-3xl py-3 sm:mb-9 sm:py-4">
       <div className="relative z-10 flex items-start justify-between">
@@ -297,6 +304,7 @@ const StepIndicator = ({ currentStep }: { currentStep: number }) => {
 };
 
 export default function Booking() {
+  const copy = useBusinessCopy().booking;
   const [initialPreference] = useState(getInitialBookingPreference);
   const [step, setStep] = useState(initialPreference.step);
   const [selectedBarberId, setSelectedBarberId] = useState<number | null>(initialPreference.barberId);
@@ -510,26 +518,34 @@ export default function Booking() {
   const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
   const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
   const selectedService = availableServices.find((service) => service.id === selectedServiceId);
-  const selectedBarberLabel = selectedBarberId === 0 ? "Sem preferência" : selectedBarber?.name;
+  const selectedBarberLabel = selectedBarberId === 0 ? copy.professional.noPreference : selectedBarber?.name;
   const selectedPhoneCountryData = getPhoneCountry(selectedPhoneCountry);
   const customerFieldErrors = useMemo(() => {
     const digits = customerDetails.phone.replace(/\D/g, "");
     const phoneLengthLabel = selectedPhoneCountryData.minDigits === selectedPhoneCountryData.maxDigits
-      ? `${selectedPhoneCountryData.minDigits} dígitos`
-      : `entre ${selectedPhoneCountryData.minDigits} e ${selectedPhoneCountryData.maxDigits} dígitos`;
+      ? formatBusinessCopy(copy.validation.phoneDigitsExact, {
+          count: selectedPhoneCountryData.minDigits,
+        })
+      : formatBusinessCopy(copy.validation.phoneDigitsRange, {
+          min: selectedPhoneCountryData.minDigits,
+          max: selectedPhoneCountryData.maxDigits,
+        });
 
     return {
-      name: customerDetails.name.trim() ? "" : "Indique o nome para a marcação.",
+      name: customerDetails.name.trim() ? "" : copy.validation.nameRequired,
       phone: !digits
-        ? "Indique o telemóvel para confirmarmos a marcação."
+        ? copy.validation.phoneRequired
         : isValidPhoneForCountry(customerDetails.phone, selectedPhoneCountry)
           ? ""
-          : `Confirme que o número tem ${phoneLengthLabel} para ${selectedPhoneCountryData.label}.`,
+          : formatBusinessCopy(copy.validation.phoneInvalid, {
+              phoneLengthLabel,
+              countryLabel: selectedPhoneCountryData.label,
+            }),
       email: isValidOptionalEmail(customerDetails.email)
         ? ""
-        : "Indique um email válido ou deixe o campo vazio.",
+        : copy.validation.emailInvalid,
     };
-  }, [customerDetails.email, customerDetails.name, customerDetails.phone, selectedPhoneCountry, selectedPhoneCountryData]);
+  }, [copy.validation, customerDetails.email, customerDetails.name, customerDetails.phone, selectedPhoneCountry, selectedPhoneCountryData]);
   const showCustomerError = (field: CustomerField) => customerTouched[field] && Boolean(customerFieldErrors[field]);
   const markCustomerTouched = (field: CustomerField) => {
     setCustomerTouched((current) => ({ ...current, [field]: true }));
@@ -702,8 +718,8 @@ export default function Booking() {
     if (step === 3 && !selectedTime) {
       setShowTimeError(true);
       toast({
-        title: "Seleção necessária",
-        description: "Escolha uma hora para a sua marcação.",
+        title: copy.validation.selectionRequiredTitle,
+        description: copy.validation.selectionRequiredDescription,
         variant: "destructive"
       });
       // Force scroll to time section if needed
@@ -717,15 +733,21 @@ export default function Booking() {
 
   const handleSubmit = async () => {
     if (!activeLocation || selectedBarberId === null || !selectedServiceId || !selectedDate || !selectedTime) {
-      toast({ title: "Erro", description: "Confirme barbeiro, serviço, data e hora.", variant: "destructive" });
+      toast({
+        title: copy.validation.incompleteSelectionTitle,
+        description: copy.validation.incompleteSelectionDescription,
+        variant: "destructive",
+      });
       return;
     }
     if (!publicBookingWindow || !isPublicDateAllowed(selectedDate)) {
       toast({
-        title: "Data ainda indisponível",
+        title: copy.validation.unavailableDateTitle,
         description: publicBookingWindow
-          ? `O próximo mês abre para marcações no dia ${publicBookingWindow.openDay}.`
-          : "Não foi possível confirmar o período disponível. Tente novamente.",
+          ? formatBusinessCopy(copy.validation.nextMonthOpening, {
+              openDay: publicBookingWindow.openDay,
+            })
+          : copy.validation.bookingWindowError,
         variant: "destructive",
       });
       return;
@@ -734,8 +756,8 @@ export default function Booking() {
     setCustomerTouched({ name: true, phone: true, email: true });
     if (customerFieldErrors.name || customerFieldErrors.phone || customerFieldErrors.email) {
       toast({
-        title: "Corrija os dados",
-        description: "Veja os campos assinalados antes de confirmar.",
+        title: copy.validation.invalidDetailsTitle,
+        description: copy.validation.invalidDetailsDescription,
         variant: "destructive",
       });
       return;
@@ -768,8 +790,10 @@ export default function Booking() {
       setStep(5);
     } catch (error: any) {
       toast({ 
-        title: "Erro na marcação", 
-        description: error.message || "Tente novamente mais tarde.", 
+        title: copy.validation.submitErrorTitle,
+        description: copy.validation.exposeServerErrorMessage && error.message
+          ? error.message
+          : copy.validation.submitErrorFallback,
         variant: "destructive" 
       });
     }
@@ -782,9 +806,9 @@ export default function Booking() {
 
   if (locationsError || locations.length === 0) {
     return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6 text-center text-white">
-      <h1 className="text-2xl font-display">Marcações indisponíveis</h1>
-      <p>{locationsError ? "Não foi possível carregar as lojas. Tente novamente dentro de instantes." : "Ainda não existem lojas disponíveis para marcação online."}</p>
-      <Button variant="outline" onClick={() => navigate("/")}>Voltar ao início</Button>
+      <h1 className="text-2xl font-display">{copy.locations.unavailableTitle}</h1>
+      <p>{locationsError ? copy.locations.loadError : copy.locations.empty}</p>
+      <Button variant="outline" onClick={() => navigate("/")}>{copy.navigation.backHome}</Button>
     </div>;
   }
 
@@ -793,16 +817,16 @@ export default function Booking() {
       <div data-testid="booking-location-choice" className="relative min-h-screen overflow-x-hidden bg-background text-white">
         <div className="absolute inset-x-0 top-0 z-10 mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 sm:pt-6 lg:px-8">
           <Button variant="ghost" onClick={() => navigate("/")}>
-            <ChevronLeft className="mr-2 h-4 w-4" /> Voltar
+            <ChevronLeft className="mr-2 h-4 w-4" /> {copy.navigation.back}
           </Button>
         </div>
         <main className="flex min-h-screen items-center px-4 py-24 sm:px-6 sm:py-28 lg:px-8">
           <div className="mx-auto w-full max-w-6xl">
             <div className="mx-auto mb-8 max-w-2xl text-center sm:mb-10">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Nova marcação</p>
-              <h1 className="mt-3 font-display text-3xl font-bold sm:text-4xl lg:text-5xl">Onde quer marcar?</h1>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">{copy.locations.eyebrow}</p>
+              <h1 className="mt-3 font-display text-3xl font-bold sm:text-4xl lg:text-5xl">{copy.locations.heading}</h1>
               <p className="mt-4 text-sm leading-relaxed text-gray-400 sm:text-base">
-                Escolha a localização para consultar os barbeiros, serviços e horários dessa loja.
+                {copy.locations.description}
               </p>
             </div>
             <div
@@ -848,33 +872,37 @@ export default function Booking() {
           >
             <Check className="w-12 h-12 text-background" />
           </motion.div>
-          <h2 className="text-3xl font-display font-bold mb-4 text-white">Marcação Confirmada!</h2>
+          <h2 className="text-3xl font-display font-bold mb-4 text-white">{copy.confirmation.heading}</h2>
           <p className="text-gray-400 mb-3">
-            Obrigado, {customerDetails.name}. O seu horário está reservado para {format(selectedDate!, "dd 'de' MMMM", { locale: pt })} às {selectedTime}h.
+            {formatBusinessCopy(copy.confirmation.reserved, {
+              customerName: customerDetails.name,
+              date: format(selectedDate!, "dd 'de' MMMM", { locale: pt }),
+              time: selectedTime!,
+            })}
           </p>
           {customerDetails.email.trim() ? (
             <>
               <p className="mb-3 text-sm text-gray-500">
-                A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
+                {copy.confirmation.deliveryNotice}
               </p>
               <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-relaxed text-gray-500">
-                Se não receber a confirmação por WhatsApp nos próximos minutos, verifique o seu email. Se ainda assim não receber, contacte diretamente a barbearia.
+                {copy.confirmation.deliveryFallbackWithEmail}
               </p>
             </>
           ) : (
             <>
               <p className="mb-3 text-sm text-gray-500">
-                A confirmação e os detalhes da sua marcação serão enviados para o contacto indicado.
+                {copy.confirmation.deliveryNotice}
               </p>
               <p className="mb-8 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-gray-400">
-                Se não receber a confirmação nos próximos minutos, contacte diretamente a barbearia.
+                {copy.confirmation.deliveryFallbackWithoutEmail}
               </p>
             </>
           )}
           
           <div className="space-y-4">
             <Link href="/">
-              <Button variant="gold" className="w-full">Voltar ao Início</Button>
+              <Button variant="gold" className="w-full">{copy.navigation.returnHome}</Button>
             </Link>
           </div>
         </div>
@@ -891,7 +919,7 @@ export default function Booking() {
             variant="ghost" 
             size="icon" 
             className="shrink-0 hover:bg-white/10"
-            aria-label={step > 1 ? "Voltar ao passo anterior" : "Voltar ao início"}
+            aria-label={step > 1 ? copy.navigation.backPreviousAria : copy.navigation.backHome}
             onClick={() => {
               if (step > 1) setStep(prev => prev - 1);
               else navigate("/");
@@ -913,7 +941,7 @@ export default function Booking() {
             }}
           />
           <div className="min-w-0 flex-1">
-            <span className="block truncate font-display text-base font-bold sm:text-lg">Nova Marcação</span>
+            <span className="block truncate font-display text-base font-bold sm:text-lg">{copy.navigation.headerTitle}</span>
             {hasMultipleLocations && activeLocation && (
               <span className="block truncate text-xs text-gray-400" title={activeLocation.name}>
                 {activeLocation.name}
@@ -922,14 +950,14 @@ export default function Booking() {
           </div>
           {hasMultipleLocations && (
             <Button className="h-9 shrink-0 px-2 text-xs sm:px-3 sm:text-sm" variant="ghost" size="sm" onClick={() => selectBookingLocation(null)}>
-              Mudar loja
+              {copy.navigation.changeLocation}
             </Button>
           )}
         </div>
       </nav>
 
       <main data-testid="booking-flow" className="mx-auto w-full max-w-6xl flex-1 px-4 pb-28 pt-5 sm:px-6 sm:pt-7 md:pb-8 lg:px-8">
-        <StepIndicator currentStep={step} />
+        <StepIndicator currentStep={step} steps={copy.steps} />
 
         <AnimatePresence mode="wait">
           <motion.div
@@ -943,7 +971,7 @@ export default function Booking() {
             {/* STEP 1: SELECT BARBER */}
             {step === 1 && (
               <BookingStepContent className="space-y-7 sm:space-y-8">
-                <BookingStepHeading title="Seleciona o barbeiro" description="Escolhe com quem queres marcar." />
+                <BookingStepHeading title={copy.professional.heading} description={copy.professional.description} />
 
                 {loadingBarbers || fetchingBarbers ? (
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 md:grid-cols-3 lg:grid-cols-4">
@@ -951,11 +979,11 @@ export default function Booking() {
                   </div>
                 ) : barbersError ? (
                   <BookingEmptyState tone="error">
-                    Não foi possível carregar os barbeiros desta localização. Tente novamente dentro de instantes.
+                    {copy.professional.loadError}
                   </BookingEmptyState>
                 ) : visibleBarbers.length === 0 ? (
                   <BookingEmptyState>
-                    Esta localização ainda não tem barbeiros disponíveis para marcação online.
+                    {copy.professional.empty}
                   </BookingEmptyState>
                 ) : (
                   <div className={cn(
@@ -987,8 +1015,8 @@ export default function Booking() {
                       <h3 className={cn(
                         "font-bold text-sm md:text-lg transition-colors duration-300 leading-tight",
                         selectedBarberId === 0 ? "text-primary" : "text-white group-hover:text-primary"
-                      )}>Sem preferência</h3>
-                      <p className="text-[10px] md:text-sm text-gray-500">Qualquer barbeiro livre</p>
+                      )}>{copy.professional.noPreference}</h3>
+                      <p className="text-[10px] md:text-sm text-gray-500">{copy.professional.anyAvailable}</p>
                       {selectedBarberId === 0 && (
                         <motion.div 
                           initial={{ scale: 0, opacity: 0 }}
@@ -1066,7 +1094,7 @@ export default function Booking() {
             {/* STEP 2: SELECT SERVICE */}
             {step === 2 && (
               <BookingStepContent className="space-y-7 sm:space-y-8">
-                <BookingStepHeading title="Selecione o Serviço" description="O que vamos fazer hoje?" />
+                <BookingStepHeading title={copy.service.heading} description={copy.service.description} />
 
                 {loadingServices || fetchingServices ? (
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -1074,13 +1102,13 @@ export default function Booking() {
                   </div>
                 ) : servicesError ? (
                   <BookingEmptyState tone="error">
-                    Não foi possível carregar os serviços desta localização. Tente novamente dentro de instantes.
+                    {copy.service.loadError}
                   </BookingEmptyState>
                 ) : availableServices.length === 0 ? (
                   <BookingEmptyState>
                     {visibleServices.length === 0
-                      ? "Esta localização ainda não tem serviços disponíveis para marcação online."
-                      : "Este barbeiro não tem serviços disponíveis para marcação online."}
+                      ? copy.service.emptyLocation
+                      : copy.service.emptyProfessional}
                   </BookingEmptyState>
                 ) : (
                   <div className={hasVisibleServiceCategories
@@ -1109,7 +1137,7 @@ export default function Booking() {
               <BookingStepContent className="grid grid-cols-1 gap-7 sm:gap-8 lg:grid-cols-[minmax(300px,380px)_1fr] lg:items-start">
                 <div className="w-full">
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                    <CalendarIcon className="w-5 h-5 text-primary" /> Selecione a Data
+                    <CalendarIcon className="w-5 h-5 text-primary" /> {copy.dateTime.dateHeading}
                   </h3>
                   <div className="bg-card border border-white/5 rounded-xl p-2 md:p-4 overflow-x-auto">
                     <Calendar
@@ -1152,20 +1180,20 @@ export default function Booking() {
                     {(loadingPublicBookingWindow || bookingMonthOpeningNotice) && publicBookingWindow?.enabled !== false && (
                       <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
                         {loadingPublicBookingWindow
-                          ? "A carregar o período disponível..."
+                          ? copy.dateTime.loadingWindow
                           : formatPublicBookingMonthOpeningNotice(bookingMonthOpeningNotice!)}
                       </p>
                     )}
                     <div className="mt-2 flex items-center justify-center gap-2 text-[11px] text-gray-500">
                       <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_0.45rem_hsl(var(--primary)/0.45)]" />
-                      <span>Dias com horários disponíveis</span>
+                      <span>{copy.dateTime.availableDaysLegend}</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="w-full">
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-primary" /> Horários disponíveis
+                    <Clock className="w-5 h-5 text-primary" /> {copy.dateTime.timeHeading}
                   </h3>
                   <div className={cn(
                     "bg-card border rounded-xl p-4 md:p-6 min-h-[200px] transition-all duration-300",
@@ -1177,29 +1205,29 @@ export default function Booking() {
                       </div>
                     ) : initialAvailabilityError ? (
                       <p className="text-red-400 text-center mt-10">
-                        Não foi possível carregar os horários disponíveis. Tente novamente dentro de instantes.
+                        {copy.dateTime.loadError}
                       </p>
                     ) : noAvailabilityInBookingWindow ? (
                       <p className="text-gray-500 text-center mt-10">
-                        Não existem horários disponíveis dentro do período de marcações atual.
+                        {copy.dateTime.noAvailabilityInWindow}
                       </p>
                     ) : !selectedDate ? (
-                      <p className="text-gray-500 text-center mt-10">Selecione uma data primeiro.</p>
+                      <p className="text-gray-500 text-center mt-10">{copy.dateTime.selectDateFirst}</p>
                     ) : loadingAppointments ? (
                       <div className="flex justify-center mt-10">
                         <Loader2 className="w-6 h-6 animate-spin text-primary" />
                       </div>
                     ) : appointmentsError ? (
                       <p className="text-gray-500 text-center mt-10">
-                        Não foi possível carregar os horários desta data. Atualize a página ou tente novamente.
+                        {copy.dateTime.dateLoadError}
                       </p>
                     ) : selectedDateIsShopClosed ? (
                       <p className="text-gray-500 text-center mt-10">
-                        A barbearia está fechada neste dia. Escolha outro dia com horários disponíveis.
+                        {copy.dateTime.establishmentClosed}
                       </p>
                     ) : timeSlots.length === 0 ? (
                       <p className="text-gray-500 text-center mt-10">
-                        Não existem horários disponíveis para esta data. Escolha outro dia.
+                        {copy.dateTime.noAvailabilityForDate}
                       </p>
                     ) : (
                       <>
@@ -1231,7 +1259,7 @@ export default function Booking() {
                             animate={{ opacity: 1, y: 0 }}
                             className="text-red-500 text-xs mt-4 text-center font-medium"
                           >
-                            É necessário selecionar uma hora para continuar.
+                            {copy.dateTime.timeRequired}
                           </motion.p>
                         )}
                       </>
@@ -1245,35 +1273,35 @@ export default function Booking() {
             {step === 4 && (
               <BookingStepContent className="space-y-7 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-7 lg:space-y-0">
                 <div className="bg-card border border-white/10 rounded-xl p-6 space-y-4">
-                  <h3 className="font-bold text-lg mb-4 border-b border-white/10 pb-2">Resumo da Marcação</h3>
+                  <h3 className="font-bold text-lg mb-4 border-b border-white/10 pb-2">{copy.details.summaryTitle}</h3>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Profissional:</span>
+                    <span className="text-gray-400">{copy.details.professionalLabel}</span>
                     <span className="font-medium">{selectedBarberLabel}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Serviço:</span>
+                    <span className="text-gray-400">{copy.details.serviceLabel}</span>
                     <span className="font-medium">{selectedService?.name}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-400">Data e hora:</span>
+                    <span className="text-gray-400">{copy.details.dateTimeLabel}</span>
                     <span className="font-medium">
                       {selectedDate && format(selectedDate, "dd/MM/yyyy")} às {selectedTime}h
                     </span>
                   </div>
                   <div className="flex justify-between text-lg font-bold text-primary pt-2 border-t border-white/10">
-                    <span>Total:</span>
+                    <span>{copy.details.totalLabel}</span>
                     <span>{selectedService && (selectedService.price / 100).toFixed(2)}€</span>
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="name">Nome Completo *</Label>
+                    <Label htmlFor="name">{copy.details.nameLabel}</Label>
                     <div className="relative">
                       <User className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
                       <Input 
                         id="name" 
-                        placeholder="O seu nome" 
+                        placeholder={copy.details.namePlaceholder}
                         className={cn(
                           "pl-10 bg-background focus:border-primary",
                           showCustomerError("name") ? "border-red-500 focus:border-red-500" : "border-white/10",
@@ -1295,7 +1323,7 @@ export default function Booking() {
                   </div>
                   
                   <div className="space-y-2">
-                    <Label htmlFor="phone">Telemóvel *</Label>
+                    <Label htmlFor="phone">{copy.details.phoneLabel}</Label>
                     <div className={cn(
                       "flex rounded-md border bg-background focus-within:ring-1",
                       showCustomerError("phone")
@@ -1304,7 +1332,7 @@ export default function Booking() {
                     )}>
                       <div className="relative shrink-0 border-r border-white/10">
                         <select
-                          aria-label="País do telemóvel"
+                          aria-label={copy.details.phoneCountryAriaLabel}
                           className="h-12 w-[116px] appearance-none rounded-l-md bg-transparent px-3 pr-6 text-sm font-medium text-white outline-none"
                           value={selectedPhoneCountry}
                           onChange={(e) => {
@@ -1338,7 +1366,7 @@ export default function Booking() {
                       />
                     </div>
                     <p id="phone-whatsapp-notice" className="text-xs leading-relaxed text-gray-400">
-                      Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.
+                      {copy.details.phoneNotice}
                     </p>
                     {showCustomerError("phone") && (
                       <p id="phone-error" className="text-xs font-medium text-red-400">
@@ -1348,12 +1376,12 @@ export default function Booking() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="email">Email (opcional)</Label>
+                    <Label htmlFor="email">{copy.details.emailLabel}</Label>
                     <Input 
                       id="email" 
                       type="email" 
                       autoComplete="email"
-                      placeholder="exemplo@email.com" 
+                      placeholder={copy.details.emailPlaceholder}
                       className={cn(
                         "bg-background focus:border-primary",
                         showCustomerError("email") ? "border-red-500 focus:border-red-500" : "border-white/10",
@@ -1371,7 +1399,7 @@ export default function Booking() {
                       </p>
                     ) : (
                       <p id="email-help" className="text-xs leading-relaxed text-gray-400">
-                        Este email será utilizado como alternativa para receber confirmações e atualizações da marcação caso o envio por WhatsApp não seja possível.
+                        {copy.details.emailHelp}
                       </p>
                     )}
                   </div>
@@ -1395,7 +1423,7 @@ export default function Booking() {
                   (step === 3 && (!selectedDate || !selectedTime || !isPublicDateAllowed(selectedDate)))
                 }
               >
-                Seguinte
+                {copy.navigation.next}
               </Button>
             ) : (
               <Button 
@@ -1404,7 +1432,7 @@ export default function Booking() {
                 disabled={createAppointment.isPending}
                 className="w-full disabled:opacity-40 sm:w-32"
               >
-                {createAppointment.isPending ? "A marcar..." : "Confirmar"}
+                {createAppointment.isPending ? copy.navigation.submitting : copy.navigation.confirm}
               </Button>
             )}
           </div>

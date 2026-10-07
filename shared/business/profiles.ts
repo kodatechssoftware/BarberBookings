@@ -1,4 +1,5 @@
 import { businessBookingFlows, type BusinessBookingFlow } from "./booking-flow";
+import { businessCopy, type BusinessCopy } from "./copy";
 import type { BusinessFeatures } from "./features";
 import { businessTerms, type BusinessTerms } from "./terms";
 import { defaultBusinessThemes, type BusinessThemeId } from "./themes";
@@ -7,6 +8,7 @@ import type { BusinessVertical } from "./vertical";
 export type BusinessProfile = {
   vertical: BusinessVertical;
   terms: BusinessTerms;
+  copy: BusinessCopy;
   bookingFlow: BusinessBookingFlow;
   defaultTheme: BusinessThemeId;
   featureDefaults: BusinessFeatures;
@@ -30,6 +32,7 @@ export const businessProfiles = {
   barber: {
     vertical: "barber",
     terms: businessTerms.barber,
+    copy: businessCopy.barber,
     bookingFlow: businessBookingFlows.barber,
     defaultTheme: defaultBusinessThemes.barber,
     featureDefaults: currentFeatureDefaults,
@@ -37,6 +40,7 @@ export const businessProfiles = {
   beauty: {
     vertical: "beauty",
     terms: businessTerms.beauty,
+    copy: businessCopy.beauty,
     bookingFlow: businessBookingFlows.beauty,
     defaultTheme: defaultBusinessThemes.beauty,
     // Future Beauty capabilities remain disabled until their implementation is shipped.

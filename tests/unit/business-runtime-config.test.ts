@@ -45,11 +45,14 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
 
   assert.equal(barber.schemaVersion, 1);
   assert.deepEqual(barber.booking.flow, ["professional", "service", "datetime", "customer"]);
+  assert.equal(barber.copy.booking.professional.heading, "Seleciona o barbeiro");
   assert.equal(barber.theme.id, "classic-gold");
   assert.equal(barber.features.workspaceRent, true);
   assert.equal(barber.features.multiLocation, false);
 
   assert.deepEqual(beauty.booking.flow, ["service", "professional", "datetime", "customer"]);
+  assert.equal(beauty.copy.booking.professional.heading, "Selecione o profissional");
+  assert.equal(beauty.copy.booking.professional.anyAvailable, "Qualquer profissional disponível");
   assert.equal(beauty.theme.id, "beauty-clean");
   assert.deepEqual(beauty.runtime.multiLocation, { enabled: true, maxLocations: 3 });
   assert.equal(beauty.features.multiLocation, true);

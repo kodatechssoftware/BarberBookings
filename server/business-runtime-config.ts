@@ -45,6 +45,7 @@ export function resolveBusinessRuntimeConfig(
       schemaVersion: businessConfigSchemaVersion,
       vertical,
       terms: profile.terms,
+      copy: profile.copy,
       booking: { flow: profile.bookingFlow },
       features,
       theme: { id: themeId },

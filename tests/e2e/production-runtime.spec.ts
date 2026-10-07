@@ -35,6 +35,14 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(runtimeConfig).toMatchObject({
     schemaVersion: 1,
     vertical: "barber",
+    copy: {
+      booking: {
+        professional: {
+          heading: "Seleciona o barbeiro",
+          anyAvailable: "Qualquer barbeiro livre",
+        },
+      },
+    },
     booking: { flow: ["professional", "service", "datetime", "customer"] },
     features: { multiLocation: false, workspaceRent: true },
     theme: { id: "classic-gold" },
