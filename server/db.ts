@@ -5,6 +5,7 @@ import * as schema from "@shared/schema";
 import { instrumentPool } from "./performance-timings";
 import { startupTimings } from "./startup-timings";
 import { buildTextEncodingRepairQuery } from "./text-encoding-repair";
+import { installPostgresPoolLifecycle } from "./postgres-pool-lifecycle";
 
 
 const { Pool } = pg;
@@ -38,10 +39,7 @@ export const pool = new Pool({
 });
 
 instrumentPool(pool);
-
-pool.on("error", (error) => {
-  console.error("Unexpected idle PostgreSQL client error", error);
-});
+installPostgresPoolLifecycle(pool);
 
 export const db = drizzle(pool, { schema });
 // Pool construction is lazy: first connection acquisition belongs to the first

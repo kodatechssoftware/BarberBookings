@@ -458,13 +458,17 @@ export async function processPendingAppointmentNotifications(deps = defaultDepen
   return processed;
 }
 
-export function startAppointmentNotificationWorker(intervalMs = Number(process.env.NOTIFICATION_OUTBOX_POLL_INTERVAL_MS || 5000)) {
-  if (!appointmentNotificationWorkerEnabled) return () => undefined;
+export function startAppointmentNotificationWorker(
+  intervalMs = Number(process.env.NOTIFICATION_OUTBOX_POLL_INTERVAL_MS || 5000),
+  deps: AppointmentNotificationDependencies = defaultDependencies,
+  enabled = appointmentNotificationWorkerEnabled,
+) {
+  if (!enabled) return () => undefined;
   let running = false;
   const tick = async () => {
     if (running) return;
     running = true;
-    try { await processPendingAppointmentNotifications(); }
+    try { await processPendingAppointmentNotifications(deps); }
     catch (error) { console.error("Appointment notification outbox tick failed:", error instanceof Error ? error.name : "UnknownError"); }
     finally { running = false; }
   };
