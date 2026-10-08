@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "@shared/schema";
 import { buildTextEncodingRepairQuery } from "./text-encoding-repair";
+import { installPostgresPoolLifecycle } from "./postgres-pool-lifecycle";
 
 
 const { Pool } = pg;
@@ -34,9 +35,7 @@ export const pool = new Pool({
   ),
 });
 
-pool.on("error", (error) => {
-  console.error("Unexpected idle PostgreSQL client error", error);
-});
+installPostgresPoolLifecycle(pool);
 
 export const db = drizzle(pool, { schema });
 

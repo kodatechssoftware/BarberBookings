@@ -8,6 +8,7 @@ import {
   processClaimedAppointmentNotification,
   processMetaLateFailureEmailFallback,
   processPendingAppointmentNotifications,
+  startAppointmentNotificationWorker,
   type AppointmentNotificationDependencies,
 } from "../../server/appointment-notifications";
 import { isMetaInboundAutoReplyEnabled, recordMetaWebhookStatuses, verifyMetaWebhookChallenge, verifyMetaWebhookSignature } from "../../server/meta-webhook";
@@ -54,6 +55,32 @@ function deps(storage: MemoryStorage, whatsapp: MetaTemplateDeliveryResult, coun
     sendCancellationEmail: sendEmail,
     sendRecurringConfirmationEmail: sendEmail };
 }
+
+test("notification worker continues polling after a failed iteration", async () => {
+  const storage = new MemoryStorage();
+  let attempts = 0;
+  storage.claimNextAppointmentNotificationEvent = async () => {
+    attempts += 1;
+    if (attempts === 1) throw Object.assign(new Error("read ECONNABORTED"), { code: "ECONNABORTED" });
+    return undefined;
+  };
+  const workerDependencies = deps(storage, accepted());
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  let stop = () => undefined;
+
+  try {
+    stop = startAppointmentNotificationWorker(5, workerDependencies, true);
+    const deadline = Date.now() + 1_000;
+    while (attempts < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(attempts >= 2, "the worker must run another iteration after a rejected database operation");
+  } finally {
+    stop();
+    console.error = originalConsoleError;
+  }
+});
 
 async function recurringFixture(optIn = false) {
   const storage = new MemoryStorage();
