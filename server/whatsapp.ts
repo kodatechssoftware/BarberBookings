@@ -1,10 +1,12 @@
 import "dotenv/config";
 import type { RecurringNotificationSnapshot, WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
+import { formatBusinessCopy, type CommunicationsCopy } from "@shared/business/copy/types";
 
 import { storage } from "./storage";
 import {
   isDevelopmentDeployment,
   recurringWhatsappNotificationsEnabled,
+  resolvedBusinessConfig,
 } from "./runtime-environment";
 
 type AppointmentMessageParams = {
@@ -17,7 +19,8 @@ type AppointmentMessageParams = {
   cancelUrl?: string;
 };
 
-const SHOP_NAME = process.env.SHOP_NAME || "Baptista Barber Shop";
+const communicationsCopy = resolvedBusinessConfig.copy.communications;
+const SHOP_NAME = process.env.SHOP_NAME?.trim() || communicationsCopy.establishmentFallback;
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const DEFAULT_COUNTRY_CODE = (process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || "351").replace(/\D/g, "");
 const REQUEST_TIMEOUT_MS = Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000);
@@ -329,15 +332,20 @@ export type MetaTemplateDeliveryResult = {
 
 export type MetaTextDeliveryResult = Omit<MetaTemplateDeliveryResult, "templateName">;
 
-export function buildMetaInboundAutoReplyMessage() {
-  return `Olá 👋 Esta é uma mensagem automática da ${SHOP_NAME}.
-
-Este número é utilizado para notificações relacionadas com marcações e não é acompanhado para atendimento por mensagem.
-
-Para reagendar ou cancelar uma marcação, utilize os botões disponíveis na mensagem de confirmação.
-Para outras questões, contacte diretamente a barbearia pelos canais habituais.
-
-Obrigado!`;
+export function buildMetaInboundAutoReplyMessage(
+  copy: CommunicationsCopy = communicationsCopy,
+  establishmentName = SHOP_NAME,
+) {
+  return [
+    formatBusinessCopy(copy.inboundAutoReply.introduction, { establishmentName }),
+    "",
+    copy.inboundAutoReply.unattended,
+    "",
+    copy.inboundAutoReply.appointmentManagement,
+    copy.inboundAutoReply.otherQuestions,
+    "",
+    copy.inboundAutoReply.thanks,
+  ].join("\n");
 }
 
 export async function sendMetaInboundAutoReply(recipient: string): Promise<MetaTextDeliveryResult> {
@@ -768,7 +776,10 @@ export function buildBookingConfirmationMessage({
   serviceName,
   startTime,
   cancelUrl,
-}: Omit<AppointmentMessageParams, "customerPhone">) {
+}: Omit<AppointmentMessageParams, "customerPhone">,
+  copy: CommunicationsCopy = communicationsCopy,
+  establishmentName = process.env.SHOP_NAME?.trim() || copy.establishmentFallback,
+) {
   const date = formatAppointmentDate(startTime);
   const time = formatAppointmentTime(startTime);
 
@@ -776,21 +787,24 @@ export function buildBookingConfirmationMessage({
     `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o est\u00e1 confirmada.`,
     "",
     `Data: ${date} \u00e0s ${time}`,
-    barberName ? `Barbeiro: ${barberName}` : null,
+    barberName ? `${copy.professionalLabel}: ${barberName}` : null,
     `Servi\u00e7o: ${serviceName}`,
     "",
     cancelUrl ? "Caso n\u00e3o consiga comparecer, pode cancelar a marca\u00e7\u00e3o aqui:" : null,
     cancelUrl || null,
     "",
     "Obrigado,",
-    SHOP_NAME,
+    establishmentName,
   ].filter(Boolean).join("\n");
 }
 
 export function buildBookingCancellationMessage({
   customerName,
   startTime,
-}: Omit<AppointmentMessageParams, "customerPhone" | "cancelUrl">) {
+}: Omit<AppointmentMessageParams, "customerPhone" | "cancelUrl">,
+  copy: CommunicationsCopy = communicationsCopy,
+  establishmentName = process.env.SHOP_NAME?.trim() || copy.establishmentFallback,
+) {
   const date = formatAppointmentDate(startTime);
   const time = formatAppointmentTime(startTime);
 
@@ -798,7 +812,7 @@ export function buildBookingCancellationMessage({
     `Ol\u00e1 ${customerName}, a sua marca\u00e7\u00e3o para ${date} \u00e0s ${time} foi cancelada com sucesso.`,
     "Se quiser voltar a marcar, estamos dispon\u00edveis para agendar uma nova data quando quiser.",
     "Obrigado,",
-    SHOP_NAME,
+    establishmentName,
   ].filter(Boolean).join("\n");
 }
 

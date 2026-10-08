@@ -9,6 +9,7 @@ export {
   type AgendaCopy,
   type BookingCopy,
   type BusinessCopy,
+  type CommunicationsCopy,
 } from "./types";
 
 export const businessCopy = {

@@ -3,17 +3,26 @@ import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 import type { AppointmentNotificationEvent } from "../../shared/schema";
+import { barberBusinessCopy } from "../../shared/business/copy/barber.pt";
+import { beautyBusinessCopy } from "../../shared/business/copy/beauty.pt";
 import {
   processAppointmentNotification,
   processClaimedAppointmentNotification,
   processMetaLateFailureEmailFallback,
   processPendingAppointmentNotifications,
   startAppointmentNotificationWorker,
+  getAppointmentNotificationFallbacks,
   type AppointmentNotificationDependencies,
 } from "../../server/appointment-notifications";
 import { isMetaInboundAutoReplyEnabled, recordMetaWebhookStatuses, verifyMetaWebhookChallenge, verifyMetaWebhookSignature } from "../../server/meta-webhook";
 import { MemoryStorage } from "../../server/storage";
-import { buildBookingUpdatedEmail, buildRecurringBookingEmail } from "../../server/email";
+import {
+  buildBookingCancellationEmail,
+  buildBookingConfirmationEmail,
+  buildBookingRescheduledEmail,
+  buildBookingUpdatedEmail,
+  buildRecurringBookingEmail,
+} from "../../server/email";
 import {
   buildMetaAppointmentTemplateComponents,
   buildMetaRecurringTemplateParams,
@@ -737,6 +746,96 @@ test("legacy WhatsApp messages also append h to PT-PT times", () => {
   assert.match(buildBookingCancellationMessage(common), /09:30h/);
 });
 
+test("email and legacy WhatsApp builders resolve Barber and Beauty communication copy", () => {
+  const commonEmail = {
+    customerName: "Cliente",
+    barberName: "Ana",
+    serviceName: "Tratamento",
+    startTime: new Date("2026-09-15T08:30:00.000Z"),
+    cancelToken: token,
+    durationMinutes: 45,
+    locationName: "Espaço Aurora",
+    locationAddress: "Rua Central 1",
+    locationTimeZone: "Europe/Lisbon",
+  };
+  const recurring = {
+    ...commonEmail,
+    customerEmail: "cliente@example.test",
+    intervalWeeks: 2,
+    durationMonths: 2,
+    occurrences: starts,
+  };
+
+  const barberEmails = [
+    buildBookingConfirmationEmail(commonEmail, barberBusinessCopy.communications),
+    buildBookingRescheduledEmail(commonEmail, barberBusinessCopy.communications),
+    buildBookingUpdatedEmail(commonEmail, barberBusinessCopy.communications),
+    buildRecurringBookingEmail(recurring, barberBusinessCopy.communications),
+  ];
+  const beautyEmails = [
+    buildBookingConfirmationEmail(commonEmail, beautyBusinessCopy.communications),
+    buildBookingRescheduledEmail(commonEmail, beautyBusinessCopy.communications),
+    buildBookingUpdatedEmail(commonEmail, beautyBusinessCopy.communications),
+    buildRecurringBookingEmail(recurring, beautyBusinessCopy.communications),
+    buildBookingCancellationEmail({ ...commonEmail, lateCancellation: true }),
+  ];
+
+  for (const content of barberEmails) assert.match(content.html, /<strong>Barbeiro:<\/strong> Ana/);
+  for (const content of beautyEmails.slice(0, 4)) assert.match(content.html, /<strong>Profissional:<\/strong> Ana/);
+  assert.match(barberEmails[3].html, /contacte a barbearia/);
+  assert.match(beautyEmails[3].html, /contacte o estabelecimento/);
+  assert.doesNotMatch(
+    beautyEmails.map((content) => `${content.subject}\n${content.html}`).join("\n"),
+    /Baptista|Powerhouse|barbeiro|barbeiros|barbearia/i,
+  );
+
+  const legacyParams = { customerName: "Cliente", barberName: "Ana", serviceName: "Tratamento",
+    startTime: commonEmail.startTime, cancelUrl: "https://example.test/cancel" };
+  const barberWhatsApp = buildBookingConfirmationMessage(
+    legacyParams,
+    barberBusinessCopy.communications,
+    "Barber Studio",
+  );
+  const beautyWhatsApp = buildBookingConfirmationMessage(
+    legacyParams,
+    beautyBusinessCopy.communications,
+    "Espaço Aurora",
+  );
+  const beautyCancellation = buildBookingCancellationMessage(
+    legacyParams,
+    beautyBusinessCopy.communications,
+    "Espaço Aurora",
+  );
+  const barberInbound = buildMetaInboundAutoReplyMessage(
+    barberBusinessCopy.communications,
+    "Barber Studio",
+  );
+  const beautyInbound = buildMetaInboundAutoReplyMessage(
+    beautyBusinessCopy.communications,
+    "Espaço Aurora",
+  );
+
+  assert.match(barberWhatsApp, /Barbeiro: Ana/);
+  assert.match(barberInbound, /contacte diretamente a barbearia/);
+  assert.match(beautyWhatsApp, /Profissional: Ana/);
+  assert.match(beautyInbound, /contacte diretamente o estabelecimento/);
+  assert.doesNotMatch(
+    [beautyWhatsApp, beautyCancellation, beautyInbound].join("\n"),
+    /Baptista|Powerhouse|barbeiro|barbeiros|barbearia/i,
+  );
+
+  assert.deepEqual(
+    getAppointmentNotificationFallbacks(barberBusinessCopy.communications, {}),
+    { professionalName: "Barbeiro indisponível", locationName: "Barbearia",
+      locationAddress: "", locationTimeZone: "Europe/Lisbon" },
+  );
+  assert.deepEqual(
+    getAppointmentNotificationFallbacks(beautyBusinessCopy.communications, {}),
+    { professionalName: "Profissional indisponível", locationName: "Estabelecimento",
+      locationAddress: "", locationTimeZone: "Europe/Lisbon" },
+  );
+});
+
 test("recurring email keeps the established layout and complete ordered occurrence list", () => {
   const content = buildRecurringBookingEmail({ customerName: "Cliente", customerEmail: "c@example.com",
     locationName: "Loja", locationAddress: "Rua 1", locationTimeZone: "Europe/Lisbon",
@@ -1050,6 +1149,34 @@ test("webhook rejects unexpected WABA and Phone Number ID", async () => {
   process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone"; const storage = new MemoryStorage();
   await assert.rejects(recordMetaWebhookStatuses(webhook("x", [], "wrong", "phone"), storage), /ACCOUNT_MISMATCH/);
   await assert.rejects(recordMetaWebhookStatuses(webhook("x", [], "waba", "wrong"), storage), /PHONE_MISMATCH/);
+});
+
+test("runtime vertical selects neutral email and inbound fallbacks without client hardcodes", () => {
+  const script = `Promise.all([import('./server/email.ts'),import('./server/whatsapp.ts')]).then(([email, whatsapp]) => {
+    const content = email.buildBookingConfirmationEmail({ customerName:'Cliente', barberName:'Ana',
+      serviceName:'Serviço', startTime:new Date('2030-01-01T10:00:00Z'), cancelToken:'${token}' });
+    console.log(JSON.stringify({ subject: content.subject, html: content.html,
+      inbound: whatsapp.buildMetaInboundAutoReplyMessage() }));
+  })`;
+  const evaluateVertical = (vertical: "barber" | "beauty") => JSON.parse(execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--eval", script],
+    { cwd: process.cwd(), env: { ...process.env, NODE_ENV: "test", APP_ENV: "development",
+      USE_MEMORY_STORAGE: "true", BUSINESS_VERTICAL: vertical, SHOP_NAME: "", SHOP_ADDRESS: "" }, encoding: "utf8" },
+  ).trim()) as { subject: string; html: string; inbound: string };
+
+  const barber = evaluateVertical("barber");
+  const beauty = evaluateVertical("beauty");
+  assert.match(barber.subject, /Barbearia/);
+  assert.match(barber.html, /Barbeiro:/);
+  assert.match(barber.inbound, /mensagem automática da Barbearia/);
+  assert.match(beauty.subject, /Estabelecimento/);
+  assert.match(beauty.html, /Profissional:/);
+  assert.match(beauty.inbound, /mensagem automática de Estabelecimento/);
+  assert.doesNotMatch(
+    `${beauty.subject}\n${beauty.html}\n${beauty.inbound}`,
+    /Baptista|Powerhouse|barbeiro|barbeiros|barbearia|Comandante Agatão/i,
+  );
 });
 
 test("production environment does not activate Development deployment", () => {

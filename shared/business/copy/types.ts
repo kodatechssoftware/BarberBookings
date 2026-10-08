@@ -234,6 +234,20 @@ export type PublicCycleCopy = {
   };
 };
 
+export type CommunicationsCopy = {
+  professionalLabel: string;
+  professionalUnavailable: string;
+  establishmentFallback: string;
+  recurringSeriesManagementHelp: string;
+  inboundAutoReply: {
+    introduction: string;
+    unattended: string;
+    appointmentManagement: string;
+    otherQuestions: string;
+    thanks: string;
+  };
+};
+
 export type AdminCopy = {
   common: {
     successTitle: string;
@@ -674,6 +688,7 @@ export type BusinessCopy = {
   booking: BookingCopy;
   agenda: AgendaCopy;
   publicCycle: PublicCycleCopy;
+  communications: CommunicationsCopy;
   admin: AdminCopy;
 };
 

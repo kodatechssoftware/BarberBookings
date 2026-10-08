@@ -240,6 +240,7 @@ const ADMIN_PUBLIC_COPY = resolvedBusinessConfig.copy.admin;
 const TEAM_PUBLIC_COPY = ADMIN_PUBLIC_COPY.team;
 const REPORT_PUBLIC_COPY = ADMIN_PUBLIC_COPY.reports;
 const PUBLIC_CYCLE_COPY = resolvedBusinessConfig.copy.publicCycle;
+const COMMUNICATIONS_COPY = resolvedBusinessConfig.copy.communications;
 const INVALID_PROFESSIONAL_SERVICE_CODE = "INVALID_PROFESSIONAL_SERVICE";
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
 const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MINUTES || 45);
@@ -1476,7 +1477,7 @@ async function sendBookingCreatedNotification(params: BookingCreatedNotification
   const emailSent = await sendBookingConfirmation({
     customerName: params.customerName,
     customerEmail: params.customerEmail,
-    barberName: params.barberName || "Barbeiro indisponível",
+    barberName: params.barberName || COMMUNICATIONS_COPY.professionalUnavailable,
     serviceName: params.serviceName,
     startTime: params.startTime,
     cancelToken: params.cancelToken,
@@ -1509,7 +1510,7 @@ async function sendBookingCancelledNotification(params: BookingCancelledNotifica
   const emailSent = await sendBookingCancellationConfirmation({
     customerName: params.customerName,
     customerEmail: params.customerEmail,
-    barberName: params.barberName || "Barbeiro indisponível",
+    barberName: params.barberName || COMMUNICATIONS_COPY.professionalUnavailable,
     serviceName: params.serviceName,
     startTime: params.startTime,
     lateCancellation: params.lateCancellation,

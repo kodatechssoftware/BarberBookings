@@ -133,6 +133,22 @@ test("Beauty B5A uses neutral terminology and explains professional invite scope
   assert.match(publicCycle.invite.accessScopeDescription, /Não concede acesso administrativo/);
 });
 
+test("B5B communication copy preserves Barber wording and provides neutral Beauty fallbacks", () => {
+  assert.equal(barberBusinessCopy.communications.professionalLabel, "Barbeiro");
+  assert.equal(barberBusinessCopy.communications.professionalUnavailable, "Barbeiro indisponível");
+  assert.equal(barberBusinessCopy.communications.establishmentFallback, "Barbearia");
+  assert.match(barberBusinessCopy.communications.inboundAutoReply.otherQuestions, /contacte diretamente a barbearia/);
+
+  assert.equal(beautyBusinessCopy.communications.professionalLabel, "Profissional");
+  assert.equal(beautyBusinessCopy.communications.professionalUnavailable, "Profissional indisponível");
+  assert.equal(beautyBusinessCopy.communications.establishmentFallback, "Estabelecimento");
+  assert.match(beautyBusinessCopy.communications.inboundAutoReply.otherQuestions, /contacte diretamente o estabelecimento/);
+  assert.doesNotMatch(
+    JSON.stringify(beautyBusinessCopy.communications),
+    /Baptista|Powerhouse|barbeiro|barbeiros|barbearia/i,
+  );
+});
+
 test("Barber Booking keeps the existing public wording", () => {
   const copy = barberBusinessCopy.booking;
   assert.deepEqual(copy.steps, ["Barbeiro", "Serviço", "Data e hora", "Detalhes"]);
@@ -300,5 +316,33 @@ test("B5A public-cycle surfaces and backend responses resolve domain wording thr
     .split(/\r?\n/)
     .filter((line) => /["'`][^"'`]*(?:Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira)[^"'`]*["'`]/i.test(line))
     .filter((line) => !/["'`](?:barber|\/api\/barbers|\/api\/barber-invites|\/barber-invite)/i.test(line));
+  assert.deepEqual(forbiddenPublicLiterals, []);
+});
+
+test("B5B communication surfaces resolve domain wording through typed server copy", () => {
+  const emailSource = readFileSync("server/email.ts", "utf8");
+  const whatsappSource = readFileSync("server/whatsapp.ts", "utf8");
+  const notificationsSource = readFileSync("server/appointment-notifications.ts", "utf8");
+  const routesSource = readFileSync("server/routes.ts", "utf8");
+  const createdNotificationStart = routesSource.indexOf("async function sendBookingCreatedNotification");
+  const communicationRoutesEnd = routesSource.indexOf("async function getBarberWorkingPeriods", createdNotificationStart);
+  const publicSources = [
+    emailSource,
+    whatsappSource,
+    notificationsSource,
+    routesSource.slice(createdNotificationStart, communicationRoutesEnd),
+  ].join("\n");
+
+  assert.ok(createdNotificationStart >= 0 && communicationRoutesEnd > createdNotificationStart);
+  assert.match(emailSource, /resolvedBusinessConfig\.copy\.communications/);
+  assert.match(whatsappSource, /resolvedBusinessConfig\.copy\.communications/);
+  assert.match(notificationsSource, /professionalName: copy\.professionalUnavailable/);
+  assert.match(routesSource.slice(createdNotificationStart, communicationRoutesEnd),
+    /COMMUNICATIONS_COPY\.professionalUnavailable/);
+
+  const forbiddenPublicLiterals = publicSources
+    .split(/\r?\n/)
+    .filter((line) => /["'`][^"'`]*(?:Baptista|Powerhouse|barbeiro|barbeiros|barbearia)[^"'`]*["'`]/i.test(line))
+    .filter((line) => !/barberName|MetaAppointmentTemplateParams|barberName:/i.test(line));
   assert.deepEqual(forbiddenPublicLiterals, []);
 });

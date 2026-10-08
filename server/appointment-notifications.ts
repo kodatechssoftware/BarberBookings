@@ -1,4 +1,5 @@
 import type { Appointment, AppointmentNotificationEvent, RecurringNotificationSnapshot } from "@shared/schema";
+import type { CommunicationsCopy } from "@shared/business/copy/types";
 import { getAppointmentServiceName } from "@shared/appointment-service-terms";
 import {
   sendBookingCancellationConfirmation,
@@ -14,6 +15,7 @@ import {
   appointmentNotificationWorkerEnabled,
   isDevelopmentDeployment,
   recurringWhatsappNotificationsEnabled,
+  resolvedBusinessConfig,
 } from "./runtime-environment";
 import { storage, type IStorage } from "./storage";
 import {
@@ -27,6 +29,19 @@ import {
 
 type Channel = "whatsapp" | "email" | "none";
 type EventType = Exclude<MetaAppointmentTemplateParams["eventType"], "appointment_recurring_confirmation">;
+const communicationsCopy = resolvedBusinessConfig.copy.communications;
+
+export function getAppointmentNotificationFallbacks(
+  copy: CommunicationsCopy = communicationsCopy,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  return {
+    professionalName: copy.professionalUnavailable,
+    locationName: environment.SHOP_NAME?.trim() || copy.establishmentFallback,
+    locationAddress: environment.SHOP_ADDRESS?.trim() || "",
+    locationTimeZone: environment.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon",
+  };
+}
 
 export type AppointmentNotificationDependencies = {
   storage: Pick<IStorage,
@@ -301,15 +316,16 @@ export async function processMetaLateFailureEmailFallback(
         appointment.serviceId ? deps.storage.getService(appointment.serviceId) : Promise.resolve(undefined),
         deps.getLocation(appointment.locationId, true),
       ]);
+      const fallbacks = getAppointmentNotificationFallbacks();
       channel = await emailFallback(appointment, claimed, {
-        barberName: barber?.name || "Barbeiro indisponível",
+        barberName: barber?.name || fallbacks.professionalName,
         serviceName: getAppointmentServiceName(
           appointment,
           new Map(service ? [[service.id, service.name]] : []),
         ),
-        locationName: location?.name || process.env.SHOP_NAME || "Barbearia",
-        locationAddress: location?.address || process.env.SHOP_ADDRESS || "",
-        locationTimeZone: location?.timezone || process.env.SHOP_TIME_ZONE || "Europe/Lisbon",
+        locationName: location?.name || fallbacks.locationName,
+        locationAddress: location?.address || fallbacks.locationAddress,
+        locationTimeZone: location?.timezone || fallbacks.locationTimeZone,
       }, deps);
     } else {
       await updateEvent(deps, claimed.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
@@ -351,15 +367,16 @@ async function processClaimedCore(
     appointment!.serviceId ? deps.storage.getService(appointment!.serviceId) : Promise.resolve(undefined),
     deps.getLocation(appointment!.locationId, true),
   ]);
+  const fallbacks = getAppointmentNotificationFallbacks();
   const details = {
-    barberName: barber?.name || "Barbeiro indisponível",
+    barberName: barber?.name || fallbacks.professionalName,
     serviceName: getAppointmentServiceName(
       appointment!,
       new Map(service ? [[service.id, service.name]] : []),
     ),
-    locationName: location?.name || process.env.SHOP_NAME || "Barbearia",
-    locationAddress: location?.address || process.env.SHOP_ADDRESS || "",
-    locationTimeZone: location?.timezone || process.env.SHOP_TIME_ZONE || "Europe/Lisbon",
+    locationName: location?.name || fallbacks.locationName,
+    locationAddress: location?.address || fallbacks.locationAddress,
+    locationTimeZone: location?.timezone || fallbacks.locationTimeZone,
   };
 
   // A reclaimed event with an external attempt has an ambiguous outcome. Never repeat WhatsApp.

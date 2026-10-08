@@ -1,13 +1,16 @@
 ﻿import { Resend } from "resend";
 import "dotenv/config";
+import type { CommunicationsCopy } from "@shared/business/copy/types";
 import { getPublicBaseUrl } from "./public-url";
+import { resolvedBusinessConfig } from "./runtime-environment";
 
 const resendApiKey = process.env.RESEND_API_KEY?.trim();
 const fromEmail = process.env.RESEND_FROM_EMAIL?.trim();
 const resend = resendApiKey && fromEmail ? new Resend(resendApiKey) : null;
 const isProduction = process.env.NODE_ENV === "production";
-const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
-const shopAddress = process.env.SHOP_ADDRESS?.trim() || "Rua Comandante Agatão Lança Nº28";
+const communicationsCopy = resolvedBusinessConfig.copy.communications;
+const shopName = process.env.SHOP_NAME?.trim() || communicationsCopy.establishmentFallback;
+const shopAddress = process.env.SHOP_ADDRESS?.trim() || "";
 const shopTimeZone = process.env.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon";
 const emailFrom = fromEmail ? `${shopName} <${fromEmail}>` : "";
 
@@ -110,7 +113,10 @@ export function formatRecurringPeriodicity(intervalWeeks: number) {
   return intervalWeeks === 1 ? "Semanal" : `A cada ${intervalWeeks} semanas`;
 }
 
-export function buildRecurringBookingEmail(params: SendRecurringConfirmationParams) {
+export function buildRecurringBookingEmail(
+  params: SendRecurringConfirmationParams,
+  copy: CommunicationsCopy = communicationsCopy,
+) {
   const occurrences = [...params.occurrences].sort((left, right) => left.getTime() - right.getTime());
   if (occurrences.length < 2) throw new Error("A recurring confirmation requires at least two occurrences.");
   const first = formatAppointmentForEmail(occurrences[0], params.locationTimeZone);
@@ -131,7 +137,7 @@ export function buildRecurringBookingEmail(params: SendRecurringConfirmationPara
           <p style="margin: 6px 0;"><strong>Cliente:</strong> ${escapeHtml(params.customerName)}</p>
           <p style="margin: 6px 0;"><strong>Localização:</strong> ${escapeHtml(params.locationName)}</p>
           <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(params.serviceName)}</p>
-          <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(params.barberName)}</p>
+          <p style="margin: 6px 0;"><strong>${escapeHtml(copy.professionalLabel)}:</strong> ${escapeHtml(params.barberName)}</p>
           <p style="margin: 6px 0;"><strong>Periodicidade:</strong> ${escapeHtml(periodicity)}</p>
           <p style="margin: 6px 0;"><strong>Duração configurada:</strong> ${escapeHtml(duration)}</p>
           <p style="margin: 6px 0;"><strong>Primeira marcação:</strong> ${escapeHtml(first.date)} às ${escapeHtml(first.time)}</p>
@@ -140,7 +146,7 @@ export function buildRecurringBookingEmail(params: SendRecurringConfirmationPara
         </div>
         <h3 style="margin-bottom: 8px;">Datas da série</h3>
         <ol style="padding-left: 22px;">${occurrenceItems}</ol>
-        <p style="font-size: 0.92em; color: #555; margin-top: 20px;">Cada marcação desta série é gerida individualmente. Para alterações à série completa, contacte a barbearia.</p>
+        <p style="font-size: 0.92em; color: #555; margin-top: 20px;">${escapeHtml(copy.recurringSeriesManagementHelp)}</p>
       </div>
     `,
   };
@@ -211,62 +217,67 @@ export function buildGoogleCalendarUrl({
   return `https://calendar.google.com/calendar/render?${calendarParams.toString()}`;
 }
 
-export async function sendBookingConfirmation({
+export function buildBookingConfirmationEmail({
   customerName,
-  customerEmail,
   barberName,
   serviceName,
   startTime,
   cancelToken,
   durationMinutes = 30,
-  depositRequired = false,
-  depositReason,
-  cancellationPolicyHours = 4,
   locationName = shopName,
   locationAddress = shopAddress,
   locationTimeZone = shopTimeZone,
-  idempotencyKey,
-}: SendConfirmationParams): Promise<EmailDeliveryResult> {
-  if (!resend) {
-    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking confirmation email was skipped.");
-    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
-  }
-
+}: Omit<SendConfirmationParams, "customerEmail" | "idempotencyKey">,
+  copy: CommunicationsCopy = communicationsCopy,
+) {
   const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
-
   const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
   const googleCalendarUrl = buildGoogleCalendarUrl({
     locationName, locationAddress, serviceName, barberName, startTime, durationMinutes,
   });
 
+  return {
+    subject: `Confirmação de marcação - ${locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
+        <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+        <p>A sua marcação foi confirmada com sucesso.</p>
+        <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>${escapeHtml(copy.professionalLabel)}:</strong> ${escapeHtml(barberName)}</p>
+          <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
+          <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
+          <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
+          <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
+        </div>
+        <p style="font-size: 0.92em; color: #555;">
+          Caso não consiga comparecer, pode reagendar ou cancelar a sua marcação através dos links abaixo.
+        </p>
+        <p style="text-align: center; margin-top: 20px;">
+          <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
+          <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
+          <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
+        </p>
+      </div>
+    `,
+  };
+}
+
+export async function sendBookingConfirmation(params: SendConfirmationParams): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking confirmation email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+
+  const content = buildBookingConfirmationEmail(params);
+
   try {
     const response = await resend.emails.send({
       from: emailFrom,
-      to: customerEmail,
-      subject: `Confirmação de marcação - ${locationName}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
-          <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
-          <p>A sua marcação foi confirmada com sucesso.</p>
-          <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
-            <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
-            <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
-            <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
-            <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
-            <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
-          </div>
-          <p style="font-size: 0.92em; color: #555;">
-            Caso não consiga comparecer, pode reagendar ou cancelar a sua marcação através dos links abaixo.
-          </p>
-          <p style="text-align: center; margin-top: 20px;">
-            <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
-            <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
-            <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
-          </p>
-        </div>
-      `,
-    }, idempotencyKey ? { idempotencyKey } : undefined);
+      to: params.customerEmail,
+      subject: content.subject,
+      html: content.html,
+    }, params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined);
 
     if (response.error) {
       console.error("Resend error while sending booking confirmation:", response.error.name);
@@ -284,9 +295,8 @@ export async function sendBookingConfirmation({
   }
 }
 
-export async function sendBookingRescheduled({
+export function buildBookingRescheduledEmail({
   customerName,
-  customerEmail,
   barberName,
   serviceName,
   startTime,
@@ -295,45 +305,55 @@ export async function sendBookingRescheduled({
   locationName = shopName,
   locationAddress = shopAddress,
   locationTimeZone = shopTimeZone,
-  idempotencyKey,
-}: SendRescheduleParams): Promise<EmailDeliveryResult> {
-  if (!resend) {
-    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; reschedule email was skipped.");
-    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
-  }
-
+}: Omit<SendRescheduleParams, "customerEmail" | "idempotencyKey">,
+  copy: CommunicationsCopy = communicationsCopy,
+) {
   const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
   const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
   const googleCalendarUrl = buildGoogleCalendarUrl({
     locationName, locationAddress, serviceName, barberName, startTime, durationMinutes,
   });
 
+  return {
+    subject: `Marcação reagendada - ${locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
+        <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+        <p>A sua marcação foi reagendada com sucesso.</p>
+        <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>${escapeHtml(copy.professionalLabel)}:</strong> ${escapeHtml(barberName)}</p>
+          <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
+          <p style="margin: 6px 0;"><strong>Nova data:</strong> ${escapeHtml(dateStr)}</p>
+          <p style="margin: 6px 0;"><strong>Nova hora:</strong> ${escapeHtml(timeStr)}</p>
+          <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
+        </div>
+        <p style="font-size: 0.92em; color: #555;">Caso não consiga comparecer, pode voltar a reagendar ou cancelar a sua marcação.</p>
+        <p style="text-align: center; margin-top: 20px;">
+          <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
+          <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
+          <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
+        </p>
+      </div>
+    `,
+  };
+}
+
+export async function sendBookingRescheduled(params: SendRescheduleParams): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; reschedule email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+
+  const content = buildBookingRescheduledEmail(params);
+
   try {
     const response = await resend.emails.send({
       from: emailFrom,
-      to: customerEmail,
-      subject: `Marcação reagendada - ${locationName}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
-          <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
-          <p>A sua marcação foi reagendada com sucesso.</p>
-          <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
-            <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
-            <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
-            <p style="margin: 6px 0;"><strong>Nova data:</strong> ${escapeHtml(dateStr)}</p>
-            <p style="margin: 6px 0;"><strong>Nova hora:</strong> ${escapeHtml(timeStr)}</p>
-            <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
-          </div>
-          <p style="font-size: 0.92em; color: #555;">Caso não consiga comparecer, pode voltar a reagendar ou cancelar a sua marcação.</p>
-          <p style="text-align: center; margin-top: 20px;">
-            <a href="${googleCalendarUrl}" style="background-color: #111; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Adicionar ao Google Calendar</a>
-            <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
-            <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
-          </p>
-        </div>
-      `,
-    }, idempotencyKey ? { idempotencyKey } : undefined);
+      to: params.customerEmail,
+      subject: content.subject,
+      html: content.html,
+    }, params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined);
 
     if (response.error) {
       console.error("Resend error while sending reschedule notification:", response.error.name);
@@ -358,7 +378,9 @@ export function buildBookingUpdatedEmail({
   locationName = shopName,
   locationAddress = shopAddress,
   locationTimeZone = shopTimeZone,
-}: Omit<SendUpdatedParams, "customerEmail" | "idempotencyKey">) {
+}: Omit<SendUpdatedParams, "customerEmail" | "idempotencyKey">,
+  copy: CommunicationsCopy = communicationsCopy,
+) {
   const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
   const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
   const googleCalendarUrl = buildGoogleCalendarUrl({
@@ -373,7 +395,7 @@ export function buildBookingUpdatedEmail({
         <p>A sua marcação foi atualizada.</p>
         <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
           <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
-          <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
+          <p style="margin: 6px 0;"><strong>${escapeHtml(copy.professionalLabel)}:</strong> ${escapeHtml(barberName)}</p>
           <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
           <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
           <p style="margin: 6px 0;"><strong>Localização:</strong> ${escapeHtml(locationName)}</p>
@@ -415,48 +437,57 @@ export async function sendBookingUpdated(params: SendUpdatedParams): Promise<Ema
   }
 }
 
-export async function sendBookingCancellationConfirmation({
+export function buildBookingCancellationEmail({
   customerName,
-  customerEmail,
   startTime,
   lateCancellation = false,
   includeLateCancellationNotice = true,
   cancellationPolicyHours = 4,
   locationName = shopName,
   locationTimeZone = shopTimeZone,
-  idempotencyKey,
-}: SendCancellationParams): Promise<EmailDeliveryResult> {
+}: Omit<SendCancellationParams, "customerEmail" | "idempotencyKey">) {
+  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
+
+  return {
+    subject: `Cancelamento de marcação - ${locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
+        <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+        <p>A sua marcação foi cancelada com sucesso.</p>
+        <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
+          <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
+        </div>
+        ${
+          includeLateCancellationNotice && lateCancellation
+            ? `<p style="font-size: 0.92em; color: #b45309;">Este cancelamento foi registado como tardio por estar a menos de ${cancellationPolicyHours} horas da marcação.</p>`
+            : ""
+        }
+        <p>Se quiser voltar a marcar, estamos disponíveis para agendar uma nova data quando quiser.</p>
+        <p>Obrigado,<br />${escapeHtml(locationName)}</p>
+      </div>
+    `,
+  };
+}
+
+export async function sendBookingCancellationConfirmation(
+  params: SendCancellationParams,
+): Promise<EmailDeliveryResult> {
   if (!resend) {
     console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; booking cancellation email was skipped.");
     return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
   }
 
-  const { date: dateStr, time: timeStr } = formatAppointmentForEmail(startTime, locationTimeZone);
+  const content = buildBookingCancellationEmail(params);
 
   try {
     const response = await resend.emails.send({
       from: emailFrom,
-      to: customerEmail,
-      subject: `Cancelamento de marcação - ${locationName}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
-          <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
-          <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
-          <p>A sua marcação foi cancelada com sucesso.</p>
-          <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
-            <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(dateStr)}</p>
-            <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(timeStr)}</p>
-          </div>
-          ${
-            includeLateCancellationNotice && lateCancellation
-              ? `<p style="font-size: 0.92em; color: #b45309;">Este cancelamento foi registado como tardio por estar a menos de ${cancellationPolicyHours} horas da marcação.</p>`
-              : ""
-          }
-          <p>Se quiser voltar a marcar, estamos disponíveis para agendar uma nova data quando quiser.</p>
-          <p>Obrigado,<br />${escapeHtml(locationName)}</p>
-        </div>
-      `,
-    }, idempotencyKey ? { idempotencyKey } : undefined);
+      to: params.customerEmail,
+      subject: content.subject,
+      html: content.html,
+    }, params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined);
 
     if (response.error) {
       console.error("Resend error while sending booking cancellation:", response.error.name);

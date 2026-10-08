@@ -234,6 +234,19 @@ export const barberBusinessCopy = {
       },
     },
   },
+  communications: {
+    professionalLabel: "Barbeiro",
+    professionalUnavailable: "Barbeiro indisponível",
+    establishmentFallback: "Barbearia",
+    recurringSeriesManagementHelp: "Cada marcação desta série é gerida individualmente. Para alterações à série completa, contacte a barbearia.",
+    inboundAutoReply: {
+      introduction: "Olá 👋 Esta é uma mensagem automática da {establishmentName}.",
+      unattended: "Este número é utilizado para notificações relacionadas com marcações e não é acompanhado para atendimento por mensagem.",
+      appointmentManagement: "Para reagendar ou cancelar uma marcação, utilize os botões disponíveis na mensagem de confirmação.",
+      otherQuestions: "Para outras questões, contacte diretamente a barbearia pelos canais habituais.",
+      thanks: "Obrigado!",
+    },
+  },
   admin: {
     common: {
       successTitle: "Sucesso",
