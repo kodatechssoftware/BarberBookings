@@ -20,6 +20,8 @@ import {
   formatPublicBookingMonthOpeningNotice,
   getPublicBookingMonthOpeningNotice,
 } from "@shared/public-booking-window";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 
 function formatPublicDateTime(value: Date | string, timeZone: string, dateStyle: "short" | "long") {
   const date = new Date(value);
@@ -33,6 +35,7 @@ function formatPublicDateTime(value: Date | string, timeZone: string, dateStyle:
 }
 
 export default function Reschedule() {
+  const copy = useBusinessCopy().publicCycle;
   const [, params] = useRoute("/reschedule/:token");
   const token = params?.token;
   const { toast } = useToast();
@@ -42,7 +45,7 @@ export default function Reschedule() {
   const [success, setSuccess] = useState(false);
   const [rescheduledStart, setRescheduledStart] = useState<Date | null>(null);
 
-  const { data: appointment, isLoading: loadingAppointment } = useAppointmentByToken(token);
+  const { data: appointment, isLoading: loadingAppointment, isError: appointmentLoadError } = useAppointmentByToken(token);
   const { data: availabilityRows, isLoading: loadingAvailability } = useBarberAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
   const { data: shopAvailabilityRows, isLoading: loadingShopAvailability } = useShopAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
@@ -111,10 +114,10 @@ export default function Reschedule() {
     if (!token || !selectedDate || !selectedTime) return;
     if (!isPublicDateAllowed(selectedDate)) {
       toast({
-        title: "Data ainda indisponível",
+        title: copy.reschedule.unavailableDateTitle,
         description: publicBookingWindow
-          ? `O próximo mês abre para marcações no dia ${publicBookingWindow.openDay}.`
-          : "Não foi possível confirmar o período disponível. Tente novamente.",
+          ? formatBusinessCopy(copy.reschedule.unavailableDateOpening, { day: publicBookingWindow.openDay })
+          : copy.reschedule.unavailableDateFallback,
         variant: "destructive",
       });
       return;
@@ -128,25 +131,25 @@ export default function Reschedule() {
       setSuccess(true);
     } catch (error: any) {
       toast({
-        title: "Erro",
-        description: error.message || "Não foi possível reagendar a marcação.",
+        title: copy.common.genericErrorTitle,
+        description: error.message || copy.reschedule.submitErrorFallback,
         variant: "destructive",
       });
     }
   };
 
   if (loadingAppointment) {
-    return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+    return <div role="status" aria-label={copy.common.loadingAppointmentAria} className="min-h-screen bg-background flex items-center justify-center"><Loader2 aria-hidden="true" className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
-  if (!appointment) {
+  if (appointmentLoadError || !appointment) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">
           <XCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h1 className="text-3xl font-display mb-4">Marcação não encontrada</h1>
-          <p className="text-gray-400 mb-6">O link pode estar incorreto ou a marcação já não existir.</p>
-          <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
+          <h1 className="text-3xl font-display mb-4">{appointmentLoadError ? copy.common.genericErrorTitle : copy.reschedule.notFoundTitle}</h1>
+          <p className="text-gray-400 mb-6">{appointmentLoadError ? copy.reschedule.submitErrorFallback : copy.reschedule.notFoundDescription}</p>
+          <Link href="/"><Button variant="gold">{copy.common.returnHome}</Button></Link>
         </div>
       </div>
     );
@@ -157,8 +160,8 @@ export default function Reschedule() {
       <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">
           <Clock className="mx-auto mb-4 h-16 w-16 text-primary" />
-          <h1 className="mb-4 text-3xl font-display">Reagendamento assistido</h1>
-          <p className="mb-6 text-gray-400">Para reagendar esta marcação, contacte a barbearia.</p>
+          <h1 className="mb-4 text-3xl font-display">{copy.reschedule.assistedTitle}</h1>
+          <p className="mb-6 text-gray-400">{copy.reschedule.assistedDescription}</p>
           <AppointmentCommercialSummary
             serviceName={appointment.serviceName}
             servicePriceCents={appointment.price}
@@ -167,8 +170,8 @@ export default function Reschedule() {
             className="mb-6"
           />
           <div className="flex flex-col justify-center gap-3 sm:flex-row">
-            <Link href={`/cancel/${token}`}><Button variant="outline">Cancelar marcação</Button></Link>
-            <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
+            <Link href={`/cancel/${token}`}><Button variant="outline">{copy.reschedule.cancelAppointment}</Button></Link>
+            <Link href="/"><Button variant="gold">{copy.common.returnHome}</Button></Link>
           </div>
         </div>
       </div>
@@ -182,16 +185,16 @@ export default function Reschedule() {
           <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-20 h-20 bg-primary rounded-full flex items-center justify-center mx-auto mb-6">
             <Check className="w-10 h-10 text-background" />
           </motion.div>
-          <h1 className="text-3xl font-display mb-4">{success ? "Marcação reagendada" : "Marcação já não pode ser reagendada"}</h1>
+          <h1 className="text-3xl font-display mb-4">{success ? copy.reschedule.successTitle : copy.reschedule.unavailableTitle}</h1>
           <p className="text-gray-400 mb-6">
-            {success ? "A nova data ficou guardada com sucesso." : "Esta marcação já foi cancelada, concluída ou alterada."}
+            {success ? copy.reschedule.successDescription : copy.reschedule.unavailableDescription}
           </p>
           {success && rescheduledStart && (
             <p className="mb-6 rounded-xl border border-white/10 bg-card px-4 py-3 text-sm text-gray-300">
               {formatPublicDateTime(rescheduledStart, appointment.locationTimeZone, "long")}
             </p>
           )}
-          <Link href="/"><Button variant="gold">Voltar ao início</Button></Link>
+          <Link href="/"><Button variant="gold">{copy.common.returnHome}</Button></Link>
         </div>
       </div>
     );
@@ -201,13 +204,18 @@ export default function Reschedule() {
     <div className="min-h-screen bg-background text-foreground font-body">
       <div className="container mx-auto px-4 py-8 max-w-3xl">
         <div className="mb-8 text-center">
-          <h1 className="text-3xl md:text-5xl font-display mb-3">Reagendar marcação</h1>
+          <h1 className="text-3xl md:text-5xl font-display mb-3">{copy.reschedule.pageTitle}</h1>
           <p className="text-gray-400">
-            {appointment.serviceName} com {appointment.barberName}
+            {formatBusinessCopy(copy.reschedule.appointmentWithProfessional, {
+              service: appointment.serviceName,
+              professional: appointment.barberName,
+            })}
           </p>
           <p className="mt-2 text-sm text-gray-400">{appointment.locationName} · {appointment.locationAddress}</p>
           <p className="text-sm text-gray-500 mt-2">
-            Atual: {formatPublicDateTime(appointment.startTime, appointment.locationTimeZone, "short")}
+            {formatBusinessCopy(copy.reschedule.currentLabel, {
+              dateTime: formatPublicDateTime(appointment.startTime, appointment.locationTimeZone, "short"),
+            })}
           </p>
           <AppointmentCommercialSummary
             serviceName={appointment.serviceName}
@@ -220,7 +228,7 @@ export default function Reschedule() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-card border border-white/10 rounded-xl p-4">
-            <h2 className="font-bold mb-4 flex items-center gap-2"><CalendarIcon className="w-5 h-5 text-primary" /> Nova data</h2>
+            <h2 className="font-bold mb-4 flex items-center gap-2"><CalendarIcon className="w-5 h-5 text-primary" aria-hidden="true" /> {copy.reschedule.newDateHeading}</h2>
             <Calendar
               mode="single"
               selected={selectedDate}
@@ -239,23 +247,24 @@ export default function Reschedule() {
             {(loadingPublicBookingWindow || bookingMonthOpeningNotice) && publicBookingWindow?.enabled !== false && (
               <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
                 {loadingPublicBookingWindow
-                  ? "A carregar o período disponível..."
+                  ? copy.reschedule.loadingWindow
                   : formatPublicBookingMonthOpeningNotice(bookingMonthOpeningNotice!)}
               </p>
             )}
           </div>
 
           <div className="bg-card border border-white/10 rounded-xl p-4">
-            <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" /> Nova hora</h2>
+            <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" aria-hidden="true" /> {copy.reschedule.newTimeHeading}</h2>
             {loadingAppointments || loadingAvailability || loadingShopAvailability || loadingRuntimeConfig ? (
-              <div className="flex justify-center py-10"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
+              <div role="status" aria-label={copy.reschedule.loadingWindow} className="flex justify-center py-10"><Loader2 aria-hidden="true" className="w-6 h-6 animate-spin text-primary" /></div>
             ) : timeSlots.length === 0 ? (
-              <p className="text-gray-500 text-sm text-center py-10">Não existem horários disponíveis para esta data.</p>
+              <p className="text-gray-500 text-sm text-center py-10">{copy.reschedule.noSlots}</p>
             ) : (
               <div className="grid grid-cols-3 gap-2">
                 {timeSlots.map(({ time, available }) => (
                   <button
                     key={time}
+                    aria-label={`${time}h`}
                     disabled={!available}
                     onClick={() => setSelectedTime(time)}
                     className={cn(
@@ -275,7 +284,7 @@ export default function Reschedule() {
 
         <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
           <Button variant="gold" disabled={!selectedTime || !selectedDate || !isPublicDateAllowed(selectedDate) || rescheduleAppointment.isPending} onClick={handleSubmit}>
-            {rescheduleAppointment.isPending ? "A reagendar..." : "Confirmar nova data"}
+            {rescheduleAppointment.isPending ? copy.reschedule.submitting : copy.reschedule.confirm}
           </Button>
           <Link
             href={`/cancel/${token}`}
@@ -283,7 +292,7 @@ export default function Reschedule() {
             onMouseEnter={() => void preloadCancellationPage()}
             onTouchStart={() => void preloadCancellationPage()}
           >
-            <Button variant="outline" className="border-white/10">Cancelar marcação</Button>
+            <Button variant="outline" className="border-white/10">{copy.reschedule.cancelAppointment}</Button>
           </Link>
         </div>
       </div>

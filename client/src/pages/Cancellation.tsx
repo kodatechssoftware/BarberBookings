@@ -15,6 +15,8 @@ import {
 import { motion } from "framer-motion";
 import { shopBranding } from "@/lib/branding";
 import { AppointmentCommercialSummary } from "@/components/AppointmentCommercialSummary";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 
 function formatAppointmentDate(value?: string, timeZone = "Europe/Lisbon") {
   if (!value) return "";
@@ -34,10 +36,12 @@ function StatusScreen({
   tone,
   title,
   description,
+  returnHomeLabel,
 }: {
   tone: "success" | "danger" | "neutral";
   title: string;
   description: string;
+  returnHomeLabel: string;
 }) {
   const Icon = tone === "success" ? CheckCircle2 : tone === "danger" ? XCircle : AlertTriangle;
   const iconClass = tone === "success" ? "text-emerald-400" : tone === "danger" ? "text-red-400" : "text-primary";
@@ -57,7 +61,7 @@ function StatusScreen({
         <p className="mb-6 text-sm leading-6 text-gray-300">{description}</p>
         <Link href="/">
           <Button variant="gold" className="flex h-11 w-full items-center justify-center gap-2">
-            <Home className="h-4 w-4" /> Voltar ao Início
+            <Home className="h-4 w-4" aria-hidden="true" /> {returnHomeLabel}
           </Button>
         </Link>
       </div>
@@ -66,12 +70,14 @@ function StatusScreen({
 }
 
 export default function Cancellation() {
+  const copy = useBusinessCopy().publicCycle;
   const [, params] = useRoute("/cancel/:token");
   const token = params?.token;
   const cancelAppointment = useCancelAppointment();
-  const { data: appointment, isLoading } = useAppointmentByToken(token);
+  const { data: appointment, isLoading, isError } = useAppointmentByToken(token);
   const [success, setSuccess] = useState(false);
   const [cancelMessage, setCancelMessage] = useState("");
+  const [cancelError, setCancelError] = useState("");
 
   const appointmentDate = useMemo(
     () => formatAppointmentDate(appointment?.startTime, appointment?.locationTimeZone),
@@ -82,20 +88,34 @@ export default function Cancellation() {
 
   const handleCancel = async () => {
     if (!token) return;
+    setCancelError("");
     try {
       const result = await cancelAppointment.mutateAsync(token);
-      setCancelMessage(result.message || "Marcação cancelada com sucesso.");
+      setCancelMessage(result.message || copy.cancellation.successFallback);
       setSuccess(true);
-    } catch {
-      // Error handled by mutation
+    } catch (error) {
+      setCancelError(error instanceof Error && error.message
+        ? error.message
+        : copy.cancellation.errorFallback);
     }
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-[100svh] bg-background flex items-center justify-center p-4">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div role="status" aria-label={copy.common.loadingAppointmentAria} className="min-h-[100svh] bg-background flex items-center justify-center p-4">
+        <Loader2 aria-hidden="true" className="h-8 w-8 animate-spin text-primary" />
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <StatusScreen
+        tone="danger"
+        title={copy.common.genericErrorTitle}
+        description={copy.cancellation.errorFallback}
+        returnHomeLabel={copy.common.returnHome}
+      />
     );
   }
 
@@ -103,8 +123,9 @@ export default function Cancellation() {
     return (
       <StatusScreen
         tone="neutral"
-        title="Marcação não encontrada"
-        description="Este link não corresponde a nenhuma marcação ativa."
+        title={copy.cancellation.notFoundTitle}
+        description={copy.cancellation.notFoundDescription}
+        returnHomeLabel={copy.common.returnHome}
       />
     );
   }
@@ -113,8 +134,9 @@ export default function Cancellation() {
     return (
       <StatusScreen
         tone="danger"
-        title="Marcação Cancelada"
-        description={cancelMessage || "Esta marcação já se encontra cancelada. Não é necessária nova ação."}
+        title={copy.cancellation.cancelledTitle}
+        description={cancelMessage || copy.cancellation.alreadyCancelledDescription}
+        returnHomeLabel={copy.common.returnHome}
       />
     );
   }
@@ -123,8 +145,9 @@ export default function Cancellation() {
     return (
       <StatusScreen
         tone="neutral"
-        title="Marcação indisponível"
-        description="Esta marcação já não pode ser cancelada por este link."
+        title={copy.cancellation.unavailableTitle}
+        description={copy.cancellation.unavailableDescription}
+        returnHomeLabel={copy.common.returnHome}
       />
     );
   }
@@ -133,10 +156,10 @@ export default function Cancellation() {
     <div className="min-h-[100svh] bg-background text-white flex items-center justify-center px-4 py-6">
       <main className="w-full max-w-md">
         <div className="mb-5 text-center">
-          <p className="text-xs font-semibold uppercase text-primary">{shopBranding.name}</p>
-          <h1 className="mt-2 font-display text-3xl font-bold leading-tight">Cancelar marcação</h1>
+          <p className="text-xs font-semibold uppercase text-primary">{appointment?.locationName || shopBranding.name}</p>
+          <h1 className="mt-2 font-display text-3xl font-bold leading-tight">{copy.cancellation.pageTitle}</h1>
           <p className="mt-3 text-sm leading-6 text-gray-300">
-            Confirme os dados da marcação antes de cancelar.
+            {copy.cancellation.pageDescription}
           </p>
         </div>
 
@@ -145,7 +168,7 @@ export default function Cancellation() {
             <div className="flex items-start gap-3 border-b border-white/10 pb-4">
               <CalendarClock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
               <div>
-                <p className="text-xs uppercase text-gray-500">Data e hora</p>
+                <p className="text-xs uppercase text-gray-500">{copy.cancellation.dateTimeLabel}</p>
                 <p className="text-sm font-semibold capitalize text-white">{appointmentDate}</p>
               </div>
             </div>
@@ -154,7 +177,7 @@ export default function Cancellation() {
               <div className="flex items-start gap-3 border-b border-white/10 py-4 sm:border-r sm:pr-4">
                 <UserRound className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                 <div>
-                  <p className="text-xs uppercase text-gray-500">Barbeiro</p>
+                  <p className="text-xs uppercase text-gray-500">{copy.cancellation.professionalLabel}</p>
                   <p className="text-sm font-semibold text-white">{appointment?.barberName}</p>
                 </div>
               </div>
@@ -162,7 +185,7 @@ export default function Cancellation() {
               <div className="flex items-start gap-3 border-b border-white/10 py-4 sm:pl-4">
                 <Scissors className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                 <div>
-                  <p className="text-xs uppercase text-gray-500">Serviço</p>
+                  <p className="text-xs uppercase text-gray-500">{copy.cancellation.serviceLabel}</p>
                   <p className="text-sm font-semibold text-white">{appointment?.serviceName}</p>
                 </div>
               </div>
@@ -180,9 +203,17 @@ export default function Cancellation() {
 
           {appointment?.isLateCancellation && (
             <div className="mt-4 rounded-md border border-orange-400/25 bg-orange-500/10 p-3 text-left text-sm leading-6 text-orange-100">
-              Esta marcação está a menos de {appointment.cancellationPolicyHours || 4} horas. Se avançar, ficará registada como cancelamento tardio.
+              {formatBusinessCopy(copy.cancellation.lateWarning, {
+                hours: appointment.cancellationPolicyHours || 4,
+              })}
             </div>
           )}
+
+          {cancelError ? (
+            <div role="alert" className="mt-4 rounded-md border border-red-400/30 bg-red-500/10 p-3 text-left text-sm leading-6 text-red-100">
+              {cancelError}
+            </div>
+          ) : null}
 
           <div className="mt-6 space-y-3">
             <Button
@@ -190,17 +221,21 @@ export default function Cancellation() {
               className="h-12 w-full text-base"
               onClick={handleCancel}
               disabled={cancelAppointment.isPending}
+              aria-busy={cancelAppointment.isPending}
             >
               {cancelAppointment.isPending ? (
-                <Loader2 className="mx-auto h-5 w-5 animate-spin" />
+                <>
+                  <Loader2 aria-hidden="true" className="mx-auto h-5 w-5 animate-spin" />
+                  <span className="sr-only">{copy.cancellation.cancellingAria}</span>
+                </>
               ) : (
-                "Cancelar marcação"
+                copy.cancellation.cancelAction
               )}
             </Button>
 
             <Link href="/">
               <Button variant="ghost" className="h-11 w-full">
-                Manter marcação
+                {copy.cancellation.keepAction}
               </Button>
             </Link>
           </div>

@@ -119,6 +119,121 @@ export type AgendaCopy = {
   appointmentNotesPlaceholder: string;
 };
 
+export type PublicCycleCopy = {
+  common: {
+    returnHome: string;
+    loadingAppointmentAria: string;
+    genericErrorTitle: string;
+  };
+  cancellation: {
+    notFoundTitle: string;
+    notFoundDescription: string;
+    cancelledTitle: string;
+    alreadyCancelledDescription: string;
+    unavailableTitle: string;
+    unavailableDescription: string;
+    pageTitle: string;
+    pageDescription: string;
+    dateTimeLabel: string;
+    professionalLabel: string;
+    serviceLabel: string;
+    lateWarning: string;
+    cancelAction: string;
+    cancellingAria: string;
+    keepAction: string;
+    successFallback: string;
+    errorFallback: string;
+    backend: {
+      notFound: string;
+      alreadyCancelled: string;
+      unavailable: string;
+      lateSuccess: string;
+      success: string;
+    };
+  };
+  reschedule: {
+    notFoundTitle: string;
+    notFoundDescription: string;
+    assistedTitle: string;
+    assistedDescription: string;
+    cancelAppointment: string;
+    successTitle: string;
+    unavailableTitle: string;
+    successDescription: string;
+    unavailableDescription: string;
+    pageTitle: string;
+    appointmentWithProfessional: string;
+    currentLabel: string;
+    newDateHeading: string;
+    newTimeHeading: string;
+    loadingWindow: string;
+    noSlots: string;
+    unavailableDateTitle: string;
+    unavailableDateOpening: string;
+    unavailableDateFallback: string;
+    submitErrorFallback: string;
+    submitting: string;
+    confirm: string;
+    backend: {
+      notFound: string;
+      unavailable: string;
+      assistedContact: string;
+      locationUnavailable: string;
+      invalidDate: string;
+      futureDate: string;
+      serviceUnavailable: string;
+      professionalUnavailable: string;
+      establishmentClosed: string;
+      outsideEstablishmentHours: string;
+      slotReserved: string;
+    };
+  };
+  invite: {
+    loadError: string;
+    loadErrorDescription: string;
+    shortPasswordTitle: string;
+    shortPasswordDescription: string;
+    passwordMismatchTitle: string;
+    passwordMismatchDescription: string;
+    definePasswordError: string;
+    successTitle: string;
+    successDescription: string;
+    loadingAria: string;
+    invalidTitle: string;
+    invalidDescription: string;
+    createAccessTitle: string;
+    invitationFor: string;
+    accessScopeDescription: string;
+    newPasswordLabel: string;
+    confirmPasswordLabel: string;
+    passwordSaved: string;
+    openingPanel: string;
+    saving: string;
+    save: string;
+    adminCreatedTitle: string;
+    adminCopiedDescription: string;
+    adminCreateError: string;
+    adminConfirmTitle: string;
+    adminConfirmDescription: string;
+    adminConfirmAction: string;
+    adminTrigger: string;
+    adminTriggerAria: string;
+    backend: {
+      invalidProfessional: string;
+      professionalNotFound: string;
+      reactivateFirst: string;
+      addEmailFirst: string;
+      created: string;
+      createError: string;
+      invalidOrExpired: string;
+      invalidPassword: string;
+      alreadyUsed: string;
+      passwordDefined: string;
+      acceptError: string;
+    };
+  };
+};
+
 export type AdminCopy = {
   common: {
     successTitle: string;
@@ -558,6 +673,7 @@ export type AdminCopy = {
 export type BusinessCopy = {
   booking: BookingCopy;
   agenda: AgendaCopy;
+  publicCycle: PublicCycleCopy;
   admin: AdminCopy;
 };
 

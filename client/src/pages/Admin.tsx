@@ -1477,6 +1477,7 @@ export default function Admin() {
   const businessCopy = useBusinessCopy();
   const adminCopy = businessCopy.admin;
   const agendaCopy = businessCopy.agenda;
+  const inviteCopy = businessCopy.publicCycle.invite;
   const weekDays = useMemo(() => getScheduleWeekDays(adminCopy.schedules), [adminCopy.schedules]);
   const [user, setUser] = useState<AdminUser | null>(null);
   const sessionExpiryHandledRef = useRef(false);
@@ -2598,14 +2599,21 @@ export default function Admin() {
       }
 
       toast({
-        title: "Convite criado",
-        description: `Link copiado para enviar a ${barber.name}: ${data.inviteUrl}`,
+        title: inviteCopy.adminCreatedTitle,
+        description: formatBusinessCopy(inviteCopy.adminCopiedDescription, {
+          name: barber.name,
+          url: data.inviteUrl,
+        }),
       });
       queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       return true;
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Não foi possível criar o convite.", variant: "destructive" });
+      toast({
+        title: adminCopy.common.errorTitle,
+        description: err.message || inviteCopy.adminCreateError,
+        variant: "destructive",
+      });
       return false;
     } finally {
       invitingBarberIdRef.current = null;
@@ -4702,9 +4710,9 @@ export default function Admin() {
                         </DialogContent>
                       </Dialog>}
                       {!usesCanonicalAuth && canManageUsers && <ConfirmAction
-                        title={`Criar convite para ${barber.name}?`}
-                        description="Se já existir outro convite, esse link deixa de funcionar. A palavra-passe atual mantém-se válida até o novo convite ser aceite."
-                        confirmLabel="Criar convite"
+                        title={formatBusinessCopy(inviteCopy.adminConfirmTitle, { name: barber.name })}
+                        description={inviteCopy.adminConfirmDescription}
+                        confirmLabel={inviteCopy.adminConfirmAction}
                         confirmClassName="bg-primary text-primary-foreground hover:bg-primary/90"
                         onConfirm={async () => { await handleCreateBarberInvite(barber); }}
                       >
@@ -4713,11 +4721,12 @@ export default function Admin() {
                           size="sm"
                           className="flex-1 h-8 text-[10px] border-red-500/20 text-red-400 hover:bg-red-500/10"
                           disabled={invitingBarberId === barber.id}
+                          aria-label={formatBusinessCopy(inviteCopy.adminTriggerAria, { name: barber.name })}
                         >
                           {invitingBarberId === barber.id
                             ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                            : <Copy className="mr-1 h-3 w-3" />}
-                          {invitingBarberId === barber.id ? "A criar..." : "Convite"}
+                            : <Copy className="mr-1 h-3 w-3" aria-hidden="true" />}
+                          {invitingBarberId === barber.id ? "A criar..." : inviteCopy.adminTrigger}
                         </Button>
                       </ConfirmAction>}
                       {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <Button

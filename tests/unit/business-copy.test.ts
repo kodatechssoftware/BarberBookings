@@ -109,6 +109,30 @@ test("Beauty B4 copy uses neutral Dashboard and report terminology", () => {
   assert.equal(reports.workbook.establishmentValue, "Valor do estabelecimento (€)");
 });
 
+test("Barber B5A keeps cancellation, reschedule and professional invite wording", () => {
+  const { publicCycle } = barberBusinessCopy;
+  assert.equal(publicCycle.cancellation.professionalLabel, "Barbeiro");
+  assert.equal(publicCycle.reschedule.assistedDescription,
+    "Para reagendar esta marcação, contacte a barbearia.");
+  assert.equal(publicCycle.invite.createAccessTitle, "Criar acesso de barbeiro");
+  assert.equal(publicCycle.invite.backend.created,
+    "Convite criado. Envie este link ao barbeiro para definir a palavra-passe.");
+  assert.match(publicCycle.invite.accessScopeDescription, /Não concede acesso administrativo/);
+});
+
+test("Beauty B5A uses neutral terminology and explains professional invite scope", () => {
+  const { publicCycle } = beautyBusinessCopy;
+  assert.equal(publicCycle.cancellation.professionalLabel, "Profissional");
+  assert.equal(publicCycle.reschedule.assistedDescription,
+    "Para reagendar esta marcação, contacte o estabelecimento.");
+  assert.equal(publicCycle.reschedule.backend.professionalUnavailable,
+    "Este profissional já não executa o serviço desta marcação.");
+  assert.equal(publicCycle.invite.createAccessTitle, "Criar acesso de Profissional");
+  assert.equal(publicCycle.invite.backend.created,
+    "Convite criado. Envie este link ao profissional para definir a palavra-passe.");
+  assert.match(publicCycle.invite.accessScopeDescription, /Não concede acesso administrativo/);
+});
+
 test("Barber Booking keeps the existing public wording", () => {
   const copy = barberBusinessCopy.booking;
   assert.deepEqual(copy.steps, ["Barbeiro", "Serviço", "Data e hora", "Detalhes"]);
@@ -233,5 +257,48 @@ test("B4 Dashboard and final Excel output resolve public domain wording through 
   const forbiddenPublicLiterals = publicSources
     .split(/\r?\n/)
     .filter((line) => /["'`][^"'`]*(?:Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira)[^"'`]*["'`]/i.test(line));
+  assert.deepEqual(forbiddenPublicLiterals, []);
+});
+
+test("B5A public-cycle surfaces and backend responses resolve domain wording through BusinessCopy", () => {
+  const cancellationSource = readFileSync("client/src/pages/Cancellation.tsx", "utf8");
+  const rescheduleSource = readFileSync("client/src/pages/Reschedule.tsx", "utf8");
+  const inviteSource = readFileSync("client/src/pages/BarberInvite.tsx", "utf8");
+  const adminSource = readFileSync("client/src/pages/Admin.tsx", "utf8");
+  const serverSource = readFileSync("server/routes.ts", "utf8");
+  const inviteStart = serverSource.indexOf('app.post("/api/barbers/:id/invite"');
+  const inviteEnd = serverSource.indexOf("// === SERVICE CATEGORIES MGMT ===", inviteStart);
+  const rescheduleStart = serverSource.indexOf('app.post("/api/appointments/reschedule/:token"');
+  const publicCycleEnd = serverSource.indexOf('app.get("/api/admin/dashboard"', rescheduleStart);
+  const adminInviteStart = adminSource.indexOf("const handleCreateBarberInvite");
+  const adminInviteEnd = adminSource.indexOf("const loadCustomerHistory", adminInviteStart);
+  const adminInviteDialogMarker = adminSource.indexOf("inviteCopy.adminConfirmTitle");
+  const adminInviteDialogStart = adminSource.lastIndexOf("<ConfirmAction", adminInviteDialogMarker);
+  const adminInviteDialogEnd = adminSource.indexOf("</ConfirmAction>", adminInviteDialogStart);
+  const publicSources = [
+    cancellationSource,
+    rescheduleSource,
+    inviteSource,
+    adminSource.slice(adminInviteStart, adminInviteEnd),
+    adminSource.slice(adminInviteDialogStart, adminInviteDialogEnd),
+    serverSource.slice(inviteStart, inviteEnd),
+    serverSource.slice(rescheduleStart, publicCycleEnd),
+  ].join("\n");
+
+  assert.ok(inviteStart >= 0 && inviteEnd > inviteStart);
+  assert.ok(rescheduleStart >= 0 && publicCycleEnd > rescheduleStart);
+  assert.match(cancellationSource, /copy\.cancellation\.professionalLabel/);
+  assert.match(cancellationSource, /role="alert"/);
+  assert.match(rescheduleSource, /copy\.reschedule\.assistedDescription/);
+  assert.match(inviteSource, /copy\.accessScopeDescription/);
+  assert.match(inviteSource, /htmlFor="invite-password"/);
+  assert.match(serverSource.slice(inviteStart, inviteEnd), /PUBLIC_CYCLE_COPY\.invite\.backend/);
+  assert.match(serverSource.slice(rescheduleStart, publicCycleEnd), /PUBLIC_CYCLE_COPY\.reschedule\.backend/);
+  assert.match(serverSource.slice(rescheduleStart, publicCycleEnd), /PUBLIC_CYCLE_COPY\.cancellation\.backend/);
+
+  const forbiddenPublicLiterals = publicSources
+    .split(/\r?\n/)
+    .filter((line) => /["'`][^"'`]*(?:Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira)[^"'`]*["'`]/i.test(line))
+    .filter((line) => !/["'`](?:barber|\/api\/barbers|\/api\/barber-invites|\/barber-invite)/i.test(line));
   assert.deepEqual(forbiddenPublicLiterals, []);
 });

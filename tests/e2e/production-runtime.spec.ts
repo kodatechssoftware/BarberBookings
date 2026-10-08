@@ -47,6 +47,17 @@ test("Production-equivalent runtime remains single-location and keeps external f
           allFilter: "Todos os barbeiros",
         },
       },
+      publicCycle: {
+        cancellation: {
+          professionalLabel: "Barbeiro",
+        },
+        reschedule: {
+          assistedDescription: "Para reagendar esta marcação, contacte a barbearia.",
+        },
+        invite: {
+          createAccessTitle: "Criar acesso de barbeiro",
+        },
+      },
       admin: {
         team: {
           heading: "Equipa de Barbeiros",

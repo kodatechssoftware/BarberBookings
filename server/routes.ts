@@ -239,6 +239,7 @@ const canonicalBootstrapRateLimiter = createFixedWindowRateLimiter({
 const ADMIN_PUBLIC_COPY = resolvedBusinessConfig.copy.admin;
 const TEAM_PUBLIC_COPY = ADMIN_PUBLIC_COPY.team;
 const REPORT_PUBLIC_COPY = ADMIN_PUBLIC_COPY.reports;
+const PUBLIC_CYCLE_COPY = resolvedBusinessConfig.copy.publicCycle;
 const INVALID_PROFESSIONAL_SERVICE_CODE = "INVALID_PROFESSIONAL_SERVICE";
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
 const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MINUTES || 45);
@@ -1574,9 +1575,14 @@ function getScheduleValidationError(
   startTime: Date,
   durationMinutes: number,
   workingPeriods?: { start: number; end: number }[],
+  publicCopy?: {
+    invalidDate: string;
+    establishmentClosed: string;
+    outsideEstablishmentHours: string;
+  },
 ) {
   if (Number.isNaN(startTime.getTime())) {
-    return "Data ou hora inválida.";
+    return publicCopy?.invalidDate ?? "Data ou hora inválida.";
   }
 
   if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
@@ -1587,16 +1593,16 @@ function getScheduleValidationError(
   const end = getShopDateParts(new Date(startTime.getTime() + durationMinutes * 60000));
 
   if (start.weekday < 0 || Number.isNaN(start.hour) || Number.isNaN(start.minute)) {
-    return "Data ou hora inválida.";
+    return publicCopy?.invalidDate ?? "Data ou hora inválida.";
   }
 
   const periods = workingPeriods ?? getDefaultShopWorkingPeriods(start.weekday);
   if (periods.length === 0) {
-    return "A barbearia está encerrada neste dia.";
+    return publicCopy?.establishmentClosed ?? "A barbearia está encerrada neste dia.";
   }
 
   if (start.dateKey !== end.dateKey) {
-    return "A marcação não cabe dentro do horário de funcionamento da barbearia.";
+    return publicCopy?.outsideEstablishmentHours ?? "A marcação não cabe dentro do horário de funcionamento da barbearia.";
   }
 
   const startMinutes = start.hour * 60 + start.minute;
@@ -1606,7 +1612,7 @@ function getScheduleValidationError(
   );
 
   if (!fitsWorkingPeriod) {
-    return "A marcação não cabe dentro do horário de funcionamento da barbearia.";
+    return publicCopy?.outsideEstablishmentHours ?? "A marcação não cabe dentro do horário de funcionamento da barbearia.";
   }
 
   return null;
@@ -3391,16 +3397,16 @@ export async function registerRoutes(
   app.post("/api/barbers/:id/invite", requireUsersManage, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
-      if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
+      if (barberId === null) return res.status(400).json({ message: PUBLIC_CYCLE_COPY.invite.backend.invalidProfessional });
       const barber = await storage.getBarber(barberId);
       if (!barber || !await isBarberAssignedToLocation(barberId, Number(res.locals.locationId))) {
-        return res.status(404).json({ message: "Barbeiro não encontrado" });
+        return res.status(404).json({ message: PUBLIC_CYCLE_COPY.invite.backend.professionalNotFound });
       }
       if (barber.isVisible === false) {
-        return res.status(409).json({ message: "Reative o barbeiro antes de criar um convite de acesso." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.invite.backend.reactivateFirst });
       }
       if (!barber.email) {
-        return res.status(400).json({ message: "Adicione um email ao barbeiro antes de criar o convite." });
+        return res.status(400).json({ message: PUBLIC_CYCLE_COPY.invite.backend.addEmailFirst });
       }
 
       if (authRuntimeMode === "canonical") {
@@ -3438,7 +3444,7 @@ export async function registerRoutes(
       });
 
       res.status(201).json({
-        message: "Convite criado. Envie este link ao barbeiro para definir a palavra-passe.",
+        message: PUBLIC_CYCLE_COPY.invite.backend.created,
         inviteUrl,
         expiresAt: invite.expiresAt,
       });
@@ -3447,19 +3453,19 @@ export async function registerRoutes(
         return sendCanonicalUserManagementError(res, error);
       }
       console.error("Create barber invite error:", error);
-      res.status(500).json({ message: "Erro ao criar convite de acesso" });
+      res.status(500).json({ message: PUBLIC_CYCLE_COPY.invite.backend.createError });
     }
   });
 
   app.get("/api/barber-invites/:token", async (req, res) => {
     const invite = await storage.getBarberInviteByToken(req.params.token);
     if (!invite || invite.usedAt || invite.expiresAt < new Date()) {
-      return res.status(404).json({ message: "Convite inválido ou expirado." });
+      return res.status(404).json({ message: PUBLIC_CYCLE_COPY.invite.backend.invalidOrExpired });
     }
 
     const barber = await storage.getBarber(invite.barberId);
     if (!barber || barber.isVisible === false) {
-      return res.status(404).json({ message: "Convite inválido ou expirado." });
+      return res.status(404).json({ message: PUBLIC_CYCLE_COPY.invite.backend.invalidOrExpired });
     }
 
     res.json({
@@ -3473,20 +3479,20 @@ export async function registerRoutes(
     try {
       const invite = await storage.getBarberInviteByToken(req.params.token);
       if (!invite || invite.usedAt || invite.expiresAt < new Date()) {
-        return res.status(404).json({ message: "Convite inválido ou expirado." });
+        return res.status(404).json({ message: PUBLIC_CYCLE_COPY.invite.backend.invalidOrExpired });
       }
 
       const parsedPassword = barberInvitePasswordSchema.safeParse(req.body);
       if (!parsedPassword.success) {
         return res.status(400).json({
-          message: parsedPassword.error.errors[0]?.message || "Palavra-passe inválida.",
+          message: parsedPassword.error.errors[0]?.message || PUBLIC_CYCLE_COPY.invite.backend.invalidPassword,
         });
       }
       const { password } = parsedPassword.data;
 
       const barber = await storage.getBarber(invite.barberId);
       if (!barber || barber.isVisible === false) {
-        return res.status(404).json({ message: "Convite inválido ou expirado." });
+        return res.status(404).json({ message: PUBLIC_CYCLE_COPY.invite.backend.invalidOrExpired });
       }
 
       if (authRuntimeMode === "canonical" && !barber.userId) {
@@ -3518,15 +3524,15 @@ export async function registerRoutes(
       }
       const updatedBarber = await storage.acceptBarberInvite(invite.id, barber.id, hashedPassword);
       if (!updatedBarber) {
-        return res.status(409).json({ message: "Este convite já foi utilizado ou substituído." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.invite.backend.alreadyUsed });
       }
 
       await establishLegacySession(req, { role: "barber", barberId: barber.id });
 
-      res.json({ message: "Palavra-passe definida com sucesso.", role: "barber" });
+      res.json({ message: PUBLIC_CYCLE_COPY.invite.backend.passwordDefined, role: "barber" });
     } catch (error) {
       console.error("Accept barber invite error:", error);
-      res.status(500).json({ message: "Erro ao aceitar convite" });
+      res.status(500).json({ message: PUBLIC_CYCLE_COPY.invite.backend.acceptError });
     }
   });
 
@@ -5670,26 +5676,26 @@ export async function registerRoutes(
     try {
       const appointment = await storage.getAppointmentByToken(req.params.token);
       if (!appointment) {
-        return res.status(404).json({ message: "Marcação não encontrada" });
+        return res.status(404).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.notFound });
       }
 
       if (appointment.status !== "booked") {
-        return res.status(409).json({ message: "Esta marcação já não pode ser reagendada." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
       }
       if (appointment.manualOutsideHours) {
         return res.status(409).json({
           code: "MANUAL_OUTSIDE_HOURS_RESCHEDULE_UNAVAILABLE",
-          message: "Para reagendar esta marcação, contacte a barbearia.",
+          message: PUBLIC_CYCLE_COPY.reschedule.backend.assistedContact,
         });
       }
       const location = await getLocation(appointment.locationId);
       if (!location || !await isBarberAssignedToLocation(appointment.barberId, appointment.locationId)) {
-        return res.status(409).json({ message: "Contacte a barbearia para reagendar esta marcação." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.locationUnavailable });
       }
 
       const startTime = new Date(req.body?.startTime);
       if (Number.isNaN(startTime.getTime())) {
-        return res.status(400).json({ message: "Data ou hora inválida." });
+        return res.status(400).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.invalidDate });
       }
       const startTimeChanged = startTime.getTime() !== new Date(appointment.startTime).getTime();
       if (startTimeChanged) {
@@ -5699,7 +5705,7 @@ export async function registerRoutes(
         }
       }
       if (isBeforeNow(startTime)) {
-        return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+        return res.status(400).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.futureDate });
       }
       if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED && !isDateWithinPublicBookingWindow(startTime, currentPublicBookingWindow(), SHOP_TIME_ZONE)) {
         return sendPublicBookingWindowClosed(res);
@@ -5711,16 +5717,21 @@ export async function registerRoutes(
       if (appointment.serviceId) {
         const selectedService = services.find((service) => service.id === appointment.serviceId);
         if (!selectedService || selectedService.isActive === false) {
-          return res.status(400).json({ message: "O serviço desta marcação já não está disponível nesta localização." });
+          return res.status(400).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.serviceUnavailable });
         }
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(appointment.locationId));
         if (!barberCanPerformService(barberServiceMap, appointment.barberId, appointment.serviceId)) {
-          return res.status(400).json({ message: "Este barbeiro já não executa o serviço desta marcação." });
+          return res.status(400).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.professionalUnavailable });
         }
       }
 
       const workingPeriods = await getBarberWorkingPeriods(appointment.barberId, getShopDateParts(startTime).weekday, appointment.locationId);
-      const scheduleError = getScheduleValidationError(startTime, duration, workingPeriods);
+      const scheduleError = getScheduleValidationError(
+        startTime,
+        duration,
+        workingPeriods,
+        PUBLIC_CYCLE_COPY.reschedule.backend,
+      );
       if (scheduleError) {
         return res.status(400).json({ message: scheduleError });
       }
@@ -5738,7 +5749,7 @@ export async function registerRoutes(
           appointment.id,
         )
       ) {
-        return res.status(409).json({ message: "Este horário já está reservado." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.slotReserved });
       }
 
       const result = appointmentNotificationEventsEnabled
@@ -5748,7 +5759,7 @@ export async function registerRoutes(
         ? result?.appointment
         : await storage.updateAppointment(appointment.id, { startTime }, "booked");
       if (!updated) {
-        return res.status(409).json({ message: "Esta marcação já não pode ser reagendada." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
       }
 
       res.json({
@@ -5757,7 +5768,7 @@ export async function registerRoutes(
       });
     } catch (error) {
       if (isAppointmentConflictError(error)) {
-        return res.status(409).json({ message: "Este horário já está reservado." });
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.slotReserved });
       }
       if (sendAppointmentLocationIntegrityError(res, error)) return;
       throw error;
@@ -5767,12 +5778,12 @@ export async function registerRoutes(
   app.post('/api/appointments/cancel/:token', async (req, res) => {
     const appointment = await storage.getAppointmentByToken(req.params.token);
     if (!appointment) {
-      return res.status(404).json({ message: "Marcação não encontrada" });
+      return res.status(404).json({ message: PUBLIC_CYCLE_COPY.cancellation.backend.notFound });
     }
     
     if (appointment.status === "cancelled" || appointment.status === "late_cancelled") {
       return res.json({
-        message: "Esta marcação já estava cancelada.",
+        message: PUBLIC_CYCLE_COPY.cancellation.backend.alreadyCancelled,
         status: appointment.status,
         alreadyCancelled: true,
         notificationChannel: "none" satisfies NotificationChannel,
@@ -5781,7 +5792,7 @@ export async function registerRoutes(
     }
 
     if (appointment.status !== 'booked') {
-      return res.status(409).json({ message: "Esta marcação já não pode ser cancelada." });
+      return res.status(409).json({ message: PUBLIC_CYCLE_COPY.cancellation.backend.unavailable });
     }
 
     const lateCancellation = isLateCancellation(appointment.startTime);
@@ -5796,14 +5807,14 @@ export async function registerRoutes(
       const latestAppointment = await storage.getAppointment(appointment.id);
       if (latestAppointment?.status === "cancelled" || latestAppointment?.status === "late_cancelled") {
         return res.json({
-          message: "Esta marcação já estava cancelada.",
+          message: PUBLIC_CYCLE_COPY.cancellation.backend.alreadyCancelled,
           status: latestAppointment.status,
           alreadyCancelled: true,
           notificationChannel: "none" satisfies NotificationChannel,
           notificationSent: false,
         });
       }
-      return res.status(409).json({ message: "Esta marcação já não pode ser cancelada." });
+      return res.status(409).json({ message: PUBLIC_CYCLE_COPY.cancellation.backend.unavailable });
     }
 
     if (!appointmentNotificationEventsEnabled) runNotificationJob("Booking cancellation", async () => {
@@ -5828,8 +5839,10 @@ export async function registerRoutes(
 
     res.json({
       message: lateCancellation
-        ? `Cancelamento registado como tardio por estar a menos de ${CANCELLATION_POLICY_HOURS} horas da marcação.`
-        : "Marcação cancelada com sucesso.",
+        ? formatBusinessCopy(PUBLIC_CYCLE_COPY.cancellation.backend.lateSuccess, {
+            hours: CANCELLATION_POLICY_HOURS,
+          })
+        : PUBLIC_CYCLE_COPY.cancellation.backend.success,
       status,
       lateCancellation,
       policyHours: CANCELLATION_POLICY_HOURS,

@@ -8,8 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 
 export default function BarberInvite() {
+  const publicCycleCopy = useBusinessCopy().publicCycle;
+  const copy = publicCycleCopy.invite;
   const [, params] = useRoute("/barber-invite/:token");
   const token = params?.token;
   const [, navigate] = useLocation();
@@ -20,13 +24,13 @@ export default function BarberInvite() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  const { data: invite, isLoading } = useQuery({
+  const { data: invite, isLoading, isError } = useQuery({
     queryKey: ["/api/barber-invites", token],
     enabled: Boolean(token),
     queryFn: async () => {
       const res = await apiFetch(`/api/barber-invites/${token}`);
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error("Não foi possível carregar o convite.");
+      if (!res.ok) throw new Error(copy.loadError);
       return res.json();
     },
   });
@@ -36,12 +40,12 @@ export default function BarberInvite() {
     if (submittingRef.current) return;
 
     if (password.length < 8) {
-      toast({ title: "Palavra-passe curta", description: "Use pelo menos 8 caracteres.", variant: "destructive" });
+      toast({ title: copy.shortPasswordTitle, description: copy.shortPasswordDescription, variant: "destructive" });
       return;
     }
 
     if (password !== confirmPassword) {
-      toast({ title: "Confirmação diferente", description: "As palavras-passe não coincidem.", variant: "destructive" });
+      toast({ title: copy.passwordMismatchTitle, description: copy.passwordMismatchDescription, variant: "destructive" });
       return;
     }
 
@@ -54,13 +58,13 @@ export default function BarberInvite() {
         body: JSON.stringify({ password }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.message || "Não foi possível definir a palavra-passe.");
+      if (!res.ok) throw new Error(data?.message || copy.definePasswordError);
 
       setSuccess(true);
-      toast({ title: "Acesso criado", description: "Já pode entrar no painel." });
+      toast({ title: copy.successTitle, description: copy.successDescription });
       setTimeout(() => navigate("/admin"), 900);
     } catch (error: any) {
-      toast({ title: "Erro", description: error.message, variant: "destructive" });
+      toast({ title: publicCycleCopy.common.genericErrorTitle, description: error.message, variant: "destructive" });
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
@@ -68,17 +72,17 @@ export default function BarberInvite() {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+    return <div role="status" aria-label={copy.loadingAria} className="min-h-screen bg-background flex items-center justify-center"><Loader2 aria-hidden="true" className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
-  if (!invite) {
+  if (isError || !invite) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center text-white">
         <Card className="max-w-md w-full bg-card border-white/10">
           <CardContent className="pt-8">
             <XCircle className="w-14 h-14 text-red-400 mx-auto mb-4" />
-            <h1 className="text-2xl font-display font-bold mb-2">Convite inválido</h1>
-            <p className="text-sm text-gray-400">Este link pode já ter expirado ou já ter sido usado.</p>
+            <h1 className="text-2xl font-display font-bold mb-2">{isError ? copy.loadError : copy.invalidTitle}</h1>
+            <p className="text-sm text-gray-400">{isError ? copy.loadErrorDescription : copy.invalidDescription}</p>
           </CardContent>
         </Card>
       </div>
@@ -89,25 +93,30 @@ export default function BarberInvite() {
     <div className="min-h-screen bg-background flex items-center justify-center p-4 text-white">
       <Card className="max-w-md w-full bg-card border-white/10">
         <CardHeader>
-          <CardTitle className="text-2xl font-display font-bold text-center text-primary">
-            Criar acesso de barbeiro
+          <CardTitle role="heading" aria-level={1} className="text-2xl font-display font-bold text-center text-primary">
+            {copy.createAccessTitle}
           </CardTitle>
           <p className="text-center text-sm text-gray-400">
-            Convite para {invite.barberName} {invite.barberEmail ? `(${invite.barberEmail})` : ""}
+            {formatBusinessCopy(copy.invitationFor, {
+              name: invite.barberName,
+              email: invite.barberEmail ? ` (${invite.barberEmail})` : "",
+            })}
           </p>
+          <p className="text-center text-xs leading-5 text-gray-500">{copy.accessScopeDescription}</p>
         </CardHeader>
         <CardContent>
           {success ? (
             <div className="py-8 text-center">
               <CheckCircle className="w-16 h-16 text-green-400 mx-auto mb-4" />
-              <p className="font-bold">Palavra-passe definida.</p>
-              <p className="text-sm text-gray-400">A abrir o painel...</p>
+              <p className="font-bold">{copy.passwordSaved}</p>
+              <p className="text-sm text-gray-400">{copy.openingPanel}</p>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label>Nova palavra-passe</Label>
+                <Label htmlFor="invite-password">{copy.newPasswordLabel}</Label>
                 <Input
+                  id="invite-password"
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
@@ -117,8 +126,9 @@ export default function BarberInvite() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Confirmar palavra-passe</Label>
+                <Label htmlFor="invite-password-confirmation">{copy.confirmPasswordLabel}</Label>
                 <Input
+                  id="invite-password-confirmation"
                   type="password"
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
@@ -128,7 +138,7 @@ export default function BarberInvite() {
                 />
               </div>
               <Button type="submit" variant="gold" className="w-full" disabled={isSubmitting}>
-                {isSubmitting ? "A guardar..." : "Definir palavra-passe"}
+                {isSubmitting ? copy.saving : copy.save}
               </Button>
             </form>
           )}
