@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, Plus } from "lucide-react";
 import type { ServiceCatalogueItem } from "@shared/schema";
 import { Button } from "@/components/ui/button-custom";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,6 +11,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { moneyInputToCents } from "@/lib/money-input";
 import { useActiveLocationId } from "@/lib/location-context";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 
 type Props = {
   locationName?: string;
@@ -20,6 +22,9 @@ type Props = {
 export function AssociateServiceDialog({ locationName, onChanged }: Props) {
   const activeLocationId = useActiveLocationId();
   const { toast } = useToast();
+  const adminCopy = useBusinessCopy().admin;
+  const copy = adminCopy.services;
+  const locationLabel = locationName || copy.associateLocationFallback;
   const [open, setOpen] = useState(false);
   const [serviceId, setServiceId] = useState("");
   const [price, setPrice] = useState("");
@@ -52,7 +57,7 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
     const priceOverride = moneyInputToCents(price);
     const durationOverride = Number(duration);
     if (priceOverride === null || !Number.isInteger(durationOverride) || durationOverride <= 0 || durationOverride > 720) {
-      toast({ title: "Dados inválidos", description: "Confirme o preço e a duração nesta loja.", variant: "destructive" });
+      toast({ title: copy.associateInvalidTitle, description: copy.associateInvalidDescription, variant: "destructive" });
       return;
     }
     savingRef.current = true;
@@ -69,9 +74,12 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
       onChanged?.();
       setOpen(false);
       reset();
-      toast({ title: "Serviço associado", description: `O serviço está disponível em ${locationName || "esta loja"}.` });
+      toast({
+        title: copy.associateSuccessTitle,
+        description: formatBusinessCopy(copy.associateSuccessDescription, { location: locationLabel }),
+      });
     } catch (error: any) {
-      toast({ title: "Erro", description: error?.message || "Não foi possível associar o serviço.", variant: "destructive" });
+      toast({ title: adminCopy.common.errorTitle, description: error?.message || copy.associateError, variant: "destructive" });
     } finally {
       savingRef.current = false;
       setIsSaving(false);
@@ -86,19 +94,20 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
     }}>
       <DialogTrigger asChild>
         <Button variant="outline" className="gap-2">
-          <Plus className="h-4 w-4" /> Associar serviço existente
+          <Plus className="h-4 w-4" /> {copy.associateTrigger}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90dvh] overflow-y-auto border-white/10 bg-card text-white sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Associar serviço a {locationName || "esta loja"}</DialogTitle>
+          <DialogTitle>{formatBusinessCopy(copy.associateTitle, { location: locationLabel })}</DialogTitle>
+          <DialogDescription>{copy.associateDescription}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-3">
           <div className="space-y-2">
-            <Label>Serviço global</Label>
+            <Label>{copy.associateGlobalLabel}</Label>
             <Select value={serviceId} onValueChange={setServiceId} disabled={isLoading || isSaving}>
-              <SelectTrigger className="border-white/10 bg-background text-white">
-                <SelectValue placeholder={isLoading ? "A carregar..." : "Selecione um serviço"} />
+              <SelectTrigger className="border-white/10 bg-background text-white" aria-label={copy.associateServiceAria}>
+                <SelectValue placeholder={isLoading ? copy.associateLoadingPlaceholder : copy.associateSelectPlaceholder} />
               </SelectTrigger>
               <SelectContent>
                 {available.map((service) => (
@@ -106,28 +115,32 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
                 ))}
               </SelectContent>
             </Select>
-            {isError && <p className="text-sm text-red-300">Não foi possível carregar os serviços disponíveis.</p>}
+            {isError && <p className="text-sm text-red-300">{copy.associateLoadError}</p>}
             {!isLoading && !isError && available.length === 0 && (
-              <p className="text-sm text-gray-400">Todos os serviços existentes já estão associados a esta loja.</p>
+              <p className="text-sm text-gray-400">{copy.associateEmpty}</p>
             )}
           </div>
           {selected && (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="associate-service-price">Preço nesta loja (€)</Label>
+                <Label htmlFor="associate-service-price">{copy.associatePriceLabel}</Label>
                 <Input id="associate-service-price" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} />
-                <p className="text-xs text-gray-500">Base global: {((selected.basePrice ?? selected.price) / 100).toFixed(2)} €</p>
+                <p className="text-xs text-gray-500">{formatBusinessCopy(copy.associateBasePrice, {
+                  price: ((selected.basePrice ?? selected.price) / 100).toFixed(2),
+                })}</p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="associate-service-duration">Duração nesta loja (min)</Label>
+                <Label htmlFor="associate-service-duration">{copy.associateDurationLabel}</Label>
                 <Input id="associate-service-duration" type="number" min={1} max={720} value={duration} onChange={(event) => setDuration(event.target.value)} />
-                <p className="text-xs text-gray-500">Base global: {selected.baseDuration ?? selected.duration} min</p>
+                <p className="text-xs text-gray-500">{formatBusinessCopy(copy.associateBaseDuration, {
+                  duration: selected.baseDuration ?? selected.duration,
+                })}</p>
               </div>
             </div>
           )}
           <Button className="w-full" variant="gold" disabled={!selected || isSaving || isLoading} onClick={submit}>
             {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Associar nesta loja
+            {isSaving ? copy.associatePending : copy.associateAction}
           </Button>
         </div>
       </DialogContent>

@@ -731,20 +731,20 @@ function isSupportedBarberPhoto(file: File) {
   return SUPPORTED_BARBER_PHOTO_EXTENSIONS.some((extension) => name.endsWith(extension));
 }
 
-function readFileAsDataUrl(file: File) {
+function readFileAsDataUrl(file: File, errorMessage: string) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+    reader.onerror = () => reject(new Error(errorMessage));
     reader.readAsDataURL(file);
   });
 }
 
-function loadImage(src: string) {
+function loadImage(src: string, errorMessage: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Não foi possível preparar a imagem."));
+    image.onerror = () => reject(new Error(errorMessage));
     image.src = src;
   });
 }
@@ -759,7 +759,7 @@ function getDataUrlByteSize(dataUrl: string) {
   return Math.ceil((base64.length * 3) / 4) - padding;
 }
 
-function renderBarberPhoto(image: HTMLImageElement, maxSide: number, quality: number) {
+function renderBarberPhoto(image: HTMLImageElement, maxSide: number, quality: number, errorMessage: string) {
   const originalWidth = image.naturalWidth || image.width;
   const originalHeight = image.naturalHeight || image.height;
   const scale = Math.min(1, maxSide / originalWidth, maxSide / originalHeight);
@@ -770,7 +770,7 @@ function renderBarberPhoto(image: HTMLImageElement, maxSide: number, quality: nu
   canvas.height = height;
 
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("Não foi possível otimizar a imagem.");
+  if (!context) throw new Error(errorMessage);
 
   context.fillStyle = "#111111";
   context.fillRect(0, 0, width, height);
@@ -778,17 +778,17 @@ function renderBarberPhoto(image: HTMLImageElement, maxSide: number, quality: nu
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-async function fileToBarberAvatar(file: File) {
+async function fileToBarberAvatar(file: File, copy: AdminCopy["team"]) {
   if (!isSupportedBarberPhoto(file)) {
-    throw new Error("Escolha uma imagem JPG, PNG ou WebP.");
+    throw new Error(copy.photoUnsupportedError);
   }
 
   if (file.size > MAX_BARBER_PHOTO_INPUT_BYTES) {
-    throw new Error("A imagem deve ter no máximo 25 MB antes de otimizar.");
+    throw new Error(copy.photoTooLargeError);
   }
 
-  const dataUrl = await readFileAsDataUrl(file);
-  const image = await loadImage(dataUrl);
+  const dataUrl = await readFileAsDataUrl(file, copy.photoReadError);
+  const image = await loadImage(dataUrl, copy.photoPrepareError);
 
   for (
     let maxSide = BARBER_PHOTO_MAX_SIDE;
@@ -796,27 +796,33 @@ async function fileToBarberAvatar(file: File) {
     maxSide = Math.floor(maxSide * BARBER_PHOTO_RESIZE_FACTOR)
   ) {
     for (const quality of BARBER_PHOTO_QUALITIES) {
-      const avatar = renderBarberPhoto(image, maxSide, quality);
+      const avatar = renderBarberPhoto(image, maxSide, quality, copy.photoOptimizeError);
       if (getDataUrlByteSize(avatar) <= MAX_BARBER_PHOTO_OUTPUT_BYTES) {
         return avatar;
       }
     }
   }
 
-  throw new Error("Não foi possível reduzir a imagem. Experimente uma foto com menos resolução.");
+  throw new Error(copy.photoResizeError);
 }
 
 type ToastFn = ReturnType<typeof useToast>["toast"];
 
-async function handleBarberPhotoFile(file: File | undefined, onChange: (avatar: string) => void, toast: ToastFn) {
+async function handleBarberPhotoFile(
+  file: File | undefined,
+  onChange: (avatar: string) => void,
+  toast: ToastFn,
+  copy: AdminCopy["team"],
+  errorTitle: string,
+) {
   if (!file) return;
 
   try {
-    onChange(await fileToBarberAvatar(file));
+    onChange(await fileToBarberAvatar(file, copy));
   } catch (err: any) {
     toast({
-      title: "Erro",
-      description: err.message || "Não foi possível carregar a foto.",
+      title: errorTitle,
+      description: err.message || copy.photoLoadError,
       variant: "destructive",
     });
   }
@@ -838,10 +844,12 @@ function BarberPhotoPicker({
   toast: ToastFn;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const adminCopy = useBusinessCopy().admin;
+  const copy = adminCopy.team;
 
   return (
     <div className="space-y-2">
-      <Label>Foto</Label>
+      <Label>{copy.photoLabel}</Label>
       <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-background/60 p-3">
         <img
           src={value || fallbackSrc}
@@ -856,7 +864,7 @@ function BarberPhotoPicker({
             accept="image/jpeg,image/png,image/webp"
             className="hidden"
             onChange={async (event) => {
-              await handleBarberPhotoFile(event.target.files?.[0], onChange, toast);
+              await handleBarberPhotoFile(event.target.files?.[0], onChange, toast, copy, adminCopy.common.errorTitle);
               event.target.value = "";
             }}
           />
@@ -867,7 +875,7 @@ function BarberPhotoPicker({
             className="gap-2"
             onClick={() => inputRef.current?.click()}
           >
-            <Upload className="h-4 w-4" /> Carregar foto
+            <Upload className="h-4 w-4" /> {copy.uploadPhoto}
           </Button>
           {value && (
             <Button
@@ -877,10 +885,10 @@ function BarberPhotoPicker({
               className="gap-2 text-red-400 hover:text-red-300"
               onClick={onRemove}
             >
-              <Trash2 className="h-4 w-4" /> Remover foto
+              <Trash2 className="h-4 w-4" /> {copy.removePhoto}
             </Button>
           )}
-          <p className="w-full text-xs text-gray-400">JPG, PNG ou WebP até 25 MB. A foto é reduzida automaticamente.</p>
+          <p className="w-full text-xs text-gray-400">{copy.photoHelp}</p>
         </div>
       </div>
     </div>
@@ -1072,17 +1080,17 @@ function getCompensationSummary(barber: BarberListItem, copy: AdminCopy["compens
 
   if (barber.compensationModel === "chair_rent") {
     const periodLabel = barber.chairRentPeriod === "day"
-      ? "dia trabalhado"
+      ? copy.periodDay
       : barber.chairRentPeriod === "week"
-        ? "semana trabalhada"
-        : "mês trabalhado";
+        ? copy.periodWeek
+        : copy.periodMonth;
     return formatBusinessCopy(copy.workspaceRentSummary, {
       amount: formatCents(barber.chairRentCents || 0),
       period: periodLabel,
     });
   }
 
-  return "Sem cálculo financeiro no relatório";
+  return copy.noneSummary;
 }
 
 function colorWithAlpha(color: string | undefined | null, alpha: number) {
@@ -1131,15 +1139,19 @@ function getEffectiveServiceSelection(
 
 function formatBarberServicesSummary(
   barber: { serviceIds?: number[] | null; allServicesAllowed?: boolean },
-  services?: ServiceListItem[],
+  services: ServiceListItem[] | undefined,
+  copy: AdminCopy["team"],
 ) {
   const allServices = services || [];
   const serviceIds = barber.serviceIds || [];
-  if (allServices.length === 0 || serviceIds.length === 0) return "Sem serviços";
+  if (allServices.length === 0 || serviceIds.length === 0) return copy.serviceSummaryNone;
   if (serviceIds.length >= allServices.length) {
-    return "Todos os serviços";
+    return copy.serviceSummaryAll;
   }
-  return `${serviceIds.length} ${serviceIds.length === 1 ? "serviço" : "serviços"}`;
+  return formatBusinessCopy(copy.serviceSummaryCount, {
+    count: serviceIds.length,
+    label: serviceIds.length === 1 ? copy.serviceSummarySingular : copy.serviceSummaryPlural,
+  });
 }
 
 function BarberServicesPicker({
@@ -1157,7 +1169,7 @@ function BarberServicesPicker({
   if (allServices.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-white/10 px-3 py-3 text-sm text-gray-500">
-        Crie serviços antes de limitar a equipa.
+        {copy.serviceAssignmentEmpty}
       </div>
     );
   }
@@ -1165,7 +1177,7 @@ function BarberServicesPicker({
   return (
     <div className="space-y-2">
       <div>
-        <Label>Serviços que executa</Label>
+        <Label>{copy.servicesPerformedLabel}</Label>
         <p className="text-xs text-gray-500">{copy.serviceSelectionHelp}</p>
       </div>
       <div className="grid gap-2 rounded-lg border border-white/10 bg-background/50 p-3 sm:grid-cols-2">
@@ -1191,7 +1203,7 @@ function BarberServicesPicker({
               />
               <span className="min-w-0">
                 <span className="block truncate font-medium">{service.name}</span>
-                {service.isVisible === false && <span className="block text-[11px] text-gray-500">Oculto no site</span>}
+                {service.isVisible === false && <span className="block text-[11px] text-gray-500">{copy.hiddenOnSite}</span>}
               </span>
             </label>
           );
@@ -1216,7 +1228,7 @@ function BarberCompensationFields({
       <div>
         <Label>{copy.modelLabel}</Label>
         <p className="text-xs text-gray-500">
-          Esta regra entra em vigor a partir do momento em que guardar. O histórico anterior mantém a regra antiga no Excel.
+          {copy.effectiveFromNowHelp}
         </p>
       </div>
       <Select
@@ -1224,11 +1236,11 @@ function BarberCompensationFields({
         onValueChange={(selected) => setValue({ compensationModel: selected as CompensationModel })}
       >
         <SelectTrigger className="border-white/10 bg-background text-white">
-          <SelectValue placeholder="Escolher modelo" />
+          <SelectValue placeholder={copy.modelPlaceholder} />
         </SelectTrigger>
         <SelectContent className="border-white/10 bg-card text-white">
-          <SelectItem value="none">Sem cálculo financeiro</SelectItem>
-          <SelectItem value="commission">Comissão percentual</SelectItem>
+          <SelectItem value="none">{copy.noneModel}</SelectItem>
+          <SelectItem value="commission">{copy.commissionModel}</SelectItem>
           <SelectItem value="chair_rent">{copy.workspaceRentModel}</SelectItem>
         </SelectContent>
       </Select>
@@ -1274,22 +1286,22 @@ function BarberCompensationFields({
               value={value.chairRentAmount}
               onChange={(event) => setValue({ chairRentAmount: event.target.value })}
               className="border-white/10 bg-background text-white"
-              placeholder="Ex.: 250"
+              placeholder={copy.amountPlaceholder}
             />
           </div>
           <div className="space-y-2">
-            <Label>Periodicidade</Label>
+            <Label>{copy.periodicityLabel}</Label>
             <Select
               value={value.chairRentPeriod}
               onValueChange={(selected) => setValue({ chairRentPeriod: selected as ChairRentPeriod })}
             >
               <SelectTrigger className="border-white/10 bg-background text-white">
-                <SelectValue placeholder="Período" />
+                <SelectValue placeholder={copy.periodPlaceholder} />
               </SelectTrigger>
               <SelectContent className="border-white/10 bg-card text-white">
-                <SelectItem value="day">Por dia trabalhado</SelectItem>
-                <SelectItem value="week">Por semana trabalhada</SelectItem>
-                <SelectItem value="month">Por mês trabalhado</SelectItem>
+                <SelectItem value="day">{copy.periodDayOption}</SelectItem>
+                <SelectItem value="week">{copy.periodWeekOption}</SelectItem>
+                <SelectItem value="month">{copy.periodMonthOption}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -1307,16 +1319,17 @@ function BarberColorField({
   onChange: (color: string) => void;
 }) {
   const selectedColor = normalizeBarberColor(value);
+  const copy = useBusinessCopy().admin.team;
 
   return (
     <div className="space-y-2">
-      <Label>Cor na agenda</Label>
+      <Label>{copy.agendaColorLabel}</Label>
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-background/50 p-3">
         {barberColorPalette.map((color) => (
           <button
             key={color}
             type="button"
-            aria-label={`Escolher ${color}`}
+            aria-label={formatBusinessCopy(copy.chooseColorAria, { color })}
             className={cn(
               "h-8 w-8 rounded-full border-2 transition-transform hover:scale-105",
               selectedColor === color ? "border-white" : "border-white/15",
@@ -1353,15 +1366,15 @@ function getFilenameFromContentDisposition(header: string | null) {
   return fallbackMatch?.[1] || null;
 }
 
-const weekDays = [
-  { id: 1, label: "Segunda", short: "Seg" },
-  { id: 2, label: "Terça", short: "Ter" },
-  { id: 3, label: "Quarta", short: "Qua" },
-  { id: 4, label: "Quinta", short: "Qui" },
-  { id: 5, label: "Sexta", short: "Sex" },
-  { id: 6, label: "Sábado", short: "Sáb" },
-  { id: 0, label: "Domingo", short: "Dom" },
-];
+const weekDayOrder = [1, 2, 3, 4, 5, 6, 0] as const;
+
+function getScheduleWeekDays(copy: AdminCopy["schedules"]) {
+  return weekDayOrder.map((id) => ({
+    id,
+    label: copy.weekdayLabels[id],
+    short: copy.weekdayShorts[id],
+  }));
+}
 
 function ConfirmAction({
   children,
@@ -1412,18 +1425,25 @@ function createDefaultAvailabilityForm(): AvailabilityForm {
 }
 
 function createBlankAvailabilityForm(): AvailabilityForm {
-  return weekDays.reduce((acc, day) => {
-    acc[day.id] = { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] };
+  return weekDayOrder.reduce((acc, dayId) => {
+    acc[dayId] = { isWorking: false, periods: [{ startTime: "09:00", endTime: "13:00" }] };
     return acc;
   }, {} as AvailabilityForm);
 }
 
-function formatAvailabilitySummary(dayConfig?: { isWorking: boolean; periods: AvailabilityPeriod[] }) {
-  if (!dayConfig?.isWorking) return "Fechada";
+function formatAvailabilitySummary(
+  dayConfig: { isWorking: boolean; periods: AvailabilityPeriod[] } | undefined,
+  closedLabel: string,
+) {
+  if (!dayConfig?.isWorking) return closedLabel;
   return dayConfig.periods.map((period) => `${period.startTime}-${period.endTime}`).join(" / ");
 }
 
-function validateAvailabilityForm(form: AvailabilityForm) {
+function validateAvailabilityForm(
+  form: AvailabilityForm,
+  weekDays: ReturnType<typeof getScheduleWeekDays>,
+  copy: AdminCopy["schedules"],
+) {
   const issues: string[] = [];
 
   for (const day of weekDays) {
@@ -1434,13 +1454,13 @@ function validateAvailabilityForm(form: AvailabilityForm) {
 
     sortedPeriods.forEach((period) => {
       if (!period.startTime || !period.endTime || period.endTime <= period.startTime) {
-        issues.push(`${day.label}: verifique a hora de abertura e fecho.`);
+        issues.push(formatBusinessCopy(copy.invalidHoursForDay, { day: day.label }));
       }
     });
 
     for (let index = 1; index < sortedPeriods.length; index += 1) {
       if (sortedPeriods[index].startTime < sortedPeriods[index - 1].endTime) {
-        issues.push(`${day.label}: existem períodos sobrepostos.`);
+        issues.push(formatBusinessCopy(copy.overlappingPeriodsForDay, { day: day.label }));
         break;
       }
     }
@@ -1453,6 +1473,7 @@ export default function Admin() {
   const businessCopy = useBusinessCopy();
   const adminCopy = businessCopy.admin;
   const agendaCopy = businessCopy.agenda;
+  const weekDays = useMemo(() => getScheduleWeekDays(adminCopy.schedules), [adminCopy.schedules]);
   const [user, setUser] = useState<AdminUser | null>(null);
   const sessionExpiryHandledRef = useRef(false);
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -2105,9 +2126,9 @@ export default function Admin() {
         serviceIds: [],
         ...defaultBarberCompensationFormData,
       });
-      toast({ title: "Sucesso", description: adminCopy.team.createSuccess });
+      toast({ title: adminCopy.common.successTitle, description: adminCopy.team.createSuccess });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || adminCopy.team.createError, variant: "destructive" });
+      toast({ title: adminCopy.common.errorTitle, description: err.message || adminCopy.team.createError, variant: "destructive" });
     } finally {
       addBarberSubmissionRef.current = false;
       setIsCreatingBarber(false);
@@ -2133,9 +2154,9 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       setIsAddingService(false);
       setServiceFormData(emptyServiceFormData);
-      toast({ title: "Sucesso", description: "Serviço adicionado com sucesso." });
+      toast({ title: adminCopy.common.successTitle, description: adminCopy.services.createSuccess });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Erro ao adicionar serviço.", variant: "destructive" });
+      toast({ title: adminCopy.common.errorTitle, description: err.message || adminCopy.services.createError, variant: "destructive" });
     } finally {
       addServiceSubmissionRef.current = false;
       setIsCreatingService(false);
@@ -2361,7 +2382,7 @@ export default function Admin() {
       );
 
       if (validPeriods.length !== dayConfig.periods.length || validPeriods.length === 0) {
-        throw new Error(`Verifique os horários de ${day.label}.`);
+        throw new Error(formatBusinessCopy(adminCopy.schedules.verifyHoursForDay, { day: day.label }));
       }
 
       rows.push(...validPeriods.map((period) => ({
@@ -2384,7 +2405,7 @@ export default function Admin() {
   const handleSaveShopAvailability = async () => {
     setIsSavingShopAvailability(true);
     try {
-      const issues = validateAvailabilityForm(shopAvailabilityForm);
+      const issues = validateAvailabilityForm(shopAvailabilityForm, weekDays, adminCopy.schedules);
       if (issues.length > 0) {
         throw new Error(issues[0]);
       }
@@ -2399,9 +2420,9 @@ export default function Admin() {
       await apiRequest("PATCH", "/api/shop/availability", rows);
       queryClient.invalidateQueries({ queryKey: ["/api/shop/availability"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-      toast({ title: "Sucesso", description: adminCopy.schedules.establishmentSaved });
+      toast({ title: adminCopy.common.successTitle, description: adminCopy.schedules.establishmentSaved });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || adminCopy.schedules.establishmentSaveError, variant: "destructive" });
+      toast({ title: adminCopy.common.errorTitle, description: err.message || adminCopy.schedules.establishmentSaveError, variant: "destructive" });
     } finally {
       setIsSavingShopAvailability(false);
     }
@@ -2430,8 +2451,8 @@ export default function Admin() {
   };
 
   const shopAvailabilityIssues = useMemo(
-    () => validateAvailabilityForm(shopAvailabilityForm),
-    [shopAvailabilityForm],
+    () => validateAvailabilityForm(shopAvailabilityForm, weekDays, adminCopy.schedules),
+    [adminCopy.schedules, shopAvailabilityForm, weekDays],
   );
 
   const openScheduleBlockDialog = (
@@ -2693,7 +2714,7 @@ export default function Admin() {
     queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] });
     if (selectedBarberFilter === String(barber.id)) setSelectedBarberFilter("all");
     if (dashboardBarberFilter === String(barber.id)) setDashboardBarberFilter("all");
-    toast({ title: "Sucesso", description: result?.message || adminCopy.team.removeSuccess });
+    toast({ title: adminCopy.common.successTitle, description: result?.message || adminCopy.team.removeSuccess });
   };
 
   const updateBarberVisibility = async (barber: BarberListItem, isVisible: boolean) => {
@@ -2706,7 +2727,7 @@ export default function Admin() {
     if (!isVisible && selectedBarberFilter === String(barber.id)) setSelectedBarberFilter("all");
     if (!isVisible && dashboardBarberFilter === String(barber.id)) setDashboardBarberFilter("all");
     toast({
-      title: "Sucesso",
+      title: adminCopy.common.successTitle,
       description: isVisible
         ? adminCopy.team.reactivated
         : adminCopy.team.archived,
@@ -4202,10 +4223,10 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
-            {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>}
-            {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>}
+            {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> {adminCopy.team.tabLabel}</TabsTrigger>}
+            {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
-            {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>}
+            {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> {adminCopy.schedules.tabLabel}</TabsTrigger>}
             {canManageLocations && multiLocationConfig?.enabled && (
               <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
             )}
@@ -4347,7 +4368,9 @@ export default function Admin() {
                     className="border-white/10 text-sm"
                     onClick={() => setShowArchivedBarbers((current) => !current)}
                   >
-                    {showArchivedBarbers ? "Ocultar arquivados" : `Mostrar arquivados (${archivedBarbers.length})`}
+                    {showArchivedBarbers
+                      ? adminCopy.team.hideArchived
+                      : formatBusinessCopy(adminCopy.team.showArchived, { count: archivedBarbers.length })}
                   </Button>
                 ) : null}
               {canAssignTeamLocation && multiLocationConfig?.enabled && <AssociateBarberDialog key={activeLocationId} />}
@@ -4368,11 +4391,11 @@ export default function Admin() {
                 </DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
-                    <DialogTitle>Adicionar Membro à Equipa</DialogTitle>
+                    <DialogTitle>{adminCopy.team.addMemberTitle}</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4 pt-4">
                     <div>
-                      <Label>Nome *</Label>
+                      <Label>{adminCopy.team.nameRequiredLabel}</Label>
                       <Input 
                         value={barberFormData.name} 
                         onChange={e => setBarberFormData({...barberFormData, name: e.target.value})} 
@@ -4381,7 +4404,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Especialidade *</Label>
+                      <Label>{adminCopy.team.specialtyRequiredLabel}</Label>
                       <Input 
                         value={barberFormData.specialty} 
                         onChange={e => setBarberFormData({...barberFormData, specialty: e.target.value})} 
@@ -4390,7 +4413,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Email (para login)</Label>
+                      <Label>{adminCopy.team.emailLoginLabel}</Label>
                       <Input 
                         type="email"
                         value={barberFormData.email} 
@@ -4399,7 +4422,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Bio</Label>
+                      <Label>{adminCopy.team.bioLabel}</Label>
                       <Input 
                         value={barberFormData.bio} 
                         onChange={e => setBarberFormData({...barberFormData, bio: e.target.value})} 
@@ -4455,15 +4478,15 @@ export default function Admin() {
                   <div className="aspect-square bg-muted relative">
                     <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
                     {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <ConfirmAction
-                      title={`Remover ${barber.name}?`}
-                      description="Se tiver marcações futuras, reatribua-as primeiro. Se tiver apenas histórico, será ocultado para preservar relatórios."
-                      confirmLabel="Remover"
+                      title={formatBusinessCopy(adminCopy.team.removeTitle, { name: barber.name })}
+                      description={adminCopy.team.removeDescription}
+                      confirmLabel={adminCopy.team.removeConfirm}
                       confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       onConfirm={async () => {
                         try {
                           await openBarberRemovalFlow(barber);
                         } catch (err: any) {
-                          toast({ title: "Erro", description: err.message || adminCopy.team.removeError, variant: "destructive" });
+                          toast({ title: adminCopy.common.errorTitle, description: err.message || adminCopy.team.removeError, variant: "destructive" });
                         }
                       }}
                     >
@@ -4471,7 +4494,7 @@ export default function Admin() {
                         variant="destructive"
                         size="icon"
                         className="absolute top-2 right-2 h-8 w-8"
-                        aria-label={`Remover ${barber.name}`}
+                        aria-label={formatBusinessCopy(adminCopy.team.removeAria, { name: barber.name })}
                       >
                         <XCircle className="w-4 h-4" />
                       </Button>
@@ -4487,7 +4510,7 @@ export default function Admin() {
                       <p className="mb-3 text-xs text-gray-400">{adminCopy.team.sharedAcrossLocations}</p>
                     )}
                     <p className="mb-3 line-clamp-2 text-xs text-gray-400">
-                      {formatBarberServicesSummary(barber, services)}
+                      {formatBarberServicesSummary(barber, services, adminCopy.team)}
                     </p>
                     {canSeeCompensation && <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
                       {getCompensationSummary(barber, adminCopy.compensation)}
@@ -4522,15 +4545,15 @@ export default function Admin() {
                         setEditingBarberId(open ? barber.id : null);
                       }}>
                         <DialogTrigger asChild>
-                          <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
+                          <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">{adminCopy.common.edit}</Button>
                         </DialogTrigger>
                         <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
                           <DialogHeader><DialogTitle>{adminCopy.team.edit}</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4" data-edit-barber-form>
-                            {canManageTeamGlobal && <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>}
-                            {canManageTeamGlobal && <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageTeamGlobal && <div><Label>{adminCopy.team.nameLabel}</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageTeamGlobal && <div><Label>{adminCopy.team.specialtyLabel}</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>}
                             {canManageTeamGlobal && <div className="space-y-2">
-                              <Label htmlFor={`edit-barber-bio-${barber.id}`}>Bio</Label>
+                              <Label htmlFor={`edit-barber-bio-${barber.id}`}>{adminCopy.team.bioLabel}</Label>
                               <Textarea
                                 defaultValue={barber.bio || ""}
                                 id={`edit-barber-bio-${barber.id}`}
@@ -4542,7 +4565,7 @@ export default function Admin() {
                               </p>
                             </div>}
                             {canManageTeamGlobal && canManageUsers && <div className="space-y-2">
-                              <Label htmlFor={`edit-barber-email-${barber.id}`}>Email de acesso</Label>
+                              <Label htmlFor={`edit-barber-email-${barber.id}`}>{adminCopy.team.emailAccessLabel}</Label>
                               <Input
                                 type="email"
                                 defaultValue={barber.email || ""}
@@ -4551,11 +4574,11 @@ export default function Admin() {
                                 autoComplete="off"
                               />
                               <p className="text-xs leading-relaxed text-gray-400">
-                                Ao alterar o email, o acesso e os convites anteriores são revogados. Crie depois um novo convite.
+                                {adminCopy.team.emailChangeHelp}
                               </p>
                             </div>}
                             {canManageTeamGlobal && <div className="space-y-2">
-                              <Label>Cor na agenda</Label>
+                              <Label>{adminCopy.team.agendaColorLabel}</Label>
                               <Input type="color" defaultValue={normalizeBarberColor(barber.color)} id={`edit-barber-color-${barber.id}`} className="h-10 w-20 bg-background border-white/10 p-1" />
                             </div>}
                             {canManageTeamGlobal && <BarberPhotoPicker
@@ -4651,14 +4674,14 @@ export default function Admin() {
                                   });
                                   setEditingBarberId(null);
                                   toast({
-                                    title: "Sucesso",
+                                    title: adminCopy.common.successTitle,
                                     description: updatedBarber.accessReset
                                       ? adminCopy.team.updateEmailChanged
                                       : adminCopy.team.updateSuccess,
                                   });
                                 } catch (err: any) {
                                   toast({
-                                    title: "Erro",
+                                    title: adminCopy.common.errorTitle,
                                     description: err.message || adminCopy.team.updateError,
                                     variant: "destructive",
                                   });
@@ -4669,7 +4692,7 @@ export default function Admin() {
                               }}
                             >
                               {savingBarberId === barber.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                              {savingBarberId === barber.id ? "A guardar..." : "Guardar"}
+                              {savingBarberId === barber.id ? adminCopy.common.saving : adminCopy.common.save}
                             </Button>
                           </div>
                         </DialogContent>
@@ -4704,19 +4727,19 @@ export default function Admin() {
                             await refreshBarbersCache(updatedBarber);
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
-                              title: "Sucesso",
+                              title: adminCopy.common.successTitle,
                               description: barber.isVisible ? adminCopy.team.hidden : adminCopy.team.visible,
                             });
                           } catch (err: any) {
                             toast({
-                              title: "Erro",
+                              title: adminCopy.common.errorTitle,
                               description: err.message || adminCopy.team.visibilityError,
                               variant: "destructive",
                             });
                           }
                         }}
                       >
-                        {barber.isVisible ? "Visível" : "Oculto"}
+                        {barber.isVisible ? adminCopy.common.visible : adminCopy.common.hidden}
                       </Button>}
                     </div>
                   </CardContent>
@@ -4731,7 +4754,7 @@ export default function Admin() {
             ) : null}
             {activeBarbers.length === 0 && isBarbersError ? (
               <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center text-sm text-red-100">
-                Não foi possível carregar a equipa. Atualize a página e tente novamente.
+                {adminCopy.team.loadError}
               </div>
             ) : null}
             {activeBarbers.length === 0 && !isLoadingBarbers && !isFetchingBarbers && !isBarbersError ? (
@@ -4744,7 +4767,7 @@ export default function Admin() {
                 <div>
                   <h3 className="text-base font-semibold text-white">{adminCopy.team.archivedHeading}</h3>
                   <p className="text-sm text-gray-400">
-                    Ficam guardados para histórico e relatórios, mas não aparecem no site, na agenda nem nas novas reservas.
+                    {adminCopy.team.archivedDescription}
                   </p>
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -4768,14 +4791,14 @@ export default function Admin() {
                             await updateBarberVisibility(barber, true);
                           } catch (err: any) {
                             toast({
-                              title: "Erro",
+                              title: adminCopy.common.errorTitle,
                               description: err.message || adminCopy.team.reactivateError,
                               variant: "destructive",
                             });
                           }
                         }}
                       >
-                        Reativar
+                        {adminCopy.team.reactivateAction}
                       </Button>}
                     </div>
                   ))}
@@ -4943,7 +4966,7 @@ export default function Admin() {
 
           <TabsContent value="services" className="outline-none">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-              <h2 className="text-xl font-bold text-white">Serviços Disponíveis</h2>
+              <h2 className="text-xl font-bold text-white">{adminCopy.services.heading}</h2>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 {canManageCatalogGlobal && (
                   <ServiceCategoriesManager
@@ -4964,16 +4987,16 @@ export default function Admin() {
                 }}>
                 <DialogTrigger asChild>
                   <Button variant="gold" className="w-full gap-2 sm:w-auto">
-                    <Plus className="w-4 h-4" /> Adicionar Serviço
+                    <Plus className="w-4 h-4" /> {adminCopy.services.add}
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="bg-card border-white/10 text-white">
                   <DialogHeader>
-                    <DialogTitle>Novo Serviço</DialogTitle>
+                    <DialogTitle>{adminCopy.services.createTitle}</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4 pt-4">
                     <div>
-                      <Label>Nome *</Label>
+                      <Label>{adminCopy.services.nameRequiredLabel}</Label>
                       <Input 
                         value={serviceFormData.name} 
                         onChange={e => setServiceFormData({...serviceFormData, name: e.target.value})} 
@@ -4982,7 +5005,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Descrição</Label>
+                      <Label>{adminCopy.services.descriptionLabel}</Label>
                       <Input 
                         value={serviceFormData.description} 
                         onChange={e => setServiceFormData({...serviceFormData, description: e.target.value})} 
@@ -4990,7 +5013,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Nome curto na agenda (opcional)</Label>
+                      <Label>{adminCopy.services.agendaLabel}</Label>
                       <Input
                         value={serviceFormData.agendaLabel}
                         onChange={e => setServiceFormData({...serviceFormData, agendaLabel: e.target.value})}
@@ -4999,7 +5022,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Preço (€) *</Label>
+                      <Label>{adminCopy.services.priceRequiredLabel}</Label>
                       <Input 
                         type="number" 
                         step="0.01" 
@@ -5010,7 +5033,7 @@ export default function Admin() {
                       />
                     </div>
                     <div>
-                      <Label>Duração (Min) *</Label>
+                      <Label>{adminCopy.services.durationRequiredLabel}</Label>
                       <Input 
                         type="number" 
                         value={serviceFormData.duration} 
@@ -5021,7 +5044,7 @@ export default function Admin() {
                     </div>
                     {serviceCategories.some((category) => category.isActive) && (
                       <div>
-                        <Label>Categoria</Label>
+                        <Label>{adminCopy.services.categoryLabel}</Label>
                         <Select
                           value={serviceFormData.categoryId === null ? "none" : String(serviceFormData.categoryId)}
                           onValueChange={(value) => setServiceFormData({
@@ -5029,11 +5052,11 @@ export default function Admin() {
                             categoryId: value === "none" ? null : Number(value),
                           })}
                         >
-                          <SelectTrigger className="border-white/10 bg-background text-white">
-                            <SelectValue placeholder="Sem categoria" />
+                          <SelectTrigger className="border-white/10 bg-background text-white" aria-label={adminCopy.services.categoryLabel}>
+                            <SelectValue placeholder={adminCopy.services.noCategory} />
                           </SelectTrigger>
                           <SelectContent className={serviceCategorySelectContentClassName}>
-                            <SelectItem className={serviceCategorySelectItemClassName} value="none">Sem categoria</SelectItem>
+                            <SelectItem className={serviceCategorySelectItemClassName} value="none">{adminCopy.services.noCategory}</SelectItem>
                             {serviceCategories.filter((category) => category.isActive).map((category) => (
                               <SelectItem className={serviceCategorySelectItemClassName} key={category.id} value={String(category.id)}>{category.name}</SelectItem>
                             ))}
@@ -5048,7 +5071,7 @@ export default function Admin() {
                       onClick={handleAddService}
                     >
                       {isCreatingService ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Criar Serviço
+                      {adminCopy.services.create}
                     </Button>
                   </div>
                 </DialogContent>
@@ -5076,7 +5099,7 @@ export default function Admin() {
                             ? "border-primary/30 bg-primary/10 text-primary"
                             : "border-white/10 bg-white/5 text-gray-400",
                         )}>
-                          {assignedCategory.name}{assignedCategory.isActive ? "" : " · inativa"}
+                          {assignedCategory.name}{assignedCategory.isActive ? "" : ` · ${adminCopy.services.inactiveCategorySuffix}`}
                         </span>
                       )}
                     </div>
@@ -5085,7 +5108,9 @@ export default function Admin() {
                   <CardContent>
                     <div className="mb-4 space-y-1 text-sm text-gray-400">
                       <p>{service.duration} min</p>
-                      <p className="text-xs text-gray-500">Agenda: {service.agendaLabel || "etiqueta automática"}</p>
+                      <p className="text-xs text-gray-500">{formatBusinessCopy(adminCopy.services.agendaDisplayLabel, {
+                        label: service.agendaLabel || adminCopy.services.automaticAgendaLabel,
+                      })}</p>
                     </div>
                     {showMissingBarberWarning && (
                       <div className="mb-4 flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200" role="status">
@@ -5105,23 +5130,23 @@ export default function Admin() {
                         }
                       }}>
                         <DialogTrigger asChild>
-                          <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">Editar</Button>
+                          <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">{adminCopy.common.edit}</Button>
                         </DialogTrigger>
                         <DialogContent className="bg-card border-white/10 text-white">
-                          <DialogHeader><DialogTitle>Editar Serviço</DialogTitle></DialogHeader>
+                          <DialogHeader><DialogTitle>{adminCopy.services.edit}</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4" data-edit-service-form>
                             {canManageCatalogGlobal && multiLocationConfig?.enabled && (
                               <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">
-                                <p className="font-semibold">Dados globais</p>
+                                <p className="font-semibold">{adminCopy.services.globalDataHeading}</p>
                                 <p className="mt-1 text-xs leading-relaxed text-amber-100/80">
                                   {adminCopy.services.globalSharedHelp}
                                 </p>
                               </div>
                             )}
-                            {canManageCatalogGlobal && <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>}
-                            {canManageCatalogGlobal && <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageCatalogGlobal && <div><Label>{adminCopy.services.nameLabel}</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageCatalogGlobal && <div><Label>{adminCopy.services.descriptionLabel}</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>}
                             {canManageCatalogGlobal && <div>
-                              <Label>Nome curto na agenda (opcional)</Label>
+                              <Label>{adminCopy.services.agendaLabel}</Label>
                               <Input
                                 defaultValue={service.agendaLabel || ""}
                                 id={`edit-service-agenda-label-${service.id}`}
@@ -5131,7 +5156,7 @@ export default function Admin() {
                             </div>}
                             {canManageCatalogGlobal && serviceCategories.length > 0 && (
                               <div>
-                                <Label>Categoria</Label>
+                                <Label>{adminCopy.services.categoryLabel}</Label>
                                 <Select
                                   value={(serviceCategoryDrafts[service.id] ?? null) === null ? "none" : String(serviceCategoryDrafts[service.id])}
                                   onValueChange={(value) => setServiceCategoryDrafts((current) => ({
@@ -5139,16 +5164,16 @@ export default function Admin() {
                                     [service.id]: value === "none" ? null : Number(value),
                                   }))}
                                 >
-                                  <SelectTrigger className="border-white/10 bg-background text-white">
-                                    <SelectValue placeholder="Sem categoria" />
+                                  <SelectTrigger className="border-white/10 bg-background text-white" aria-label={adminCopy.services.categoryLabel}>
+                                    <SelectValue placeholder={adminCopy.services.noCategory} />
                                   </SelectTrigger>
                                   <SelectContent className={serviceCategorySelectContentClassName}>
-                                    <SelectItem className={serviceCategorySelectItemClassName} value="none">Sem categoria</SelectItem>
+                                    <SelectItem className={serviceCategorySelectItemClassName} value="none">{adminCopy.services.noCategory}</SelectItem>
                                     {serviceCategories
                                       .filter((category) => category.isActive || category.id === service.categoryId)
                                       .map((category) => (
                                         <SelectItem className={serviceCategorySelectItemClassName} key={category.id} value={String(category.id)}>
-                                          {category.name}{category.isActive ? "" : " (inativa)"}
+                                          {category.name}{category.isActive ? "" : ` (${adminCopy.services.inactiveCategorySuffix})`}
                                         </SelectItem>
                                       ))}
                                   </SelectContent>
@@ -5166,14 +5191,18 @@ export default function Admin() {
                               </div>
                             )}
                             {canManageCatalogLocation && <div>
-                              <Label htmlFor={`edit-service-price-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localPriceLabel : "Preço (€)"}</Label>
+                              <Label htmlFor={`edit-service-price-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localPriceLabel : adminCopy.services.priceLabel}</Label>
                               <Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" />
-                              {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Valor base global: {((service.basePrice ?? service.price) / 100).toFixed(2)} €</p>}
+                              {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">{formatBusinessCopy(adminCopy.services.basePriceLabel, {
+                                price: ((service.basePrice ?? service.price) / 100).toFixed(2),
+                              })}</p>}
                             </div>}
                             {canManageCatalogLocation && <div>
-                              <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localDurationLabel : "Duração (Min)"}</Label>
+                              <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localDurationLabel : adminCopy.services.durationLabel}</Label>
                               <Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" />
-                              {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Duração base global: {service.baseDuration ?? service.duration} min</p>}
+                              {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">{formatBusinessCopy(adminCopy.services.baseDurationLabel, {
+                                duration: service.baseDuration ?? service.duration,
+                              })}</p>}
                             </div>}
                             <Button variant="gold" className="w-full" disabled={savingServiceId === service.id} onClick={async (event) => {
                               if (savingServiceIdRef.current !== null) return;
@@ -5204,16 +5233,16 @@ export default function Admin() {
                                 refreshBookableLocationsCache();
                                 queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                                 setEditingServiceId(null);
-                                toast({ title: "Sucesso", description: "Serviço atualizado." });
+                                toast({ title: adminCopy.common.successTitle, description: adminCopy.services.updateSuccess });
                               } catch (err: any) {
-                                toast({ title: "Erro", description: err.message || "Erro ao atualizar serviço.", variant: "destructive" });
+                                toast({ title: adminCopy.common.errorTitle, description: err.message || adminCopy.services.updateError, variant: "destructive" });
                               } finally {
                                 savingServiceIdRef.current = null;
                                 setSavingServiceId(null);
                               }
                             }}>
                               {savingServiceId === service.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                              Guardar
+                              {savingServiceId === service.id ? adminCopy.services.saving : adminCopy.services.save}
                             </Button>
                           </div>
                         </DialogContent>
@@ -5221,13 +5250,13 @@ export default function Admin() {
                       {(multiLocationConfig?.enabled ? canManageCatalogLocation : canManageCatalogGlobal && canManageCatalogLocation) && <ConfirmAction
                         title={multiLocationConfig?.enabled
                           ? formatBusinessCopy(adminCopy.services.removeFromLocationTitle, { service: service.name })
-                          : `Remover ${service.name}?`}
+                          : formatBusinessCopy(adminCopy.services.removeTitle, { service: service.name })}
                         description={multiLocationConfig?.enabled
                           ? formatBusinessCopy(adminCopy.services.removeFromLocationDescription, {
                               location: activeLocation?.name || adminCopy.services.localSectionHeading.toLocaleLowerCase("pt-PT"),
                             })
-                          : "As marcações antigas ficam guardadas, mas este serviço deixa de estar disponível."}
-                        confirmLabel={multiLocationConfig?.enabled ? adminCopy.services.removeFromLocationConfirm : "Remover"}
+                          : adminCopy.services.removeDescription}
+                        confirmLabel={multiLocationConfig?.enabled ? adminCopy.services.removeFromLocationConfirm : adminCopy.services.removeConfirm}
                         confirmClassName="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         onConfirm={async () => {
                           try {
@@ -5236,14 +5265,14 @@ export default function Admin() {
                             queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
                             refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
-                            toast({ title: "Sucesso", description: multiLocationConfig?.enabled ? adminCopy.services.removedFromLocation : "Serviço removido." });
+                            toast({ title: adminCopy.common.successTitle, description: multiLocationConfig?.enabled ? adminCopy.services.removedFromLocation : adminCopy.services.removeSuccess });
                           } catch {
-                            toast({ title: "Erro", description: "Não foi possível remover o serviço. Verifique se existem marcações associadas.", variant: "destructive" });
+                            toast({ title: adminCopy.common.errorTitle, description: adminCopy.services.removeError, variant: "destructive" });
                           }
                         }}
                       >
                         <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400">
-                          {multiLocationConfig?.enabled ? "Retirar" : "Remover"}
+                          {multiLocationConfig?.enabled ? adminCopy.services.removeFromLocationShort : adminCopy.services.removeConfirm}
                         </Button>
                       </ConfirmAction>}
                       {canManageCatalogLocation && <Button
@@ -5259,23 +5288,23 @@ export default function Admin() {
                             refreshBookableLocationsCache();
                             queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
                             toast({
-                              title: "Sucesso",
+                              title: adminCopy.common.successTitle,
                               description: isServiceActiveHere
-                                ? (multiLocationConfig?.enabled ? adminCopy.services.hiddenAtLocation : "Serviço ocultado.")
-                                : (multiLocationConfig?.enabled ? adminCopy.services.activeAtLocation : "Serviço visível no site."),
+                                ? (multiLocationConfig?.enabled ? adminCopy.services.hiddenAtLocation : adminCopy.services.hidden)
+                                : (multiLocationConfig?.enabled ? adminCopy.services.activeAtLocation : adminCopy.services.visible),
                             });
                           } catch (err: any) {
                             toast({
-                              title: "Erro",
-                              description: err.message || "Não foi possível atualizar a visibilidade do serviço.",
+                              title: adminCopy.common.errorTitle,
+                              description: err.message || adminCopy.services.visibilityError,
                               variant: "destructive",
                             });
                           }
                         }}
                       >
                         {isServiceActiveHere
-                          ? (multiLocationConfig?.enabled ? adminCopy.services.activeAtLocationStatus : "Visível")
-                          : (multiLocationConfig?.enabled ? adminCopy.services.inactiveAtLocationStatus : "Oculto")}
+                          ? (multiLocationConfig?.enabled ? adminCopy.services.activeAtLocationStatus : adminCopy.common.visible)
+                          : (multiLocationConfig?.enabled ? adminCopy.services.inactiveAtLocationStatus : adminCopy.common.hidden)}
                       </Button>}
                     </div>
                   </CardContent>
@@ -5286,17 +5315,17 @@ export default function Admin() {
             {(!services || services.length === 0) && (isLoadingServices || isFetchingServices) ? (
               <div className="mt-6 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                A carregar serviços...
+                {adminCopy.services.loading}
               </div>
             ) : null}
             {(!services || services.length === 0) && isServicesError ? (
               <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 p-6 text-center text-sm text-red-100">
-                Não foi possível carregar os serviços. Atualize a página e tente novamente.
+                {adminCopy.services.loadError}
               </div>
             ) : null}
             {services && services.length === 0 && !isLoadingServices && !isFetchingServices && !isServicesError ? (
               <div className="mt-6 rounded-lg border border-white/10 bg-card p-6 text-center text-sm text-gray-400">
-                Não há serviços ativos neste momento.
+                {adminCopy.services.empty}
               </div>
             ) : null}
           </TabsContent>
@@ -5327,7 +5356,7 @@ export default function Admin() {
                       onClick={handleSaveShopAvailability}
                     >
                       {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                      {isSavingShopAvailability ? "A guardar..." : "Guardar horário"}
+                      {isSavingShopAvailability ? adminCopy.schedules.saving : adminCopy.schedules.save}
                     </Button>
                   </div>
                 </div>
@@ -5336,14 +5365,14 @@ export default function Admin() {
                 <div className="rounded-xl border border-white/10 bg-background/40 p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <Clock className="h-4 w-4 text-primary" />
-                    <h3 className="font-bold text-white">Resumo semanal</h3>
+                    <h3 className="font-bold text-white">{adminCopy.schedules.weeklySummary}</h3>
                   </div>
                   <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                     {weekDays.map((day) => (
                       <div key={day.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
                         <span className="text-sm font-medium text-white">{day.short}</span>
                         <span className={cn("text-right text-xs", shopAvailabilityForm[day.id]?.isWorking ? "text-gray-300" : "text-gray-500")}>
-                          {formatAvailabilitySummary(shopAvailabilityForm[day.id])}
+                          {formatAvailabilitySummary(shopAvailabilityForm[day.id], adminCopy.schedules.closedStatus)}
                         </span>
                       </div>
                     ))}
@@ -5353,7 +5382,7 @@ export default function Admin() {
                 {shopAvailabilityIssues.length > 0 && (
                   <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
                     <div className="mb-2 flex items-center gap-2 font-bold">
-                      <AlertTriangle className="h-4 w-4" /> Verifique o horário antes de guardar
+                      <AlertTriangle className="h-4 w-4" /> {adminCopy.schedules.validationTitle}
                     </div>
                     <ul className="space-y-1">
                       {shopAvailabilityIssues.map((issue) => (
@@ -5386,13 +5415,16 @@ export default function Admin() {
                             <div>
                               <Label className="font-bold text-white">{day.label}</Label>
                               <p className={cn("mt-1 text-xs", isWorking ? "text-gray-400" : "text-gray-500")}>
-                                {formatAvailabilitySummary(dayConfig)}
+                                {formatAvailabilitySummary(dayConfig, adminCopy.schedules.closedStatus)}
                               </p>
                             </div>
                           </div>
                           <div className="flex items-center justify-between gap-3 md:justify-end">
-                            <span className="text-sm text-gray-400">{isWorking ? "Aberta" : "Fechada"}</span>
+                            <span className="text-sm text-gray-400">
+                              {isWorking ? adminCopy.schedules.openStatus : adminCopy.schedules.closedStatus}
+                            </span>
                             <Switch
+                              aria-label={formatBusinessCopy(adminCopy.schedules.openDayAria, { day: day.label })}
                               checked={isWorking}
                               onCheckedChange={(checked) => updateShopDay(day.id, (current) => ({
                                 ...current,
@@ -5407,7 +5439,7 @@ export default function Admin() {
                             {dayConfig.periods.map((period, index) => (
                               <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_40px] items-end gap-2 sm:max-w-xl">
                                 <div className="min-w-0">
-                                  <Label className="text-[11px] text-gray-400">Abre</Label>
+                                  <Label className="text-[11px] text-gray-400">{adminCopy.schedules.opensLabel}</Label>
                                   <Input
                                     type="time"
                                     value={period.startTime}
@@ -5416,7 +5448,7 @@ export default function Admin() {
                                   />
                                 </div>
                                 <div className="min-w-0">
-                                  <Label className="text-[11px] text-gray-400">Fecha</Label>
+                                  <Label className="text-[11px] text-gray-400">{adminCopy.schedules.closesLabel}</Label>
                                   <Input
                                     type="time"
                                     value={period.endTime}
@@ -5430,7 +5462,7 @@ export default function Admin() {
                                   size="icon"
                                   className="h-10 w-10 text-red-400 hover:text-red-300"
                                   disabled={dayConfig.periods.length === 1}
-                                  aria-label={`Remover período de ${day.label}`}
+                                  aria-label={formatBusinessCopy(adminCopy.schedules.removePeriodAria, { period: index + 1, day: day.label })}
                                   onClick={() => updateShopDay(day.id, (current) => ({
                                     ...current,
                                     periods: current.periods.filter((_, periodIndex) => periodIndex !== index),
@@ -5450,7 +5482,7 @@ export default function Admin() {
                                 periods: [...current.periods, { startTime: "14:00", endTime: "18:00" }],
                               }))}
                             >
-                              <Plus className="h-3.5 w-3.5" /> Adicionar período
+                              <Plus className="h-3.5 w-3.5" /> {adminCopy.schedules.addPeriod}
                             </Button>
                           </div>
                         ) : (
@@ -5470,7 +5502,7 @@ export default function Admin() {
                   onClick={handleSaveShopAvailability}
                 >
                   {isSavingShopAvailability ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                  {isSavingShopAvailability ? "A guardar..." : "Guardar horário"}
+                  {isSavingShopAvailability ? adminCopy.schedules.saving : adminCopy.schedules.save}
                 </Button>
               </CardContent>
             </Card>

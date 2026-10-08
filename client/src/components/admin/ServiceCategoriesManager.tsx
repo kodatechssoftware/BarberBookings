@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useBusinessCopy } from "@/business/use-business-copy";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 
 type Props = {
   categories: ServiceCategoryWithCount[];
@@ -35,6 +37,8 @@ type Props = {
 
 export function ServiceCategoriesManager({ categories, isLoading, isError }: Props) {
   const { toast } = useToast();
+  const adminCopy = useBusinessCopy().admin;
+  const copy = adminCopy.categories;
   const [isManagerOpen, setIsManagerOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -57,11 +61,11 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
     try {
       await action();
       await refresh();
-      toast({ title: "Sucesso", description: successMessage });
+      toast({ title: adminCopy.common.successTitle, description: successMessage });
     } catch (error: any) {
       toast({
-        title: "Erro",
-        description: error?.message || "Não foi possível atualizar as categorias.",
+        title: adminCopy.common.errorTitle,
+        description: error?.message || copy.updateError,
         variant: "destructive",
       });
     } finally {
@@ -76,7 +80,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
     await runAction("create", async () => {
       await apiRequest("POST", "/api/service-categories", { name });
       setNewName("");
-    }, "Categoria criada.");
+    }, copy.created);
   };
 
   const saveName = async (category: ServiceCategoryWithCount) => {
@@ -86,7 +90,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
       await apiRequest("PATCH", `/api/service-categories/${category.id}`, { name });
       setEditingId(null);
       setEditingName("");
-    }, "Categoria renomeada.");
+    }, copy.renamed);
   };
 
   const closeEditDialog = () => {
@@ -101,7 +105,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
     [orderedIds[index], orderedIds[target]] = [orderedIds[target], orderedIds[index]];
     await runAction("reorder", async () => {
       await apiRequest("PUT", "/api/service-categories/order", { categoryIds: orderedIds });
-    }, "Ordem das categorias atualizada.");
+    }, copy.reordered);
   };
 
   return (
@@ -119,27 +123,27 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
       <DialogTrigger asChild>
         <Button variant="outline" className="w-full gap-2 sm:w-auto">
           <Tags className="h-4 w-4" />
-          Gerir categorias
+          {copy.manage}
         </Button>
       </DialogTrigger>
       <DialogContent className="grid max-h-[85vh] w-[calc(100%-2rem)] max-w-3xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-white/10 bg-card text-white">
         <DialogHeader>
-          <DialogTitle>Gerir categorias</DialogTitle>
+          <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription className="text-gray-400">
-            Organize os serviços por categorias para facilitar a escolha nas marcações online.
+            {copy.description}
           </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 overflow-y-auto p-1" data-testid="service-categories-manager">
           {isLoading && (
             <div className="mb-3 flex items-center gap-2 text-sm text-gray-400">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" aria-label="A carregar categorias" />
-              A carregar categorias...
+              <Loader2 className="h-4 w-4 animate-spin text-primary" aria-label={copy.loadingAria} />
+              {copy.loading}
             </div>
           )}
 
           {isError ? (
-            <p className="text-sm text-red-300">Não foi possível carregar as categorias.</p>
+            <p className="text-sm text-red-300">{copy.loadError}</p>
           ) : (
             <>
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -153,9 +157,9 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                 }
               }}
               maxLength={80}
-              placeholder="Nova categoria"
+              placeholder={copy.newPlaceholder}
               className="border-white/10 bg-background text-white"
-              aria-label="Nome da nova categoria"
+              aria-label={copy.newNameAria}
             />
             <Button
               variant="outline"
@@ -164,7 +168,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
               onClick={() => void createCategory()}
             >
               {pendingAction === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              Criar categoria
+              {copy.create}
             </Button>
           </div>
 
@@ -178,7 +182,10 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                 >
                   <div className="min-w-0 flex-1">
                     <span className="block font-medium text-white">{category.name}</span>
-                    <span className="text-xs text-gray-400">{category.serviceCount} {category.serviceCount === 1 ? "serviço associado" : "serviços associados"}</span>
+                    <span className="text-xs text-gray-400">{formatBusinessCopy(copy.serviceCount, {
+                      count: category.serviceCount,
+                      label: category.serviceCount === 1 ? copy.serviceCountSingular : copy.serviceCountPlural,
+                    })}</span>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
@@ -191,10 +198,10 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                         setEditingId(category.id);
                         setEditingName(category.name);
                       }}
-                      aria-label={`Editar ${category.name}`}
+                      aria-label={formatBusinessCopy(copy.editAria, { name: category.name })}
                     >
                       <Pencil className="h-3.5 w-3.5" />
-                      Editar
+                      {copy.edit}
                     </Button>
                     <Button
                       variant="outline"
@@ -202,8 +209,8 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       className="h-8 w-8"
                       disabled={index === 0 || pendingAction !== null}
                       onClick={() => void moveCategory(index, -1)}
-                      title="Mover para cima"
-                      aria-label={`Mover ${category.name} para cima`}
+                      title={copy.moveUp}
+                      aria-label={formatBusinessCopy(copy.moveUpAria, { name: category.name })}
                     >
                       <ChevronUp className="h-4 w-4" />
                     </Button>
@@ -213,8 +220,8 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       className="h-8 w-8"
                       disabled={index === categories.length - 1 || pendingAction !== null}
                       onClick={() => void moveCategory(index, 1)}
-                      title="Mover para baixo"
-                      aria-label={`Mover ${category.name} para baixo`}
+                      title={copy.moveDown}
+                      aria-label={formatBusinessCopy(copy.moveDownAria, { name: category.name })}
                     >
                       <ChevronDown className="h-4 w-4" />
                     </Button>
@@ -222,35 +229,38 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       <Switch
                         checked={category.isActive}
                         disabled={pendingAction !== null}
-                        aria-label={`${category.isActive ? "Desativar" : "Ativar"} ${category.name}`}
+                        aria-label={formatBusinessCopy(
+                          category.isActive ? copy.deactivateAria : copy.activateAria,
+                          { name: category.name },
+                        )}
                         onCheckedChange={(isActive) => void runAction(`toggle-${category.id}`, async () => {
                           await apiRequest("PATCH", `/api/service-categories/${category.id}`, { isActive });
-                        }, isActive ? "Categoria ativada." : "Categoria desativada.")}
+                        }, isActive ? copy.activated : copy.deactivated)}
                       />
-                      {category.isActive ? "Ativa" : "Inativa"}
+                      {category.isActive ? copy.active : copy.inactive}
                     </label>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-300" aria-label={`Eliminar ${category.name}`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-300" aria-label={formatBusinessCopy(copy.deleteAria, { name: category.name })}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent className="border-white/10 bg-card text-white">
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Eliminar a categoria “{category.name}”?</AlertDialogTitle>
+                          <AlertDialogTitle>{formatBusinessCopy(copy.deleteTitle, { name: category.name })}</AlertDialogTitle>
                           <AlertDialogDescription className="text-gray-400">
-                            Esta ação elimina apenas a categoria. Os serviços associados mantêm-se e ficam sem categoria.
+                            {copy.deleteDescription}
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">Cancelar</AlertDialogCancel>
+                          <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">{adminCopy.common.cancel}</AlertDialogCancel>
                           <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             onClick={() => void runAction(`delete-${category.id}`, async () => {
                               await apiRequest("DELETE", `/api/service-categories/${category.id}`);
-                            }, "Categoria eliminada. Os serviços ficaram sem categoria.")}
+                            }, copy.deleted)}
                           >
-                            Eliminar categoria
+                            {copy.deleteAction}
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
@@ -260,7 +270,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
               ))}
                 </div>
               ) : (
-                !isLoading && <p className="mt-4 text-sm text-gray-400">Ainda não existem categorias.</p>
+                !isLoading && <p className="mt-4 text-sm text-gray-400">{copy.empty}</p>
               )}
 
               {categories.map((category) => (
@@ -273,9 +283,9 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
             >
               <DialogContent className="max-w-md border-white/10 bg-card text-white">
                 <DialogHeader>
-                  <DialogTitle>Editar categoria</DialogTitle>
+                  <DialogTitle>{copy.editTitle}</DialogTitle>
                   <DialogDescription className="sr-only">
-                    Altere o nome apresentado para esta categoria de serviços.
+                    {copy.editDescription}
                   </DialogDescription>
                 </DialogHeader>
                 <form
@@ -287,7 +297,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                 >
                   <div className="space-y-2">
                     <label htmlFor={`service-category-name-${category.id}`} className="text-sm font-medium text-white">
-                      Nome da categoria
+                      {copy.nameLabel}
                     </label>
                     <Input
                       id={`service-category-name-${category.id}`}
@@ -301,7 +311,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                   </div>
                   <DialogFooter>
                     <Button type="button" variant="outline" onClick={closeEditDialog}>
-                      Cancelar
+                      {adminCopy.common.cancel}
                     </Button>
                     <Button
                       type="submit"
@@ -313,7 +323,7 @@ export function ServiceCategoriesManager({ categories, isLoading, isError }: Pro
                       }
                     >
                       {pendingAction === `rename-${category.id}` && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Guardar alterações
+                      {copy.save}
                     </Button>
                   </DialogFooter>
                 </form>

@@ -18,7 +18,6 @@ type Props = {
   location: { id: number; name: string; timezone: string };
 };
 type ScheduleRow = Omit<AvailabilityRow, "barberId">;
-const weekdays = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
 const dayOrder = [1, 2, 3, 4, 5, 6, 0];
 const clockTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
@@ -66,9 +65,9 @@ function LoadSchedule({ barber, location, onSaved }: Props & { onSaved: () => vo
       return response.json();
     },
   });
-  if (schedule.isError || shop.isError) return <p role="alert">Não foi possível carregar o horário. Feche e volte a abrir para tentar novamente.</p>;
+  if (schedule.isError || shop.isError) return <p role="alert">{copy.loadError}</p>;
   // Never initialise an editable form from stale cached rows during a location switch/reopen.
-  if (!schedule.data || !shop.data || schedule.isFetching || shop.isFetching) return <p role="status" className="flex gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin" />A carregar horário…</p>;
+  if (!schedule.data || !shop.data || schedule.isFetching || shop.isFetching) return <p role="status" className="flex gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin" />{copy.loading}</p>;
   return <ScheduleForm barber={barber} location={location} rows={schedule.data} shopRows={shop.data} onSaved={onSaved} />;
 }
 
@@ -76,6 +75,7 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
   rows: ScheduleRow[]; shopRows: ShopAvailabilityRow[]; onSaved: () => void;
 }) {
   const copy = useBusinessCopy().admin.schedules;
+  const weekdays = copy.weekdays;
   const { toast } = useToast();
   const savingRef = useRef(false);
   const [days, setDays] = useState(() => weekdays.map((_, dayOfWeek) => {
@@ -92,7 +92,7 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
       });
       if (!response.ok) {
         const error = await response.json().catch(() => null);
-        throw new Error(error?.message || "Não foi possível guardar o horário.");
+        throw new Error(error?.message || copy.saveError);
       }
       return response.json();
     },
@@ -104,7 +104,7 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
       }
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       toast({
-        title: "Horário guardado",
+        title: copy.savedTitle,
         description: formatBusinessCopy(copy.locationScheduleSaved, {
           name: barber.name,
           location: location.name,
@@ -134,23 +134,26 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
       {dayOrder.map((day) => <section key={day} className="min-w-0 space-y-2 rounded-lg border border-white/10 p-3" aria-label={weekdays[day]}>
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium">{weekdays[day]}</span>
-          <Switch aria-label={`Trabalha ${weekdays[day]}`} checked={days[day].isWorking} onCheckedChange={(isWorking) => updateDay(day, { isWorking })} />
+          <Switch aria-label={formatBusinessCopy(copy.worksDayAria, { day: weekdays[day] })} checked={days[day].isWorking} onCheckedChange={(isWorking) => updateDay(day, { isWorking })} />
         </div>
         {days[day].isWorking ? <>
           {days[day].periods.map((period, index) => <div className="flex min-w-0 items-center gap-2" key={index}>
             {(["startTime", "endTime"] as const).map((field) => <Input
               key={field} type="time" required value={period[field]}
-              aria-label={`${field === "startTime" ? "Início" : "Fim"} ${weekdays[day]} ${index + 1}`}
+              aria-label={formatBusinessCopy(
+                field === "startTime" ? copy.startAria : copy.endAria,
+                { day: weekdays[day], period: index + 1 },
+              )}
               className="min-w-0 flex-1 bg-background px-2"
               onChange={(event) => updateDay(day, { periods: days[day].periods.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: event.target.value } : row) })}
             />)}
-            <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={`Remover período ${index + 1} ${weekdays[day]}`} disabled={days[day].periods.length === 1} onClick={() => updateDay(day, { periods: days[day].periods.filter((_, rowIndex) => rowIndex !== index) })}><Trash2 className="h-4 w-4" /></Button>
+            <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={formatBusinessCopy(copy.removePeriodAria, { period: index + 1, day: weekdays[day] })} disabled={days[day].periods.length === 1} onClick={() => updateDay(day, { periods: days[day].periods.filter((_, rowIndex) => rowIndex !== index) })}><Trash2 className="h-4 w-4" /></Button>
           </div>)}
-          <Button type="button" variant="ghost" size="sm" onClick={() => updateDay(day, { periods: [...days[day].periods, { startTime: "14:00", endTime: "19:00" }] })}><Plus className="mr-1 h-3 w-3" />Adicionar período</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => updateDay(day, { periods: [...days[day].periods, { startTime: "14:00", endTime: "19:00" }] })}><Plus className="mr-1 h-3 w-3" />{copy.addPeriod}</Button>
         </> : <p className="text-xs text-gray-400">{copy.notWorkingAtLocation}</p>}
       </section>)}
       <div className="flex flex-col gap-2 sm:flex-row">
-        <Button type="submit" variant="gold" className="flex-1">{save.isPending ? "A guardar…" : copy.saveLocationSchedule}</Button>
+        <Button type="submit" variant="gold" className="flex-1">{save.isPending ? copy.saving : copy.saveLocationSchedule}</Button>
         <Button type="button" variant="outline" onClick={() => submitSchedule([])}>{copy.useEstablishmentSchedule}</Button>
       </div>
     </fieldset>

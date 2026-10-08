@@ -31,7 +31,7 @@ export function AssociateBarberDialog() {
       setBarberId("");
       toast({ title: copy.associateSuccessTitle, description: copy.associateSuccessDescription });
     } catch (error) {
-      toast({ title: "Não foi possível associar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+      toast({ title: copy.associateErrorTitle, description: error instanceof Error ? error.message : copy.associateErrorFallback, variant: "destructive" });
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -46,13 +46,13 @@ export function AssociateBarberDialog() {
       <DialogHeader><DialogTitle>{copy.associateTitle}</DialogTitle>
         <DialogDescription>{copy.associateDescription}</DialogDescription>
       </DialogHeader>
-      {isLoading ? <p>A carregar equipa…</p> : isError ? <p>Não foi possível carregar a equipa.</p> : barbers.length === 0 ?
+      {isLoading ? <p>{copy.associateLoading}</p> : isError ? <p>{copy.associateLoadError}</p> : barbers.length === 0 ?
         <p className="text-sm text-gray-400">{copy.associateEmpty}</p> :
         <Select value={barberId} onValueChange={setBarberId}>
           <SelectTrigger aria-label={copy.associateAria}><SelectValue placeholder={copy.associatePlaceholder} /></SelectTrigger>
           <SelectContent>{barbers.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}</SelectContent>
         </Select>}
-      <Button variant="gold" disabled={!barberId || saving} onClick={associate}>{saving ? "A associar…" : copy.associateAction}</Button>
+      <Button variant="gold" disabled={!barberId || saving} onClick={associate}>{saving ? copy.associatePending : copy.associateAction}</Button>
     </DialogContent>
   </Dialog>;
 }

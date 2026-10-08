@@ -54,6 +54,35 @@ test("Beauty Admin and Agenda use neutral professional and establishment termino
   assert.equal(agenda.professional.label, "Profissional");
 });
 
+test("Barber B3 copy preserves services, categories, team associations and schedules", () => {
+  const { admin } = barberBusinessCopy;
+  assert.equal(admin.services.heading, "Serviços Disponíveis");
+  assert.equal(admin.services.createTitle, "Novo Serviço");
+  assert.equal(admin.services.create, "Criar Serviço");
+  assert.equal(admin.services.associateDescription, "Configure o preço e a duração aplicáveis apenas nesta loja.");
+  assert.equal(admin.categories.manage, "Gerir categorias");
+  assert.equal(admin.team.servicesPerformedLabel, "Serviços que executa");
+  assert.equal(admin.team.associatedApiSuccess, "Barbeiro associado. Configure os serviços e horários nesta loja.");
+  assert.equal(admin.schedules.locationProfessionalTrigger, "Horário nesta loja");
+  assert.equal(admin.schedules.establishmentClosedDay, "Loja fechada neste dia.");
+  assert.deepEqual(admin.schedules.weekdayLabels, ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"]);
+});
+
+test("Beauty B3 copy uses professional and establishment terminology end-to-end", () => {
+  const { admin } = beautyBusinessCopy;
+  assert.equal(admin.services.associateDescription, "Configure o preço e a duração aplicáveis apenas neste estabelecimento.");
+  assert.equal(admin.services.associateAction, "Associar neste estabelecimento");
+  assert.equal(admin.team.addMemberTitle, "Adicionar Profissional à Equipa");
+  assert.equal(admin.team.servicesPerformedLabel, "Serviços que executa");
+  assert.equal(admin.team.associatedApiSuccess, "Profissional associado. Configure os serviços e horários neste estabelecimento.");
+  assert.equal(admin.team.invalidProfessional, "Profissional inválido.");
+  assert.equal(admin.team.professionalNotFound, "Profissional não encontrado");
+  assert.equal(admin.team.invalidServiceForProfessional, "Serviço inválido para este profissional.");
+  assert.equal(admin.schedules.locationProfessionalTrigger, "Horário neste estabelecimento");
+  assert.equal(admin.schedules.establishmentClosedDay, "Estabelecimento fechado neste dia.");
+  assert.equal(admin.compensation.workspaceRentModel, "Renda fixa de espaço");
+});
+
 test("Barber Booking keeps the existing public wording", () => {
   const copy = barberBusinessCopy.booking;
   assert.deepEqual(copy.steps, ["Barbeiro", "Serviço", "Data e hora", "Detalhes"]);
@@ -119,4 +148,27 @@ test("Booking source contains no forbidden Beauty output literals outside known 
     withoutKnownInternalReferences,
     /Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira/i,
   );
+});
+
+test("B3 backend public responses resolve professional wording through typed runtime copy", () => {
+  const source = readFileSync("server/routes.ts", "utf8");
+  const teamStart = source.indexOf("// === BARBERS MGMT ===");
+  const teamEnd = source.indexOf('app.patch("/api/barbers/:id/reset-password"', teamStart);
+  const scheduleStart = source.indexOf('app.get("/api/barbers/:id/availability"');
+  const scheduleEnd = source.indexOf("// === APPOINTMENTS ===", scheduleStart);
+  const publicTeamRoutes = source.slice(teamStart, teamEnd);
+  const publicScheduleRoutes = source.slice(scheduleStart, scheduleEnd);
+
+  assert.ok(teamStart >= 0 && teamEnd > teamStart);
+  assert.ok(scheduleStart >= 0 && scheduleEnd > scheduleStart);
+  assert.match(publicTeamRoutes, /message: TEAM_PUBLIC_COPY\.invalidProfessional/);
+  assert.match(publicTeamRoutes, /message: TEAM_PUBLIC_COPY\.associatedApiSuccess/);
+  assert.match(publicTeamRoutes, /getTeamValidationMessage\(error\)/);
+  assert.doesNotMatch(publicTeamRoutes, /message:\s*["'`]([^"'`]*(?:barbeiro|barbearia|aluguer de cadeira))/i);
+  assert.doesNotMatch(publicScheduleRoutes, /message:\s*["'`]([^"'`]*(?:barbeiro|barbearia|aluguer de cadeira))/i);
+
+  const sharedSchemas = readFileSync("shared/routes.ts", "utf8");
+  assert.match(sharedSchemas, /Indique o nome do barbeiro/);
+  assert.match(source, /issue\.path\[0\] === "name"/);
+  assert.match(source, /TEAM_PUBLIC_COPY\.validationNameRequired/);
 });
