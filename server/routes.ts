@@ -115,6 +115,7 @@ import {
   PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
 } from "@shared/public-booking-window";
 import { locationInputSchema, locationUpdateSchema } from "@shared/locations";
+import { formatBusinessCopy } from "@shared/business/copy/types";
 import {
   assignBarberToLocation,
   assignServiceToLocation,
@@ -237,6 +238,7 @@ const canonicalBootstrapRateLimiter = createFixedWindowRateLimiter({
 });
 const ADMIN_PUBLIC_COPY = resolvedBusinessConfig.copy.admin;
 const TEAM_PUBLIC_COPY = ADMIN_PUBLIC_COPY.team;
+const REPORT_PUBLIC_COPY = ADMIN_PUBLIC_COPY.reports;
 const INVALID_PROFESSIONAL_SERVICE_CODE = "INVALID_PROFESSIONAL_SERVICE";
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
 const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MINUTES || 45);
@@ -1772,9 +1774,9 @@ function centsToEuros(cents: number) {
 }
 
 function getCompensationModelLabel(model: BarberCompensationModel) {
-  if (model === "commission") return "Comissão percentual";
-  if (model === "chair_rent") return "Aluguer fixo de cadeira";
-  return "Sem cálculo financeiro";
+  if (model === "commission") return REPORT_PUBLIC_COPY.compensationCommission;
+  if (model === "chair_rent") return REPORT_PUBLIC_COPY.compensationWorkspaceRent;
+  return REPORT_PUBLIC_COPY.compensationNone;
 }
 
 function getChairRentPeriodLabel(period?: ChairRentPeriod | null) {
@@ -6625,7 +6627,10 @@ export async function registerRoutes(
     const historical = Array.from(historicalIds)
       .map((barberId) => {
         const barber = barbersById.get(barberId);
-        return { id: barberId, name: barber?.name || `Barbeiro #${barberId}` };
+        return {
+          id: barberId,
+          name: barber?.name || formatBusinessCopy(REPORT_PUBLIC_COPY.professionalNumber, { id: barberId }),
+        };
       })
       .sort((left, right) => left.name.localeCompare(right.name, "pt"));
 
@@ -6671,7 +6676,7 @@ export async function registerRoutes(
     const hasSelectedBarber = Boolean(barberId && barberId !== "all");
     const parsedSelectedBarberId = hasSelectedBarber ? parsePositiveInteger(barberId) : undefined;
     if (hasSelectedBarber && parsedSelectedBarberId === null) {
-      return res.status(400).json({ message: "Barbeiro inválido" });
+      return res.status(400).json({ message: REPORT_PUBLIC_COPY.invalidProfessional });
     }
     const ownProfessionalId = authRuntimeMode === "canonical"
       ? canonicalContext?.professionalId
@@ -6801,7 +6806,7 @@ export async function registerRoutes(
           && selectedBarber?.isVisible !== false;
         if (!isActiveAtLocation && rangeAppointments.length === 0) {
           return res.status(400).json({
-            message: "Este barbeiro não está ativo nesta loja nem tem movimentos no período selecionado.",
+            message: REPORT_PUBLIC_COPY.inactiveProfessional,
           });
         }
       }
@@ -6872,7 +6877,8 @@ export async function registerRoutes(
         const serviceName = resolveAppointmentServiceName(appointment, serviceNames, "Serviço desconhecido");
         const serviceKey = JSON.stringify([appointment.serviceId, serviceName]);
         const dateKey = getShopDateParts(new Date(appointment.startTime)).dateKey;
-        const barberSummary = barberSummaryMap.get(appointment.barberId) || createSummaryRow(barber?.name || "Barbeiro desconhecido");
+        const barberSummary = barberSummaryMap.get(appointment.barberId)
+          || createSummaryRow(barber?.name || REPORT_PUBLIC_COPY.unknownProfessional);
         const serviceSummary = serviceSummaryMap.get(serviceKey) || createSummaryRow(serviceName);
         const dailySummary = dailySummaryMap.get(dateKey);
 
@@ -6883,7 +6889,7 @@ export async function registerRoutes(
 
         if (appointment.status === "completed") {
           const compensationSummary = compensationSummaryMap.get(appointment.barberId) || {
-            barberName: barber?.name || "Barbeiro desconhecido",
+            barberName: barber?.name || REPORT_PUBLIC_COPY.unknownProfessional,
             completed: 0,
             realizedCents: 0,
             commissionCents: 0,
@@ -6933,7 +6939,7 @@ export async function registerRoutes(
         : 0;
 
       const workbook = new ExcelJS.Workbook();
-      workbook.creator = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
+      workbook.creator = process.env.SHOP_NAME?.trim() || REPORT_PUBLIC_COPY.workbook.defaultEstablishmentName;
       workbook.created = new Date();
       workbook.modified = new Date();
 
@@ -7002,18 +7008,18 @@ export async function registerRoutes(
       };
 
       if (isBarberSession) {
-        const barberName = selectedBarber?.name || "Barbeiro";
+        const barberName = selectedBarber?.name || REPORT_PUBLIC_COPY.professionalFallback;
         const barberWorkbook = workbook;
 
         const ownSummarySheet = barberWorkbook.addWorksheet("Resumo");
         ownSummarySheet.mergeCells("A1:B1");
-        ownSummarySheet.getCell("A1").value = "Resumo do barbeiro";
+        ownSummarySheet.getCell("A1").value = REPORT_PUBLIC_COPY.workbook.professionalSummaryTitle;
         ownSummarySheet.getCell("A1").font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
         ownSummarySheet.getCell("A1").fill = headerFill;
         ownSummarySheet.getRow(1).height = 28;
         ownSummarySheet.addRows([
           ["Período", `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`],
-          ["Barbeiro", barberName],
+          [REPORT_PUBLIC_COPY.workbook.professionalLabel, barberName],
           ["", ""],
           ["Marcações no período", totalSummary.appointments],
           ["Concluídas", totalSummary.completed],
@@ -7625,10 +7631,12 @@ export async function registerRoutes(
       // string indexes (the source of the stray numeric values in some readers).
       [...workbook.worksheets].forEach((sheet) => workbook.removeWorksheet(sheet.id));
 
-      const shopName = process.env.SHOP_NAME?.trim() || "Baptista Barber Shop";
+      const shopName = process.env.SHOP_NAME?.trim() || REPORT_PUBLIC_COPY.workbook.defaultEstablishmentName;
       const reportPeriod = `${formatCalendarDateKey(startDateKey)} a ${formatCalendarDateKey(endDateKey)}`;
       const reportFilter = selectedBarber?.name
-        || (selectedBarberId ? `Barbeiro #${selectedBarberId}` : "Todos os barbeiros");
+        || (selectedBarberId
+          ? formatBusinessCopy(REPORT_PUBLIC_COPY.workbook.professionalNumber, { id: selectedBarberId })
+          : REPORT_PUBLIC_COPY.workbook.allProfessionals);
       const includesShopExpenses = selectedBarberId === undefined;
       const cashBalanceAfterExpensesCents = totalSummary.confirmedPaymentCents - businessExpensesCents;
       const styleReportTitle = (sheet: ExcelJS.Worksheet, range: string, title: string) => {
@@ -7681,10 +7689,10 @@ export async function registerRoutes(
       });
       styleReportTitle(accountingSummarySheet, "A1:D1", "Resumo financeiro");
       const summaryMetadata: Array<[string, string]> = [
-        ["Barbearia", shopName],
+        [REPORT_PUBLIC_COPY.workbook.establishmentLabel, shopName],
         ...(MULTI_LOCATION_CONFIG.enabled && location ? [["Localização", location.name] as [string, string]] : []),
         ["Período", reportPeriod],
-        ["Barbeiro", reportFilter],
+        [REPORT_PUBLIC_COPY.workbook.professionalLabel, reportFilter],
       ];
       summaryMetadata.forEach(([label, value], index) => {
         const row = accountingSummarySheet.getRow(3 + index);
@@ -7709,9 +7717,9 @@ export async function registerRoutes(
         ["Ofertas (valor dos serviços, sem recebimento)", centsToEuros(giftServiceAmountCents)],
         ["Ofertas (valor dos Extras, sem recebimento)", centsToEuros(giftExtrasAmountCents)],
         ["Ofertas (valor total, sem recebimento)", centsToEuros(totalSummary.giftCents)],
-        ["Total atribuído aos barbeiros", centsToEuros(barberPayoutCents)],
+        [REPORT_PUBLIC_COPY.workbook.totalForProfessionals, centsToEuros(barberPayoutCents)],
         ["Total atribuído ao estabelecimento", centsToEuros(shopCompensationCents)],
-        ["Aluguer de cadeira incluído nos acertos", centsToEuros(chairRentIncomeCents)],
+        [REPORT_PUBLIC_COPY.workbook.workspaceRentIncluded, centsToEuros(chairRentIncomeCents)],
         ...(includesShopExpenses ? [
           ["Despesas registadas", centsToEuros(businessExpensesCents)] as [string, number],
           ["Saldo de recebimentos após despesas registadas", centsToEuros(cashBalanceAfterExpensesCents)] as [string, number],
@@ -7727,7 +7735,7 @@ export async function registerRoutes(
         if ([
           "Receita total concluída",
           "Receita realizada",
-          "Total atribuído aos barbeiros",
+          REPORT_PUBLIC_COPY.workbook.totalForProfessionals,
           "Total atribuído ao estabelecimento",
           "Resultado líquido estimado",
         ].includes(label)) {
@@ -7785,7 +7793,7 @@ export async function registerRoutes(
       styleReportTitle(movementsSheet, "A1:Q1", "Detalhe dos movimentos");
       movementsSheet.getCell("A3").value = "Período";
       movementsSheet.getCell("B3").value = reportPeriod;
-      movementsSheet.getCell("D3").value = "Barbeiro";
+      movementsSheet.getCell("D3").value = REPORT_PUBLIC_COPY.workbook.professionalLabel;
       movementsSheet.getCell("E3").value = reportFilter;
       movementsSheet.getCell("A3").font = { bold: true };
       movementsSheet.getCell("D3").font = { bold: true };
@@ -7799,7 +7807,7 @@ export async function registerRoutes(
         columns: [
           "Data do serviço",
           "ID da marcação",
-          "Barbeiro",
+          REPORT_PUBLIC_COPY.workbook.professionalLabel,
           "Serviço efetivo",
           "Valor serviço (€)",
           "Extras",
@@ -7812,8 +7820,8 @@ export async function registerRoutes(
           "Valor recebido (€)",
           "Valor coberto por Vale/Cupão (€)",
           "Valor realizado (€)",
-          "Parte barbeiro (€)",
-          "Parte estabelecimento (€)",
+          REPORT_PUBLIC_COPY.workbook.professionalShare,
+          REPORT_PUBLIC_COPY.workbook.establishmentShare,
         ].map((name) => ({ name, filterButton: true })),
         rows: rangeAppointments.map((appointment) => {
           const financial = reportFinancials.byAppointmentId.get(appointment.id)!;
@@ -7831,7 +7839,8 @@ export async function registerRoutes(
           return [
             toExcelShopDateTime(new Date(appointment.startTime)),
             appointment.id,
-            barbersById.get(appointment.barberId)?.name || `Barbeiro #${appointment.barberId}`,
+            barbersById.get(appointment.barberId)?.name
+              || formatBusinessCopy(REPORT_PUBLIC_COPY.workbook.professionalNumber, { id: appointment.barberId }),
             resolveAppointmentServiceName(appointment, serviceNames, "Serviço desconhecido"),
             centsToEuros(financial.serviceAmountCents),
             describeExtras(financial),
@@ -7879,14 +7888,14 @@ export async function registerRoutes(
         ))
         .sort((left, right) => left.barberName.localeCompare(right.barberName, "pt"));
       if (compensationRows.length > 0) {
-        const settlementsSheet = workbook.addWorksheet("Acertos com Barbeiros", {
+        const settlementsSheet = workbook.addWorksheet(REPORT_PUBLIC_COPY.workbook.settlementsSheet, {
           views: [{ showGridLines: false }],
           pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
         });
-        styleReportTitle(settlementsSheet, "A1:H1", "Acertos com barbeiros");
+        styleReportTitle(settlementsSheet, "A1:H1", REPORT_PUBLIC_COPY.workbook.settlementsTitle);
         settlementsSheet.getCell("A3").value = "Período";
         settlementsSheet.getCell("B3").value = reportPeriod;
-        settlementsSheet.getCell("D3").value = "Barbeiro";
+        settlementsSheet.getCell("D3").value = REPORT_PUBLIC_COPY.workbook.professionalLabel;
         settlementsSheet.getCell("E3").value = reportFilter;
         settlementsSheet.getCell("A3").font = { bold: true };
         settlementsSheet.getCell("D3").font = { bold: true };
@@ -7898,14 +7907,14 @@ export async function registerRoutes(
           totalsRow: false,
           style: { theme: "TableStyleMedium2", showRowStripes: true },
           columns: [
-            "Barbeiro",
+            REPORT_PUBLIC_COPY.workbook.professionalLabel,
             "Modelo aplicado",
             "Serviços concluídos",
             "Base de acerto (€)",
-            "Comissões do barbeiro (€)",
-            "Aluguer de cadeira (€)",
-            "Valor do barbeiro (€)",
-            "Valor da barbearia (€)",
+            REPORT_PUBLIC_COPY.workbook.professionalCommissions,
+            REPORT_PUBLIC_COPY.workbook.workspaceRent,
+            REPORT_PUBLIC_COPY.workbook.professionalValue,
+            REPORT_PUBLIC_COPY.workbook.establishmentValue,
           ].map((name) => ({ name, filterButton: true })),
           rows: compensationRows.map((item) => [
             item.barberName,

@@ -1,5 +1,6 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 type DailyDashboardPoint = {
   label: string;
@@ -34,12 +35,14 @@ const tooltipStyle = {
 };
 
 export default function DashboardChartCard(props: DashboardChartCardProps) {
+  const copy = useBusinessCopy().admin.dashboard;
+
   if (props.variant === "daily") {
     return (
       <Card className="border-white/10 bg-card text-white">
         <CardHeader>
-          <CardTitle className="text-base font-bold">Evolução diária</CardTitle>
-          <p className="text-sm text-gray-400">Marcações, serviços concluídos e receita por dia.</p>
+          <CardTitle className="text-base font-bold">{copy.dailyEvolution}</CardTitle>
+          <p className="text-sm text-gray-400">{copy.dailyEvolutionDescription}</p>
         </CardHeader>
         <CardContent>
           <div className="h-[280px] w-full">
@@ -59,7 +62,7 @@ export default function DashboardChartCard(props: DashboardChartCardProps) {
                   labelStyle={{ color: "#fff" }}
                   formatter={(value, name) => [
                     name === "revenueCents" ? props.formatCents(Number(value)) : value,
-                    name === "revenueCents" ? "Receita" : name === "appointments" ? "Marcações" : "Concluídas",
+                    name === "revenueCents" ? copy.revenue : name === "appointments" ? copy.appointments : copy.completed,
                   ]}
                 />
                 <Area type="monotone" dataKey="revenueCents" stroke="hsl(var(--primary))" fill="url(#dashboardRevenue)" strokeWidth={2} />
@@ -76,11 +79,11 @@ export default function DashboardChartCard(props: DashboardChartCardProps) {
   return (
     <Card className="border-white/10 bg-card text-white">
       <CardHeader>
-        <CardTitle className="text-base font-bold">Desempenho por barbeiro</CardTitle>
+        <CardTitle className="text-base font-bold">{copy.professionalPerformance}</CardTitle>
       </CardHeader>
       <CardContent>
         {props.barbers.length === 0 ? (
-          <p className="py-8 text-center text-sm text-gray-500">Sem dados neste período.</p>
+          <p className="py-8 text-center text-sm text-gray-500">{copy.noDataInPeriod}</p>
         ) : (
           <div className="h-[260px] w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -92,7 +95,7 @@ export default function DashboardChartCard(props: DashboardChartCardProps) {
                   contentStyle={tooltipStyle}
                   formatter={(value, name) => [
                     name === "revenueCents" ? props.formatCents(Number(value)) : value,
-                    name === "revenueCents" ? "Receita" : "Marcações",
+                    name === "revenueCents" ? copy.revenue : copy.appointments,
                   ]}
                 />
                 <Bar dataKey="revenueCents" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />

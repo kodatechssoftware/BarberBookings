@@ -83,6 +83,32 @@ test("Beauty B3 copy uses professional and establishment terminology end-to-end"
   assert.equal(admin.compensation.workspaceRentModel, "Renda fixa de espaço");
 });
 
+test("Barber B4 copy preserves Dashboard and report terminology", () => {
+  const { dashboard, reports } = barberBusinessCopy.admin;
+  assert.equal(dashboard.busiestProfessional, "Barbeiro mais ocupado");
+  assert.equal(dashboard.professionalShare, "Parte dos barbeiros");
+  assert.equal(dashboard.professionalPerformance, "Desempenho por barbeiro");
+  assert.equal(reports.professionalLabel, "Barbeiro");
+  assert.equal(reports.expensesTitle, "Despesas da Barbearia");
+  assert.equal(reports.workbook.settlementsSheet, "Acertos com Barbeiros");
+  assert.equal(reports.workbook.workspaceRent, "Aluguer de cadeira (€)");
+});
+
+test("Beauty B4 copy uses neutral Dashboard and report terminology", () => {
+  const { dashboard, reports } = beautyBusinessCopy.admin;
+  assert.equal(dashboard.busiestProfessional, "Profissional mais ocupado");
+  assert.equal(dashboard.professionalShare, "Parte dos profissionais");
+  assert.equal(dashboard.professionalPerformance, "Desempenho por profissional");
+  assert.equal(reports.professionalLabel, "Profissional");
+  assert.equal(reports.expensesTitle, "Despesas do Estabelecimento");
+  assert.equal(reports.financeExcelHelp,
+    "O Excel combina este valor com a receita concluída e os pagamentos estimados aos profissionais.");
+  assert.equal(reports.compensationWorkspaceRent, "Renda fixa de espaço");
+  assert.equal(reports.workbook.settlementsSheet, "Acertos com Profissionais");
+  assert.equal(reports.workbook.workspaceRent, "Renda de espaço (€)");
+  assert.equal(reports.workbook.establishmentValue, "Valor do estabelecimento (€)");
+});
+
 test("Barber Booking keeps the existing public wording", () => {
   const copy = barberBusinessCopy.booking;
   assert.deepEqual(copy.steps, ["Barbeiro", "Serviço", "Data e hora", "Detalhes"]);
@@ -171,4 +197,41 @@ test("B3 backend public responses resolve professional wording through typed run
   assert.match(sharedSchemas, /Indique o nome do barbeiro/);
   assert.match(source, /issue\.path\[0\] === "name"/);
   assert.match(source, /TEAM_PUBLIC_COPY\.validationNameRequired/);
+});
+
+test("B4 Dashboard and final Excel output resolve public domain wording through BusinessCopy", () => {
+  const adminSource = readFileSync("client/src/pages/Admin.tsx", "utf8");
+  const chartSource = readFileSync("client/src/components/admin/DashboardChartCard.tsx", "utf8");
+  const serverSource = readFileSync("server/routes.ts", "utf8");
+  const dashboardStart = adminSource.indexOf("function TodayOverviewPanel");
+  const dashboardEnd = adminSource.indexOf("function getBarberAvatar", dashboardStart);
+  const dashboardSectionStart = adminSource.indexOf('ref={businessDashboardRef}');
+  const dashboardSectionEnd = adminSource.indexOf('<TabsContent value="appointments"', dashboardSectionStart);
+  const reportsStart = adminSource.indexOf('<TabsContent value="reports"');
+  const reportsEnd = adminSource.indexOf("</TabsContent>", reportsStart);
+  const finalWorkbookStart = serverSource.indexOf("// The accounting export deliberately replaces");
+  const finalWorkbookEnd = serverSource.indexOf("// === SEED DATA ===", finalWorkbookStart);
+  const ownWorkbookStart = serverSource.indexOf("if (isBarberSession)");
+  const ownWorkbookEnd = serverSource.indexOf("const summarySheet", ownWorkbookStart);
+  const publicSources = [
+    adminSource.slice(dashboardStart, dashboardEnd),
+    adminSource.slice(dashboardSectionStart, dashboardSectionEnd),
+    adminSource.slice(reportsStart, reportsEnd),
+    chartSource,
+    serverSource.slice(finalWorkbookStart, finalWorkbookEnd),
+    serverSource.slice(ownWorkbookStart, ownWorkbookEnd)
+      .replace(/ResumoDiarioBarbeiro|ResumoPorServicoBarbeiro|DetalheBarbeiro/g, ""),
+  ].join("\n");
+
+  assert.ok(dashboardStart >= 0 && dashboardEnd > dashboardStart);
+  assert.ok(reportsStart >= 0 && reportsEnd > reportsStart);
+  assert.ok(finalWorkbookStart >= 0 && finalWorkbookEnd > finalWorkbookStart);
+  assert.match(adminSource, /adminCopy\.dashboard\.professionalFilterPlaceholder/);
+  assert.match(adminSource, /adminCopy\.reports\.professionalLabel/);
+  assert.match(serverSource, /REPORT_PUBLIC_COPY\.workbook\.settlementsSheet/);
+  assert.match(serverSource, /REPORT_PUBLIC_COPY\.compensationWorkspaceRent/);
+  const forbiddenPublicLiterals = publicSources
+    .split(/\r?\n/)
+    .filter((line) => /["'`][^"'`]*(?:Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira)[^"'`]*["'`]/i.test(line));
+  assert.deepEqual(forbiddenPublicLiterals, []);
 });

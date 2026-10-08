@@ -500,14 +500,15 @@ function TodayOverviewPanel({
   getServiceName: (appointment: AdminAppointment) => string;
   showFinancialSummary?: boolean;
 }) {
+  const copy = useBusinessCopy().admin.dashboard;
   const next = summary.nextAppointment;
   const nextStart = next ? parseISO(next.startTime) : null;
   const metrics = [
-    { label: "Total do dia", value: String(summary.total), tone: "text-white" },
-    { label: "Atrasadas", value: String(summary.delayed), tone: summary.delayed ? "text-orange-300" : "text-gray-300" },
-    { label: "Faltas prováveis", value: String(summary.probableNoShows), tone: summary.probableNoShows ? "text-rose-300" : "text-gray-300" },
+    { label: copy.totalToday, value: String(summary.total), tone: "text-white" },
+    { label: copy.delayed, value: String(summary.delayed), tone: summary.delayed ? "text-orange-300" : "text-gray-300" },
+    { label: copy.probableNoShows, value: String(summary.probableNoShows), tone: summary.probableNoShows ? "text-rose-300" : "text-gray-300" },
     ...(showFinancialSummary
-      ? [{ label: "Receita prevista", value: formatCents(summary.projectedRevenueCents), tone: "text-primary" }]
+      ? [{ label: copy.projectedRevenue, value: formatCents(summary.projectedRevenueCents), tone: "text-primary" }]
       : []),
   ];
 
@@ -516,8 +517,8 @@ function TodayOverviewPanel({
       <CardHeader className="pb-3">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-widest text-primary">Hoje</p>
-            <CardTitle className="text-xl font-bold">Resumo do dia</CardTitle>
+            <p className="text-xs uppercase tracking-widest text-primary">{copy.today}</p>
+            <CardTitle className="text-xl font-bold">{copy.todaySummary}</CardTitle>
           </div>
           <p className="text-sm text-gray-400">{format(startOfToday(), "dd 'de' MMMM", { locale: pt })}</p>
         </div>
@@ -529,7 +530,7 @@ function TodayOverviewPanel({
           : "md:grid-cols-[1.4fr_repeat(3,minmax(0,1fr))]",
       )}>
         <div className="rounded-xl border border-white/10 bg-background/60 p-3">
-          <p className="text-xs uppercase tracking-widest text-gray-500">Próxima marcação</p>
+          <p className="text-xs uppercase tracking-widest text-gray-500">{copy.nextAppointment}</p>
           {next && nextStart ? (
             <div className="mt-2 min-w-0">
               <p className="truncate text-lg font-bold text-white">{next.customerName}</p>
@@ -537,7 +538,7 @@ function TodayOverviewPanel({
               <p className="mt-1 truncate text-xs text-gray-400">{getBarberName(next.barberId)}</p>
             </div>
           ) : (
-            <p className="mt-3 text-sm font-semibold text-gray-400">Sem próximas marcações hoje</p>
+            <p className="mt-3 text-sm font-semibold text-gray-400">{copy.noUpcomingToday}</p>
           )}
         </div>
         {metrics.map((item) => (
@@ -552,6 +553,7 @@ function TodayOverviewPanel({
 }
 
 function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
+  const copy = useBusinessCopy().admin.dashboard;
   const busiestBarber = [...data.barbers].sort((a, b) => b.booked - a.booked)[0];
   const topServices = data.services.slice(0, 5);
   const noShowsByMonth = Array.from(
@@ -572,11 +574,11 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
       <CardHeader>
         <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <CardTitle className="text-xl font-bold">Dashboard simples</CardTitle>
-            <p className="mt-1 text-sm text-gray-400">Receita, marcações e faltas num só lugar.</p>
+            <CardTitle className="text-xl font-bold">{copy.simpleTitle}</CardTitle>
+            <p className="mt-1 text-sm text-gray-400">{copy.simpleDescription}</p>
           </div>
           <span className="w-fit rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300">
-            Últimos {data.range.days} dias
+            {formatBusinessCopy(copy.lastDays, { days: data.range.days })}
           </span>
         </div>
       </CardHeader>
@@ -584,49 +586,51 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
-              <Euro className="h-4 w-4 text-green-300" /> Receita concluída
+              <Euro className="h-4 w-4 text-green-300" /> {copy.completedRevenue}
             </p>
             <p className="mt-2 text-2xl font-bold text-white">{formatCents(data.summary.revenueCents)}</p>
-            <p className="mt-1 text-xs text-gray-400">{data.summary.completed} serviços concluídos</p>
+            <p className="mt-1 text-xs text-gray-400">{formatBusinessCopy(copy.completedServices, { count: data.summary.completed })}</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
-              <TrendingUp className="h-4 w-4 text-primary" /> Receita prevista
+              <TrendingUp className="h-4 w-4 text-primary" /> {copy.projectedRevenue}
             </p>
             <p className="mt-2 text-2xl font-bold text-primary">{formatCents(data.summary.projectedRevenueCents)}</p>
-            <p className="mt-1 text-xs text-gray-400">{data.summary.booked} marcações ativas</p>
+            <p className="mt-1 text-xs text-gray-400">{formatBusinessCopy(copy.activeAppointments, { count: data.summary.booked })}</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
-              <Users className="h-4 w-4 text-blue-300" /> Barbeiro mais ocupado
+              <Users className="h-4 w-4 text-blue-300" /> {copy.busiestProfessional}
             </p>
-            <p className="mt-2 truncate text-xl font-bold text-white">{busiestBarber?.name || "Sem dados"}</p>
-            <p className="mt-1 text-xs text-gray-400">{busiestBarber ? `${busiestBarber.booked} marca\u00e7\u00f5es ativas` : "Ainda sem marca\u00e7\u00f5es"}</p>
+            <p className="mt-2 truncate text-xl font-bold text-white">{busiestBarber?.name || copy.noData}</p>
+            <p className="mt-1 text-xs text-gray-400">{busiestBarber
+              ? formatBusinessCopy(copy.activeAppointments, { count: busiestBarber.booked })
+              : copy.noAppointments}</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-gray-500">
-              <AlertTriangle className="h-4 w-4 text-rose-300" /> Faltas no período
+              <AlertTriangle className="h-4 w-4 text-rose-300" /> {copy.noShowsInPeriod}
             </p>
             <p className="mt-2 text-2xl font-bold text-rose-300">{data.summary.noShows}</p>
-            <p className="mt-1 text-xs text-gray-400">{data.summary.noShowRate}% de risco registado</p>
+            <p className="mt-1 text-xs text-gray-400">{formatBusinessCopy(copy.riskRate, { rate: data.summary.noShowRate })}</p>
           </div>
         </div>
 
         <div className="space-y-3" data-testid="dashboard-payment-breakdown">
           <div>
-            <h3 className="font-semibold text-white">Pagamentos das marcações concluídas</h3>
+            <h3 className="font-semibold text-white">{copy.completedPayments}</h3>
             <p className="mt-1 text-xs text-gray-400">
-              O Vale/Cupão preserva o valor nominal e os acertos, mas não conta como dinheiro recebido no momento.
+              {copy.voucherHelp}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             {[
-              ["Valor nominal", data.summary.nominalCompletedCents],
-              ["Dinheiro", data.summary.cashCents],
-              ["Multibanco", data.summary.cardCents],
-              ["Vale/Cupão", data.summary.voucherCents],
-              ["Oferta", data.summary.giftCents],
-              ["Por confirmar", data.summary.pendingPaymentCents],
+              [copy.nominalValue, data.summary.nominalCompletedCents],
+              [copy.cash, data.summary.cashCents],
+              [copy.card, data.summary.cardCents],
+              [copy.voucher, data.summary.voucherCents],
+              [copy.gift, data.summary.giftCents],
+              [copy.paymentPending, data.summary.pendingPaymentCents],
             ].map(([label, amount]) => (
               <div key={String(label)} className="rounded-xl border border-white/10 bg-background/60 p-3">
                 <p className="text-xs uppercase tracking-wider text-gray-500">{label}</p>
@@ -636,10 +640,10 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              ["Valor realizado", data.summary.revenueCents],
-              ["Parte dos barbeiros", data.summary.barberRevenueCents],
-              ["Parte do estabelecimento", data.summary.establishmentRevenueCents],
-              ["Comissões", data.summary.commissionCents],
+              [copy.realizedValue, data.summary.revenueCents],
+              [copy.professionalShare, data.summary.barberRevenueCents],
+              [copy.establishmentShare, data.summary.establishmentRevenueCents],
+              [copy.commissions, data.summary.commissionCents],
             ].map(([label, amount]) => (
               <div key={String(label)} className="rounded-xl border border-white/10 bg-background/60 p-3">
                 <p className="text-xs uppercase tracking-wider text-gray-500">{label}</p>
@@ -653,10 +657,10 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <div className="mb-4 flex items-center gap-2">
               <Scissors className="h-4 w-4 text-primary" />
-              <h3 className="font-semibold text-white">Serviços mais pedidos</h3>
+              <h3 className="font-semibold text-white">{copy.popularServices}</h3>
             </div>
             {topServices.length === 0 ? (
-              <p className="py-6 text-center text-sm text-gray-500">Sem dados neste período.</p>
+              <p className="py-6 text-center text-sm text-gray-500">{copy.noDataInPeriod}</p>
             ) : (
               <div className="space-y-3">
                 {topServices.map((service) => {
@@ -665,7 +669,7 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
                     <div key={service.key || service.id || service.name} className="space-y-2">
                       <div className="flex items-center justify-between gap-3 text-sm">
                         <span className="min-w-0 truncate font-medium text-white">{service.name}</span>
-                        <span className="shrink-0 text-gray-400">{service.count} marcações</span>
+                        <span className="shrink-0 text-gray-400">{formatBusinessCopy(copy.appointmentCount, { count: service.count })}</span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-white/10">
                         <div
@@ -683,10 +687,10 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <div className="mb-4 flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-rose-300" />
-              <h3 className="font-semibold text-white">Faltas por mês</h3>
+              <h3 className="font-semibold text-white">{copy.noShowsByMonth}</h3>
             </div>
             {noShowsByMonth.length === 0 ? (
-              <p className="py-6 text-center text-sm text-gray-500">Sem dados neste período.</p>
+              <p className="py-6 text-center text-sm text-gray-500">{copy.noDataInPeriod}</p>
             ) : (
               <div className="space-y-2">
                 {noShowsByMonth.map((item) => (
@@ -1770,7 +1774,7 @@ export default function Admin() {
       const res = await apiFetch(`/api/admin/dashboard?${params.toString()}`, {
         headers: locationHeaders(activeLocationId),
       });
-      if (!res.ok) throw new Error("Não foi possível carregar o dashboard.");
+      if (!res.ok) throw new Error(adminCopy.dashboard.loadError);
       return res.json();
     },
   });
@@ -1798,7 +1802,7 @@ export default function Admin() {
     enabled: user?.authorized === true && canExportTeamReports && activeTab === "reports",
     queryFn: async () => {
       const response = await apiFetch(exportBarberOptionsUrl);
-      if (!response.ok) throw new Error("Não foi possível carregar os barbeiros do relatório.");
+      if (!response.ok) throw new Error(adminCopy.reports.professionalsLoadError);
       return response.json();
     },
   });
@@ -2168,8 +2172,8 @@ export default function Admin() {
     try {
       if (exportDates.start > exportDates.end) {
         toast({
-          title: "Datas inválidas",
-          description: "A data de início não pode ser posterior à data de fim.",
+          title: adminCopy.reports.invalidDatesTitle,
+          description: adminCopy.reports.invalidDatesDescription,
           variant: "destructive",
         });
         return;
@@ -2183,7 +2187,7 @@ export default function Admin() {
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.message || "Falha ao gerar o relatório.");
+        throw new Error(errorBody?.message || adminCopy.reports.exportError);
       }
 
       const blob = await response.blob();
@@ -2195,9 +2199,9 @@ export default function Admin() {
       link.click();
       link.remove();
       URL.revokeObjectURL(downloadUrl);
-      toast({ title: "Sucesso", description: "O relatório foi descarregado." });
+      toast({ title: adminCopy.common.successTitle, description: adminCopy.reports.exportSuccess });
     } catch (err: any) {
-      toast({ title: "Erro", description: err.message || "Falha ao gerar o relatório.", variant: "destructive" });
+      toast({ title: adminCopy.common.errorTitle, description: err.message || adminCopy.reports.exportError, variant: "destructive" });
     } finally {
       setIsExporting(false);
     }
@@ -4235,7 +4239,7 @@ export default function Admin() {
             )}
             {canBlockCustomers && <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>}
             {canUseOwnOrTeamReports && (
-              <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
+              <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> {adminCopy.reports.tabLabel}</TabsTrigger>
             )}
           </TabsList>
           </div>
@@ -4277,29 +4281,29 @@ export default function Admin() {
               <>
             <div ref={businessDashboardRef} className="scroll-mt-24 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-xl font-bold text-white">Dashboard de negócio</h2>
+                <h2 className="text-xl font-bold text-white">{adminCopy.dashboard.sectionTitle}</h2>
                 <p className="text-sm text-gray-400">
-                  Receita, procura, faltas e clientes a recuperar num só lugar.
+                  {adminCopy.dashboard.sectionDescription}
                 </p>
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Select value={dashboardDays} onValueChange={handleDashboardDaysChange}>
-                  <SelectTrigger className="h-11 border-white/10 bg-card text-white sm:w-[170px]">
-                    <SelectValue placeholder="Período" />
+                  <SelectTrigger aria-label={adminCopy.dashboard.periodPlaceholder} className="h-11 border-white/10 bg-card text-white sm:w-[170px]">
+                    <SelectValue placeholder={adminCopy.dashboard.periodPlaceholder} />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-white/10 text-white">
-                    <SelectItem value="7">Últimos 7 dias</SelectItem>
-                    <SelectItem value="30">Últimos 30 dias</SelectItem>
-                    <SelectItem value="90">Últimos 90 dias</SelectItem>
+                    <SelectItem value="7">{adminCopy.dashboard.last7Days}</SelectItem>
+                    <SelectItem value="30">{adminCopy.dashboard.last30Days}</SelectItem>
+                    <SelectItem value="90">{adminCopy.dashboard.last90Days}</SelectItem>
                   </SelectContent>
                 </Select>
                 {canViewTeamFinance ? (
                   <Select value={dashboardBarberFilter} onValueChange={handleDashboardBarberChange}>
-                    <SelectTrigger className="h-11 border-white/10 bg-card text-white sm:w-[190px]">
-                      <SelectValue placeholder="Barbeiro" />
+                    <SelectTrigger aria-label={adminCopy.dashboard.professionalFilterPlaceholder} className="h-11 border-white/10 bg-card text-white sm:w-[190px]">
+                      <SelectValue placeholder={adminCopy.dashboard.professionalFilterPlaceholder} />
                     </SelectTrigger>
                     <SelectContent className="bg-card border-white/10 text-white">
-                      <SelectItem value="all">Todos os barbeiros</SelectItem>
+                      <SelectItem value="all">{adminCopy.dashboard.allProfessionals}</SelectItem>
                       {activeBarbers.map((barber) => (
                         <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>
                       ))}
@@ -5551,20 +5555,20 @@ export default function Admin() {
               )}
             >
               <CardHeader>
-                <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
+                <CardTitle className="text-xl font-display font-bold text-primary">{adminCopy.reports.exportTitle}</CardTitle>
                 <p className="text-gray-400 text-sm">
                   {canExportTeamReports
-                    ? "Gere um ficheiro .xlsx com o resumo financeiro, os estados e os detalhes das marcações do período."
-                    : "Gere um ficheiro .xlsx apenas com as suas marcações e resumo do período."}
+                    ? adminCopy.reports.adminExportDescription
+                    : adminCopy.reports.professionalExportDescription}
                 </p>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label className="text-white">Data de início</Label>
+                    <Label className="text-white">{adminCopy.reports.startDate}</Label>
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
+                        <Button aria-label={adminCopy.reports.startDate} variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
                           <CalendarIcon className="mr-2 h-4 w-4" />
                           {format(exportDates.start, "dd/MM/yyyy")}
                         </Button>
@@ -5575,10 +5579,10 @@ export default function Admin() {
                     </Popover>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-white">Data de fim</Label>
+                    <Label className="text-white">{adminCopy.reports.endDate}</Label>
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
+                        <Button aria-label={adminCopy.reports.endDate} variant="outline" className="w-full justify-start border-white/10 bg-background text-white h-11">
                           <CalendarIcon className="mr-2 h-4 w-4" />
                           {format(exportDates.end, "dd/MM/yyyy")}
                         </Button>
@@ -5592,37 +5596,37 @@ export default function Admin() {
 
                 {canExportTeamReports ? (
                   <div className="space-y-2">
-                    <Label className="text-white">Barbeiro</Label>
+                    <Label className="text-white">{adminCopy.reports.professionalLabel}</Label>
                     <Select value={exportDates.barberId} onValueChange={(v) => setExportDates({...exportDates, barberId: v})}>
-                      <SelectTrigger className="border-white/10 bg-background text-white h-11">
-                        <SelectValue placeholder="Selecione o barbeiro" />
+                      <SelectTrigger aria-label={adminCopy.reports.selectProfessional} className="border-white/10 bg-background text-white h-11">
+                        <SelectValue placeholder={adminCopy.reports.selectProfessional} />
                       </SelectTrigger>
                       <SelectContent className="bg-card border-white/10 text-white">
-                        <SelectItem value="all">Todos os barbeiros</SelectItem>
+                        <SelectItem value="all">{adminCopy.reports.allProfessionals}</SelectItem>
                         {(exportBarberOptions?.active || []).map((barber) => (
                           <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>
                         ))}
                         {(exportBarberOptions?.historical.length || 0) > 0 && (
                           <div className="px-2 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-gray-400">
-                            Com movimentos no período
+                            {adminCopy.reports.historicalSection}
                           </div>
                         )}
                         {exportBarberOptions?.historical.map((barber) => (
                           <SelectItem key={barber.id} value={String(barber.id)}>
-                            {barber.name} (histórico)
+                            {barber.name} ({adminCopy.reports.historicalSuffix})
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                     {(exportBarberOptions?.historical.length || 0) > 0 && (
                       <p className="text-xs text-gray-400">
-                        Os perfis antigos aparecem apenas quando têm movimentos no período selecionado.
+                        {adminCopy.reports.historicalHelp}
                       </p>
                     )}
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <Label className="text-white">Barbeiro</Label>
+                    <Label className="text-white">{adminCopy.reports.professionalLabel}</Label>
                     <div className="flex h-11 items-center rounded-md border border-white/10 bg-background px-3 text-sm font-semibold text-primary">
                       {user.name}
                     </div>
@@ -5631,7 +5635,7 @@ export default function Admin() {
 
                 <Button variant="gold" className="h-12 min-h-12 w-full gap-2 text-base font-bold" onClick={handleExport} disabled={isExporting}>
                   {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileDown className="w-5 h-5" />}
-                  Gerar Relatório Excel
+                  {adminCopy.reports.generate}
                 </Button>
               </CardContent>
             </Card>
@@ -5640,8 +5644,8 @@ export default function Admin() {
             <>
               <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:flex xl:h-full xl:flex-col">
                 <CardHeader>
-                  <CardTitle className="text-xl font-display font-bold text-primary">Despesas da Barbearia</CardTitle>
-                  <p className="text-gray-400 text-sm">Registe renda, água, luz, material, marketing ou outras despesas para serem incluídas no resumo financeiro.</p>
+                  <CardTitle className="text-xl font-display font-bold text-primary">{adminCopy.reports.expensesTitle}</CardTitle>
+                  <p className="text-gray-400 text-sm">{adminCopy.reports.expensesDescription}</p>
                 </CardHeader>
                 <CardContent className="xl:flex xl:flex-1 xl:flex-col">
                   <form className="flex flex-1 flex-col gap-4" onSubmit={handleAddExpense}>
@@ -5684,7 +5688,7 @@ export default function Admin() {
                         value={expenseForm.description}
                         onChange={(event) => setExpenseForm({...expenseForm, description: event.target.value})}
                         className="border-white/10 bg-background text-white h-11"
-                        placeholder="Ex.: renda de julho, lâminas, eletricidade"
+                        placeholder={adminCopy.reports.expenseDescriptionPlaceholder}
                       />
                     </div>
 
@@ -5712,7 +5716,7 @@ export default function Admin() {
                           </SelectContent>
                         </Select>
                         <p className="text-xs text-gray-500">
-                          O valor é incluído no período correspondente à data registada. Use a periodicidade para identificar despesas fixas ou recorrentes.
+                          {adminCopy.reports.expenseRecurrenceHelp}
                         </p>
                       </div>
                     </div>
@@ -5723,13 +5727,13 @@ export default function Admin() {
                         value={expenseForm.notes}
                         onChange={(event) => setExpenseForm({...expenseForm, notes: event.target.value})}
                         className="min-h-[76px] border-white/10 bg-background text-white"
-                        placeholder="Opcional. Ex.: pago em dinheiro, fornecedor, referência."
+                        placeholder={adminCopy.reports.expenseNotesPlaceholder}
                       />
                     </div>
 
                     <Button type="submit" variant="gold" className="mt-0 h-12 min-h-12 w-full gap-2 text-base font-bold xl:mt-auto" disabled={isSavingExpense}>
                       {isSavingExpense ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-                      Registar despesa
+                      {adminCopy.reports.registerExpense}
                     </Button>
                   </form>
                 </CardContent>
@@ -5737,29 +5741,29 @@ export default function Admin() {
 
               <Card className="bg-card border-white/10 xl:col-start-2 xl:row-start-2">
                 <CardHeader>
-                  <CardTitle className="text-xl font-display font-bold text-primary">Resumo financeiro</CardTitle>
-                  <p className="text-gray-400 text-sm">Despesas registadas no período selecionado para o relatório.</p>
+                  <CardTitle className="text-xl font-display font-bold text-primary">{adminCopy.reports.financeSummaryTitle}</CardTitle>
+                  <p className="text-gray-400 text-sm">{adminCopy.reports.financeSummaryDescription}</p>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="rounded-md border border-white/10 bg-background/70 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Total de despesas</p>
+                        <p className="text-xs uppercase tracking-[0.18em] text-gray-500">{adminCopy.reports.totalExpenses}</p>
                         <p data-testid="business-expenses-total" className="text-2xl font-bold text-white">{(businessExpensesTotalCents / 100).toFixed(2).replace(".", ",")} €</p>
                       </div>
                       <Euro className="h-6 w-6 text-primary" />
                     </div>
-                    <p className="mt-2 text-xs text-gray-500">O Excel combina este valor com a receita concluída e os pagamentos estimados aos barbeiros.</p>
+                    <p className="mt-2 text-xs text-gray-500">{adminCopy.reports.financeExcelHelp}</p>
                   </div>
 
                   {isLoadingExpenses ? (
                     <div className="flex items-center justify-center rounded-md border border-white/10 py-10 text-gray-400">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      A carregar despesas...
+                      {adminCopy.reports.loadingExpenses}
                     </div>
                   ) : businessExpenses.length === 0 ? (
                     <div className="rounded-md border border-dashed border-white/10 py-10 text-center text-gray-500">
-                      Sem despesas registadas neste período.
+                      {adminCopy.reports.noExpenses}
                     </div>
                   ) : (
                     <div className="divide-y divide-white/10 rounded-md border border-white/10">
@@ -5786,7 +5790,7 @@ export default function Admin() {
                               variant="outline"
                               size="sm"
                               disabled={deletingExpenseId !== null}
-                              aria-label={`Remover despesa ${expense.description}`}
+                              aria-label={formatBusinessCopy(adminCopy.reports.removeExpenseAria, { description: expense.description })}
                               className="border-red-500/30 text-red-300 hover:bg-red-500/10"
                               onClick={() => handleDeleteExpense(expense)}
                             >

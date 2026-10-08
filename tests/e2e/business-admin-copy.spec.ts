@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import ExcelJS from "exceljs";
 import { resolveBusinessRuntimeConfig } from "../../server/business-runtime-config";
 
 const beautyRuntimeConfig = resolveBusinessRuntimeConfig({
@@ -13,11 +14,75 @@ async function loginAdmin(request: APIRequestContext) {
   expect(response.ok()).toBe(true);
 }
 
+async function mockDashboardAndReports(page: Page) {
+  await page.route("**/api/admin/dashboard?**", async (route) => {
+    await route.fulfill({
+      json: {
+        range: { startDate: "2026-10-01", endDate: "2026-10-30", days: 30, barberId: "all" },
+        summary: {
+          appointments: 4,
+          completed: 2,
+          booked: 2,
+          cancellations: 0,
+          noShows: 0,
+          revenueCents: 5000,
+          nominalCompletedCents: 5000,
+          receivedCents: 5000,
+          cashCents: 2500,
+          cardCents: 2500,
+          voucherCents: 0,
+          giftCents: 0,
+          pendingPaymentCents: 0,
+          projectedRevenueCents: 4000,
+          extrasRevenueCents: 0,
+          barberRevenueCents: 2500,
+          establishmentRevenueCents: 2500,
+          commissionCents: 2500,
+          chairRentCents: 0,
+          averageTicketCents: 2500,
+          completionRate: 50,
+          noShowRate: 0,
+          upcomingWeek: 2,
+          inactiveCustomers: 0,
+          busiestHour: "10:00",
+        },
+        daily: [],
+        barbers: [{
+          id: 1,
+          name: "Ana",
+          appointments: 4,
+          completed: 2,
+          booked: 2,
+          noShows: 0,
+          revenueCents: 5000,
+        }],
+        services: [{ key: "1", id: 1, name: "Tratamento", count: 4, revenueCents: 5000 }],
+        inactiveCustomers: [],
+      },
+    });
+  });
+  await page.route("**/api/admin/export/barbers?**", async (route) => {
+    await route.fulfill({ json: { active: [{ id: 1, name: "Ana" }], historical: [] } });
+  });
+  await page.route("**/api/admin/expenses?**", async (route) => {
+    await route.fulfill({ json: [] });
+  });
+}
+
 test("Barber Admin and Agenda preserve the existing copy", async ({ page }) => {
+  await mockDashboardAndReports(page);
   await loginAdmin(page.request);
   await page.goto("/admin");
 
   await expect(page.getByLabel("Filtrar barbeiro")).toBeVisible();
+  await expect(page.getByText("Barbeiro mais ocupado", { exact: true })).toBeVisible();
+  await expect(page.getByText("Parte dos barbeiros", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Período", { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Relatórios", exact: true }).click();
+  await expect(page.getByText("Exportar Relatório Excel", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Selecione o barbeiro")).toBeVisible();
+  await expect(page.getByText("Despesas da Barbearia", { exact: true })).toBeVisible();
 
   await page.getByRole("tab", { name: "Equipa", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Equipa de Barbeiros" })).toBeVisible();
@@ -57,10 +122,19 @@ test("Beauty Admin and Agenda use neutral copy on mobile", async ({ page }) => {
       json: [{ id: 999, name: "Tratamento", price: 2500, duration: 45, basePrice: 2500, baseDuration: 45 }],
     });
   });
+  await mockDashboardAndReports(page);
   await loginAdmin(page.request);
   await page.goto("/admin");
 
   await expect(page.getByLabel("Filtrar profissional")).toBeVisible();
+  await expect(page.getByText("Profissional mais ocupado", { exact: true })).toBeVisible();
+  await expect(page.getByText("Parte dos profissionais", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Profissional", { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Relatórios", exact: true }).click();
+  await expect(page.getByLabel("Selecione o profissional")).toBeVisible();
+  await expect(page.getByText("Despesas do Estabelecimento", { exact: true })).toBeVisible();
+  await expect(page.getByText(/pagamentos estimados aos profissionais/i)).toBeVisible();
 
   await page.getByRole("tab", { name: "Equipa", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Equipa de Profissionais" })).toBeVisible();
@@ -144,4 +218,118 @@ test("Admin team and schedule API errors follow the resolved backend vertical", 
   });
   expect(specialtyResponse.status()).toBe(400);
   expect(await specialtyResponse.json()).toMatchObject({ message: expectedSpecialty, field: "specialty" });
+});
+
+test("Excel report headings follow the resolved backend vertical without changing its structure", async ({ request }) => {
+  await loginAdmin(request);
+  const runtimeResponse = await request.get("/api/runtime-config");
+  expect(runtimeResponse.ok()).toBe(true);
+  const runtime = await runtimeResponse.json() as { vertical: "barber" | "beauty" };
+  const exportResponse = await request.get(
+    "/api/admin/export?startDate=2026-10-01&endDate=2026-10-02&barberId=all",
+  );
+  expect(exportResponse.ok()).toBe(true);
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await exportResponse.body());
+  expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+    "Resumo Financeiro",
+    "Detalhe dos Movimentos",
+  ]);
+  const summary = workbook.getWorksheet("Resumo Financeiro");
+  const movements = workbook.getWorksheet("Detalhe dos Movimentos");
+  expect(summary).toBeTruthy();
+  expect(movements).toBeTruthy();
+
+  const visibleText = workbook.worksheets.flatMap((sheet) => {
+    const values: string[] = [];
+    sheet.eachRow((row) => row.eachCell((cell) => {
+      if (typeof cell.value === "string") values.push(cell.value);
+    }));
+    return values;
+  }).join("\n");
+
+  if (runtime.vertical === "beauty") {
+    expect(summary!.getCell("A3").value).toBe("Estabelecimento");
+    expect(summary!.getCell("A5").value).toBe("Profissional");
+    expect(movements!.getCell("D3").value).toBe("Profissional");
+    expect(visibleText).not.toMatch(/Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira/i);
+  } else {
+    expect(summary!.getCell("A3").value).toBe("Barbearia");
+    expect(summary!.getCell("A5").value).toBe("Barbeiro");
+    expect(movements!.getCell("D3").value).toBe("Barbeiro");
+  }
+});
+
+test("chair rent calculations keep their values while report labels follow the backend vertical", async ({ request }) => {
+  await loginAdmin(request);
+  const runtime = await (await request.get("/api/runtime-config")).json() as { vertical: "barber" | "beauty" };
+  const suffix = Date.now();
+  const serviceResponse = await request.post("/api/services", {
+    data: {
+      name: `Serviço B4 ${suffix}`,
+      agendaLabel: "B4",
+      description: "Validação de labels B4",
+      price: 10000,
+      duration: 60,
+    },
+  });
+  expect(serviceResponse.ok(), await serviceResponse.text()).toBe(true);
+  const service = await serviceResponse.json();
+  const professionalResponse = await request.post("/api/barbers", {
+    data: {
+      name: `Profissional B4 ${suffix}`,
+      specialty: "Teste B4",
+      color: "#7C3AED",
+      isVisible: true,
+      serviceIds: [service.id],
+      compensationModel: "chair_rent",
+      chairRentCents: 2500,
+      chairRentPeriod: "month",
+    },
+  });
+  expect(professionalResponse.ok(), await professionalResponse.text()).toBe(true);
+  const professional = await professionalResponse.json();
+  const appointmentResponse = await request.post("/api/appointments/block", {
+    data: {
+      barberId: professional.id,
+      serviceId: service.id,
+      startTime: "2026-10-01T10:00:00.000Z",
+      name: `Cliente B4 ${suffix}`,
+      phone: "+351912697411",
+      isManualBooking: true,
+      allowOutsideHours: true,
+      isAlreadyCompleted: true,
+      paymentMethod: "cash",
+    },
+  });
+  expect(appointmentResponse.status(), await appointmentResponse.text()).toBe(201);
+
+  const exportResponse = await request.get(
+    `/api/admin/export?startDate=2026-10-01&endDate=2026-10-01&barberId=${professional.id}`,
+  );
+  expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await exportResponse.body());
+  const expectedSheet = runtime.vertical === "beauty" ? "Acertos com Profissionais" : "Acertos com Barbeiros";
+  const expectedProfessional = runtime.vertical === "beauty" ? "Profissional" : "Barbeiro";
+  const expectedRent = runtime.vertical === "beauty" ? "Renda de espaço (€)" : "Aluguer de cadeira (€)";
+  const expectedModel = runtime.vertical === "beauty" ? "Renda fixa de espaço" : "Aluguer fixo de cadeira";
+  const settlement = workbook.getWorksheet(expectedSheet);
+  expect(settlement).toBeTruthy();
+  expect(settlement!.getRow(5).values).toEqual([
+    undefined,
+    expectedProfessional,
+    "Modelo aplicado",
+    "Serviços concluídos",
+    "Base de acerto (€)",
+    runtime.vertical === "beauty" ? "Comissões do profissional (€)" : "Comissões do barbeiro (€)",
+    expectedRent,
+    runtime.vertical === "beauty" ? "Valor do profissional (€)" : "Valor do barbeiro (€)",
+    runtime.vertical === "beauty" ? "Valor do estabelecimento (€)" : "Valor da barbearia (€)",
+  ]);
+  expect(settlement!.getCell("B6").value).toBe(expectedModel);
+  expect(settlement!.getCell("F6").value).toBe(25);
+  expect(settlement!.getCell("G6").value).toBe(75);
+  expect(settlement!.getCell("H6").value).toBe(25);
 });
