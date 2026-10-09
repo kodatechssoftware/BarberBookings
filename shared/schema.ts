@@ -2,6 +2,7 @@ import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKe
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
+import { accessPresetKeys, capabilityCodes } from "./auth";
 
 const databaseSchema =
   typeof process !== "undefined" ? process.env.DATABASE_SCHEMA?.trim() : undefined;
@@ -28,6 +29,9 @@ export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appoint
 export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 export const extraDefinitionsIdSeq = appPgSchema?.sequence("extra_definitions_id_seq");
+export const usersIdSeq = appPgSchema?.sequence("users_id_seq");
+export const userAccessScopesIdSeq = appPgSchema?.sequence("user_access_scopes_id_seq");
+export const userInvitesIdSeq = appPgSchema?.sequence("user_invites_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -56,6 +60,8 @@ export const appointmentPaymentMethods = [
   "voucher",
   "gift",
 ] as const;
+
+export const userStatuses = ["invited", "active", "disabled"] as const;
 
 export const barberCompensationModels = [
   "none",
@@ -145,6 +151,37 @@ export const locations = appPgTable("locations", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+/** Canonical login identity. Legacy admins/barbers remain authoritative until auth cutover. */
+export const users = appPgTable("users", {
+  id: idColumn("users_id_seq"),
+  displayName: text("display_name").notNull(),
+  username: text("username"),
+  usernameKey: text("username_key").generatedAlwaysAs(sql`lower(btrim(username))`),
+  email: text("email").notNull(),
+  emailKey: text("email_key").notNull().generatedAlwaysAs(sql`lower(btrim(email))`),
+  passwordHash: text("password_hash"),
+  status: text("status", { enum: userStatuses }).notNull().default("invited"),
+  authVersion: integer("auth_version").notNull().default(1),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  displayNameNotBlankCheck: check("users_display_name_not_blank_check", sql`btrim(${table.displayName}) <> ''`),
+  emailNotBlankCheck: check("users_email_not_blank_check", sql`btrim(${table.email}) <> ''`),
+  usernameNotBlankCheck: check("users_username_not_blank_check", sql`${table.username} IS NULL OR btrim(${table.username}) <> ''`),
+  statusCheck: check("users_status_check", sql`${table.status} IN ('invited', 'active', 'disabled')`),
+  authVersionCheck: check("users_auth_version_check", sql`${table.authVersion} > 0`),
+  passwordStateCheck: check("users_password_state_check", sql`
+    (${table.status} = 'active' AND ${table.passwordHash} IS NOT NULL AND btrim(${table.passwordHash}) <> '')
+    OR (${table.status} IN ('invited', 'disabled') AND (${table.passwordHash} IS NULL OR btrim(${table.passwordHash}) <> ''))
+  `),
+  timestampsCheck: check("users_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+  emailKeyUnique: uniqueIndex("users_email_key_unique").on(table.emailKey),
+  usernameKeyUnique: uniqueIndex("users_username_key_unique")
+    .on(table.usernameKey)
+    .where(sql`${table.usernameKey} IS NOT NULL`),
+}));
+
 export const barbers = appPgTable("barbers", {
   id: idColumn("barbers_id_seq"),
   name: text("name").notNull(),
@@ -153,9 +190,14 @@ export const barbers = appPgTable("barbers", {
   avatar: text("avatar"),
   email: text("email").unique(),
   password: text("password"),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
   color: text("color").notNull().default("#D4AF37"),
   isVisible: boolean("is_visible").default(true),
-});
+}, (table) => ({
+  userIdUnique: uniqueIndex("barbers_user_id_unique")
+    .on(table.userId)
+    .where(sql`${table.userId} IS NOT NULL`),
+}));
 
 export const serviceCategories = appPgTable("service_categories", {
   id: idColumn("service_categories_id_seq"),
@@ -335,7 +377,69 @@ export const admins = appPgTable("admins", {
   username: text("username").notNull().unique(),
   email: text("email").unique(),
   password: text("password").notNull(),
-});
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+}, (table) => ({
+  userIdUnique: uniqueIndex("admins_user_id_unique")
+    .on(table.userId)
+    .where(sql`${table.userId} IS NOT NULL`),
+}));
+
+/** Presets remain code-owned; scopes persist only a known key plus optional explicit grants. */
+export const userAccessScopes = appPgTable("user_access_scopes", {
+  id: idColumn("user_access_scopes_id_seq"),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "cascade" }),
+  presetKey: text("preset_key", { enum: accessPresetKeys }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  presetKeyCheck: check("user_access_scopes_preset_key_check",
+    sql`${table.presetKey} IS NULL OR ${table.presetKey} IN ('administrator', 'professional')`),
+  administratorGlobalCheck: check("user_access_scopes_administrator_global_check",
+    sql`${table.presetKey} IS DISTINCT FROM 'administrator' OR ${table.locationId} IS NULL`),
+  timestampsCheck: check("user_access_scopes_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+  globalScopeUnique: uniqueIndex("user_access_scopes_global_unique")
+    .on(table.userId)
+    .where(sql`${table.locationId} IS NULL`),
+  locationScopeUnique: uniqueIndex("user_access_scopes_location_unique")
+    .on(table.userId, table.locationId)
+    .where(sql`${table.locationId} IS NOT NULL`),
+}));
+
+const capabilitySqlList = sql.raw(capabilityCodes.map((code) => `'${code}'`).join(", "));
+
+export const userAccessScopeCapabilities = appPgTable("user_access_scope_capabilities", {
+  accessScopeId: integer("access_scope_id")
+    .references(() => userAccessScopes.id, { onDelete: "cascade" })
+    .notNull(),
+  capabilityCode: text("capability_code").notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.accessScopeId, table.capabilityCode] }),
+  capabilityCodeCheck: check("user_access_scope_capabilities_code_check",
+    sql`${table.capabilityCode} IN (${capabilitySqlList})`),
+}));
+
+export const userInvites = appPgTable("user_invites", {
+  id: idColumn("user_invites_id_seq"),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  tokenDigest: text("token_digest").notNull(),
+  invitedByUserId: integer("invited_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tokenDigestUnique: uniqueIndex("user_invites_token_digest_unique").on(table.tokenDigest),
+  userIdx: index("user_invites_user_idx").on(table.userId, table.createdAt),
+  tokenDigestNotBlankCheck: check("user_invites_token_digest_not_blank_check", sql`btrim(${table.tokenDigest}) <> ''`),
+  expiryCheck: check("user_invites_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+  terminalStateCheck: check("user_invites_terminal_state_check",
+    sql`${table.acceptedAt} IS NULL OR ${table.revokedAt} IS NULL`),
+  acceptedAtCheck: check("user_invites_accepted_at_check",
+    sql`${table.acceptedAt} IS NULL OR ${table.acceptedAt} >= ${table.createdAt}`),
+  revokedAtCheck: check("user_invites_revoked_at_check",
+    sql`${table.revokedAt} IS NULL OR ${table.revokedAt} >= ${table.createdAt}`),
+}));
 
 export const blacklist = appPgTable("blacklist", {
   id: idColumn("blacklist_id_seq"),
@@ -467,13 +571,20 @@ export const auditLogs = appPgTable("audit_logs", {
   actorType: text("actor_type").notNull(),
   actorId: integer("actor_id"),
   actorName: text("actor_name"),
+  actorUserId: integer("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  actorProfessionalId: integer("actor_professional_id").references(() => barbers.id, { onDelete: "set null" }),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "set null" }),
   action: text("action").notNull(),
   entityType: text("entity_type").notNull(),
   entityId: integer("entity_id"),
   summary: text("summary").notNull(),
   metadata: text("metadata"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  actorUserIdx: index("audit_logs_actor_user_idx").on(table.actorUserId, table.createdAt),
+  actorProfessionalIdx: index("audit_logs_actor_professional_idx").on(table.actorProfessionalId, table.createdAt),
+  locationIdx: index("audit_logs_location_idx").on(table.locationId, table.createdAt),
+}));
 
 export const barberCompensationRules = appPgTable("barber_compensation_rules", {
   id: idColumn("barber_compensation_rules_id_seq"),
@@ -640,7 +751,64 @@ export const appointmentExtrasRelations = relations(appointmentExtras, ({ one })
   }),
 }));
 
-export const barbersRelations = relations(barbers, ({ many }) => ({
+export const usersRelations = relations(users, ({ one, many }) => ({
+  legacyAdmin: one(admins, {
+    fields: [users.id],
+    references: [admins.userId],
+  }),
+  professional: one(barbers, {
+    fields: [users.id],
+    references: [barbers.userId],
+  }),
+  accessScopes: many(userAccessScopes),
+  invites: many(userInvites, { relationName: "invitedUser" }),
+  sentInvites: many(userInvites, { relationName: "invitingUser" }),
+}));
+
+export const adminsRelations = relations(admins, ({ one }) => ({
+  user: one(users, {
+    fields: [admins.userId],
+    references: [users.id],
+  }),
+}));
+
+export const userAccessScopesRelations = relations(userAccessScopes, ({ one, many }) => ({
+  user: one(users, {
+    fields: [userAccessScopes.userId],
+    references: [users.id],
+  }),
+  location: one(locations, {
+    fields: [userAccessScopes.locationId],
+    references: [locations.id],
+  }),
+  capabilities: many(userAccessScopeCapabilities),
+}));
+
+export const userAccessScopeCapabilitiesRelations = relations(userAccessScopeCapabilities, ({ one }) => ({
+  scope: one(userAccessScopes, {
+    fields: [userAccessScopeCapabilities.accessScopeId],
+    references: [userAccessScopes.id],
+  }),
+}));
+
+export const userInvitesRelations = relations(userInvites, ({ one }) => ({
+  user: one(users, {
+    relationName: "invitedUser",
+    fields: [userInvites.userId],
+    references: [users.id],
+  }),
+  invitedBy: one(users, {
+    relationName: "invitingUser",
+    fields: [userInvites.invitedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const barbersRelations = relations(barbers, ({ one, many }) => ({
+  user: one(users, {
+    fields: [barbers.userId],
+    references: [users.id],
+  }),
   appointments: many(appointments),
   serviceAssignments: many(barberServices),
   compensationRules: many(barberCompensationRules),
@@ -776,6 +944,18 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   whatsappOptIn: z.boolean().optional().default(false),
 });
 export const insertAdminSchema = createInsertSchema(admins).omit({ id: true });
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertUserAccessScopeSchema = createInsertSchema(userAccessScopes).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertUserAccessScopeCapabilitySchema = createInsertSchema(userAccessScopeCapabilities);
+export const insertUserInviteSchema = createInsertSchema(userInvites).omit({ id: true, createdAt: true });
 export const insertBlacklistSchema = createInsertSchema(blacklist).omit({ id: true, createdAt: true });
 export const insertShopAvailabilitySchema = createInsertSchema(shopAvailability).omit({ id: true });
 export const insertBarberAvailabilitySchema = createInsertSchema(barberAvailability).omit({ id: true });
@@ -842,6 +1022,10 @@ export type ExtraPricingMode = typeof extraPricingModes[number];
 export type AppointmentStatus = typeof appointmentStatuses[number];
 export type AppointmentPaymentMethod = typeof appointmentPaymentMethods[number];
 export type Admin = typeof admins.$inferSelect;
+export type User = typeof users.$inferSelect;
+export type UserAccessScope = typeof userAccessScopes.$inferSelect;
+export type UserAccessScopeCapability = typeof userAccessScopeCapabilities.$inferSelect;
+export type UserInvite = typeof userInvites.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
 export type BarberAvailability = typeof barberAvailability.$inferSelect;

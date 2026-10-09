@@ -163,6 +163,9 @@ try {
   const table = (name: string) => `"${schema}"."${name}"`;
   await pool.query(`CREATE SCHEMA "${schema}"`);
   await pool.query(`
+    CREATE TABLE ${table("admins")} (
+      id serial PRIMARY KEY, username text NOT NULL UNIQUE, email text UNIQUE, password text NOT NULL
+    );
     CREATE TABLE ${table("barbers")} (
       id serial PRIMARY KEY, name text NOT NULL, specialty text NOT NULL, bio text, avatar text,
       email text, password text, color text NOT NULL DEFAULT '#D4AF37', is_visible boolean DEFAULT true
@@ -206,6 +209,18 @@ try {
       expense_date timestamp NOT NULL, recurrence text NOT NULL DEFAULT 'once', notes text,
       created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now()
     );
+    CREATE TABLE ${table("barber_invites")} (
+      id serial PRIMARY KEY, barber_id integer NOT NULL REFERENCES ${table("barbers")}(id),
+      token text NOT NULL UNIQUE, expires_at timestamp NOT NULL, used_at timestamp,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
+    CREATE TABLE ${table("audit_logs")} (
+      id serial PRIMARY KEY, actor_type text NOT NULL, actor_id integer, actor_name text,
+      action text NOT NULL, entity_type text NOT NULL, entity_id integer,
+      summary text NOT NULL, metadata text, created_at timestamp NOT NULL DEFAULT now()
+    );
+    INSERT INTO ${table("admins")} (username, email, password)
+      VALUES ('admin', 'owner@example.test', '$2b$legacy-admin');
     INSERT INTO ${table("barbers")} (name, specialty) VALUES ('Barbeiro original', 'Corte');
     INSERT INTO ${table("services")} (name, description, agenda_label, price, duration, is_visible) VALUES
       ('Serviço original', 'Descrição original', 'Original', 1500, 30, true),
@@ -220,10 +235,15 @@ try {
     INSERT INTO ${table("customer_notes")} (phone, customer_name_key, email, notes) VALUES ('910000000', 'cliente original', 'cliente@example.test', 'Nota existente');
     INSERT INTO ${table("blacklist")} (phone, reason) VALUES ('919999999', 'Teste existente');
     INSERT INTO ${table("business_expenses")} (category, description, amount_cents, expense_date) VALUES ('rent', 'Renda existente', 50000, '2030-09-01');
+    INSERT INTO ${table("barber_invites")} (barber_id, token, expires_at)
+      VALUES (1, 'legacy-invite-token', '2031-01-01');
+    INSERT INTO ${table("audit_logs")} (
+      actor_type, actor_id, actor_name, action, entity_type, entity_id, summary
+    ) VALUES ('admin', 1, 'admin', 'legacy.action', 'legacy', 1, 'Legacy audit');
   `);
 
-  const preservedTables = ["barbers", "services", "appointments", "shop_availability", "barber_availability",
-    "barber_services", "customer_notes", "blacklist", "business_expenses"];
+  const preservedTables = ["admins", "barbers", "services", "appointments", "shop_availability", "barber_availability",
+    "barber_services", "barber_invites", "customer_notes", "blacklist", "business_expenses", "audit_logs"];
   const legacyServicesBefore = (await pool.query(`
     SELECT id, name, description, agenda_label, price, duration, is_visible
     FROM ${table("services")} ORDER BY id
@@ -253,7 +273,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 14, "a fresh empty application schema must apply migrations 0001 through 0014");
+  assert.equal(freshRun.applied.length, 15, "a fresh empty application schema must apply migrations 0001 through 0015");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -276,13 +296,15 @@ try {
     WHERE table_schema = $1 AND table_name = 'barber_services'
   `, [freshSchema])).rows;
   assert.ok(freshBarberServiceColumns.some((column) => column.column_name === "location_id" && column.is_nullable === "NO"));
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("users")}`)).rows[0].count), 0,
+    "the auth foundation must not create canonical users during a fresh migration");
   const secondFreshRun = await runSchemaMigrations(pool, {
     schemaName: freshSchema,
     environment,
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 14);
+  assert.equal(secondFreshRun.alreadyApplied, 15);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -992,8 +1014,17 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.deepEqual(compensationMigrationRun.applied, ["0014_barber_location_compensation.sql"]);
+  assert.deepEqual(compensationMigrationRun.applied, [
+    "0014_barber_location_compensation.sql",
+    "0015_auth_users_foundation.sql",
+  ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("users")}`)).rows[0].count), 0,
+    "migration 0015 must not backfill canonical users");
+  assert.equal((await pool.query(`SELECT user_id FROM ${table("admins")} WHERE id = 1`)).rows[0].user_id, null,
+    "migration 0015 must leave the legacy admin unlinked");
+  assert.equal((await pool.query(`SELECT user_id FROM ${table("barbers")} WHERE id = 1`)).rows[0].user_id, null,
+    "migration 0015 must leave the legacy professional unlinked");
   assert.deepEqual((await pool.query(`
     SELECT barber_id, location_id, model, commission_percent, effective_from
     FROM ${table("barber_compensation_rules")}
@@ -1112,7 +1143,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 14);
+  assert.equal(secondCompensationRun.alreadyApplied, 15);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1131,6 +1162,11 @@ try {
     "barber_compensation_rules_barber_location_effective_idx",
     "barber_compensation_rules_barber_location_effective_uidx",
     "barber_compensation_rules_snapshot_identity_uidx",
+    "users_email_key_unique", "users_username_key_unique",
+    "barbers_user_id_unique", "admins_user_id_unique",
+    "user_access_scopes_global_unique", "user_access_scopes_location_unique",
+    "user_invites_token_digest_unique", "user_invites_user_idx",
+    "audit_logs_actor_user_idx", "audit_logs_actor_professional_idx", "audit_logs_location_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
   assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
     "the legacy global customer-note identity index must be removed");
@@ -1761,7 +1797,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0014, location-specific service offers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0015, additive auth foundation, location-specific service offers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

@@ -2476,6 +2476,7 @@ export class MemoryStorage implements IStorage {
       avatar: barber.avatar ?? null,
       email: barber.email ?? null,
       password: barber.password ?? null,
+      userId: null,
       color: barber.color ?? "#D4AF37",
       isVisible: barber.isVisible ?? true,
     };
@@ -3262,6 +3263,7 @@ export class MemoryStorage implements IStorage {
       username: admin.username,
       email: admin.email ?? null,
       password: admin.password,
+      userId: null,
     };
     this.admins.push(newAdmin);
     return newAdmin;
@@ -3525,6 +3527,9 @@ export class MemoryStorage implements IStorage {
       actorType: log.actorType,
       actorId: log.actorId ?? null,
       actorName: log.actorName ?? null,
+      actorUserId: log.actorUserId ?? null,
+      actorProfessionalId: log.actorProfessionalId ?? null,
+      locationId: log.locationId ?? null,
       action: log.action,
       entityType: log.entityType,
       entityId: log.entityId ?? null,

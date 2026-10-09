@@ -59,6 +59,13 @@ location, including inactive historical associations, but stops and rolls back
 for ambiguous shared chair-rent histories. It also adds database constraints
 and immutable compensation snapshots for newly completed appointments.
 
+Migration `0015_auth_users_foundation.sql` adds the canonical `users` identity,
+location/global access scopes, explicit capability grants, digest-only user
+invites, nullable legacy links from `admins` and `barbers`, and additive audit
+actor references. It intentionally creates no users, changes no legacy login or
+session path, and performs no identity backfill; that remains a separately
+approved migration phase after the read-only legacy preflight.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification

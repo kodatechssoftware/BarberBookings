@@ -18,5 +18,9 @@ local scopes cannot receive capabilities such as `team.manage_global` or
 future manager preset is intentionally not declared yet. Custom access is
 represented by explicit capabilities on a scope rather than by a fake preset.
 
-P1 is a pure shared contract. It is intentionally not connected to the legacy
-`admin`/`barber` session or route guards yet.
+P1 is a pure shared contract. P2A adds dormant persistence for canonical users,
+global/location scopes and explicit grants, while presets remain code-owned by
+this module. Neither layer is connected to the legacy `admin`/`barber` login,
+session, route guards or invite flow yet. The `auth:preflight` command only
+classifies legacy identities inside a repeatable-read, read-only transaction;
+it never creates users or links legacy records.
