@@ -24,3 +24,11 @@ this module. Neither layer is connected to the legacy `admin`/`barber` login,
 session, route guards or invite flow yet. The `auth:preflight` command only
 classifies legacy identities inside a repeatable-read, read-only transaction;
 it never creates users or links legacy records.
+
+P2B keeps that runtime boundary. `auth:backfill` defaults to a dry run and only
+applies `SAFE_AUTO` identities when explicitly invoked with `--apply`. Each
+identity uses its own serializable transaction under one PostgreSQL advisory
+lock. Legacy Admin identities receive a global `administrator` scope;
+professional-only identities receive a local `professional` scope for every
+active professional/location association. A linked professional profile still
+grants no access by itself.

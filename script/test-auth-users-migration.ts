@@ -125,6 +125,13 @@ try {
 
   const legacySchema = "auth_legacy_fixture";
   await createLegacyFoundation(pool, legacySchema, true);
+  const preMigrationPreflight = await runLegacyAuthPreflight(pool, {
+    schemaName: legacySchema,
+    now: new Date("2030-01-01T12:00:00.000Z"),
+  });
+  assert.equal(preMigrationPreflight.cases[0].classification, "MANUAL_REVIEW",
+    "the read-only preflight must work before migration 0015 adds legacy user_id links");
+  assert.deepEqual(preMigrationPreflight.cases[0].linkedUserIds, []);
   const legacyRun = await runSchemaMigrations(pool, {
     schemaName: legacySchema,
     environment,

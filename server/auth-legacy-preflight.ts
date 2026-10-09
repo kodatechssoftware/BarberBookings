@@ -14,6 +14,7 @@ export type LegacyAdminCredential = {
   username: string;
   email: string | null;
   passwordHash: string;
+  userId?: number | null;
 };
 
 export type LegacyBarberCredential = {
@@ -21,6 +22,7 @@ export type LegacyBarberCredential = {
   name: string;
   email: string | null;
   passwordHash: string | null;
+  userId?: number | null;
 };
 
 export type LegacyBarberInvite = {
@@ -41,10 +43,12 @@ export type LegacySessionInventory = {
 
 export type LegacyIdentityCase = {
   key: string;
+  displayName: string;
   classification: LegacyAuthPreflightClassification;
   normalizedIdentifiers: string[];
   adminIds: number[];
   barberIds: number[];
+  linkedUserIds: number[];
   credentialComparison: "none" | "single" | "literal_equal" | "different";
   reasons: string[];
   proposedAction: string;
@@ -97,16 +101,16 @@ export type LegacyAuthPreflightReport = {
   cases: LegacyIdentityCase[];
 };
 
-function normalizeIdentity(value: string | null | undefined) {
+export function normalizeIdentity(value: string | null | undefined) {
   const normalized = value?.trim().toLowerCase() || "";
   return normalized || null;
 }
 
-function isUsableEmail(value: string | null) {
+export function isUsableEmail(value: string | null) {
   return Boolean(value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));
 }
 
-function nonempty(value: string | null | undefined) {
+export function nonempty(value: string | null | undefined) {
   return Boolean(value?.trim());
 }
 
@@ -166,6 +170,13 @@ function classifyComponent(
 
   if (admins.length > 1) blockerReasons.push("multiple_admin_records_share_an_identity");
   if (barbers.length > 1) blockerReasons.push("multiple_professional_records_share_an_identity");
+
+  const linkedUserIds = Array.from(new Set(
+    [...admins, ...barbers]
+      .map((record) => record.userId)
+      .filter((userId): userId is number => typeof userId === "number"),
+  )).sort((a, b) => a - b);
+  if (linkedUserIds.length > 1) blockerReasons.push("legacy_identity_links_multiple_canonical_users");
 
   const adminsWithoutPassword = admins.filter((admin) => !nonempty(admin.passwordHash));
   if (adminsWithoutPassword.length > 0) blockerReasons.push("admin_has_no_usable_password_hash");
@@ -236,10 +247,12 @@ function classifyComponent(
 
   return {
     key,
+    displayName: barbers[0]?.name.trim() || admins[0]?.username.trim() || key,
     classification,
     normalizedIdentifiers: identifiers,
     adminIds: admins.map((admin) => admin.id).sort((a, b) => a - b),
     barberIds: barbers.map((barber) => barber.id).sort((a, b) => a - b),
+    linkedUserIds,
     credentialComparison,
     reasons,
     proposedAction: classification === "BLOCKER"
@@ -382,7 +395,7 @@ export function buildLegacyAuthPreflightReport(input: {
   };
 }
 
-function quoteIdentifier(identifier: string) {
+export function quoteDatabaseIdentifier(identifier: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
     throw new Error(`Unsafe database identifier: ${identifier}`);
   }
@@ -402,7 +415,7 @@ async function collectSessionInventory(
     return { tablePresent: false, total: 0, active: 0, activeAdmin: 0, activeBarber: 0, activeUnknownRole: 0 };
   }
 
-  const table = `${quoteIdentifier(schemaName)}.${quoteIdentifier("session")}`;
+  const table = `${quoteDatabaseIdentifier(schemaName)}.${quoteDatabaseIdentifier("session")}`;
   const result = await client.query<{
     total: string;
     active: string;
@@ -429,44 +442,65 @@ async function collectSessionInventory(
   };
 }
 
+export async function collectLegacyAuthSnapshot(
+  client: PoolClient,
+  schemaName: string,
+  now: Date,
+) {
+  const schema = quoteDatabaseIdentifier(schemaName);
+  const linkageColumns = await client.query<{ table_name: string }>(`
+    SELECT table_name
+    FROM information_schema.columns
+    WHERE table_schema = $1
+      AND table_name IN ('admins', 'barbers')
+      AND column_name = 'user_id'
+  `, [schemaName]);
+  const tablesWithUserId = new Set(linkageColumns.rows.map((row) => row.table_name));
+  const adminUserIdExpression = tablesWithUserId.has("admins") ? "user_id" : "NULL::integer";
+  const barberUserIdExpression = tablesWithUserId.has("barbers") ? "user_id" : "NULL::integer";
+  // A PoolClient serializes work on one connection. Keep these reads
+  // explicitly sequential so the snapshot stays consistent without relying
+  // on the deprecated concurrent client.query() queueing behaviour in pg.
+  const adminsResult = await client.query<LegacyAdminCredential>(`
+      SELECT id, username, email, password AS "passwordHash", ${adminUserIdExpression} AS "userId"
+      FROM ${schema}.admins
+      ORDER BY id
+  `);
+  const barbersResult = await client.query<LegacyBarberCredential>(`
+      SELECT id, name, email, password AS "passwordHash", ${barberUserIdExpression} AS "userId"
+      FROM ${schema}.barbers
+      ORDER BY id
+  `);
+  const invitesResult = await client.query<LegacyBarberInvite>(`
+      SELECT id, barber_id AS "barberId", expires_at AS "expiresAt", used_at AS "usedAt"
+      FROM ${schema}.barber_invites
+      ORDER BY id
+  `);
+  const sessions = await collectSessionInventory(client, schemaName);
+
+  return {
+    admins: adminsResult.rows,
+    barbers: barbersResult.rows,
+    invites: invitesResult.rows,
+    sessions,
+    now,
+  };
+}
+
 export async function runLegacyAuthPreflight(
   pool: Pool,
   options: { schemaName?: string; now?: Date } = {},
 ) {
   const schemaName = options.schemaName?.trim() || process.env.DATABASE_SCHEMA?.trim() || "public";
-  const schema = quoteIdentifier(schemaName);
+  quoteDatabaseIdentifier(schemaName);
   const now = options.now ?? new Date();
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    // A PoolClient serializes work on one connection. Keep these reads
-    // explicitly sequential so the snapshot stays consistent without relying
-    // on the deprecated concurrent client.query() queueing behaviour in pg.
-    const adminsResult = await client.query<LegacyAdminCredential>(`
-      SELECT id, username, email, password AS "passwordHash"
-      FROM ${schema}.admins
-      ORDER BY id
-    `);
-    const barbersResult = await client.query<LegacyBarberCredential>(`
-      SELECT id, name, email, password AS "passwordHash"
-      FROM ${schema}.barbers
-      ORDER BY id
-    `);
-    const invitesResult = await client.query<LegacyBarberInvite>(`
-      SELECT id, barber_id AS "barberId", expires_at AS "expiresAt", used_at AS "usedAt"
-      FROM ${schema}.barber_invites
-      ORDER BY id
-    `);
-    const sessions = await collectSessionInventory(client, schemaName);
+    const snapshot = await collectLegacyAuthSnapshot(client, schemaName, now);
 
-    const report = buildLegacyAuthPreflightReport({
-      admins: adminsResult.rows,
-      barbers: barbersResult.rows,
-      invites: invitesResult.rows,
-      sessions,
-      now,
-    });
+    const report = buildLegacyAuthPreflightReport(snapshot);
     await client.query("ROLLBACK");
     return report;
   } catch (error) {

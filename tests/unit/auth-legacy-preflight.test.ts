@@ -47,10 +47,12 @@ test("Bruno-style duplicate with one literal credential is a single SAFE_AUTO id
   assert.equal(report.cases.length, 1);
   assert.deepEqual(report.cases[0], {
     key: "bs881366@gmail.com",
+    displayName: "Bruno Santos",
     classification: "SAFE_AUTO",
     normalizedIdentifiers: ["bs881366@gmail.com"],
     adminIds: [2],
     barberIds: [20],
+    linkedUserIds: [],
     credentialComparison: "literal_equal",
     reasons: ["legacy_records_have_one_unambiguous_identity"],
     proposedAction: "Eligible for a controlled P2B backfill after explicit approval.",

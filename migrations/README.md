@@ -64,7 +64,9 @@ location/global access scopes, explicit capability grants, digest-only user
 invites, nullable legacy links from `admins` and `barbers`, and additive audit
 actor references. It intentionally creates no users, changes no legacy login or
 session path, and performs no identity backfill; that remains a separately
-approved migration phase after the read-only legacy preflight.
+approved operation after the read-only legacy preflight. The explicit
+`auth:backfill` command remains dry-run by default and is not part of startup or
+the migration runner.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

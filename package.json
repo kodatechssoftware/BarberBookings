@@ -20,7 +20,9 @@
     "test:availability": "cross-env TZ=UTC NODE_ENV=test tsx --test tests/unit/availability.test.ts",
     "test:slot-interval": "cross-env TZ=UTC NODE_ENV=test tsx --test tests/unit/booking-slot-interval.test.ts tests/unit/booking-slot-runtime-http.test.ts && playwright test --config=playwright.slot-interval.config.ts",
     "auth:preflight": "tsx script/auth-legacy-preflight.ts",
+    "auth:backfill": "tsx script/auth-legacy-backfill.ts",
     "test:auth-schema": "tsx script/test-auth-users-migration.ts",
+    "test:auth-backfill": "tsx script/test-auth-users-backfill.ts",
     "db:migrate": "tsx script/migrate.ts",
     "db:push": "drizzle-kit push"
   },
