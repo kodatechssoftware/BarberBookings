@@ -608,10 +608,10 @@ export interface IStorage {
   updateAdminPassword(id: number, password: string): Promise<void>;
 
   // Blacklist
-  getBlacklist(): Promise<Blacklist[]>;
+  getBlacklist(locationId: number): Promise<Blacklist[]>;
   addToBlacklist(data: InsertBlacklist): Promise<Blacklist>;
-  removeFromBlacklist(id: number): Promise<void>;
-  isBlacklisted(email?: string, phone?: string): Promise<boolean>;
+  removeFromBlacklist(id: number, locationId: number): Promise<void>;
+  isBlacklisted(locationId: number, email?: string, phone?: string): Promise<boolean>;
 
   // Barber availability
   getShopAvailability(locationId?: number): Promise<ShopAvailability[]>;
@@ -637,7 +637,7 @@ export interface IStorage {
   upsertCustomerNote(note: UpsertCustomerNoteInput): Promise<CustomerNote>;
 
   // Audit log
-  getAuditLogs(limit?: number): Promise<AuditLog[]>;
+  getAuditLogs(limit?: number, locationId?: number): Promise<AuditLog[]>;
   createAuditLog(log: CreateAuditLogRequest): Promise<AuditLog>;
 
   // Barber compensation
@@ -1745,8 +1745,12 @@ export class DatabaseStorage implements IStorage {
     await db.update(admins).set({ password }).where(eq(admins.id, id));
   }
 
-  async getBlacklist(): Promise<Blacklist[]> {
-    return await db.select().from(blacklist).orderBy(blacklist.createdAt);
+  async getBlacklist(locationId: number): Promise<Blacklist[]> {
+    return await db
+      .select()
+      .from(blacklist)
+      .where(eq(blacklist.locationId, locationId))
+      .orderBy(blacklist.createdAt);
   }
 
   async addToBlacklist(data: InsertBlacklist): Promise<Blacklist> {
@@ -1754,16 +1758,22 @@ export class DatabaseStorage implements IStorage {
     return entry;
   }
 
-  async removeFromBlacklist(id: number): Promise<void> {
-    await db.delete(blacklist).where(eq(blacklist.id, id));
+  async removeFromBlacklist(id: number, locationId: number): Promise<void> {
+    await db.delete(blacklist).where(and(
+      eq(blacklist.id, id),
+      eq(blacklist.locationId, locationId),
+    ));
   }
 
-  async isBlacklisted(email?: string, phone?: string): Promise<boolean> {
+  async isBlacklisted(locationId: number, email?: string, phone?: string): Promise<boolean> {
     const hasPhone = Boolean(phone?.replace(/\D/g, ""));
     const normalizedEmail = normalizeEmail(email);
     if (!normalizedEmail && !hasPhone) return false;
 
-    const entries = await db.select().from(blacklist);
+    const entries = await db
+      .select()
+      .from(blacklist)
+      .where(eq(blacklist.locationId, locationId));
     return entries.some((entry) =>
       (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
       (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
@@ -2011,10 +2021,11 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getAuditLogs(limit = 50): Promise<AuditLog[]> {
+  async getAuditLogs(limit = 50, locationId?: number): Promise<AuditLog[]> {
     return await db
       .select()
       .from(auditLogs)
+      .where(locationId === undefined ? undefined : eq(auditLogs.locationId, locationId))
       .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
       .limit(limit);
   }
@@ -3274,8 +3285,8 @@ export class MemoryStorage implements IStorage {
     if (admin) admin.password = password;
   }
 
-  async getBlacklist(): Promise<Blacklist[]> {
-    return [...this.blacklist].sort(
+  async getBlacklist(locationId: number): Promise<Blacklist[]> {
+    return this.blacklist.filter((entry) => entry.locationId === locationId).sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     );
   }
@@ -3283,6 +3294,7 @@ export class MemoryStorage implements IStorage {
   async addToBlacklist(data: InsertBlacklist): Promise<Blacklist> {
     const entry: Blacklist = {
       id: this.nextIds.blacklist++,
+      locationId: data.locationId,
       phone: data.phone,
       email: data.email ?? null,
       reason: data.reason ?? null,
@@ -3292,18 +3304,22 @@ export class MemoryStorage implements IStorage {
     return entry;
   }
 
-  async removeFromBlacklist(id: number): Promise<void> {
-    this.blacklist = this.blacklist.filter((entry) => entry.id !== id);
+  async removeFromBlacklist(id: number, locationId: number): Promise<void> {
+    this.blacklist = this.blacklist.filter((entry) =>
+      entry.id !== id || entry.locationId !== locationId,
+    );
   }
 
-  async isBlacklisted(email?: string, phone?: string): Promise<boolean> {
+  async isBlacklisted(locationId: number, email?: string, phone?: string): Promise<boolean> {
     const hasPhone = Boolean(phone?.replace(/\D/g, ""));
     const normalizedEmail = normalizeEmail(email);
     if (!normalizedEmail && !hasPhone) return false;
 
     return this.blacklist.some((entry) =>
-      (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
-      (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail),
+      entry.locationId === locationId && (
+        (hasPhone && supportedPhonesMatch(entry.phone, phone)) ||
+        (normalizedEmail && normalizeEmail(entry.email) === normalizedEmail)
+      ),
     );
   }
 
@@ -3513,8 +3529,9 @@ export class MemoryStorage implements IStorage {
     return savedNote;
   }
 
-  async getAuditLogs(limit = 50): Promise<AuditLog[]> {
+  async getAuditLogs(limit = 50, locationId?: number): Promise<AuditLog[]> {
     return [...this.auditLogs]
+      .filter((entry) => locationId === undefined || entry.locationId === locationId)
       .sort((a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id,
       )

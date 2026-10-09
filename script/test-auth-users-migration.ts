@@ -27,7 +27,8 @@ async function createLegacyFoundation(pool: pg.Pool, schema: string, withRows: b
   await pool.query(`
     CREATE TABLE ${table(schema, "locations")} (
       id serial PRIMARY KEY,
-      name text NOT NULL
+      name text NOT NULL,
+      is_default boolean NOT NULL DEFAULT false
     );
     CREATE TABLE ${table(schema, "barbers")} (
       id serial PRIMARY KEY,
@@ -62,6 +63,13 @@ async function createLegacyFoundation(pool: pg.Pool, schema: string, withRows: b
       metadata text,
       created_at timestamp NOT NULL DEFAULT now()
     );
+    CREATE TABLE ${table(schema, "blacklist")} (
+      id serial PRIMARY KEY,
+      email text,
+      phone text NOT NULL,
+      reason text,
+      created_at timestamp NOT NULL DEFAULT now()
+    );
     CREATE TABLE ${table(schema, "session")} (
       sid varchar NOT NULL PRIMARY KEY,
       sess json NOT NULL,
@@ -69,9 +77,9 @@ async function createLegacyFoundation(pool: pg.Pool, schema: string, withRows: b
     );
   `);
 
+  await pool.query(`INSERT INTO ${table(schema, "locations")} (name, is_default) VALUES ('Loja legacy', true)`);
   if (!withRows) return;
   await pool.query(`
-    INSERT INTO ${table(schema, "locations")} (name) VALUES ('Loja legacy');
     INSERT INTO ${table(schema, "barbers")} (name, specialty, email, password)
       VALUES ('Bruno legacy', 'Corte', 'bs881366@gmail.com', '$2b$legacy-barber');
     INSERT INTO ${table(schema, "admins")} (username, email, password)
@@ -109,6 +117,10 @@ try {
     path.resolve(process.cwd(), "migrations/0015_auth_users_foundation.sql"),
     path.join(migrationDirectory, "0015_auth_users_foundation.sql"),
   );
+  await copyFile(
+    path.resolve(process.cwd(), "migrations/0016_blacklist_location_scope.sql"),
+    path.join(migrationDirectory, "0016_blacklist_location_scope.sql"),
+  );
   await embedded.initialise();
   await embedded.start();
   pool = new pg.Pool({
@@ -137,7 +149,10 @@ try {
     environment,
     migrationsDirectory: migrationDirectory,
   });
-  assert.deepEqual(legacyRun.applied, ["0015_auth_users_foundation.sql"]);
+  assert.deepEqual(legacyRun.applied, [
+    "0015_auth_users_foundation.sql",
+    "0016_blacklist_location_scope.sql",
+  ]);
   assert.equal(Number((await pool.query(`SELECT count(*) FROM ${table(legacySchema, "users")}`)).rows[0].count), 0,
     "P2A must not backfill users");
   assert.equal((await pool.query(`SELECT user_id, email, password FROM ${table(legacySchema, "barbers")} WHERE id = 1`)).rows[0].user_id, null);
@@ -181,7 +196,7 @@ try {
     environment,
     migrationsDirectory: migrationDirectory,
   });
-  assert.deepEqual(rerun, { applied: [], alreadyApplied: 1 });
+  assert.deepEqual(rerun, { applied: [], alreadyApplied: 2 });
 
   const userResult = await pool.query(`
     INSERT INTO ${table(legacySchema, "users")} (
@@ -298,7 +313,10 @@ try {
     environment,
     migrationsDirectory: migrationDirectory,
   });
-  assert.deepEqual(freshRun.applied, ["0015_auth_users_foundation.sql"]);
+  assert.deepEqual(freshRun.applied, [
+    "0015_auth_users_foundation.sql",
+    "0016_blacklist_location_scope.sql",
+  ]);
   assert.equal(Number((await pool.query(`SELECT count(*) FROM ${table(freshSchema, "users")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) FROM ${table(freshSchema, "user_access_scopes")}`)).rows[0].count), 0);
 

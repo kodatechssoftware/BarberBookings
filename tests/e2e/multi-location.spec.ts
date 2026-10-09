@@ -2195,3 +2195,136 @@ test("[multi-location] compensation is configured independently for each shop", 
     headers: { "X-Location-Id": String(locationA.id) }, data: { isVisible: false },
   })).ok()).toBe(true);
 });
+
+test("[multi-location] blacklist blocks and cancels only inside the selected shop", async ({ request }) => {
+  test.setTimeout(90_000);
+  const [shopA, shopB] = await ensureLocations(request, 2);
+  if (!shopB.isActive) {
+    const activation = await request.patch(`/api/admin/locations/${shopB.id}`, {
+      data: { isActive: true },
+    });
+    expect(activation.ok(), await activation.text()).toBe(true);
+  }
+  const headersA = { "X-Location-Id": String(shopA.id) };
+  const headersB = { "X-Location-Id": String(shopB.id) };
+  const suffix = Date.now();
+
+  const createLocalResources = async (headers: Record<string, string>, label: string) => {
+    const serviceResponse = await request.post("/api/services", {
+      headers,
+      data: {
+        name: `Blacklist ${label} ${suffix}`,
+        description: "Isolamento por localização",
+        price: 1500,
+        duration: 30,
+        isVisible: true,
+      },
+    });
+    expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
+    const service = await serviceResponse.json();
+    const barberResponse = await request.post("/api/barbers", {
+      headers,
+      data: {
+        name: `Profissional blacklist ${label} ${suffix}`,
+        specialty: "Teste",
+        color: "#334455",
+        isVisible: true,
+        serviceIds: [service.id],
+      },
+    });
+    expect(barberResponse.status(), await barberResponse.text()).toBe(201);
+    return { service, barber: await barberResponse.json() };
+  };
+
+  const resourcesA = await createLocalResources(headersA, "A");
+  const resourcesB = await createLocalResources(headersB, "B");
+  const start = new Date(Date.now() + 600 * 86400000);
+  start.setUTCHours(10, 0, 0, 0);
+  const weekdayLabel = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Lisbon",
+    weekday: "short",
+  }).format(start);
+  const weekday = ({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 } as Record<string, number>)[weekdayLabel];
+  for (const [headers, resources] of [
+    [headersA, resourcesA],
+    [headersB, resourcesB],
+  ] as const) {
+    expect((await request.patch("/api/shop/availability", {
+      headers,
+      data: [{ dayOfWeek: weekday, startTime: "09:00", endTime: "18:00", isOpen: true }],
+    })).ok()).toBe(true);
+    expect((await request.patch(`/api/barbers/${resources.barber.id}/availability`, {
+      headers,
+      data: [{ dayOfWeek: weekday, startTime: "09:00", endTime: "18:00", isWorking: true }],
+    })).ok()).toBe(true);
+  }
+
+  const phone = "+351910099001";
+  const email = `blacklist-location-${suffix}@example.test`;
+  const createManual = async (
+    headers: Record<string, string>,
+    resources: typeof resourcesA,
+    name: string,
+  ) => {
+    const response = await request.post("/api/appointments/block", {
+      headers,
+      data: {
+        barberId: resources.barber.id,
+        serviceId: resources.service.id,
+        startTime: start.toISOString(),
+        name,
+        phone,
+        customerEmail: email,
+        isManualBooking: true,
+        allowOutsideHours: true,
+        isRecurring: false,
+      },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    const body = await response.json();
+    expect(body.appointments).toHaveLength(1);
+    return body.appointments[0];
+  };
+  const appointmentA = await createManual(headersA, resourcesA, "Cliente bloqueado A");
+  const appointmentB = await createManual(headersB, resourcesB, "Cliente permitido B");
+
+  const blockResponse = await request.post("/api/admin/blacklist", {
+    headers: headersA,
+    data: { phone, email, reason: "Teste local", cancelFutureAppointments: true },
+  });
+  expect(blockResponse.status(), await blockResponse.text()).toBe(201);
+  expect(await (await request.get("/api/admin/blacklist", { headers: headersA })).json()).toHaveLength(1);
+  expect(await (await request.get("/api/admin/blacklist", { headers: headersB })).json()).toHaveLength(0);
+
+  const appointmentsA = await (await request.get("/api/appointments", { headers: headersA })).json();
+  const appointmentsB = await (await request.get("/api/appointments", { headers: headersB })).json();
+  expect(appointmentsA.find((appointment: any) => appointment.id === appointmentA.id)?.status).toBe("cancelled");
+  expect(appointmentsB.find((appointment: any) => appointment.id === appointmentB.id)?.status).toBe("booked");
+
+  const nextStart = new Date(start.getTime() + 60 * 60000).toISOString();
+  const bookingB = await request.post("/api/appointments", {
+    headers: headersB,
+    data: {
+      barberId: resourcesB.barber.id,
+      serviceId: resourcesB.service.id,
+      startTime: nextStart,
+      customerName: "Cliente permitido B",
+      customerPhone: phone,
+      customerEmail: email,
+    },
+  });
+  expect(bookingB.status(), await bookingB.text()).toBe(201);
+
+  const bookingA = await request.post("/api/appointments", {
+    headers: headersA,
+    data: {
+      barberId: resourcesA.barber.id,
+      serviceId: resourcesA.service.id,
+      startTime: nextStart,
+      customerName: "Cliente bloqueado A",
+      customerPhone: phone,
+      customerEmail: email,
+    },
+  });
+  expect(bookingA.status()).toBe(403);
+});

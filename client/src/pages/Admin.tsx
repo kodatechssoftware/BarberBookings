@@ -1590,18 +1590,38 @@ export default function Admin() {
     activeLocationId,
     (role) => role === "admin",
   );
-  const canManageAdminFeatures = canUseRuntimeCapability(
+  const canManageUsers = canUseRuntimeCapability(
     user,
     "users.manage",
     activeLocationId,
     (role) => role === "admin",
   );
+  const canViewTeam = canUseRuntimeCapability(user, "team.view", activeLocationId, (role) => role === "admin");
+  const canManageTeamGlobal = canUseRuntimeCapability(user, "team.manage_global", activeLocationId, (role) => role === "admin");
+  const canAssignTeamLocation = canUseRuntimeCapability(user, "team.assign_location", activeLocationId, (role) => role === "admin");
+  const canManageCatalogGlobal = canUseRuntimeCapability(user, "catalog.manage_global", activeLocationId, (role) => role === "admin");
+  const canManageCatalogLocation = canUseRuntimeCapability(user, "catalog.manage_location", activeLocationId, (role) => role === "admin");
+  const canManageOwnHours = canUseRuntimeCapability(user, "hours.manage_own", activeLocationId, (role) => role === "admin");
+  const canManageTeamHours = canUseRuntimeCapability(user, "hours.manage_team", activeLocationId, (role) => role === "admin");
+  const canManageShopHours = canUseRuntimeCapability(user, "hours.manage_establishment", activeLocationId, (role) => role === "admin");
+  const canManageExtras = canUseRuntimeCapability(user, "extras.manage", activeLocationId, (role) => role === "admin");
+  const canManageExpenses = canUseRuntimeCapability(user, "finance.manage_expenses", activeLocationId, (role) => role === "admin");
+  const canManageCompensation = canUseRuntimeCapability(user, "finance.manage_compensation", activeLocationId, (role) => role === "admin");
+  const canManageLocations = canUseRuntimeCapability(user, "locations.manage", activeLocationId, (role) => role === "admin");
+  const canViewAudit = canUseRuntimeCapability(user, "audit.view", activeLocationId, (role) => role === "admin");
   const canBlockCustomers = canUseRuntimeCapability(
     user,
     "customers.block",
     activeLocationId,
     (role) => role === "admin",
   );
+  const canOpenTeamManagement = canViewTeam || canManageTeamGlobal || canAssignTeamLocation
+    || canManageTeamHours || canManageOwnHours || canManageCompensation || canManageUsers;
+  const canOpenCatalogManagement = canManageCatalogGlobal || canManageCatalogLocation;
+  const canCreateProfessional = canManageTeamGlobal && canAssignTeamLocation
+    && canManageCatalogLocation && canManageCompensation;
+  const canEditProfessional = canManageTeamGlobal || canManageCatalogLocation || canManageCompensation;
+  const canSeeCompensation = canViewTeamFinance || canManageCompensation;
   const operationalProfessionalId = user?.professionalId
     ?? (!user?.access && user?.role === "barber" ? user.id : null);
   const canUseOwnOrTeamFinance = canViewTeamFinance
@@ -1650,7 +1670,7 @@ export default function Admin() {
     data: serviceCategories = [],
     isLoading: isLoadingServiceCategories,
     isError: isServiceCategoriesError,
-  } = useServiceCategories({ enabled: canManageAdminFeatures && activeTab === "services" });
+  } = useServiceCategories({ enabled: canOpenCatalogManagement && activeTab === "services" });
   // Only initial loads delay secondary panels. Background refreshes keep the
   // existing agenda and normal polling behaviour; errors also release the gate.
   const isLoadingAgenda = isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices;
@@ -1659,8 +1679,8 @@ export default function Admin() {
     enabled: canBlockCustomers,
   });
   const { data: auditLogs, isLoading: isLoadingAuditLogs } = useQuery<AuditLogItem[]>({
-    queryKey: ["/api/admin/audit-logs"],
-    enabled: canManageAdminFeatures && !isLoadingAgenda,
+    queryKey: ["/api/admin/audit-logs", { locationId: activeLocationId }],
+    enabled: canViewAudit && !isLoadingAgenda,
     refetchInterval: 15000,
   });
   const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
@@ -1719,7 +1739,7 @@ export default function Admin() {
   }, [exportDates.start, exportDates.end]);
   const { data: businessExpenses = [], isLoading: isLoadingExpenses } = useQuery<BusinessExpense[]>({
     queryKey: [expensesUrl, { locationId: activeLocationId }],
-    enabled: user?.authorized === true && canManageAdminFeatures && activeTab === "reports",
+    enabled: user?.authorized === true && canManageExpenses && activeTab === "reports",
   });
   const exportBarberOptionsUrl = useMemo(() => {
     const params = new URLSearchParams({
@@ -4149,18 +4169,14 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
-            {canManageAdminFeatures && (
-              <>
-                <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>
-                <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
-                <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>
-                <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>
-                {multiLocationConfig?.enabled && (
-                  <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
-                )}
-                <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>
-              </>
+            {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>}
+            {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>}
+            {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
+            {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>}
+            {canManageLocations && multiLocationConfig?.enabled && (
+              <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
             )}
+            {canBlockCustomers && <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>}
             {canUseOwnOrTeamReports && (
               <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
             )}
@@ -4196,7 +4212,7 @@ export default function Admin() {
               getStatusLabel={getStatusLabel}
             />
 
-            {canManageAdminFeatures && (
+            {canViewAudit && (
               <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs || (isLoadingAgenda && !auditLogs)} />
             )}
 
@@ -4298,8 +4314,8 @@ export default function Admin() {
                     {showArchivedBarbers ? "Ocultar arquivados" : `Mostrar arquivados (${archivedBarbers.length})`}
                   </Button>
                 ) : null}
-              {multiLocationConfig?.enabled && <AssociateBarberDialog key={activeLocationId} />}
-              <Dialog open={isAddingBarber} onOpenChange={(open) => {
+              {canAssignTeamLocation && multiLocationConfig?.enabled && <AssociateBarberDialog key={activeLocationId} />}
+              {canCreateProfessional && <Dialog open={isAddingBarber} onOpenChange={(open) => {
                 if (!open && addBarberSubmissionRef.current) return;
                 if (open) {
                   setBarberFormData((current) => ({
@@ -4389,7 +4405,7 @@ export default function Admin() {
                     </Button>
                   </div>
                 </DialogContent>
-              </Dialog>
+              </Dialog>}
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -4402,7 +4418,7 @@ export default function Admin() {
                 >
                   <div className="aspect-square bg-muted relative">
                     <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
-                    <ConfirmAction
+                    {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <ConfirmAction
                       title={`Remover ${barber.name}?`}
                       description="Se tiver marcações futuras, reatribua-as primeiro. Se tiver apenas histórico, será ocultado para preservar relatórios."
                       confirmLabel="Remover"
@@ -4423,7 +4439,7 @@ export default function Admin() {
                       >
                         <XCircle className="w-4 h-4" />
                       </Button>
-                    </ConfirmAction>
+                    </ConfirmAction>}
                   </div>
                   <CardContent className="p-4">
                     <div className="mb-1 flex items-center gap-2">
@@ -4437,10 +4453,11 @@ export default function Admin() {
                     <p className="mb-3 line-clamp-2 text-xs text-gray-400">
                       {formatBarberServicesSummary(barber, services)}
                     </p>
-                    <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
+                    {canSeeCompensation && <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
                       {getCompensationSummary(barber)}
-                    </p>
-                    {multiLocationConfig?.enabled && activeLocation && (
+                    </p>}
+                    {multiLocationConfig?.enabled && activeLocation
+                      && (canManageTeamHours || (canManageOwnHours && operationalProfessionalId === barber.id)) && (
                       <BarberLocationScheduleDialog
                         key={`${activeLocation.id}:${barber.id}`}
                         barber={barber}
@@ -4448,7 +4465,7 @@ export default function Admin() {
                       />
                     )}
                     <div className="flex flex-wrap gap-2">
-                      <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => {
+                      {canEditProfessional && <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => {
                         if (!open && savingBarberIdRef.current === barber.id) return;
                         setEditingBarberId(open ? barber.id : null);
                       }}>
@@ -4458,9 +4475,9 @@ export default function Admin() {
                         <DialogContent className="bg-card border-white/10 text-white w-[95vw] max-h-[90vh] overflow-y-auto">
                           <DialogHeader><DialogTitle>Editar Barbeiro</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4" data-edit-barber-form>
-                            <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>
-                            <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>
-                            <div className="space-y-2">
+                            {canManageTeamGlobal && <div><Label>Nome</Label><Input defaultValue={barber.name} id={`edit-barber-name-${barber.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageTeamGlobal && <div><Label>Especialidade</Label><Input defaultValue={barber.specialty} id={`edit-barber-spec-${barber.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageTeamGlobal && <div className="space-y-2">
                               <Label htmlFor={`edit-barber-bio-${barber.id}`}>Bio</Label>
                               <Textarea
                                 defaultValue={barber.bio || ""}
@@ -4471,8 +4488,8 @@ export default function Admin() {
                               <p className="text-xs leading-relaxed text-gray-400">
                                 Este texto aparece na apresentação pública do barbeiro.
                               </p>
-                            </div>
-                            <div className="space-y-2">
+                            </div>}
+                            {canManageTeamGlobal && canManageUsers && <div className="space-y-2">
                               <Label htmlFor={`edit-barber-email-${barber.id}`}>Email de acesso</Label>
                               <Input
                                 type="email"
@@ -4484,20 +4501,20 @@ export default function Admin() {
                               <p className="text-xs leading-relaxed text-gray-400">
                                 Ao alterar o email, o acesso e os convites anteriores são revogados. Crie depois um novo convite.
                               </p>
-                            </div>
-                            <div className="space-y-2">
+                            </div>}
+                            {canManageTeamGlobal && <div className="space-y-2">
                               <Label>Cor na agenda</Label>
                               <Input type="color" defaultValue={normalizeBarberColor(barber.color)} id={`edit-barber-color-${barber.id}`} className="h-10 w-20 bg-background border-white/10 p-1" />
-                            </div>
-                            <BarberPhotoPicker
+                            </div>}
+                            {canManageTeamGlobal && <BarberPhotoPicker
                               inputId={`edit-barber-photo-${barber.id}`}
                               value={getEditedBarberAvatar(barberAvatarDrafts, barber)}
                               fallbackSrc={getBarberAvatar({ ...barber, avatar: null })}
                               onChange={(avatar) => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: avatar }))}
                               onRemove={() => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: null }))}
                               toast={toast}
-                            />
-                            <BarberServicesPicker
+                            />}
+                            {canManageCatalogLocation && <BarberServicesPicker
                               services={services}
                               selectedServiceIds={getEffectiveServiceSelection(
                                 Object.prototype.hasOwnProperty.call(barberServiceDrafts, barber.id)
@@ -4509,8 +4526,8 @@ export default function Admin() {
                                 ...current,
                                 [barber.id]: normalizeServiceSelection(serviceIds, getAllServiceIds(services)),
                               }))}
-                            />
-                            <BarberCompensationFields
+                            />}
+                            {canManageCompensation && <BarberCompensationFields
                               value={
                                 Object.prototype.hasOwnProperty.call(barberCompensationDrafts, barber.id)
                                   ? barberCompensationDrafts[barber.id]
@@ -4520,7 +4537,7 @@ export default function Admin() {
                                 ...current,
                                 [barber.id]: compensation,
                               }))}
-                            />
+                            />}
                             <Button
                               variant="gold"
                               className="w-full"
@@ -4546,16 +4563,18 @@ export default function Admin() {
                                     services,
                                   );
                                   const payload: Record<string, unknown> = {
-                                    name,
-                                    specialty,
-                                    bio: bio || null,
-                                    email,
-                                    color: normalizeBarberColor(color),
-                                    ...(Object.prototype.hasOwnProperty.call(barberAvatarDrafts, barber.id)
-                                      ? { avatar: avatar || null } : {}),
-                                    ...getBarberCompensationPayload(compensationDraft),
+                                    ...(canManageTeamGlobal ? {
+                                      name,
+                                      specialty,
+                                      bio: bio || null,
+                                      color: normalizeBarberColor(color),
+                                      ...(Object.prototype.hasOwnProperty.call(barberAvatarDrafts, barber.id)
+                                        ? { avatar: avatar || null } : {}),
+                                    } : {}),
+                                    ...(canManageTeamGlobal && canManageUsers ? { email } : {}),
+                                    ...(canManageCompensation ? getBarberCompensationPayload(compensationDraft) : {}),
                                   };
-                                  if (hasServiceDraft) {
+                                  if (canManageCatalogLocation && hasServiceDraft) {
                                     payload.serviceIds = normalizeServiceSelection(selectedServiceIds, getAllServiceIds(services));
                                   }
 
@@ -4602,8 +4621,8 @@ export default function Admin() {
                             </Button>
                           </div>
                         </DialogContent>
-                      </Dialog>
-                      <ConfirmAction
+                      </Dialog>}
+                      {canManageUsers && <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
                         description="Se já existir outro convite, esse link deixa de funcionar. A palavra-passe atual mantém-se válida até o novo convite ser aceite."
                         confirmLabel="Criar convite"
@@ -4617,8 +4636,8 @@ export default function Admin() {
                         >
                           <Copy className="mr-1 h-3 w-3" /> Convite
                         </Button>
-                      </ConfirmAction>
-                      <Button
+                      </ConfirmAction>}
+                      {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <Button
                         variant="outline"
                         size="sm"
                         className="h-8 text-[10px] text-gray-400 border-white/5"
@@ -4642,7 +4661,7 @@ export default function Admin() {
                         }}
                       >
                         {barber.isVisible ? "Visível" : "Oculto"}
-                      </Button>
+                      </Button>}
                     </div>
                   </CardContent>
                 </Card>
@@ -4684,7 +4703,7 @@ export default function Admin() {
                         <p className="truncate font-semibold">{barber.name}</p>
                         <p className="truncate text-sm text-gray-400">{barber.specialty}</p>
                       </div>
-                      <Button
+                      {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <Button
                         variant="outline"
                         size="sm"
                         className="border-white/10"
@@ -4701,7 +4720,7 @@ export default function Admin() {
                         }}
                       >
                         Reativar
-                      </Button>
+                      </Button>}
                     </div>
                   ))}
                 </div>
@@ -4823,20 +4842,20 @@ export default function Admin() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <h2 className="text-xl font-bold text-white">Serviços Disponíveis</h2>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                {canManageAdminFeatures && (
+                {canManageCatalogGlobal && (
                   <ServiceCategoriesManager
                     categories={serviceCategories}
                     isLoading={isLoadingServiceCategories}
                     isError={isServiceCategoriesError}
                   />
                 )}
-                {canManageAdminFeatures && multiLocationConfig?.enabled && (
+                {canManageCatalogLocation && multiLocationConfig?.enabled && (
                   <AssociateServiceDialog
                     locationName={activeLocation?.name}
                     onChanged={refreshBookableLocationsCache}
                   />
                 )}
-                <Dialog open={isAddingService} onOpenChange={(open) => {
+                {canManageCatalogGlobal && canManageCatalogLocation && <Dialog open={isAddingService} onOpenChange={(open) => {
                   if (!open && addServiceSubmissionRef.current) return;
                   setIsAddingService(open);
                 }}>
@@ -4930,7 +4949,7 @@ export default function Admin() {
                     </Button>
                   </div>
                 </DialogContent>
-                </Dialog>
+                </Dialog>}
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -4988,7 +5007,7 @@ export default function Admin() {
                         <DialogContent className="bg-card border-white/10 text-white">
                           <DialogHeader><DialogTitle>Editar Serviço</DialogTitle></DialogHeader>
                           <div className="space-y-4 pt-4" data-edit-service-form>
-                            {multiLocationConfig?.enabled && (
+                            {canManageCatalogGlobal && multiLocationConfig?.enabled && (
                               <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">
                                 <p className="font-semibold">Dados globais</p>
                                 <p className="mt-1 text-xs leading-relaxed text-amber-100/80">
@@ -4996,9 +5015,9 @@ export default function Admin() {
                                 </p>
                               </div>
                             )}
-                            <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>
-                            <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>
-                            <div>
+                            {canManageCatalogGlobal && <div><Label>Nome</Label><Input defaultValue={service.name} id={`edit-service-name-${service.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageCatalogGlobal && <div><Label>Descrição</Label><Textarea defaultValue={service.description || ""} id={`edit-service-desc-${service.id}`} className="bg-background border-white/10" /></div>}
+                            {canManageCatalogGlobal && <div>
                               <Label>Nome curto na agenda (opcional)</Label>
                               <Input
                                 defaultValue={service.agendaLabel || ""}
@@ -5006,8 +5025,8 @@ export default function Admin() {
                                 className="bg-background border-white/10"
                                 maxLength={40}
                               />
-                            </div>
-                            {serviceCategories.length > 0 && (
+                            </div>}
+                            {canManageCatalogGlobal && serviceCategories.length > 0 && (
                               <div>
                                 <Label>Categoria</Label>
                                 <Select
@@ -5033,7 +5052,7 @@ export default function Admin() {
                                 </Select>
                               </div>
                             )}
-                            {multiLocationConfig?.enabled && (
+                            {canManageCatalogLocation && multiLocationConfig?.enabled && (
                               <div className="border-t border-white/10 pt-4">
                                 <p className="font-semibold text-white">Nesta loja</p>
                                 <p className="mt-1 text-xs text-gray-400">
@@ -5041,16 +5060,16 @@ export default function Admin() {
                                 </p>
                               </div>
                             )}
-                            <div>
+                            {canManageCatalogLocation && <div>
                               <Label htmlFor={`edit-service-price-${service.id}`}>{multiLocationConfig?.enabled ? "Preço nesta loja (€)" : "Preço (€)"}</Label>
                               <Input type="number" step="0.01" defaultValue={service.price / 100} id={`edit-service-price-${service.id}`} className="bg-background border-white/10" />
                               {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Valor base global: {((service.basePrice ?? service.price) / 100).toFixed(2)} €</p>}
-                            </div>
-                            <div>
+                            </div>}
+                            {canManageCatalogLocation && <div>
                               <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? "Duração nesta loja (Min)" : "Duração (Min)"}</Label>
                               <Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" />
                               {multiLocationConfig?.enabled && <p className="mt-1 text-xs text-gray-500">Duração base global: {service.baseDuration ?? service.duration} min</p>}
-                            </div>
+                            </div>}
                             <Button variant="gold" className="w-full" disabled={savingServiceId === service.id} onClick={async (event) => {
                               if (savingServiceIdRef.current !== null) return;
                               savingServiceIdRef.current = service.id;
@@ -5065,10 +5084,16 @@ export default function Admin() {
                                 const categoryId = Object.prototype.hasOwnProperty.call(serviceCategoryDrafts, service.id)
                                   ? serviceCategoryDrafts[service.id]
                                   : service.categoryId ?? null;
-                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, multiLocationConfig?.enabled
-                                  ? { name, description, agendaLabel, priceOverride: price, durationOverride: duration, categoryId }
-                                  : { name, description, agendaLabel, price, duration, categoryId });
-                                await assertServiceAgendaLabelPersisted(response, agendaLabel);
+                                const payload = {
+                                  ...(canManageCatalogGlobal ? { name, description, agendaLabel, categoryId } : {}),
+                                  ...(canManageCatalogLocation
+                                    ? multiLocationConfig?.enabled
+                                      ? { priceOverride: price, durationOverride: duration }
+                                      : { price, duration }
+                                    : {}),
+                                };
+                                const response = await apiRequest("PATCH", `/api/services/${service.id}`, payload);
+                                if (canManageCatalogGlobal) await assertServiceAgendaLabelPersisted(response, agendaLabel);
                                 queryClient.invalidateQueries({ queryKey: ["/api/services"] });
                                 queryClient.invalidateQueries({ queryKey: ["/api/service-categories"] });
                                 refreshBookableLocationsCache();
@@ -5088,8 +5113,10 @@ export default function Admin() {
                           </div>
                         </DialogContent>
                       </Dialog>
-                      <ConfirmAction
-                        title={multiLocationConfig?.enabled ? `Retirar ${service.name} desta loja?` : `Remover ${service.name}?`}
+                      {(multiLocationConfig?.enabled ? canManageCatalogLocation : canManageCatalogGlobal && canManageCatalogLocation) && <ConfirmAction
+                        title={multiLocationConfig?.enabled
+                          ? `Retirar ${service.name} desta loja?`
+                          : `Remover ${service.name}?`}
                         description={multiLocationConfig?.enabled
                           ? `O serviço deixa de estar disponível em ${activeLocation?.name || "esta loja"}, sem afetar as outras lojas nem as marcações antigas.`
                           : "As marcações antigas ficam guardadas, mas este serviço deixa de estar disponível."}
@@ -5111,8 +5138,8 @@ export default function Admin() {
                         <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400">
                           {multiLocationConfig?.enabled ? "Retirar" : "Remover"}
                         </Button>
-                      </ConfirmAction>
-                      <Button
+                      </ConfirmAction>}
+                      {canManageCatalogLocation && <Button
                         variant="outline"
                         size="sm"
                         className="h-8 text-[10px] text-gray-400 border-white/5"
@@ -5142,7 +5169,7 @@ export default function Admin() {
                         {isServiceActiveHere
                           ? (multiLocationConfig?.enabled ? "Ativo nesta loja" : "Visível")
                           : (multiLocationConfig?.enabled ? "Inativo nesta loja" : "Oculto")}
-                      </Button>
+                      </Button>}
                     </div>
                   </CardContent>
                 </Card>
@@ -5167,7 +5194,7 @@ export default function Admin() {
             ) : null}
           </TabsContent>
 
-          {canManageAdminFeatures && (
+          {canManageExtras && (
             <TabsContent value="extras" className="outline-none">
               <ExtrasManager enabled={activeTab === "extras"} />
             </TabsContent>
@@ -5342,7 +5369,7 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          {canManageAdminFeatures && multiLocationConfig?.enabled && (
+          {canManageLocations && multiLocationConfig?.enabled && (
             <TabsContent value="locations" className="outline-none">
               <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
             </TabsContent>
@@ -5449,7 +5476,7 @@ export default function Admin() {
               </CardContent>
             </Card>
 
-            {canManageAdminFeatures && (
+            {canManageExpenses && (
             <>
               <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:flex xl:h-full xl:flex-col">
                 <CardHeader>

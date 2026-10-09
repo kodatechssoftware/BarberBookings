@@ -68,6 +68,15 @@ approved operation after the read-only legacy preflight. The explicit
 `auth:backfill` command remains dry-run by default and is not part of startup or
 the migration runner.
 
+Migration `0016_blacklist_location_scope.sql` assigns every customer block to
+an explicit location and adds the `finance.manage_compensation` capability to
+the database constraint. A legacy block is retained at the canonical default
+location and copied to every other location that already exists, preserving
+the former global behaviour without choosing an arbitrary shop. New reads,
+booking checks, removals and future-appointment cancellations are then scoped
+to that location. The migration is additive and does not alter appointments or
+customer contact data.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification

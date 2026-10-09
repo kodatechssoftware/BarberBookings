@@ -155,6 +155,7 @@ import {
 import {
   enforceCanonicalAnyCapability,
   enforceCanonicalAnyOwnOrTeamCapability,
+  enforceCanonicalAllCapabilities,
   enforceCanonicalCapability,
   enforceCanonicalOwnOrTeamCapability,
   getCanonicalAccessibleLocationIds,
@@ -164,9 +165,16 @@ import {
   hasCanonicalOwnCapability,
   hasCanonicalOwnOrTeamCapability,
   redactTeamAgendaAppointment,
+  requireAllGlobalCapabilities,
+  requireAnyCapabilityAtLocation,
   requireCapabilityAtLocation,
+  requireGlobalCapability,
   setCanonicalRequestAuthContext,
 } from "./auth-authorization";
+import {
+  redactStoredAuditMetadata,
+  serializeSafeAuditMetadata,
+} from "./audit-log-security";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -388,7 +396,10 @@ type AuditLogInput = {
   entityId?: number | null;
   summary: string;
   metadata?: Record<string, unknown> | string | null;
+  locationId?: number | null;
 };
+
+const requestLocationIds = new WeakMap<Request, number>();
 
 async function getAuditActor(req: Request) {
   const canonicalContext = getCanonicalRequestAuthContext(req);
@@ -440,14 +451,11 @@ function recordAuditLog(req: Request, input: AuditLogInput) {
           }
         : await getAuditActor(req);
 
-      const metadata = input.metadata
-        ? typeof input.metadata === "string"
-          ? input.metadata
-          : JSON.stringify(input.metadata)
-        : null;
+      const metadata = serializeSafeAuditMetadata(input.metadata);
 
       await storage.createAuditLog({
         ...actor,
+        locationId: input.locationId ?? requestLocationIds.get(req) ?? null,
         action: input.action,
         entityType: input.entityType,
         entityId: input.entityId ?? null,
@@ -765,9 +773,9 @@ function getStatusPatch(status: Appointment["status"]) {
   return patch;
 }
 
-async function getFutureBookedCustomerAppointments(phone: string, email?: string) {
+async function getFutureBookedCustomerAppointments(locationId: number, phone: string, email?: string) {
   const now = new Date();
-  return (await storage.getAppointments())
+  return (await storage.getAppointments(undefined, undefined, locationId))
     .filter((appointment) =>
       appointment.status === "booked" &&
       new Date(appointment.startTime).getTime() >= now.getTime() &&
@@ -986,6 +994,7 @@ function isLocationSensitiveMutation(req: Request) {
   return [
     /^\/admin\/extras(?:\/\d+)?$/,
     /^\/admin\/expenses(?:\/\d+)?$/,
+    /^\/admin\/blacklist(?:\/\d+)?$/,
     /^\/admin\/location-barbers$/,
     /^\/admin\/service-locations(?:\/\d+)?$/,
     /^\/barbers(?:\/\d+(?:\/(?:services|availability|reset-password|invite))?)?$/,
@@ -1238,11 +1247,13 @@ function sanitizeBarberForResponse<T extends {
     chairRentPeriod,
     ...publicBarber
   } = barber;
-  if (!includePrivateFields) return publicBarber;
-
-  return includeFinancialFields
-    ? { ...publicBarber, email, compensationModel, commissionPercent, chairRentCents, chairRentPeriod }
-    : { ...publicBarber, email };
+  return {
+    ...publicBarber,
+    ...(includePrivateFields ? { email } : {}),
+    ...(includeFinancialFields
+      ? { compensationModel, commissionPercent, chairRentCents, chairRentPeriod }
+      : {}),
+  };
 }
 
 function isLateCancellation(startTime: Date | string) {
@@ -1881,6 +1892,7 @@ export async function registerRoutes(
       }
       res.locals.locationId = location.id;
       res.locals.location = location;
+      requestLocationIds.set(req, location.id);
       return next();
     } catch (error) {
       return next(error);
@@ -2031,10 +2043,31 @@ export async function registerRoutes(
   };
 
   const requireCatalogView = requireCapabilityAtLocation("catalog.view", requireAuth);
-  const requireManualAppointmentAccess = requireCapabilityAtLocation(
-    "appointments.create_manual",
+  const requireExtrasRead = requireAnyCapabilityAtLocation(
+    ["appointments.create_manual", "extras.manage"],
     requireAdmin,
   );
+  const requireDiagnostics = requireGlobalCapability("system.diagnostics", requireAdmin);
+  const requireLocationsManage = requireGlobalCapability("locations.manage", requireAdmin);
+  const requireAuditView = requireCapabilityAtLocation("audit.view", requireAdmin);
+  const requireExtrasManage = requireCapabilityAtLocation("extras.manage", requireAdmin);
+  const requireExpensesManage = requireCapabilityAtLocation("finance.manage_expenses", requireAdmin);
+  const requireTeamLocationAssignment = requireCapabilityAtLocation("team.assign_location", requireAdmin);
+  const requireCatalogLocationManage = requireCapabilityAtLocation("catalog.manage_location", requireAdmin);
+  const requireCatalogGlobalManage = requireGlobalCapability("catalog.manage_global", requireAdmin);
+  const requireUsersManage = requireGlobalCapability("users.manage", requireAdmin);
+  const requireUsersAndAccessManage = requireAllGlobalCapabilities(
+    ["users.manage", "access.manage"],
+    requireAdmin,
+  );
+  const requireShopHoursManage = requireCapabilityAtLocation("hours.manage_establishment", requireAdmin);
+  const requireCustomerBlock = requireCapabilityAtLocation("customers.block", requireAdmin);
+  const requireTeamGlobalManage = requireGlobalCapability("team.manage_global", requireAdmin);
+  const requireCompensationManage = requireCapabilityAtLocation("finance.manage_compensation", requireAdmin);
+  const requireTeamAppointmentsManage = requireCapabilityAtLocation("appointments.manage_team", requireAdmin);
+  const requireManagementAuth = (req: Request, res: Response, next: NextFunction) => authRuntimeMode === "canonical"
+    ? requireAuth(req, res, next)
+    : requireAdmin(req, res, next);
 
   if (isMetaWebhookEnabled()) {
     app.get("/api/webhooks/whatsapp/meta", (req, res) => {
@@ -2059,7 +2092,7 @@ export async function registerRoutes(
 
   if (isDevelopmentDeployment) {
 
-    app.post("/api/admin/dev/whatsapp/meta/test", requireAdmin, async (req, res) => {
+    app.post("/api/admin/dev/whatsapp/meta/test", requireDiagnostics, async (req, res) => {
       const parsed = metaWhatsappTestInputSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ message: "Indique um destinatario WhatsApp valido." });
@@ -2078,7 +2111,7 @@ export async function registerRoutes(
       }
     });
 
-    app.get("/api/admin/dev/whatsapp/meta/test/:id", requireAdmin, async (req, res) => {
+    app.get("/api/admin/dev/whatsapp/meta/test/:id", requireDiagnostics, async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ message: "Identificador de teste invalido." });
@@ -2101,7 +2134,7 @@ export async function registerRoutes(
       });
     });
 
-    app.get("/api/admin/dev/notifications/reschedule/:id", requireAdmin, async (req, res) => {
+    app.get("/api/admin/dev/notifications/reschedule/:id", requireDiagnostics, async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ message: "Identificador de notificacao invalido." });
@@ -2132,7 +2165,7 @@ export async function registerRoutes(
       });
     });
 
-    app.get("/api/admin/dev/notifications/appointment/:appointmentId", requireAdmin, async (req, res) => {
+    app.get("/api/admin/dev/notifications/appointment/:appointmentId", requireDiagnostics, async (req, res) => {
       const appointmentId = Number(req.params.appointmentId);
       if (!Number.isInteger(appointmentId) || appointmentId <= 0) return res.status(400).json({ message: "Identificador invalido." });
       const events = await storage.getAppointmentNotificationEvents(appointmentId);
@@ -2147,7 +2180,7 @@ export async function registerRoutes(
       })));
     });
 
-    app.get("/api/admin/dev/webhooks/meta/receipts/:wamid", requireAdmin, async (req, res) => {
+    app.get("/api/admin/dev/webhooks/meta/receipts/:wamid", requireDiagnostics, async (req, res) => {
       const wamid = req.params.wamid.trim();
       if (!wamid || wamid.length > 500) return res.status(400).json({ message: "wamid invalido." });
       const receipts = await storage.getMetaWebhookReceipts(wamid);
@@ -2179,14 +2212,14 @@ export async function registerRoutes(
     return res.json(locations.filter((location) => locationIds.includes(location.id)));
   });
 
-  app.get("/api/admin/locations", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/locations", requireLocationsManage, async (_req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Gestão de localizações não disponível." });
     }
     res.json(await listLocations(true));
   });
 
-  app.post("/api/admin/locations", requireAdmin, async (req, res) => {
+  app.post("/api/admin/locations", requireLocationsManage, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Gestão de localizações não disponível." });
     }
@@ -2208,7 +2241,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/locations/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/locations/:id", requireLocationsManage, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Gestão de localizações não disponível." });
     }
@@ -2240,14 +2273,23 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/audit-logs", requireAdmin, async (req, res) => {
+  app.get("/api/admin/audit-logs", requireAuditView, async (req, res) => {
     try {
       const requestedLimit = Number(req.query.limit || 30);
       const limit = Number.isFinite(requestedLimit)
         ? Math.min(Math.max(Math.floor(requestedLimit), 1), 100)
         : 30;
-      const logs = await storage.getAuditLogs(limit);
-      res.json(logs);
+      const canonicalContext = getCanonicalRequestAuthContext(req);
+      const locationId = authRuntimeMode === "canonical"
+        && canonicalContext
+        && !hasCanonicalCapability(canonicalContext, "audit.view")
+        ? Number(res.locals.locationId)
+        : undefined;
+      const logs = await storage.getAuditLogs(limit, locationId);
+      res.json(logs.map((log) => ({
+        ...log,
+        metadata: redactStoredAuditMetadata(log.metadata),
+      })));
     } catch (error) {
       console.warn("Could not load audit logs:", error instanceof Error ? error.message : error);
       res.json([]);
@@ -2255,7 +2297,7 @@ export async function registerRoutes(
   });
 
   // === EXTRAS CATALOGUE ===
-  app.get("/api/admin/extras", requireManualAppointmentAccess, async (req, res) => {
+  app.get("/api/admin/extras", requireExtrasRead, async (req, res) => {
     const canonicalContext = getCanonicalRequestAuthContext(req);
     const includeInactive = authRuntimeMode !== "canonical"
       || Boolean(canonicalContext && hasCanonicalCapability(
@@ -2269,7 +2311,7 @@ export async function registerRoutes(
     res.json(extras);
   });
 
-  app.post("/api/admin/extras", requireAdmin, async (req, res) => {
+  app.post("/api/admin/extras", requireExtrasManage, async (req, res) => {
     try {
       const locationId = Number(res.locals.locationId);
       const input = insertExtraDefinitionSchema.parse({
@@ -2309,7 +2351,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/extras/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/extras/:id", requireExtrasManage, async (req, res) => {
     try {
       const extraId = parsePositiveInteger(req.params.id);
       if (extraId === null) return res.status(400).json({ message: "Extra inválido." });
@@ -2381,7 +2423,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/expenses", requireAdmin, async (req, res) => {
+  app.get("/api/admin/expenses", requireExpensesManage, async (req, res) => {
     try {
       const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
       const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
@@ -2408,7 +2450,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/expenses", requireAdmin, async (req, res) => {
+  app.post("/api/admin/expenses", requireExpensesManage, async (req, res) => {
     try {
       const parsed = businessExpenseInputSchema.parse(req.body);
       const { start } = getShopDateBounds(parsed.expenseDate);
@@ -2445,7 +2487,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/expenses/:id", requireExpensesManage, async (req, res) => {
     try {
       const expenseId = parsePositiveInteger(req.params.id);
       if (expenseId === null) return res.status(400).json({ message: "Despesa inválida." });
@@ -2481,7 +2523,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/admin/expenses/:id", requireAdmin, async (req, res) => {
+  app.delete("/api/admin/expenses/:id", requireExpensesManage, async (req, res) => {
     try {
       const expenseId = parsePositiveInteger(req.params.id);
       if (expenseId === null) return res.status(400).json({ message: "Despesa inválida." });
@@ -2504,7 +2546,7 @@ export async function registerRoutes(
   });
 
   // === BARBERS MGMT ===
-  app.get("/api/admin/available-barbers", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/available-barbers", requireTeamLocationAssignment, async (_req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) return res.status(404).json({ message: "Funcionalidade indisponível." });
     const assignedIds = new Set(await getBarberIdsForLocation(Number(res.locals.locationId)));
     const barbers = await storage.getBarbers();
@@ -2512,7 +2554,7 @@ export async function registerRoutes(
       .map((barber) => ({ id: barber.id, name: barber.name, specialty: barber.specialty })));
   });
 
-  app.post("/api/admin/location-barbers", requireAdmin, async (req, res) => {
+  app.post("/api/admin/location-barbers", requireTeamLocationAssignment, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) return res.status(404).json({ message: "Funcionalidade indisponível." });
     const barberId = parsePositiveInteger(req.body?.barberId);
     if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
@@ -2543,7 +2585,13 @@ export async function registerRoutes(
     res.status(201).json({ message: "Barbeiro associado. Configure os serviços e horários nesta loja." });
   });
 
-  app.post("/api/barbers", requireAdmin, async (req, res) => {
+  app.post(
+    "/api/barbers",
+    requireTeamGlobalManage,
+    requireTeamLocationAssignment,
+    requireCatalogLocationManage,
+    requireCompensationManage,
+    async (req, res) => {
     try {
       const input = api.barbers.create.input.parse(req.body);
       const {
@@ -2601,13 +2649,33 @@ export async function registerRoutes(
       console.error("Create barber error:", error);
       res.status(500).json({ message: "Erro ao criar barbeiro" });
     }
-  });
+    },
+  );
 
-  app.patch("/api/barbers/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/barbers/:id", requireManagementAuth, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
       const input = barberUpdateInputSchema.parse(req.body);
+      const inputFields = new Set(Object.keys(input));
+      const globalIdentityFields = ["name", "specialty", "bio", "avatar", "email", "color"];
+      if (authRuntimeMode === "canonical") {
+        if (globalIdentityFields.some((field) => inputFields.has(field))
+          && !enforceCanonicalCapability(req, res, "team.manage_global")) return;
+        if (inputFields.has("email")
+          && !enforceCanonicalCapability(req, res, "users.manage")) return;
+        if (inputFields.has("isVisible")) {
+          const allowed = MULTI_LOCATION_CONFIG.enabled
+            ? enforceCanonicalCapability(req, res, "team.assign_location", Number(res.locals.locationId))
+            : enforceCanonicalCapability(req, res, "team.manage_global");
+          if (!allowed) return;
+        }
+        if (inputFields.has("serviceIds")
+          && !enforceCanonicalCapability(req, res, "catalog.manage_location", Number(res.locals.locationId))) return;
+        if (["compensationModel", "commissionPercent", "chairRentCents", "chairRentPeriod"]
+          .some((field) => inputFields.has(field))
+          && !enforceCanonicalCapability(req, res, "finance.manage_compensation", Number(res.locals.locationId))) return;
+      }
       const {
         serviceIds,
         compensationModel,
@@ -2711,8 +2779,21 @@ export async function registerRoutes(
         },
       });
       const currentVisible = updatedBarber.isVisible !== false && await isBarberAssignedToLocation(barberId, locationId);
+      const canonicalContext = getCanonicalRequestAuthContext(req);
+      const includePrivateFields = authRuntimeMode !== "canonical" || Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "team.manage_global")
+        || hasCanonicalCapability(canonicalContext, "team.view", locationId)
+      ));
+      const includeFinancialFields = authRuntimeMode !== "canonical" || Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "finance.view_team", locationId)
+        || hasCanonicalCapability(canonicalContext, "finance.manage_compensation", locationId)
+      ));
       res.json({
-        ...sanitizeBarberForResponse(attachCompensationRule(updatedBarber, locationId, compensationRule), true, true),
+        ...sanitizeBarberForResponse(
+          attachCompensationRule(updatedBarber, locationId, compensationRule),
+          includePrivateFields,
+          includeFinancialFields,
+        ),
         isVisible: currentVisible,
         serviceIds: currentServiceIds,
         accessReset: emailChanged,
@@ -2738,7 +2819,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/barbers/:id/services", requireAdmin, async (req, res) => {
+  app.patch("/api/barbers/:id/services", requireCatalogLocationManage, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
@@ -2780,7 +2861,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/barbers/:id/future-appointments", requireAdmin, async (req, res) => {
+  app.get("/api/barbers/:id/future-appointments", requireTeamAppointmentsManage, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) {
@@ -2808,7 +2889,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/barbers/:id", requireAdmin, async (req, res) => {
+  app.delete("/api/barbers/:id", requireManagementAuth, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) {
@@ -2816,6 +2897,13 @@ export async function registerRoutes(
       }
       const barber = await storage.getBarber(barberId);
       const locationId = Number(res.locals.locationId);
+      if (authRuntimeMode === "canonical") {
+        const capability = MULTI_LOCATION_CONFIG.enabled ? "team.assign_location" : "team.manage_global";
+        const allowed = MULTI_LOCATION_CONFIG.enabled
+          ? enforceCanonicalCapability(req, res, capability, locationId)
+          : enforceCanonicalCapability(req, res, capability);
+        if (!allowed) return;
+      }
       if (!barber || !await isBarberAssignedToLocation(barberId, locationId, true)) {
         return res.status(404).json({ message: "Barbeiro não encontrado" });
       }
@@ -2861,7 +2949,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/barbers/:id/reset-password", requireAdmin, async (req, res) => {
+  app.patch("/api/barbers/:id/reset-password", requireUsersManage, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
@@ -2898,7 +2986,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/barbers/:id/invite", requireAdmin, async (req, res) => {
+  app.post("/api/barbers/:id/invite", requireUsersManage, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
       if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
@@ -3023,7 +3111,7 @@ export async function registerRoutes(
     res.json(categories.map((category) => ({ ...category, serviceCount: counts.get(category.id) || 0 })));
   });
 
-  app.post(api.serviceCategories.create.path, requireAdmin, async (req, res) => {
+  app.post(api.serviceCategories.create.path, requireCatalogGlobalManage, async (req, res) => {
     try {
       const input = serviceCategoryCreateInputSchema.parse(req.body);
       const category = await storage.createServiceCategory(input);
@@ -3046,7 +3134,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put(api.serviceCategories.reorder.path, requireAdmin, async (req, res) => {
+  app.put(api.serviceCategories.reorder.path, requireCatalogGlobalManage, async (req, res) => {
     try {
       const { categoryIds } = serviceCategoryOrderInputSchema.parse(req.body);
       const categories = await storage.reorderServiceCategories(categoryIds);
@@ -3067,7 +3155,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch(api.serviceCategories.update.path, requireAdmin, async (req, res) => {
+  app.patch(api.serviceCategories.update.path, requireCatalogGlobalManage, async (req, res) => {
     try {
       const categoryId = parsePositiveInteger(req.params.id);
       if (categoryId === null) return res.status(400).json({ message: "Categoria inválida." });
@@ -3095,7 +3183,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete(api.serviceCategories.remove.path, requireAdmin, async (req, res) => {
+  app.delete(api.serviceCategories.remove.path, requireCatalogGlobalManage, async (req, res) => {
     try {
       const categoryId = parsePositiveInteger(req.params.id);
       if (categoryId === null) return res.status(400).json({ message: "Categoria inválida." });
@@ -3116,7 +3204,11 @@ export async function registerRoutes(
   });
 
   // === SERVICES MGMT ===
-  app.post("/api/services", requireAdmin, async (req, res) => {
+  app.post(
+    "/api/services",
+    requireCatalogGlobalManage,
+    requireCatalogLocationManage,
+    async (req, res) => {
     try {
       const input = insertServiceSchema.parse(req.body);
       await validateServiceCategoryAssignment(input.categoryId);
@@ -3149,14 +3241,24 @@ export async function registerRoutes(
       }
       res.status(500).json({ message: "Erro ao criar serviço" });
     }
-  });
+    },
+  );
 
-  app.patch("/api/services/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/services/:id", requireManagementAuth, async (req, res) => {
     try {
       const input = serviceUpdateInputSchema.parse(req.body);
       const serviceId = parsePositiveInteger(req.params.id);
       if (serviceId === null) return res.status(400).json({ message: "Serviço inválido." });
       const locationId = Number(res.locals.locationId);
+      if (authRuntimeMode === "canonical") {
+        const inputFields = new Set(Object.keys(input));
+        if (["name", "description", "agendaLabel", "categoryId"]
+          .some((field) => inputFields.has(field))
+          && !enforceCanonicalCapability(req, res, "catalog.manage_global")) return;
+        if (["priceOverride", "durationOverride", "isActive", "isVisible", "price", "duration"]
+          .some((field) => inputFields.has(field))
+          && !enforceCanonicalCapability(req, res, "catalog.manage_location", locationId)) return;
+      }
       const currentOffer = await getServiceLocationOffer(serviceId, locationId);
       if (!currentOffer) return res.status(404).json({ message: "Serviço não encontrado" });
       const currentService = await storage.getService(serviceId);
@@ -3227,7 +3329,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/services/:id", requireAdmin, async (req, res) => {
+  app.delete("/api/services/:id", requireManagementAuth, async (req, res) => {
     try {
       const serviceId = parsePositiveInteger(req.params.id);
       if (serviceId === null) {
@@ -3246,6 +3348,7 @@ export async function registerRoutes(
       const hasOtherAssignments = locationIds.some((id) => id !== locationId);
       const hasHistory = appointments.some((appointment) => appointment.serviceId === serviceId);
       if (hasOtherAssignments || hasHistory) {
+        if (!enforceCanonicalCapability(req, res, "catalog.manage_location", locationId)) return;
         await removeServiceFromLocation(serviceId, locationId);
         await recordAuditLog(req, {
           action: "service.unassigned",
@@ -3264,6 +3367,12 @@ export async function registerRoutes(
         });
       }
 
+      if (!enforceCanonicalAllCapabilities(
+        req,
+        res,
+        ["catalog.manage_global", "catalog.manage_location"],
+        locationId,
+      )) return;
       await storage.deleteService(serviceId);
       await deleteServiceLocationOffers(serviceId);
       await recordAuditLog(req, {
@@ -3283,7 +3392,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/services/available", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/services/available", requireCatalogLocationManage, async (_req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Associação de serviços não disponível." });
     }
@@ -3297,7 +3406,7 @@ export async function registerRoutes(
     })));
   });
 
-  app.post("/api/admin/service-locations", requireAdmin, async (req, res) => {
+  app.post("/api/admin/service-locations", requireCatalogLocationManage, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Associação de serviços não disponível." });
     }
@@ -3328,7 +3437,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/service-locations/:serviceId", requireAdmin, async (req, res) => {
+  app.patch("/api/admin/service-locations/:serviceId", requireCatalogLocationManage, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Associação de serviços não disponível." });
     }
@@ -3362,7 +3471,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/admin/service-locations/:serviceId", requireAdmin, async (req, res) => {
+  app.delete("/api/admin/service-locations/:serviceId", requireCatalogLocationManage, async (req, res) => {
     if (!MULTI_LOCATION_CONFIG.enabled) {
       return res.status(404).json({ message: "Associação de serviços não disponível." });
     }
@@ -3385,7 +3494,7 @@ export async function registerRoutes(
   });
 
   // === ADMIN MGMT ===
-  app.post("/api/admin/create", requireAdmin, async (req, res) => {
+  app.post("/api/admin/create", requireUsersAndAccessManage, async (req, res) => {
     try {
       const input = adminCreateInputSchema.parse(req.body);
       const username = input.username.toLowerCase();
@@ -3418,8 +3527,17 @@ export async function registerRoutes(
     const avatarReferences = req.query.avatarMode === "reference";
     const appSession = getAppSession(req);
     const canonicalContext = getCanonicalRequestAuthContext(req);
-    const isAdminSession = authRuntimeMode === "canonical"
-      ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "team.manage_global"))
+    const canViewTeam = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "team.manage_global")
+        || hasCanonicalCapability(canonicalContext, "team.view", locationId)
+      ))
+      : appSession.role === "admin" && Boolean(appSession.adminId);
+    const canViewTeamFinance = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "finance.view_team", locationId)
+        || hasCanonicalCapability(canonicalContext, "finance.manage_compensation", locationId)
+      ))
       : appSession.role === "admin" && Boolean(appSession.adminId);
     const ownBarberId = authRuntimeMode === "canonical"
       ? canonicalContext?.professionalId
@@ -3429,7 +3547,7 @@ export async function registerRoutes(
       : appSession.role === "barber"
         ? Number(appSession.barberId)
         : undefined;
-    const includeHidden = req.query.includeHidden === "true" && isAdminSession;
+    const includeHidden = req.query.includeHidden === "true" && canViewTeam;
     const barbers = await getBarbersWithServiceIds(locationId, avatarReferences, includeHidden);
     const visibleBarbers = includeHidden
       ? barbers
@@ -3441,8 +3559,8 @@ export async function registerRoutes(
           avatarReferences && referencedBarberId(barber.avatar) === barber.id
             ? { ...barber, avatar: `${barber.avatar}&locationId=${locationId}` }
             : barber,
-          isAdminSession || barber.id === ownBarberId,
-          isAdminSession,
+          canViewTeam || barber.id === ownBarberId,
+          canViewTeamFinance,
         ),
       ),
     );
@@ -3455,8 +3573,11 @@ export async function registerRoutes(
     const appSession = getAppSession(req);
     const locationId = Number(res.locals.locationId);
     const canonicalContext = getCanonicalRequestAuthContext(req);
-    const isAdmin = authRuntimeMode === "canonical"
-      ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "team.manage_global"))
+    const canViewTeam = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "team.manage_global")
+        || hasCanonicalCapability(canonicalContext, "team.view", locationId)
+      ))
       : appSession.role === "admin" && Boolean(appSession.adminId);
     const isOwnBarber = authRuntimeMode === "canonical"
       ? Boolean(
@@ -3465,8 +3586,8 @@ export async function registerRoutes(
         && hasCanonicalCapability(canonicalContext, "agenda.view_own", locationId),
       )
       : appSession.role === "barber" && Number(appSession.barberId) === barberId;
-    if (!barber || (!barber.isVisible && !isAdmin && !isOwnBarber)
-      || !await isBarberAssignedToLocation(barberId, locationId, isAdmin || isOwnBarber)) {
+    if (!barber || (!barber.isVisible && !canViewTeam && !isOwnBarber)
+      || !await isBarberAssignedToLocation(barberId, locationId, canViewTeam || isOwnBarber)) {
       return res.status(404).end();
     }
     const image = decodeBarberAvatar(barber.avatar);
@@ -3493,7 +3614,7 @@ export async function registerRoutes(
     res.json(availability.length > 0 ? availability : getDefaultShopAvailabilityRows());
   });
 
-  app.patch("/api/shop/availability", requireAdmin, async (req, res) => {
+  app.patch("/api/shop/availability", requireShopHoursManage, async (req, res) => {
     const inputSchema = z.array(z.object({
       dayOfWeek: z.number().int().min(0).max(6),
       startTime: z.string().regex(/^\d{2}:\d{2}$/),
@@ -3556,7 +3677,7 @@ export async function registerRoutes(
     res.json(availability);
   });
 
-  app.patch("/api/barbers/:id/availability", requireAdmin, async (req, res) => {
+  app.patch("/api/barbers/:id/availability", requireManagementAuth, async (req, res) => {
     const inputSchema = z.array(z.object({
       dayOfWeek: z.number().int().min(0).max(6),
       startTime: z.string().regex(/^\d{2}:\d{2}$/),
@@ -3567,6 +3688,12 @@ export async function registerRoutes(
     const barberId = parsePositiveInteger(req.params.id);
     if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
     const locationId = Number(res.locals.locationId);
+    if (!enforceCanonicalOwnOrTeamCapability(req, res, {
+      ownCapability: "hours.manage_own",
+      teamCapability: "hours.manage_team",
+      ownerProfessionalId: barberId,
+      locationId,
+    })) return;
     const barber = await storage.getBarber(barberId);
     if (!barber || !await isBarberAssignedToLocation(barberId, locationId)) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
@@ -3620,8 +3747,17 @@ export async function registerRoutes(
     }
     const appSession = getAppSession(req);
     const canonicalContext = getCanonicalRequestAuthContext(req);
-    const isAdminSession = authRuntimeMode === "canonical"
-      ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "team.manage_global"))
+    const canViewTeam = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "team.manage_global")
+        || hasCanonicalCapability(canonicalContext, "team.view", locationId)
+      ))
+      : appSession.role === "admin" && Boolean(appSession.adminId);
+    const canViewTeamFinance = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "finance.view_team", locationId)
+        || hasCanonicalCapability(canonicalContext, "finance.manage_compensation", locationId)
+      ))
       : appSession.role === "admin" && Boolean(appSession.adminId);
     const isOwnBarber = authRuntimeMode === "canonical"
       ? Boolean(
@@ -3630,12 +3766,12 @@ export async function registerRoutes(
         && hasCanonicalCapability(canonicalContext, "agenda.view_own", locationId),
       )
       : appSession.role === "barber" && Number(appSession.barberId) === barber.id;
-    const includePrivateFields = isAdminSession || isOwnBarber;
-    if (!barber.isVisible && !isAdminSession && !isOwnBarber) {
+    const includePrivateFields = canViewTeam || isOwnBarber;
+    if (!barber.isVisible && !canViewTeam && !isOwnBarber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
 
-    const locationServiceIds = await getServiceIdsForLocation(locationId, isAdminSession);
+    const locationServiceIds = await getServiceIdsForLocation(locationId, canViewTeam);
     const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
     const allServiceIds = await storage.getBarberServiceIds(barber.id, locationId);
     const serviceIds = allServiceIds
@@ -3645,7 +3781,7 @@ export async function registerRoutes(
       ...attachCompensationRule(barber, locationId, compensationRule),
       serviceIds,
       allServicesAllowed: locationServiceIds.length > 0 && serviceIds.length === locationServiceIds.length,
-    }, includePrivateFields, isAdminSession));
+    }, includePrivateFields, canViewTeamFinance));
   });
 
   // === SERVICES ===
@@ -3846,7 +3982,11 @@ export async function registerRoutes(
       const normalizedCustomerPhone = normalizeCustomerPhoneForStorage(input.customerPhone);
       const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
       // Check for blacklist
-      const isBlacklisted = await storage.isBlacklisted(normalizedCustomerEmail || undefined, normalizedCustomerPhone);
+      const isBlacklisted = await storage.isBlacklisted(
+        Number(res.locals.locationId),
+        normalizedCustomerEmail || undefined,
+        normalizedCustomerPhone,
+      );
       if (isBlacklisted) {
         return res.status(403).json({ message: "Não é possível realizar a marcação online. Contacte a barbearia." });
       }
@@ -4038,6 +4178,10 @@ export async function registerRoutes(
         recurringMonths,
       } = req.body;
       if (authRuntimeMode === "canonical") {
+        // This legacy endpoint multiplexes two different operations. A customer
+        // appointment uses create_manual; a calendar absence/block uses the
+        // deliberately separate block_time grant. The payload is validated
+        // below before either path can mutate data.
         const requiredCapability = isManualBooking === true
           ? "appointments.create_manual"
           : "appointments.block_time";
@@ -5553,16 +5697,17 @@ export async function registerRoutes(
   });
 
   // === BLACKLIST ===
-  app.get("/api/admin/blacklist", requireAdmin, async (req, res) => {
-    const list = await storage.getBlacklist();
+  app.get("/api/admin/blacklist", requireCustomerBlock, async (_req, res) => {
+    const list = await storage.getBlacklist(Number(res.locals.locationId));
     res.json(list);
   });
 
-  app.post("/api/admin/blacklist", requireAdmin, async (req, res) => {
+  app.post("/api/admin/blacklist", requireCustomerBlock, async (req, res) => {
     try {
       const input = blacklistInputSchema.parse(req.body);
+      const locationId = Number(res.locals.locationId);
       await withBlacklistMutationLock(async () => {
-        const existingEntry = (await storage.getBlacklist()).find((entry) =>
+        const existingEntry = (await storage.getBlacklist(locationId)).find((entry) =>
           supportedPhonesMatch(entry.phone, input.phone),
         );
         if (existingEntry) {
@@ -5574,7 +5719,11 @@ export async function registerRoutes(
           });
         }
 
-        const futureAppointments = await getFutureBookedCustomerAppointments(input.phone, input.email || undefined);
+        const futureAppointments = await getFutureBookedCustomerAppointments(
+          locationId,
+          input.phone,
+          input.email || undefined,
+        );
 
         if (futureAppointments.length > 0 && input.cancelFutureAppointments === undefined) {
           return res.status(409).json({
@@ -5585,6 +5734,7 @@ export async function registerRoutes(
         }
 
         const entry = await storage.addToBlacklist({
+          locationId,
           phone: input.phone,
           email: input.email || null,
           reason: input.reason || undefined,
@@ -5643,11 +5793,12 @@ export async function registerRoutes(
     if (!Number.isInteger(entryId) || entryId <= 0) {
       return res.status(400).json({ message: "Entrada da lista de bloqueio inválida." });
     }
-    const entry = (await storage.getBlacklist()).find((item) => item.id === entryId);
+    const locationId = Number(res.locals.locationId);
+    const entry = (await storage.getBlacklist(locationId)).find((item) => item.id === entryId);
     if (!entry) {
       return res.status(404).json({ message: "Cliente não encontrado na lista de bloqueio." });
     }
-    await storage.removeFromBlacklist(entryId);
+    await storage.removeFromBlacklist(entryId, locationId);
     await recordAuditLog(req, {
       action: "customer.unblocked",
       entityType: "blacklist",
@@ -5658,8 +5809,8 @@ export async function registerRoutes(
     res.json({ message: "Removido da lista de bloqueio" });
   };
 
-  app.post("/api/admin/blacklist/:id", requireAdmin, removeBlacklistEntry);
-  app.delete("/api/admin/blacklist/:id", requireAdmin, removeBlacklistEntry);
+  app.post("/api/admin/blacklist/:id", requireCustomerBlock, removeBlacklistEntry);
+  app.delete("/api/admin/blacklist/:id", requireCustomerBlock, removeBlacklistEntry);
 
   const canAccessCustomer = async (
     req: Request,

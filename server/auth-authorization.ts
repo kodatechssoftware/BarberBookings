@@ -149,6 +149,20 @@ export function enforceCanonicalAnyCapability(
   return false;
 }
 
+export function enforceCanonicalAllCapabilities(
+  request: Request,
+  response: Response,
+  capabilities: readonly CapabilityCode[],
+  locationId?: number,
+) {
+  if (authRuntimeMode !== "canonical") return true;
+  const context = getCanonicalRequestAuthContext(request);
+  if (context && capabilities.every((capability) =>
+    hasCanonicalCapability(context, capability, locationId))) return true;
+  rejectCanonicalAuthorization(request, response);
+  return false;
+}
+
 export function enforceCanonicalOwnOrTeamCapability(
   request: Request,
   response: Response,
@@ -196,6 +210,49 @@ export function requireCapabilityAtLocation(
       return response.status(400).json({ message: "Localização inválida." });
     }
     if (!enforceCanonicalCapability(request, response, capability, locationId)) return;
+    next();
+  };
+}
+
+export function requireAnyCapabilityAtLocation(
+  capabilities: readonly CapabilityCode[],
+  legacyMiddleware: RequestHandler,
+): RequestHandler {
+  return (request: Request, response: Response, next: NextFunction) => {
+    if (authRuntimeMode !== "canonical") {
+      return legacyMiddleware(request, response, next);
+    }
+    const locationId = Number(response.locals.locationId);
+    if (!Number.isSafeInteger(locationId) || locationId <= 0) {
+      return response.status(400).json({ message: "Localização inválida." });
+    }
+    if (!enforceCanonicalAnyCapability(request, response, capabilities, locationId)) return;
+    next();
+  };
+}
+
+export function requireGlobalCapability(
+  capability: CapabilityCode,
+  legacyMiddleware: RequestHandler,
+): RequestHandler {
+  return (request: Request, response: Response, next: NextFunction) => {
+    if (authRuntimeMode !== "canonical") {
+      return legacyMiddleware(request, response, next);
+    }
+    if (!enforceCanonicalCapability(request, response, capability)) return;
+    next();
+  };
+}
+
+export function requireAllGlobalCapabilities(
+  capabilities: readonly CapabilityCode[],
+  legacyMiddleware: RequestHandler,
+): RequestHandler {
+  return (request: Request, response: Response, next: NextFunction) => {
+    if (authRuntimeMode !== "canonical") {
+      return legacyMiddleware(request, response, next);
+    }
+    if (!enforceCanonicalAllCapabilities(request, response, capabilities)) return;
     next();
   };
 }

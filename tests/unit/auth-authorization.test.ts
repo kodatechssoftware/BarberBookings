@@ -243,6 +243,90 @@ test("Bruno with only the professional preset receives only operational capabili
   ), false);
 });
 
+test("the Professional preset cannot access any P4B management surface", () => {
+  for (const capability of [
+    "customers.block",
+    "team.view",
+    "team.manage_global",
+    "team.assign_location",
+    "catalog.manage_global",
+    "catalog.manage_location",
+    "hours.manage_own",
+    "hours.manage_team",
+    "hours.manage_establishment",
+    "extras.manage",
+    "finance.view_team",
+    "finance.manage_expenses",
+    "finance.manage_compensation",
+    "reports.export_team",
+    "locations.manage",
+    "users.manage",
+    "access.manage",
+    "settings.manage",
+    "audit.view",
+    "system.diagnostics",
+  ] as const) {
+    assert.equal(
+      hasCanonicalCapability(professional, capability, locationA),
+      false,
+      capability,
+    );
+  }
+});
+
+test("location-scoped management grants are isolated between locations", () => {
+  const locationManager = context([{
+    kind: "location",
+    locationId: locationA,
+    capabilities: [
+      "customers.block",
+      "team.assign_location",
+      "catalog.manage_location",
+      "hours.manage_team",
+      "hours.manage_establishment",
+      "extras.manage",
+      "finance.manage_expenses",
+      "finance.manage_compensation",
+      "reports.export_team",
+      "audit.view",
+    ],
+  }], null);
+
+  for (const capability of [
+    "customers.block",
+    "team.assign_location",
+    "catalog.manage_location",
+    "hours.manage_team",
+    "hours.manage_establishment",
+    "extras.manage",
+    "finance.manage_expenses",
+    "finance.manage_compensation",
+    "reports.export_team",
+    "audit.view",
+  ] as const) {
+    assert.equal(hasCanonicalCapability(locationManager, capability, locationA), true, capability);
+    assert.equal(hasCanonicalCapability(locationManager, capability, locationB), false, capability);
+  }
+});
+
+test("global professional identity and local compensation grants remain independent", () => {
+  const identityOnly = context([{
+    kind: "global",
+    capabilities: ["team.manage_global"],
+  }], null);
+  const compensationOnly = context([{
+    kind: "location",
+    locationId: locationA,
+    capabilities: ["finance.manage_compensation"],
+  }], null);
+
+  assert.equal(hasCanonicalCapability(identityOnly, "team.manage_global"), true);
+  assert.equal(hasCanonicalCapability(identityOnly, "finance.manage_compensation", locationA), false);
+  assert.equal(hasCanonicalCapability(compensationOnly, "finance.manage_compensation", locationA), true);
+  assert.equal(hasCanonicalCapability(compensationOnly, "finance.manage_compensation", locationB), false);
+  assert.equal(hasCanonicalCapability(compensationOnly, "team.manage_global"), false);
+});
+
 test("team agenda redaction excludes private customer and commercial fields", () => {
   const redacted = redactTeamAgendaAppointment({
     id: 77,

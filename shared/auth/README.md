@@ -50,3 +50,14 @@ preset is projected into the legacy route shape. Other active canonical users
 can authenticate and inspect `/api/admin/me`, but fail closed on legacy
 `requireAuth`/`requireAdmin` routes rather than inheriting access from a profile
 link.
+
+P4A authorizes operational appointment, customer, finance and report paths by
+ownership or explicit team capability. P4B applies the same fail-closed model
+to management surfaces. Global professional/service identity remains protected
+by global capabilities, while location membership, local catalogue terms,
+schedules, Extras, expenses, compensation, customer blocking and local audit
+access are evaluated against the selected location. Compensation uses its own
+`finance.manage_compensation` capability; team management or finance read
+access never substitutes for it. In legacy mode the existing Admin/Professional
+guards remain the compatibility authority until the separately approved
+cutover removes them.

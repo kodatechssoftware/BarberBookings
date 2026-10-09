@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import { resolveEffectiveAccess, type AccessScope } from "@shared/auth";
 import type { CanonicalAuthContext } from "../../server/auth-runtime";
 import {
+  enforceCanonicalAllCapabilities,
   enforceCanonicalAnyOwnOrTeamCapability,
   enforceCanonicalCapability,
   enforceCanonicalOwnOrTeamCapability,
@@ -168,4 +169,68 @@ test("manage_own authorizes own cancellation without authorizing other status ch
     },
   ), false);
   assert.equal(completion.state.status, 403);
+});
+
+test("canonical mixed mutations require every independent capability", () => {
+  const identityOnly = context([{
+    kind: "global",
+    capabilities: ["team.manage_global"],
+  }], null);
+  const compensationOnly = context([{
+    kind: "location",
+    locationId: locationA,
+    capabilities: ["finance.manage_compensation"],
+  }], null);
+  const both = context([
+    { kind: "global", capabilities: ["team.manage_global"] },
+    {
+      kind: "location",
+      locationId: locationA,
+      capabilities: ["finance.manage_compensation"],
+    },
+  ], null);
+
+  for (const denied of [identityOnly, compensationOnly]) {
+    const { response, state } = responseRecorder();
+    assert.equal(enforceCanonicalAllCapabilities(
+      canonicalRequest(denied),
+      response,
+      ["team.manage_global", "finance.manage_compensation"],
+      locationA,
+    ), false);
+    assert.equal(state.status, 403);
+  }
+
+  const allowed = responseRecorder();
+  assert.equal(enforceCanonicalAllCapabilities(
+    canonicalRequest(both),
+    allowed.response,
+    ["team.manage_global", "finance.manage_compensation"],
+    locationA,
+  ), true);
+  assert.equal(allowed.state.status, undefined);
+});
+
+test("local compensation authorization is denied outside the granted location", () => {
+  const compensationManager = context([{
+    kind: "location",
+    locationId: locationA,
+    capabilities: ["finance.manage_compensation"],
+  }], null);
+  const atA = responseRecorder();
+  assert.equal(enforceCanonicalCapability(
+    canonicalRequest(compensationManager),
+    atA.response,
+    "finance.manage_compensation",
+    locationA,
+  ), true);
+
+  const atB = responseRecorder();
+  assert.equal(enforceCanonicalCapability(
+    canonicalRequest(compensationManager),
+    atB.response,
+    "finance.manage_compensation",
+    locationB,
+  ), false);
+  assert.equal(atB.state.status, 403);
 });

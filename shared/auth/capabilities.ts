@@ -153,6 +153,11 @@ export const capabilityRegistry = {
     description: "Manage business expenses.",
     locationGrantAllowed: true,
   },
+  "finance.manage_compensation": {
+    area: "finance",
+    description: "Manage professional compensation rules at a location.",
+    locationGrantAllowed: true,
+  },
   "reports.export_own": {
     area: "reports",
     description: "Export only the professional's own report data.",

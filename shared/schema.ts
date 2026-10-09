@@ -443,11 +443,15 @@ export const userInvites = appPgTable("user_invites", {
 
 export const blacklist = appPgTable("blacklist", {
   id: idColumn("blacklist_id_seq"),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
   email: text("email"),
   phone: text("phone").notNull(),
   reason: text("reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  locationPhoneIdx: index("blacklist_location_phone_idx").on(table.locationId, table.phone),
+  locationCreatedAtIdx: index("blacklist_location_created_at_idx").on(table.locationId, table.createdAt),
+}));
 
 export const verificationCodes = appPgTable("verification_codes", {
   id: idColumn("verification_codes_id_seq"),

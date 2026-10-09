@@ -273,7 +273,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 15, "a fresh empty application schema must apply migrations 0001 through 0015");
+  assert.equal(freshRun.applied.length, 16, "a fresh empty application schema must apply migrations 0001 through 0016");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -304,7 +304,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 15);
+  assert.equal(secondFreshRun.alreadyApplied, 16);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1017,6 +1017,7 @@ try {
   assert.deepEqual(compensationMigrationRun.applied, [
     "0014_barber_location_compensation.sql",
     "0015_auth_users_foundation.sql",
+    "0016_blacklist_location_scope.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("users")}`)).rows[0].count), 0,
@@ -1025,6 +1026,20 @@ try {
     "migration 0015 must leave the legacy admin unlinked");
   assert.equal((await pool.query(`SELECT user_id FROM ${table("barbers")} WHERE id = 1`)).rows[0].user_id, null,
     "migration 0015 must leave the legacy professional unlinked");
+  const migratedBlacklistRows = (await pool.query(`
+    SELECT location_id, phone, reason
+    FROM ${table("blacklist")}
+    WHERE phone = '919999999'
+    ORDER BY location_id
+  `)).rows.map((row) => ({
+    locationId: Number(row.location_id),
+    phone: row.phone,
+    reason: row.reason,
+  }));
+  assert.deepEqual(migratedBlacklistRows, [
+    { locationId: Number(defaultLocation.id), phone: "919999999", reason: "Teste existente" },
+    { locationId: secondLocationId, phone: "919999999", reason: "Teste existente" },
+  ], "migration 0016 must preserve every legacy global block in every existing location");
   assert.deepEqual((await pool.query(`
     SELECT barber_id, location_id, model, commission_percent, effective_from
     FROM ${table("barber_compensation_rules")}
@@ -1143,7 +1158,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 15);
+  assert.equal(secondCompensationRun.alreadyApplied, 16);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1158,6 +1173,7 @@ try {
     "extra_definitions_location_name_ci_idx", "extra_definitions_location_active_order_idx",
     "appointment_extras_pkey", "appointment_extras_appointment_position_unique",
     "appointment_extras_extra_definition_id_idx",
+    "blacklist_location_phone_idx", "blacklist_location_created_at_idx",
     "barber_services_location_barber_idx", "barber_services_location_service_idx",
     "barber_compensation_rules_barber_location_effective_idx",
     "barber_compensation_rules_barber_location_effective_uidx",
@@ -1797,7 +1813,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0015, additive auth foundation, location-specific service offers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0016, additive auth foundation, location-scoped blacklist, location-specific service offers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
