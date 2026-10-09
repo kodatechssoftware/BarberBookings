@@ -45,6 +45,7 @@ import { AssociateServiceDialog } from "@/components/admin/AssociateServiceDialo
 import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
 import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesManager";
 import { ExtrasManager } from "@/components/admin/ExtrasManager";
+import { UserAccessManager } from "@/components/admin/UserAccessManager";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
@@ -1596,6 +1597,13 @@ export default function Admin() {
     activeLocationId,
     (role) => role === "admin",
   );
+  const canManageAccess = canUseRuntimeCapability(
+    user,
+    "access.manage",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const usesCanonicalAuth = Boolean(user?.access && user.userId);
   const canViewTeam = canUseRuntimeCapability(user, "team.view", activeLocationId, (role) => role === "admin");
   const canManageTeamGlobal = canUseRuntimeCapability(user, "team.manage_global", activeLocationId, (role) => role === "admin");
   const canAssignTeamLocation = canUseRuntimeCapability(user, "team.assign_location", activeLocationId, (role) => role === "admin");
@@ -4176,6 +4184,9 @@ export default function Admin() {
             {canManageLocations && multiLocationConfig?.enabled && (
               <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
             )}
+            {usesCanonicalAuth && canManageUsers && (
+              <TabsTrigger value="users" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Utilizadores</TabsTrigger>
+            )}
             {canBlockCustomers && <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>}
             {canUseOwnOrTeamReports && (
               <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
@@ -5372,6 +5383,27 @@ export default function Admin() {
           {canManageLocations && multiLocationConfig?.enabled && (
             <TabsContent value="locations" className="outline-none">
               <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
+            </TabsContent>
+          )}
+
+          {usesCanonicalAuth && canManageUsers && user?.userId && user.access && (
+            <TabsContent value="users" className="outline-none">
+              <UserAccessManager
+                enabled={activeTab === "users"}
+                currentUserId={user.userId}
+                currentAccess={user.access}
+                locations={availableLocations}
+                professionals={(barbers ?? []).map((barber) => ({
+                  id: barber.id,
+                  name: barber.name,
+                  userId: barber.userId,
+                }))}
+              />
+              {!canManageAccess && (
+                <p className="mt-3 text-xs text-amber-200">
+                  Pode gerir identidades, mas o acesso fica limitado às localizações onde tem `access.manage`.
+                </p>
+              )}
             </TabsContent>
           )}
 
