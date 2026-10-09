@@ -31,3 +31,18 @@ export type {
   GlobalAccessScope,
   LocationAccessScope,
 } from "./types";
+export {
+  canonicalAccessReplaceSchema,
+  canonicalAccessScopeInputSchema,
+  canonicalAccessScopesSchema,
+  canonicalInviteAcceptanceSchema,
+  canonicalInviteOptionsSchema,
+  canonicalPasswordChangeSchema,
+  canonicalProfessionalLinkSchema,
+  canonicalUserCreateSchema,
+  canonicalUserIdentityUpdateSchema,
+  canonicalUserStatusUpdateSchema,
+  type CanonicalAccessReplaceInput,
+  type CanonicalUserCreateInput,
+  type CanonicalUserIdentityUpdateInput,
+} from "./user-management";

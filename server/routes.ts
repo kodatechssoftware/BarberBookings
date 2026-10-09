@@ -175,6 +175,35 @@ import {
   redactStoredAuditMetadata,
   serializeSafeAuditMetadata,
 } from "./audit-log-security";
+import {
+  canonicalAccessReplaceSchema,
+  canonicalInviteAcceptanceSchema,
+  canonicalInviteOptionsSchema,
+  canonicalPasswordChangeSchema,
+  canonicalProfessionalLinkSchema,
+  canonicalUserCreateSchema,
+  canonicalUserIdentityUpdateSchema,
+  canonicalUserStatusUpdateSchema,
+  hasCapability,
+  hasCapabilityAtLocation,
+} from "@shared/auth";
+import {
+  acceptCanonicalUserInvite,
+  CanonicalUserManagementError,
+  changeCanonicalPassword,
+  createCanonicalInvitedUser,
+  getCanonicalUser,
+  getCanonicalUserAccess,
+  listCanonicalUsers,
+  replaceCanonicalUserAccess,
+  replaceCanonicalUserInvite,
+  revokeCanonicalUserInvites,
+  revokeCanonicalUserSessions,
+  setCanonicalProfessionalLink,
+  setCanonicalUserStatus,
+  updateCanonicalUserIdentity,
+} from "./auth-user-management";
+import { createFixedWindowRateLimiter } from "./auth-rate-limit";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -182,6 +211,18 @@ const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY = process.env.PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY;
 const PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED = process.env.PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED === "true";
 const MULTI_LOCATION_CONFIG = parseMultiLocationConfig(process.env);
+const canonicalLoginRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 10,
+  windowMs: 15 * 60 * 1_000,
+});
+const canonicalInviteRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 8,
+  windowMs: 15 * 60 * 1_000,
+});
+const canonicalPasswordRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 8,
+  windowMs: 15 * 60 * 1_000,
+});
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
 const DEPOSIT_LONG_SERVICE_MINUTES = Number(process.env.DEPOSIT_LONG_SERVICE_MINUTES || 45);
 const DEPOSIT_RISK_THRESHOLD = Number(process.env.DEPOSIT_RISK_THRESHOLD || 2);
@@ -346,6 +387,43 @@ const adminCreateInputSchema = z.object({
 const barberInvitePasswordSchema = z.object({
   password: z.string().min(8, "A palavra-passe deve ter pelo menos 8 caracteres.").max(200),
 });
+
+function canonicalAuthRateKey(req: Request, purpose: string, subject = "") {
+  return `${purpose}:${req.ip || req.socket.remoteAddress || "unknown"}:${subject}`;
+}
+
+function applyRateLimit(
+  req: Request,
+  res: Response,
+  limiter: ReturnType<typeof createFixedWindowRateLimiter>,
+  purpose: string,
+  subject = "",
+) {
+  const key = canonicalAuthRateKey(req, purpose, subject);
+  const decision = limiter.consume(key);
+  if (decision.allowed) return key;
+  res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  res.status(429).json({ message: "Demasiadas tentativas. Tente novamente mais tarde." });
+  return null;
+}
+
+function sendCanonicalUserManagementError(res: Response, error: unknown) {
+  if (error instanceof CanonicalUserManagementError) {
+    return res.status(error.status).json({ code: error.code, message: error.message });
+  }
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({
+      code: "VALIDATION_ERROR",
+      message: error.errors[0]?.message || "Pedido inválido.",
+      field: error.errors[0]?.path.join("."),
+    });
+  }
+  const code = (error as { code?: string } | null)?.code;
+  if (code === "23505") {
+    return res.status(409).json({ code: "IDENTITY_CONFLICT", message: "O utilizador ou associação já existe." });
+  }
+  throw error;
+}
 
 let blacklistMutationQueue: Promise<void> = Promise.resolve();
 
@@ -1850,7 +1928,14 @@ export async function registerRoutes(
         return next();
       }
 
-      const ignoresSelectedLocation = ["/account/locations", "/admin/login", "/admin/logout", "/admin/me"].includes(req.path)
+      const ignoresSelectedLocation = [
+        "/account/locations",
+        "/account/password",
+        "/admin/login",
+        "/admin/logout",
+        "/admin/me",
+        "/user-invites/accept",
+      ].includes(req.path)
         || /^\/appointments\/(token|reschedule|cancel)\//.test(req.path)
         || req.path.startsWith("/barber-invites/");
       // <img> cannot supply X-Location-Id. Only this read-only image route accepts
@@ -1912,10 +1997,19 @@ export async function registerRoutes(
       const normalizedUsername = username.toLowerCase();
 
       if (authRuntimeMode === "canonical") {
+        const rateLimitKey = applyRateLimit(
+          req,
+          res,
+          canonicalLoginRateLimiter,
+          "login",
+          normalizedUsername,
+        );
+        if (!rateLimitKey) return;
         const authenticated = await authenticateCanonicalUser(pool, normalizedUsername, password);
         if (!authenticated) {
           return res.status(401).json({ message: "Utilizador ou palavra-passe incorretos" });
         }
+        canonicalLoginRateLimiter.reset(rateLimitKey);
         await establishCanonicalSession(req, authenticated.identity);
         setCanonicalRequestAuthContext(req, authenticated.context);
         return res.json({
@@ -2068,6 +2162,217 @@ export async function registerRoutes(
   const requireManagementAuth = (req: Request, res: Response, next: NextFunction) => authRuntimeMode === "canonical"
     ? requireAuth(req, res, next)
     : requireAdmin(req, res, next);
+
+  const requireCanonicalUsersManage = (req: Request, res: Response, next: NextFunction) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    if (!enforceCanonicalCapability(req, res, "users.manage")) return;
+    next();
+  };
+
+  app.post("/api/user-invites/accept", async (req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    const rateLimitKey = applyRateLimit(
+      req,
+      res,
+      canonicalInviteRateLimiter,
+      "user-invite",
+    );
+    if (!rateLimitKey) return;
+    try {
+      const input = canonicalInviteAcceptanceSchema.parse(req.body);
+      const identity = await acceptCanonicalUserInvite(pool, input.token, input.password);
+      canonicalInviteRateLimiter.reset(rateLimitKey);
+      await establishCanonicalSession(req, identity);
+      const context = await loadCanonicalAuthContext(pool, identity.userId);
+      if (!context) throw new Error("Canonical user unavailable after accepting invite.");
+      setCanonicalRequestAuthContext(req, context);
+      return res.json({
+        message: "Convite aceite e acesso ativado.",
+        ...toCanonicalMeResponse(context),
+      });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.post("/api/account/password", requireAuth, async (req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    const context = getCanonicalRequestAuthContext(req)!;
+    const rateLimitKey = applyRateLimit(
+      req,
+      res,
+      canonicalPasswordRateLimiter,
+      "password-change",
+      String(context.user.id),
+    );
+    if (!rateLimitKey) return;
+    try {
+      const input = canonicalPasswordChangeSchema.parse(req.body);
+      await changeCanonicalPassword(pool, context, input.currentPassword, input.newPassword);
+      canonicalPasswordRateLimiter.reset(rateLimitKey);
+      await clearAuthenticatedSessionIdentity(req);
+      return res.json({ message: "Palavra-passe alterada. Inicie sessão novamente." });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.get("/api/admin/users", requireCanonicalUsersManage, async (_req, res) => {
+    return res.json(await listCanonicalUsers(pool));
+  });
+
+  app.get("/api/admin/users/:id", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      return res.json(await getCanonicalUser(pool, userId));
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.post("/api/admin/users", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const input = canonicalUserCreateSchema.parse(req.body);
+      const created = await createCanonicalInvitedUser(pool, actor, input);
+      return res.status(201).json({
+        user: created.user,
+        inviteUrl: `${buildPublicUrl("/user-invite")}#token=${encodeURIComponent(created.invite.token)}`,
+        expiresAt: created.invite.expiresAt,
+      });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.patch("/api/admin/users/:id", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const input = canonicalUserIdentityUpdateSchema.parse(req.body);
+      return res.json(await updateCanonicalUserIdentity(pool, actor, userId, input));
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.put("/api/admin/users/:id/status", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const input = canonicalUserStatusUpdateSchema.parse(req.body);
+      return res.json(await setCanonicalUserStatus(pool, actor, userId, input.status));
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.put("/api/admin/users/:id/professional", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const input = canonicalProfessionalLinkSchema.parse(req.body);
+      return res.json(await setCanonicalProfessionalLink(pool, actor, userId, input.professionalId));
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.get("/api/admin/users/:id/access", requireAuth, async (req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const requestedLocationId = req.query.locationId === undefined
+        ? undefined
+        : parsePositiveInteger(req.query.locationId);
+      if (req.query.locationId !== undefined && requestedLocationId === null) {
+        return res.status(400).json({ message: "Localização inválida." });
+      }
+      if (hasCapability(actor.access, "access.manage")) {
+        return res.json(await getCanonicalUserAccess(pool, userId, {
+          locationId: requestedLocationId ?? undefined,
+        }));
+      }
+      const locationId = requestedLocationId ?? Number(res.locals.locationId);
+      if (!Number.isSafeInteger(locationId) || locationId <= 0
+        || !hasCapabilityAtLocation(actor.access, "access.manage", locationId)) {
+        return res.status(403).json({ message: "Não autorizado" });
+      }
+      return res.json(await getCanonicalUserAccess(pool, userId, { locationId }));
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.put("/api/admin/users/:id/access", requireAuth, async (req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const input = canonicalAccessReplaceSchema.parse(req.body);
+      return res.json(await replaceCanonicalUserAccess(pool, actor, userId, input));
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.post("/api/admin/users/:id/invites", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const input = canonicalInviteOptionsSchema.parse(req.body ?? {});
+      const invite = await replaceCanonicalUserInvite(pool, actor, userId, input.expiresInHours);
+      return res.status(201).json({
+        inviteUrl: `${buildPublicUrl("/user-invite")}#token=${encodeURIComponent(invite.token)}`,
+        expiresAt: invite.expiresAt,
+      });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.delete("/api/admin/users/:id/invites", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const revoked = await revokeCanonicalUserInvites(pool, actor, userId);
+      return res.json({ revoked });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.post("/api/admin/users/:id/revoke-sessions", requireCanonicalUsersManage, async (req, res) => {
+    try {
+      const userId = parsePositiveInteger(req.params.id);
+      if (userId === null) return res.status(400).json({ message: "Utilizador inválido." });
+      const actor = getCanonicalRequestAuthContext(req)!;
+      const authVersion = await revokeCanonicalUserSessions(pool, actor, userId);
+      if (userId === actor.user.id) await clearAuthenticatedSessionIdentity(req);
+      return res.json({ authVersion });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
 
   if (isMetaWebhookEnabled()) {
     app.get("/api/webhooks/whatsapp/meta", (req, res) => {
@@ -3073,14 +3378,14 @@ export async function registerRoutes(
           hashedPassword,
         );
         if (!identity) {
-          return res.status(409).json({ message: PUBLIC_CYCLE_COPY.invite.backend.alreadyUsed });
+          return res.status(409).json({ message: "Este convite já foi utilizado ou substituído." });
         }
         await establishCanonicalSession(req, identity);
         const context = await loadCanonicalAuthContext(pool, identity.userId);
         if (!context) throw new Error("Canonical user unavailable after accepting invite.");
         setCanonicalRequestAuthContext(req, context);
         return res.json({
-          message: PUBLIC_CYCLE_COPY.invite.backend.passwordDefined,
+          message: "Palavra-passe definida com sucesso.",
           ...toCanonicalMeResponse(context),
         });
       }

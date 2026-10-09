@@ -61,3 +61,15 @@ access are evaluated against the selected location. Compensation uses its own
 access never substitutes for it. In legacy mode the existing Admin/Professional
 guards remain the compatibility authority until the separately approved
 cutover removes them.
+
+P5A adds canonical backend lifecycle management without changing the legacy
+runtime. New identities are invited through `users` and `user_invites`; tokens
+are stored only as digests and canonical passwords are written only to
+`users.password_hash`. Professional links remain optional identity links and
+grant no access. Presets and explicit capabilities are persisted as a union of
+grants, subject to the caller's grant ceiling. User/access mutations increment
+`auth_version` where they affect an authenticated identity, and an advisory
+transaction lock prevents concurrent mutations from removing the final active
+global Administrator. These endpoints fail closed while
+`AUTH_RUNTIME_MODE=legacy`; `admins`, `barbers.password` and `barber_invites`
+remain compatibility-only until the separately approved cutover.
