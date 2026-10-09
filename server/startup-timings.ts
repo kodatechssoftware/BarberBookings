@@ -9,6 +9,7 @@ import {
 type Phase =
   | "process-origin" | "instrumentation-ready" | "entry-module-ready"
   | "db-pool-configuration" | "http-configuration" | "runtime-validation"
+  | "canonical-auth-foundation"
   | "starting-to-listen" | "ensureServiceAgendaLabelColumn"
   | "ensureAppointmentPaymentMethodColumn" | "ensureBarberServicesTable"
   | "ensureBusinessExpensesTable"

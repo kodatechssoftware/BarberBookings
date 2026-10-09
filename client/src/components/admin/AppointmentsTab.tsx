@@ -41,7 +41,7 @@ export type AppointmentBlockData = {
 };
 
 type AppointmentsTabUser = {
-  role: "" | "admin" | "barber";
+  role: "" | "admin" | "barber" | "user";
   name?: string;
 };
 

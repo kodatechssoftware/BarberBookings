@@ -38,12 +38,24 @@ test("Production runtime starts fail-closed without Meta credentials", () => {
     production:m.isProductionDeployment, development:m.isDevelopmentDeployment,
     events:m.appointmentNotificationEventsEnabled, worker:m.appointmentNotificationWorkerEnabled,
     recurring:m.recurringWhatsappNotificationsEnabled,
+    authRuntimeMode:m.authRuntimeMode,
     bookingSlotInterval:m.bookingSlotIntervalMinutes
   }))`);
   assert.deepEqual(JSON.parse(output), {
     production: true, development: false, events: false, worker: false, recurring: false,
+    authRuntimeMode: "legacy",
     bookingSlotInterval: 30,
   });
+});
+
+test("Production preserves legacy auth by default and rejects an unknown explicit runtime mode", () => {
+  const legacyEnvironment = { ...baseEnvironment };
+  delete legacyEnvironment.AUTH_RUNTIME_MODE;
+  assert.equal(evaluate(legacyEnvironment, "console.log(m.authRuntimeMode)"), "legacy");
+  assert.throws(() => evaluate(
+    { ...baseEnvironment, AUTH_RUNTIME_MODE: "hybrid" },
+    "m.validateRuntimeConfiguration()",
+  ));
 });
 
 test("booking slot interval accepts 15, 30 and 60 and fails fast for every other configured value", () => {

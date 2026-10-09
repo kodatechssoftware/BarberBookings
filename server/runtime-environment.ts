@@ -1,4 +1,7 @@
 import { parseBookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
+import { authRuntimeMode } from "./auth-runtime";
+
+export { authRuntimeMode };
 
 const appEnvironment = process.env.APP_ENV?.trim().toLowerCase();
 

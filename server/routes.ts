@@ -136,6 +136,24 @@ import {
 } from "./location-store";
 import { getPublicBaseUrl } from "./public-url";
 import { resolveServiceLocationTerms } from "@shared/service-location-terms";
+import {
+  acceptLegacyProfessionalInviteCanonical,
+  authenticateCanonicalUser,
+  authRuntimeMode,
+  canUseLegacyAuthenticatedRoutes,
+  loadCanonicalAuthContext,
+  resetCanonicalPasswordForProfessional,
+  toCanonicalMeResponse,
+  validateCanonicalSession,
+  type CanonicalAuthContext,
+} from "./auth-runtime";
+import {
+  clearAuthenticatedSessionIdentity,
+  destroyAuthenticatedSession,
+  establishCanonicalSession,
+  establishLegacySession,
+  type RuntimeSession as AppSession,
+} from "./auth-session";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -242,11 +260,7 @@ const appointmentPaymentMethodLabels: Record<AppointmentPaymentMethod, string> =
   gift: "Oferta",
 };
 
-type AppSession = session.Session & Partial<session.SessionData> & {
-  adminId?: number;
-  barberId?: number;
-  role?: "admin" | "barber";
-};
+const canonicalRequestContexts = new WeakMap<Request, CanonicalAuthContext>();
 
 const customerNotesInputSchema = z.object({
   customerName: z.string().trim().max(120, "O nome não pode ter mais de 120 caracteres.").optional(),
@@ -332,6 +346,25 @@ async function withBlacklistMutationLock<T>(callback: () => Promise<T>): Promise
 }
 
 function getAppSession(req: Request) {
+  const rawSession = req.session as AppSession;
+  if (authRuntimeMode !== "canonical") return rawSession;
+  const context = canonicalRequestContexts.get(req);
+  if (!context) {
+    return { ...rawSession, role: undefined, adminId: undefined, barberId: undefined } as AppSession;
+  }
+  // Compatibility view only. These derived legacy fields are never written to
+  // the canonical session store and are not authorization authority.
+  return {
+    ...rawSession,
+    role: context.isGlobalAdministrator
+      ? "admin"
+      : context.professionalId && context.hasProfessionalAccessPreset ? "barber" : undefined,
+    adminId: context.isGlobalAdministrator ? (context.legacyAdminId ?? context.user.id) : undefined,
+    barberId: context.professionalId ?? undefined,
+  } as AppSession;
+}
+
+function getWritableAppSession(req: Request) {
   return req.session as AppSession;
 }
 
@@ -347,6 +380,18 @@ type AuditLogInput = {
 };
 
 async function getAuditActor(req: Request) {
+  const canonicalContext = canonicalRequestContexts.get(req);
+  if (canonicalContext) {
+    return {
+      actorType: canonicalContext.isGlobalAdministrator ? "admin" : "barber",
+      actorId: canonicalContext.isGlobalAdministrator
+        ? (canonicalContext.legacyAdminId ?? canonicalContext.user.id)
+        : canonicalContext.professionalId,
+      actorName: canonicalContext.user.displayName || canonicalContext.user.email,
+      actorUserId: canonicalContext.user.id,
+      actorProfessionalId: canonicalContext.professionalId,
+    };
+  }
   const appSession = getAppSession(req);
 
   if (appSession.role === "barber" && appSession.barberId) {
@@ -413,15 +458,6 @@ function getSessionSameSite(): "lax" | "strict" | "none" {
   }
 
   return "lax";
-}
-
-function saveSession(req: Request) {
-  return new Promise<void>((resolve, reject) => {
-    req.session.save((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
 }
 
 function getShopDateParts(date: Date) {
@@ -1737,6 +1773,29 @@ export async function registerRoutes(
     });
   });
 
+  if (authRuntimeMode === "canonical") {
+    app.use(async (req, _res, next) => {
+      try {
+        const appSession = getWritableAppSession(req);
+        if (!appSession.userId || !appSession.authVersion) return next();
+        const context = await validateCanonicalSession(pool, {
+          userId: appSession.userId,
+          authVersion: appSession.authVersion,
+        });
+        if (!context) {
+          await clearAuthenticatedSessionIdentity(req).catch((error) => {
+            console.warn("Could not clear invalid canonical session:", error);
+          });
+          return next();
+        }
+        canonicalRequestContexts.set(req, context);
+        return next();
+      } catch (error) {
+        return next(error);
+      }
+    });
+  }
+
   app.get("/api/multi-location/config", (_req, res) => {
     res.json({
       ...MULTI_LOCATION_CONFIG,
@@ -1820,15 +1879,24 @@ export async function registerRoutes(
       }
       const { username, password } = parsedLogin.data;
       const normalizedUsername = username.toLowerCase();
+
+      if (authRuntimeMode === "canonical") {
+        const authenticated = await authenticateCanonicalUser(pool, normalizedUsername, password);
+        if (!authenticated) {
+          return res.status(401).json({ message: "Utilizador ou palavra-passe incorretos" });
+        }
+        await establishCanonicalSession(req, authenticated.identity);
+        canonicalRequestContexts.set(req, authenticated.context);
+        return res.json({
+          message: "Login efetuado com sucesso",
+          ...toCanonicalMeResponse(authenticated.context),
+        });
+      }
       
       // Try admin login first
       const admin = await storage.getAdminByUsername(normalizedUsername);
       if (admin && (await bcrypt.compare(password, admin.password))) {
-        const appSession = getAppSession(req);
-        appSession.adminId = admin.id;
-        delete appSession.barberId;
-        appSession.role = "admin";
-        await saveSession(req);
+        await establishLegacySession(req, { role: "admin", adminId: admin.id });
         return res.json({
           message: "Login efetuado com sucesso",
           authorized: true,
@@ -1847,11 +1915,7 @@ export async function registerRoutes(
         }
         
         if (await bcrypt.compare(password, barber.password)) {
-          const appSession = getAppSession(req);
-          appSession.barberId = barber.id;
-          delete appSession.adminId;
-          appSession.role = "barber";
-          await saveSession(req);
+          await establishLegacySession(req, { role: "barber", barberId: barber.id });
           return res.json({
             message: "Login efetuado com sucesso",
             authorized: true,
@@ -1870,17 +1934,21 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/logout", (req, res) => {
-    req.session.destroy((err) => {
-      if (err) {
-        console.error("Logout error:", err);
-        return res.status(500).json({ message: "Erro ao sair" });
-      }
+  app.post("/api/admin/logout", async (req, res) => {
+    try {
+      await destroyAuthenticatedSession(req);
       return res.json({ message: "Logout efetuado" });
-    });
+    } catch (error) {
+      console.error("Logout error:", error);
+      return res.status(500).json({ message: "Erro ao sair" });
+    }
   });
 
   app.get("/api/admin/me", async (req, res) => {
+    if (authRuntimeMode === "canonical") {
+      const context = canonicalRequestContexts.get(req);
+      return res.json(context ? toCanonicalMeResponse(context) : { authorized: false, role: "" });
+    }
     const appSession = getAppSession(req);
     if (
       (appSession.role !== "admin" || !appSession.adminId)
@@ -1908,6 +1976,13 @@ export async function registerRoutes(
 
   // Auth Middleware for admin routes
   const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
+    if (authRuntimeMode === "canonical") {
+      const context = canonicalRequestContexts.get(req);
+      if (!context?.isGlobalAdministrator) {
+        return res.status(401).json({ message: "Não autorizado" });
+      }
+      return next();
+    }
     const appSession = getAppSession(req);
     if (appSession.role !== "admin" || !appSession.adminId) {
       return res.status(401).json({ message: "Não autorizado" });
@@ -1916,6 +1991,12 @@ export async function registerRoutes(
   };
 
   const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
+    if (authRuntimeMode === "canonical") {
+      const context = canonicalRequestContexts.get(req);
+      return context && canUseLegacyAuthenticatedRoutes(context)
+        ? next()
+        : res.status(401).json({ message: "Não autorizado" });
+    }
     const appSession = getAppSession(req);
     if (appSession.role === "admin" && appSession.adminId) return next();
     if (appSession.role !== "barber" || !appSession.barberId) {
@@ -2748,6 +2829,22 @@ export async function registerRoutes(
       if (!await isBarberAssignedToLocation(barberId, Number(res.locals.locationId))) {
         return res.status(404).json({ message: "Barbeiro não encontrado" });
       }
+      if (authRuntimeMode === "canonical") {
+        const reset = await resetCanonicalPasswordForProfessional(pool, barberId);
+        if (!reset) {
+          return res.status(409).json({
+            message: "Este profissional ainda não está associado a uma identidade de acesso canónica.",
+          });
+        }
+        await storage.invalidateBarberInvites(barberId);
+        await recordAuditLog(req, {
+          action: "barber.password_reset",
+          entityType: "barber",
+          entityId: barberId,
+          summary: "Acesso canónico reposto; sessões anteriores invalidadas.",
+        });
+        return res.json({ message: "Palavra-passe removida" });
+      }
       const updated = await storage.updateBarber(barberId, { password: null });
       if (!updated) return res.status(404).json({ message: "Barbeiro não encontrado" });
       await recordAuditLog(req, {
@@ -2841,16 +2938,31 @@ export async function registerRoutes(
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+      if (authRuntimeMode === "canonical") {
+        const identity = await acceptLegacyProfessionalInviteCanonical(
+          pool,
+          invite.id,
+          barber.id,
+          hashedPassword,
+        );
+        if (!identity) {
+          return res.status(409).json({ message: PUBLIC_CYCLE_COPY.invite.backend.alreadyUsed });
+        }
+        await establishCanonicalSession(req, identity);
+        const context = await loadCanonicalAuthContext(pool, identity.userId);
+        if (!context) throw new Error("Canonical user unavailable after accepting invite.");
+        canonicalRequestContexts.set(req, context);
+        return res.json({
+          message: PUBLIC_CYCLE_COPY.invite.backend.passwordDefined,
+          ...toCanonicalMeResponse(context),
+        });
+      }
       const updatedBarber = await storage.acceptBarberInvite(invite.id, barber.id, hashedPassword);
       if (!updatedBarber) {
         return res.status(409).json({ message: "Este convite já foi utilizado ou substituído." });
       }
 
-      const appSession = getAppSession(req);
-      appSession.barberId = barber.id;
-      delete appSession.adminId;
-      appSession.role = "barber";
-      await saveSession(req);
+      await establishLegacySession(req, { role: "barber", barberId: barber.id });
 
       res.json({ message: "Palavra-passe definida com sucesso.", role: "barber" });
     } catch (error) {

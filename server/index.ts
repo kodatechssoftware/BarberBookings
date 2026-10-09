@@ -19,6 +19,7 @@ import {
 } from "./db";
 import { performanceTimingMiddleware } from "./performance-timings";
 import { startupTimings } from "./startup-timings";
+import { authRuntimeMode, validateCanonicalAuthFoundation } from "./auth-runtime";
 
 startupTimings.mark("entry-module-ready");
 const finishHttpConfiguration = startupTimings.start("http-configuration");
@@ -185,6 +186,9 @@ finishHttpConfiguration();
 
 (async () => {
   startupTimings.sync("runtime-validation", validateRuntimeConfiguration);
+  if (authRuntimeMode === "canonical") {
+    await startupTimings.measure("canonical-auth-foundation", () => validateCanonicalAuthFoundation(pool));
+  }
   const finishStartup = startupTimings.start("starting-to-listen");
   log(`starting BarberBookings API (${getSafeDatabaseTarget()} appPoolMax=${pool.options.max})`);
 

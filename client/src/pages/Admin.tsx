@@ -103,8 +103,10 @@ type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
 type AdminUser = {
   authorized: boolean;
-  role: "" | "admin" | "barber";
+  role: "" | "admin" | "barber" | "user";
   id?: number;
+  userId?: number;
+  professionalId?: number | null;
   name?: string;
   email?: string;
 };
@@ -1499,7 +1501,9 @@ export default function Admin() {
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
     enabled: user?.authorized === true,
     date: appointmentQueryDate,
-    barberId: user?.role === "barber" ? (user.id ? String(user.id) : undefined) : (selectedBarberFilter === "all" ? undefined : selectedBarberFilter),
+    barberId: user?.role === "barber"
+      ? ((user.professionalId ?? user.id) ? String(user.professionalId ?? user.id) : undefined)
+      : (selectedBarberFilter === "all" ? undefined : selectedBarberFilter),
     refetchInterval: 10000,
   });
   const { data: weeklyAppointments, isLoading: isLoadingWeeklyAppointments } = useAppointments({
@@ -1575,7 +1579,7 @@ export default function Admin() {
   });
   const { data: shopAvailabilityRows } = useShopAvailability();
   const { data: dashboardData, isLoading: isLoadingDashboard } = useQuery<DashboardData>({
-    queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.id, { locationId: activeLocationId }],
+    queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.professionalId ?? user?.id, { locationId: activeLocationId }],
     enabled: user?.authorized === true && user.role === "admin" && !isLoadingAgenda,
     queryFn: async () => {
       const params = new URLSearchParams({ days: dashboardDays });
@@ -1978,8 +1982,8 @@ export default function Admin() {
         return;
       }
 
-      const exportBarberId = user?.role === "barber" && user.id
-        ? String(user.id)
+      const exportBarberId = user?.role === "barber" && (user.professionalId ?? user.id)
+        ? String(user.professionalId ?? user.id)
         : exportDates.barberId;
       const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportBarberId}`;
       const response = await apiFetch(url);
@@ -2104,6 +2108,8 @@ export default function Admin() {
           authorized: true,
           role: data.role,
           id: data.id,
+          userId: data.userId,
+          professionalId: data.professionalId,
           name: data.name,
           email: data.email,
         });
@@ -2304,7 +2310,9 @@ export default function Admin() {
   };
 
   const getAgendaSelectedBarberId = () => {
-    if (user?.role === "barber" && user.id) return String(user.id);
+    if (user?.role === "barber" && (user.professionalId ?? user.id)) {
+      return String(user.professionalId ?? user.id);
+    }
     return selectedBarberFilter !== "all" ? selectedBarberFilter : undefined;
   };
 

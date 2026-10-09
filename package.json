@@ -23,6 +23,7 @@
     "auth:backfill": "tsx script/auth-legacy-backfill.ts",
     "test:auth-schema": "tsx script/test-auth-users-migration.ts",
     "test:auth-backfill": "tsx script/test-auth-users-backfill.ts",
+    "test:auth-runtime": "tsx --test tests/unit/auth-runtime-mode.test.ts tests/unit/auth-session.test.ts && tsx script/test-auth-runtime.ts",
     "db:migrate": "tsx script/migrate.ts",
     "db:push": "drizzle-kit push"
   },

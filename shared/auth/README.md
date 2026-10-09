@@ -32,3 +32,21 @@ lock. Legacy Admin identities receive a global `administrator` scope;
 professional-only identities receive a local `professional` scope for every
 active professional/location association. A linked professional profile still
 grants no access by itself.
+
+P3 introduces an explicit runtime cutover. `AUTH_RUNTIME_MODE=legacy` remains
+the default and preserves the existing credential/session flow.
+`AUTH_RUNTIME_MODE=canonical` starts only after migration `0015` is registered
+and its tables/links are structurally present. In canonical mode login reads
+only `users`; there is no fallback to legacy credential columns. Sessions store
+only `userId` and `authVersion`, and every authenticated request reloads the
+active identity, optional professional link and access scopes from PostgreSQL.
+Changing/resetting a canonical password increments `authVersion`, invalidating
+all older sessions. The legacy invite token transport remains temporarily
+compatible, but accepting it writes the password only to `users.password_hash`.
+
+Until P4 converts each route to its exact capability guard, only a global
+administrator scope or a linked professional with an explicit `professional`
+preset is projected into the legacy route shape. Other active canonical users
+can authenticate and inspect `/api/admin/me`, but fail closed on legacy
+`requireAuth`/`requireAdmin` routes rather than inheriting access from a profile
+link.
