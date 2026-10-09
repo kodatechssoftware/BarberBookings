@@ -98,6 +98,8 @@ import {
   MAX_APPOINTMENT_DURATION_MINUTES,
   MAX_APPOINTMENT_SERVICE_NAME_LENGTH,
 } from "@shared/appointment-service-terms";
+import type { EffectiveAccess } from "@shared/auth";
+import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -107,6 +109,7 @@ type AdminUser = {
   id?: number;
   userId?: number;
   professionalId?: number | null;
+  access?: EffectiveAccess;
   name?: string;
   email?: string;
 };
@@ -1497,18 +1500,130 @@ export default function Admin() {
   const businessDashboardRef = useRef<HTMLDivElement>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const activeLocationId = useActiveLocationId();
+  const canViewTeamAgenda = canUseRuntimeCapability(
+    user,
+    "agenda.view_team",
+    activeLocationId,
+    (role) => role === "admin" || role === "barber",
+  );
+  const canCreateManualAppointment = canUseRuntimeCapability(
+    user,
+    "appointments.create_manual",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canBlockTime = canUseRuntimeCapability(
+    user,
+    "appointments.block_time",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canManageOwnAppointments = canUseRuntimeCapability(
+    user,
+    "appointments.manage_own",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canManageTeamAppointments = canUseRuntimeCapability(
+    user,
+    "appointments.manage_team",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canChangeOwnAppointmentStatus = canUseRuntimeCapability(
+    user,
+    "appointments.change_status_own",
+    activeLocationId,
+    (role) => role === "admin" || role === "barber",
+  );
+  const canChangeTeamAppointmentStatus = canUseRuntimeCapability(
+    user,
+    "appointments.change_status_team",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canViewOwnCustomers = canUseRuntimeCapability(
+    user,
+    "customers.view_own",
+    activeLocationId,
+    (role) => role === "admin" || role === "barber",
+  );
+  const canViewTeamCustomers = canUseRuntimeCapability(
+    user,
+    "customers.view_team",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canManageOwnCustomerNotes = canUseRuntimeCapability(
+    user,
+    "customers.notes_own",
+    activeLocationId,
+    (role) => role === "admin" || role === "barber",
+  );
+  const canManageTeamCustomerNotes = canUseRuntimeCapability(
+    user,
+    "customers.notes_team",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canViewOwnFinance = canUseRuntimeCapability(
+    user,
+    "finance.view_own",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canViewTeamFinance = canUseRuntimeCapability(
+    user,
+    "finance.view_team",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canExportOwnReports = canUseRuntimeCapability(
+    user,
+    "reports.export_own",
+    activeLocationId,
+    (role) => role === "admin" || role === "barber",
+  );
+  const canExportTeamReports = canUseRuntimeCapability(
+    user,
+    "reports.export_team",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canManageAdminFeatures = canUseRuntimeCapability(
+    user,
+    "users.manage",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const canBlockCustomers = canUseRuntimeCapability(
+    user,
+    "customers.block",
+    activeLocationId,
+    (role) => role === "admin",
+  );
+  const operationalProfessionalId = user?.professionalId
+    ?? (!user?.access && user?.role === "barber" ? user.id : null);
+  const canUseOwnOrTeamFinance = canViewTeamFinance
+    || (canViewOwnFinance && Boolean(operationalProfessionalId));
+  const canUseOwnOrTeamReports = canExportTeamReports
+    || (canExportOwnReports && Boolean(operationalProfessionalId));
+  const canMoveAppointments = canManageOwnAppointments || canManageTeamAppointments;
+  const usesOwnOperationalView = Boolean(
+    operationalProfessionalId && !canManageTeamAppointments,
+  );
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
     enabled: user?.authorized === true,
     date: appointmentQueryDate,
-    barberId: user?.role === "barber"
-      ? ((user.professionalId ?? user.id) ? String(user.professionalId ?? user.id) : undefined)
+    barberId: usesOwnOperationalView
+      ? String(operationalProfessionalId)
       : (selectedBarberFilter === "all" ? undefined : selectedBarberFilter),
     refetchInterval: 10000,
   });
   const { data: weeklyAppointments, isLoading: isLoadingWeeklyAppointments } = useAppointments({
     enabled: user?.authorized === true,
-    scope: user?.role === "barber" ? "team" : undefined,
+    scope: canViewTeamAgenda ? "team" : undefined,
     refetchInterval: 10000,
   });
   const {
@@ -1535,17 +1650,17 @@ export default function Admin() {
     data: serviceCategories = [],
     isLoading: isLoadingServiceCategories,
     isError: isServiceCategoriesError,
-  } = useServiceCategories({ enabled: user?.role === "admin" && activeTab === "services" });
+  } = useServiceCategories({ enabled: canManageAdminFeatures && activeTab === "services" });
   // Only initial loads delay secondary panels. Background refreshes keep the
   // existing agenda and normal polling behaviour; errors also release the gate.
   const isLoadingAgenda = isLoadingWeeklyAppointments || isLoadingBarbers || isLoadingServices;
   const { data: blacklistEntries } = useQuery<any[]>({ 
     queryKey: ["/api/admin/blacklist", { locationId: activeLocationId }],
-    enabled: user?.role === "admin"
+    enabled: canBlockCustomers,
   });
   const { data: auditLogs, isLoading: isLoadingAuditLogs } = useQuery<AuditLogItem[]>({
     queryKey: ["/api/admin/audit-logs"],
-    enabled: user?.role === "admin" && !isLoadingAgenda,
+    enabled: canManageAdminFeatures && !isLoadingAgenda,
     refetchInterval: 15000,
   });
   const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
@@ -1569,10 +1684,10 @@ export default function Admin() {
     multiLocationConfig?.enabled && activeBookingLocations.length >= 2,
   );
   useEffect(() => {
-    if (!multiLocationConfig?.enabled || !activeLocation) return;
+    if (!activeLocation) return;
     if (availableLocations.some((location) => location.id === activeLocationId)) return;
     setActiveLocationId(activeLocation.id);
-  }, [activeLocation, activeLocationId, availableLocations, multiLocationConfig?.enabled]);
+  }, [activeLocation, activeLocationId, availableLocations]);
   const { data: allAvailabilityRows } = useQuery<any[]>({
     queryKey: ["/api/barbers/availability", { locationId: activeLocationId }],
     enabled: user?.authorized === true,
@@ -1580,7 +1695,7 @@ export default function Admin() {
   const { data: shopAvailabilityRows } = useShopAvailability();
   const { data: dashboardData, isLoading: isLoadingDashboard } = useQuery<DashboardData>({
     queryKey: ["/api/admin/dashboard", dashboardDays, dashboardBarberFilter, user?.role, user?.professionalId ?? user?.id, { locationId: activeLocationId }],
-    enabled: user?.authorized === true && user.role === "admin" && !isLoadingAgenda,
+    enabled: user?.authorized === true && canUseOwnOrTeamFinance && !isLoadingAgenda,
     queryFn: async () => {
       const params = new URLSearchParams({ days: dashboardDays });
       if (dashboardBarberFilter !== "all") {
@@ -1604,7 +1719,7 @@ export default function Admin() {
   }, [exportDates.start, exportDates.end]);
   const { data: businessExpenses = [], isLoading: isLoadingExpenses } = useQuery<BusinessExpense[]>({
     queryKey: [expensesUrl, { locationId: activeLocationId }],
-    enabled: user?.authorized === true && user.role === "admin" && activeTab === "reports",
+    enabled: user?.authorized === true && canManageAdminFeatures && activeTab === "reports",
   });
   const exportBarberOptionsUrl = useMemo(() => {
     const params = new URLSearchParams({
@@ -1615,7 +1730,7 @@ export default function Admin() {
   }, [exportDates.start, exportDates.end]);
   const { data: exportBarberOptions } = useQuery<ExportBarberOptions>({
     queryKey: [exportBarberOptionsUrl, { locationId: activeLocationId }],
-    enabled: user?.authorized === true && user.role === "admin" && activeTab === "reports",
+    enabled: user?.authorized === true && canExportTeamReports && activeTab === "reports",
     queryFn: async () => {
       const response = await apiFetch(exportBarberOptionsUrl);
       if (!response.ok) throw new Error("Não foi possível carregar os barbeiros do relatório.");
@@ -1706,6 +1821,19 @@ export default function Admin() {
     const candidates = [...agendaAppointmentList, ...appointmentList];
     return candidates.find((appointment) => appointment.id === selectedAppointment.id) || selectedAppointment;
   }, [agendaAppointmentList, appointmentList, selectedAppointment]);
+  const selectedAppointmentIsOwn = Boolean(
+    selectedAppointmentDetails
+    && operationalProfessionalId
+    && selectedAppointmentDetails.barberId === operationalProfessionalId,
+  );
+  const canEditSelectedAppointment = canManageTeamAppointments
+    || (canManageOwnAppointments && selectedAppointmentIsOwn);
+  const canChangeSelectedAppointmentStatus = canChangeTeamAppointmentStatus
+    || (canChangeOwnAppointmentStatus && selectedAppointmentIsOwn);
+  const canViewSelectedAppointmentCustomer = canViewTeamCustomers
+    || (canViewOwnCustomers && selectedAppointmentIsOwn);
+  const canManageSelectedAppointmentNotes = canManageTeamCustomerNotes
+    || (canManageOwnCustomerNotes && selectedAppointmentIsOwn);
   const selectedAppointmentLocationLogoUrl = selectedAppointmentDetails?.locationId
     ? availableLocations.find((location) => location.id === selectedAppointmentDetails.locationId)?.logoUrl
     : null;
@@ -1755,7 +1883,7 @@ export default function Admin() {
     && (showManualBookingLocationSelector || blockLocationId !== activeLocationId),
   );
   const shouldLoadManualLocationData = Boolean(
-    user?.role === "admin" && isBlocking && usesIndependentManualLocationData && blockLocationId,
+    canCreateManualAppointment && isBlocking && usesIndependentManualLocationData && blockLocationId,
   );
   const manualLocationBarbersQuery = useBarbers({
     enabled: shouldLoadManualLocationData,
@@ -1777,7 +1905,7 @@ export default function Admin() {
   });
   const manualLocationBlacklistQuery = useQuery<any[]>({
     queryKey: ["/api/admin/blacklist", { locationId: blockLocationId }],
-    enabled: shouldLoadManualLocationData,
+    enabled: shouldLoadManualLocationData && canBlockCustomers,
     queryFn: async () => {
       const response = await apiFetch("/api/admin/blacklist", {
         headers: locationHeaders(blockLocationId),
@@ -1824,7 +1952,7 @@ export default function Admin() {
     isFetching: isFetchingExtraDefinitions,
     isError: isExtraDefinitionsError,
   } = useExtras({
-    enabled: user?.role === "admin" && isBlocking && blockData.isManualBooking,
+    enabled: canCreateManualAppointment && isBlocking && blockData.isManualBooking,
     locationId: blockLocationId ?? undefined,
   });
   const activeManualBookingExtras = useMemo(
@@ -1982,8 +2110,8 @@ export default function Admin() {
         return;
       }
 
-      const exportBarberId = user?.role === "barber" && (user.professionalId ?? user.id)
-        ? String(user.professionalId ?? user.id)
+      const exportBarberId = !canExportTeamReports && operationalProfessionalId
+        ? String(operationalProfessionalId)
         : exportDates.barberId;
       const url = `/api/admin/export?startDate=${format(exportDates.start, 'yyyy-MM-dd')}&endDate=${format(exportDates.end, 'yyyy-MM-dd')}&barberId=${exportBarberId}`;
       const response = await apiFetch(url);
@@ -2110,6 +2238,7 @@ export default function Admin() {
           id: data.id,
           userId: data.userId,
           professionalId: data.professionalId,
+          access: data.access,
           name: data.name,
           email: data.email,
         });
@@ -2310,8 +2439,8 @@ export default function Admin() {
   };
 
   const getAgendaSelectedBarberId = () => {
-    if (user?.role === "barber" && (user.professionalId ?? user.id)) {
-      return String(user.professionalId ?? user.id);
+    if (usesOwnOperationalView && operationalProfessionalId) {
+      return String(operationalProfessionalId);
     }
     return selectedBarberFilter !== "all" ? selectedBarberFilter : undefined;
   };
@@ -3853,8 +3982,14 @@ export default function Admin() {
           pendingAction={pendingAppointmentAction}
           locationLogoUrl={selectedAppointmentLocationLogoUrl}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}
-          canManageSchedule={user.role === "admin"}
-          canManageAppointment={user.role === "admin" || selectedAppointmentDetails?.canManage !== false}
+          canManageSchedule={canMoveAppointments}
+          canEditAppointment={canEditSelectedAppointment && selectedAppointmentDetails?.canManage !== false}
+          canBlockCustomer={canBlockCustomers}
+          canManageAppointment={canEditSelectedAppointment || canChangeSelectedAppointmentStatus || canViewSelectedAppointmentCustomer}
+          canViewCustomer={canViewSelectedAppointmentCustomer}
+          canManageCustomerNotes={canManageSelectedAppointmentNotes}
+          canChangeStatus={canChangeSelectedAppointmentStatus}
+          canCancelAppointment={canEditSelectedAppointment || canChangeSelectedAppointmentStatus}
         />
 
         <Dialog
@@ -4014,7 +4149,7 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
-            {user.role === "admin" && (
+            {canManageAdminFeatures && (
               <>
                 <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>
                 <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
@@ -4026,7 +4161,9 @@ export default function Admin() {
                 <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>
               </>
             )}
-            <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
+            {canUseOwnOrTeamReports && (
+              <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> Relatórios</TabsTrigger>
+            )}
           </TabsList>
           </div>
 
@@ -4035,7 +4172,7 @@ export default function Admin() {
               summary={todaySummary}
               getBarberName={getBarberName}
               getServiceName={getAppointmentServiceName}
-              showFinancialSummary={user.role === "admin"}
+              showFinancialSummary={canViewTeamFinance}
             />
 
             <WeeklyAgenda
@@ -4045,8 +4182,10 @@ export default function Admin() {
               isLoading={isLoadingAgenda}
               selectedBarberFilter={selectedBarberFilter}
               selectedStatusFilter={selectedAgendaStatusFilter}
-              canFilterBarbers={user.role === "admin"}
-              canManageSchedule={user.role === "admin"}
+              canFilterBarbers={canViewTeamAgenda}
+              canManageSchedule={canMoveAppointments}
+              canCreateManualAppointment={canCreateManualAppointment}
+              canBlockTime={canBlockTime}
               onBarberFilterChange={setSelectedBarberFilter}
               onStatusFilterChange={setSelectedAgendaStatusFilter}
               onException={openAgendaExceptionDialog}
@@ -4057,11 +4196,11 @@ export default function Admin() {
               getStatusLabel={getStatusLabel}
             />
 
-            {user.role === "admin" && (
+            {canManageAdminFeatures && (
               <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs || (isLoadingAgenda && !auditLogs)} />
             )}
 
-            {user.role === "admin" && (
+            {canUseOwnOrTeamFinance && (
               <>
             <div ref={businessDashboardRef} className="scroll-mt-24 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -4081,7 +4220,7 @@ export default function Admin() {
                     <SelectItem value="90">Últimos 90 dias</SelectItem>
                   </SelectContent>
                 </Select>
-                {user.role === "admin" ? (
+                {canViewTeamFinance ? (
                   <Select value={dashboardBarberFilter} onValueChange={handleDashboardBarberChange}>
                     <SelectTrigger className="h-11 border-white/10 bg-card text-white sm:w-[190px]">
                       <SelectValue placeholder="Barbeiro" />
@@ -4130,6 +4269,8 @@ export default function Admin() {
               onSelectedStatusFilterChange={setSelectedStatusFilter}
               isLoadingAppointments={isLoadingAppointments || isLoadingBarbers || isLoadingServices}
               dayAppointmentSummary={dayAppointmentSummary}
+              canFilterProfessionals={canViewTeamAgenda}
+              canCreateManualAppointment={canCreateManualAppointment}
               onOpenManualBooking={() => openManualBookingDialog()}
               onSelectAppointment={(appointment) => setSelectedAppointment(appointment)}
               getBarberName={getBarberName}
@@ -4682,14 +4823,14 @@ export default function Admin() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <h2 className="text-xl font-bold text-white">Serviços Disponíveis</h2>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                {user?.role === "admin" && (
+                {canManageAdminFeatures && (
                   <ServiceCategoriesManager
                     categories={serviceCategories}
                     isLoading={isLoadingServiceCategories}
                     isError={isServiceCategoriesError}
                   />
                 )}
-                {user?.role === "admin" && multiLocationConfig?.enabled && (
+                {canManageAdminFeatures && multiLocationConfig?.enabled && (
                   <AssociateServiceDialog
                     locationName={activeLocation?.name}
                     onChanged={refreshBookableLocationsCache}
@@ -5026,7 +5167,7 @@ export default function Admin() {
             ) : null}
           </TabsContent>
 
-          {user.role === "admin" && (
+          {canManageAdminFeatures && (
             <TabsContent value="extras" className="outline-none">
               <ExtrasManager enabled={activeTab === "extras"} />
             </TabsContent>
@@ -5201,7 +5342,7 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          {user.role === "admin" && multiLocationConfig?.enabled && (
+          {canManageAdminFeatures && multiLocationConfig?.enabled && (
             <TabsContent value="locations" className="outline-none">
               <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
             </TabsContent>
@@ -5211,7 +5352,7 @@ export default function Admin() {
             <div
               className={cn(
                 "grid grid-cols-1 gap-6",
-                user.role === "admin"
+                canExportTeamReports
                   ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
                   : "mx-auto max-w-3xl",
               )}
@@ -5219,13 +5360,13 @@ export default function Admin() {
             <Card
               className={cn(
                 "bg-card border-white/10",
-                user.role === "admin" && "xl:col-start-2 xl:row-start-1",
+                canExportTeamReports && "xl:col-start-2 xl:row-start-1",
               )}
             >
               <CardHeader>
                 <CardTitle className="text-xl font-display font-bold text-primary">Exportar Relatório Excel</CardTitle>
                 <p className="text-gray-400 text-sm">
-                  {user.role === "admin"
+                  {canExportTeamReports
                     ? "Gere um ficheiro .xlsx com o resumo financeiro, os estados e os detalhes das marcações do período."
                     : "Gere um ficheiro .xlsx apenas com as suas marcações e resumo do período."}
                 </p>
@@ -5262,7 +5403,7 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {user.role === "admin" ? (
+                {canExportTeamReports ? (
                   <div className="space-y-2">
                     <Label className="text-white">Barbeiro</Label>
                     <Select value={exportDates.barberId} onValueChange={(v) => setExportDates({...exportDates, barberId: v})}>
@@ -5308,7 +5449,7 @@ export default function Admin() {
               </CardContent>
             </Card>
 
-            {user.role === "admin" && (
+            {canManageAdminFeatures && (
             <>
               <Card className="bg-card border-white/10 xl:col-start-1 xl:row-span-2 xl:row-start-1 xl:flex xl:h-full xl:flex-col">
                 <CardHeader>

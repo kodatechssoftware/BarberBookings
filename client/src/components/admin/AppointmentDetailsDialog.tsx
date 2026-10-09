@@ -823,7 +823,13 @@ export function AppointmentDetailsDialog({
   onStatusChange,
   onBlockCustomer,
   canManageSchedule,
+  canEditAppointment = canManageSchedule,
+  canBlockCustomer = canManageSchedule,
   canManageAppointment,
+  canViewCustomer = canManageAppointment,
+  canManageCustomerNotes = canManageAppointment,
+  canChangeStatus = canManageAppointment,
+  canCancelAppointment = canManageAppointment,
   pendingAction = null,
   locationLogoUrl,
 }: {
@@ -849,7 +855,13 @@ export function AppointmentDetailsDialog({
   ) => void;
   onBlockCustomer: (appointment: AdminAppointment) => Promise<boolean | void>;
   canManageSchedule: boolean;
+  canEditAppointment?: boolean;
+  canBlockCustomer?: boolean;
   canManageAppointment: boolean;
+  canViewCustomer?: boolean;
+  canManageCustomerNotes?: boolean;
+  canChangeStatus?: boolean;
+  canCancelAppointment?: boolean;
   pendingAction?: AppointmentMutationPendingAction | null;
   locationLogoUrl?: string | null;
 }) {
@@ -863,7 +875,7 @@ export function AppointmentDetailsDialog({
   );
 
   useEffect(() => {
-    if (!open || !canManageAppointment || (!appointment?.customerPhone && !appointment?.customerEmail)) {
+    if (!open || !canViewCustomer || (!appointment?.customerPhone && !appointment?.customerEmail)) {
       setCustomerNotes("");
       setCustomerNotesUpdatedAt(null);
       return;
@@ -895,7 +907,7 @@ export function AppointmentDetailsDialog({
     return () => {
       isMounted = false;
     };
-  }, [appointment?.customerEmail, appointment?.customerPhone, appointment?.id, appointment?.locationId, canManageAppointment, open]);
+  }, [appointment?.customerEmail, appointment?.customerPhone, appointment?.id, appointment?.locationId, canViewCustomer, open]);
 
   const handleSaveCustomerNotes = async () => {
     if (!appointment || (!appointment.customerPhone && !appointment.customerEmail)) return;
@@ -993,7 +1005,7 @@ export function AppointmentDetailsDialog({
               <div className="min-w-0">
                 <p className="text-2xl font-display font-bold text-primary">{format(start, "HH:mm")}</p>
                 <h3 className="mt-1 truncate text-lg font-bold text-white">{appointment.customerName}</h3>
-                {canManageAppointment && (
+                {canViewCustomer && (
                   <p className="text-sm text-gray-400">
                     {contactLinks.displayPhone || appointment.customerPhone || appointment.customerEmail}
                   </p>
@@ -1021,7 +1033,7 @@ export function AppointmentDetailsDialog({
                   </span>
                 )}
               </div>
-              {canManageAppointment && appointment.status === "completed" && (
+              {canViewCustomer && appointment.status === "completed" && (
                 <div className="rounded-xl border border-white/10 bg-card px-3 py-2 sm:col-span-2">
                   <p className="text-xs uppercase tracking-widest text-gray-500">Pagamento</p>
                   <p className="mt-1 font-semibold text-white">{getPaymentMethodLabel(appointment.paymentMethod)}</p>
@@ -1051,7 +1063,7 @@ export function AppointmentDetailsDialog({
             </div>
           </div>
 
-          {canManageAppointment ? (
+          {canViewCustomer ? (
           <div className="rounded-2xl border border-white/10 bg-background/50 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -1072,7 +1084,7 @@ export function AppointmentDetailsDialog({
                   value={customerNotes}
                   onChange={(event) => setCustomerNotes(event.target.value)}
                   maxLength={1200}
-                  disabled={isLoadingCustomerNotes || isAppointmentMutationPending}
+                  disabled={!canManageCustomerNotes || isLoadingCustomerNotes || isAppointmentMutationPending}
                   placeholder="Ex.: prefere máquina 0.5, costuma atrasar 10 min, quer sempre barba curta."
                   className="mt-3 min-h-[96px] scroll-mb-24 resize-y border-white/10 bg-card text-white placeholder:text-gray-600"
                 />
@@ -1080,16 +1092,18 @@ export function AppointmentDetailsDialog({
                   <span className="text-xs text-gray-500">
                     {isLoadingCustomerNotes ? "A carregar notas..." : `${customerNotes.length}/1200`}
                   </span>
-                  <Button
-                    type="button"
-                    variant="gold"
-                    size="sm"
-                    onClick={handleSaveCustomerNotes}
-                    disabled={isLoadingCustomerNotes || isSavingCustomerNotes || isAppointmentMutationPending}
-                    className="w-full sm:w-auto"
-                  >
-                    {isSavingCustomerNotes ? "A guardar..." : "Guardar notas"}
-                  </Button>
+                  {canManageCustomerNotes && (
+                    <Button
+                      type="button"
+                      variant="gold"
+                      size="sm"
+                      onClick={handleSaveCustomerNotes}
+                      disabled={isLoadingCustomerNotes || isSavingCustomerNotes || isAppointmentMutationPending}
+                      className="w-full sm:w-auto"
+                    >
+                      {isSavingCustomerNotes ? "A guardar..." : "Guardar notas"}
+                    </Button>
+                  )}
                 </div>
               </>
             ) : (
@@ -1105,46 +1119,51 @@ export function AppointmentDetailsDialog({
           )}
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-            {canManageAppointment && contactLinks.tel && (
+            {canViewCustomer && contactLinks.tel && (
               <Button asChild size="sm" variant="outline" className="h-9 border-white/10 text-xs">
                 <a href={contactLinks.tel}>
                   <Phone className="mr-1 h-3.5 w-3.5" /> Ligar
                 </a>
               </Button>
             )}
-            {canManageAppointment && <Button size="sm" variant="outline" onClick={handleOpenHistory} className="h-9 border-white/10 text-xs">
+            {canViewCustomer && <Button size="sm" variant="outline" onClick={handleOpenHistory} className="h-9 border-white/10 text-xs">
               <User className="mr-1 h-3.5 w-3.5" /> Histórico
             </Button>}
 
-            {canManageAppointment && appointment.status === "booked" && (
+            {appointment.status === "booked" && (
               <>
-                <Button
-                  data-testid="appointment-action-complete"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setIsPaymentDialogOpen(true)}
-                  disabled={Boolean(completeDisabledMessage) || isAppointmentMutationPending}
-                  title={completeDisabledMessage || "Marcar como feita"}
-                  className="h-9 text-xs text-green-300 hover:text-green-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
-                </Button>
-                <Button
-                  data-testid="appointment-action-no-show"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => handleStatusChange("no_show")}
-                  disabled={Boolean(noShowDisabledMessage) || isAppointmentMutationPending}
-                  title={noShowDisabledMessage || "Marcar falta"}
-                  className="h-9 text-xs text-rose-300 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Falta
-                </Button>
-                <Button data-testid="appointment-action-cancel" disabled={isAppointmentMutationPending} size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">
-                  <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
-                </Button>
-                {canManageSchedule && (
+                {canChangeStatus && (
                   <>
+                    <Button
+                      data-testid="appointment-action-complete"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setIsPaymentDialogOpen(true)}
+                      disabled={Boolean(completeDisabledMessage) || isAppointmentMutationPending}
+                      title={completeDisabledMessage || "Marcar como feita"}
+                      className="h-9 text-xs text-green-300 hover:text-green-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
+                    </Button>
+                    <Button
+                      data-testid="appointment-action-no-show"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleStatusChange("no_show")}
+                      disabled={Boolean(noShowDisabledMessage) || isAppointmentMutationPending}
+                      title={noShowDisabledMessage || "Marcar falta"}
+                      className="h-9 text-xs text-rose-300 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Falta
+                    </Button>
+                  </>
+                )}
+                {canCancelAppointment && (
+                  <Button data-testid="appointment-action-cancel" disabled={isAppointmentMutationPending} size="sm" variant="ghost" onClick={() => handleStatusChange("cancelled")} className="h-9 text-xs text-red-300 hover:text-red-200">
+                    <XCircle className="mr-1 h-3.5 w-3.5" /> Cancelar
+                  </Button>
+                )}
+                {canBlockCustomer && (
                     <ConfirmAction
                       title="Bloquear cliente?"
                       description={`${appointment.customerName} (${contactLinks.displayPhone || appointment.customerPhone}) deixa de conseguir fazer marcações online.`}
@@ -1156,6 +1175,8 @@ export function AppointmentDetailsDialog({
                         Bloquear
                       </Button>
                     </ConfirmAction>
+                )}
+                {canEditAppointment && (
                     <EditAppointmentDialog
                       appointment={appointment}
                       barbers={barbers}
@@ -1168,7 +1189,6 @@ export function AppointmentDetailsDialog({
                       disabled={isAppointmentMutationPending}
                       locationLogoUrl={locationLogoUrl}
                     />
-                  </>
                 )}
               </>
             )}

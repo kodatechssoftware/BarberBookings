@@ -72,6 +72,8 @@ type AppointmentsTabProps = {
   onSelectedStatusFilterChange: (status: AppointmentStatusFilter) => void;
   isLoadingAppointments: boolean;
   dayAppointmentSummary: DayAppointmentSummary;
+  canFilterProfessionals: boolean;
+  canCreateManualAppointment: boolean;
   onOpenManualBooking: () => void;
   onSelectAppointment: (appointment: WeeklyAgendaAppointment) => void;
   getBarberName: (id: number) => string;
@@ -116,6 +118,8 @@ export function AppointmentsTab({
   onSelectedStatusFilterChange,
   isLoadingAppointments,
   dayAppointmentSummary,
+  canFilterProfessionals,
+  canCreateManualAppointment,
   onOpenManualBooking,
   onSelectAppointment,
   getBarberName,
@@ -126,7 +130,7 @@ export function AppointmentsTab({
   return (
     <>
       <div className="grid gap-3 rounded-2xl border border-white/10 bg-card/80 p-3 shadow-lg shadow-black/10 backdrop-blur sm:flex sm:flex-wrap sm:items-center sm:rounded-xl">
-        {user.role === "admin" ? (
+        {canFilterProfessionals ? (
           <Select value={selectedBarberFilter} onValueChange={onSelectedBarberFilterChange}>
             <SelectTrigger className="h-11 w-full border-white/10 bg-background/60 text-white sm:w-[180px]">
               <SelectValue placeholder="Filtrar por barbeiro" />
@@ -199,7 +203,7 @@ export function AppointmentsTab({
           </SelectContent>
         </Select>
 
-        {user.role === "admin" && (
+        {canCreateManualAppointment && (
           <div className="sm:ml-auto">
             <Button
               variant="gold"

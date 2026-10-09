@@ -140,12 +140,10 @@ import {
   acceptLegacyProfessionalInviteCanonical,
   authenticateCanonicalUser,
   authRuntimeMode,
-  canUseLegacyAuthenticatedRoutes,
   loadCanonicalAuthContext,
   resetCanonicalPasswordForProfessional,
   toCanonicalMeResponse,
   validateCanonicalSession,
-  type CanonicalAuthContext,
 } from "./auth-runtime";
 import {
   clearAuthenticatedSessionIdentity,
@@ -154,6 +152,21 @@ import {
   establishLegacySession,
   type RuntimeSession as AppSession,
 } from "./auth-session";
+import {
+  enforceCanonicalAnyCapability,
+  enforceCanonicalAnyOwnOrTeamCapability,
+  enforceCanonicalCapability,
+  enforceCanonicalOwnOrTeamCapability,
+  getCanonicalAccessibleLocationIds,
+  getCanonicalRequestAuthContext,
+  hasAnyCanonicalAccessAtLocation,
+  hasCanonicalCapability,
+  hasCanonicalOwnCapability,
+  hasCanonicalOwnOrTeamCapability,
+  redactTeamAgendaAppointment,
+  requireCapabilityAtLocation,
+  setCanonicalRequestAuthContext,
+} from "./auth-authorization";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -260,8 +273,6 @@ const appointmentPaymentMethodLabels: Record<AppointmentPaymentMethod, string> =
   gift: "Oferta",
 };
 
-const canonicalRequestContexts = new WeakMap<Request, CanonicalAuthContext>();
-
 const customerNotesInputSchema = z.object({
   customerName: z.string().trim().max(120, "O nome não pode ter mais de 120 caracteres.").optional(),
   email: z.string().email().or(z.literal("")).optional(),
@@ -348,7 +359,7 @@ async function withBlacklistMutationLock<T>(callback: () => Promise<T>): Promise
 function getAppSession(req: Request) {
   const rawSession = req.session as AppSession;
   if (authRuntimeMode !== "canonical") return rawSession;
-  const context = canonicalRequestContexts.get(req);
+  const context = getCanonicalRequestAuthContext(req);
   if (!context) {
     return { ...rawSession, role: undefined, adminId: undefined, barberId: undefined } as AppSession;
   }
@@ -380,7 +391,7 @@ type AuditLogInput = {
 };
 
 async function getAuditActor(req: Request) {
-  const canonicalContext = canonicalRequestContexts.get(req);
+  const canonicalContext = getCanonicalRequestAuthContext(req);
   if (canonicalContext) {
     return {
       actorType: canonicalContext.isGlobalAdministrator ? "admin" : "barber",
@@ -1788,7 +1799,7 @@ export async function registerRoutes(
           });
           return next();
         }
-        canonicalRequestContexts.set(req, context);
+        setCanonicalRequestAuthContext(req, context);
         return next();
       } catch (error) {
         return next(error);
@@ -1850,11 +1861,19 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Localização inválida." });
       }
       const appSession = getAppSession(req);
+      const canonicalContext = getCanonicalRequestAuthContext(req);
       const isPublicBookingRequest = req.path === "/appointments" && req.method === "POST";
-      const canUseInactive = appSession.role === "admin" && Boolean(appSession.adminId) && !isPublicBookingRequest;
+      const canUseInactive = (authRuntimeMode === "canonical"
+        ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "locations.manage"))
+        : appSession.role === "admin" && Boolean(appSession.adminId))
+        && !isPublicBookingRequest;
       const location = locations.find((location) => location.id === locationId && (canUseInactive || location.isActive));
       if (!location) return res.status(404).json({ message: "Localização não encontrada ou indisponível." });
-      if (appSession.role === "barber" && appSession.barberId && !ignoresSelectedLocation) {
+      if (authRuntimeMode === "canonical" && canonicalContext && !ignoresSelectedLocation) {
+        if (!hasAnyCanonicalAccessAtLocation(canonicalContext, location.id)) {
+          return res.status(403).json({ message: "Não tem acesso a esta localização." });
+        }
+      } else if (appSession.role === "barber" && appSession.barberId && !ignoresSelectedLocation) {
         const allowedLocationIds = await getLocationIdsForBarber(Number(appSession.barberId));
         if (!allowedLocationIds.includes(location.id)) {
           return res.status(403).json({ message: "Não tem acesso a esta localização." });
@@ -1886,7 +1905,7 @@ export async function registerRoutes(
           return res.status(401).json({ message: "Utilizador ou palavra-passe incorretos" });
         }
         await establishCanonicalSession(req, authenticated.identity);
-        canonicalRequestContexts.set(req, authenticated.context);
+        setCanonicalRequestAuthContext(req, authenticated.context);
         return res.json({
           message: "Login efetuado com sucesso",
           ...toCanonicalMeResponse(authenticated.context),
@@ -1946,7 +1965,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/me", async (req, res) => {
     if (authRuntimeMode === "canonical") {
-      const context = canonicalRequestContexts.get(req);
+      const context = getCanonicalRequestAuthContext(req);
       return res.json(context ? toCanonicalMeResponse(context) : { authorized: false, role: "" });
     }
     const appSession = getAppSession(req);
@@ -1977,7 +1996,7 @@ export async function registerRoutes(
   // Auth Middleware for admin routes
   const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
     if (authRuntimeMode === "canonical") {
-      const context = canonicalRequestContexts.get(req);
+      const context = getCanonicalRequestAuthContext(req);
       if (!context?.isGlobalAdministrator) {
         return res.status(401).json({ message: "Não autorizado" });
       }
@@ -1992,8 +2011,7 @@ export async function registerRoutes(
 
   const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
     if (authRuntimeMode === "canonical") {
-      const context = canonicalRequestContexts.get(req);
-      return context && canUseLegacyAuthenticatedRoutes(context)
+      return getCanonicalRequestAuthContext(req)
         ? next()
         : res.status(401).json({ message: "Não autorizado" });
     }
@@ -2011,6 +2029,12 @@ export async function registerRoutes(
       return res.status(401).json({ message: "Não autorizado" });
     });
   };
+
+  const requireCatalogView = requireCapabilityAtLocation("catalog.view", requireAuth);
+  const requireManualAppointmentAccess = requireCapabilityAtLocation(
+    "appointments.create_manual",
+    requireAdmin,
+  );
 
   if (isMetaWebhookEnabled()) {
     app.get("/api/webhooks/whatsapp/meta", (req, res) => {
@@ -2140,6 +2164,14 @@ export async function registerRoutes(
       const defaultLocation = await getDefaultLocation();
       return res.json(defaultLocation ? [defaultLocation] : []);
     }
+    if (authRuntimeMode === "canonical") {
+      const context = getCanonicalRequestAuthContext(req)!;
+      const allowedLocationIds = getCanonicalAccessibleLocationIds(context);
+      const locations = allowedLocationIds === null ? await listLocations(true) : await listLocations(false);
+      return res.json(allowedLocationIds === null
+        ? locations
+        : locations.filter((location) => allowedLocationIds.has(location.id)));
+    }
     const appSession = getAppSession(req);
     if (appSession.role === "admin") return res.json(await listLocations(true));
     const locationIds = await getLocationIdsForBarber(Number(appSession.barberId));
@@ -2223,9 +2255,16 @@ export async function registerRoutes(
   });
 
   // === EXTRAS CATALOGUE ===
-  app.get("/api/admin/extras", requireAdmin, async (_req, res) => {
+  app.get("/api/admin/extras", requireManualAppointmentAccess, async (req, res) => {
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    const includeInactive = authRuntimeMode !== "canonical"
+      || Boolean(canonicalContext && hasCanonicalCapability(
+        canonicalContext,
+        "extras.manage",
+        Number(res.locals.locationId),
+      ));
     const extras = await storage.getExtraDefinitions(Number(res.locals.locationId), {
-      includeInactive: true,
+      includeInactive,
     });
     res.json(extras);
   });
@@ -2951,7 +2990,7 @@ export async function registerRoutes(
         await establishCanonicalSession(req, identity);
         const context = await loadCanonicalAuthContext(pool, identity.userId);
         if (!context) throw new Error("Canonical user unavailable after accepting invite.");
-        canonicalRequestContexts.set(req, context);
+        setCanonicalRequestAuthContext(req, context);
         return res.json({
           message: PUBLIC_CYCLE_COPY.invite.backend.passwordDefined,
           ...toCanonicalMeResponse(context),
@@ -2972,7 +3011,7 @@ export async function registerRoutes(
   });
 
   // === SERVICE CATEGORIES MGMT ===
-  app.get(api.serviceCategories.list.path, requireAuth, async (_req, res) => {
+  app.get(api.serviceCategories.list.path, requireCatalogView, async (_req, res) => {
     const [categories, services] = await Promise.all([
       storage.getServiceCategories({ includeInactive: true }),
       storage.getServices(),
@@ -3378,8 +3417,18 @@ export async function registerRoutes(
     // Opt-in preserves the API contract for older clients still using inline photos.
     const avatarReferences = req.query.avatarMode === "reference";
     const appSession = getAppSession(req);
-    const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
-    const ownBarberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    const isAdminSession = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "team.manage_global"))
+      : appSession.role === "admin" && Boolean(appSession.adminId);
+    const ownBarberId = authRuntimeMode === "canonical"
+      ? canonicalContext?.professionalId
+        && hasCanonicalCapability(canonicalContext, "agenda.view_own", locationId)
+        ? canonicalContext.professionalId
+        : undefined
+      : appSession.role === "barber"
+        ? Number(appSession.barberId)
+        : undefined;
     const includeHidden = req.query.includeHidden === "true" && isAdminSession;
     const barbers = await getBarbersWithServiceIds(locationId, avatarReferences, includeHidden);
     const visibleBarbers = includeHidden
@@ -3404,9 +3453,18 @@ export async function registerRoutes(
     if (barberId === null) return res.status(400).end();
     const barber = await storage.getBarber(barberId);
     const appSession = getAppSession(req);
-    const isAdmin = appSession.role === "admin" && Boolean(appSession.adminId);
-    const isOwnBarber = appSession.role === "barber" && Number(appSession.barberId) === barberId;
     const locationId = Number(res.locals.locationId);
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    const isAdmin = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "team.manage_global"))
+      : appSession.role === "admin" && Boolean(appSession.adminId);
+    const isOwnBarber = authRuntimeMode === "canonical"
+      ? Boolean(
+        canonicalContext
+        && canonicalContext.professionalId === barberId
+        && hasCanonicalCapability(canonicalContext, "agenda.view_own", locationId),
+      )
+      : appSession.role === "barber" && Number(appSession.barberId) === barberId;
     if (!barber || (!barber.isVisible && !isAdmin && !isOwnBarber)
       || !await isBarberAssignedToLocation(barberId, locationId, isAdmin || isOwnBarber)) {
       return res.status(404).end();
@@ -3561,8 +3619,17 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Barbeiro não encontrado" });
     }
     const appSession = getAppSession(req);
-    const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
-    const isOwnBarber = appSession.role === "barber" && Number(appSession.barberId) === barber.id;
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    const isAdminSession = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && hasCanonicalCapability(canonicalContext, "team.manage_global"))
+      : appSession.role === "admin" && Boolean(appSession.adminId);
+    const isOwnBarber = authRuntimeMode === "canonical"
+      ? Boolean(
+        canonicalContext
+        && canonicalContext.professionalId === barber.id
+        && hasCanonicalCapability(canonicalContext, "agenda.view_own", locationId),
+      )
+      : appSession.role === "barber" && Number(appSession.barberId) === barber.id;
     const includePrivateFields = isAdminSession || isOwnBarber;
     if (!barber.isVisible && !isAdminSession && !isOwnBarber) {
       return res.status(404).json({ message: "Barbeiro não encontrado" });
@@ -3584,8 +3651,18 @@ export async function registerRoutes(
   // === SERVICES ===
   app.get(api.services.list.path, async (req, res) => {
     const appSession = getAppSession(req);
-    const includeHidden = req.query.includeHidden === "true" &&
-      Boolean(appSession.adminId || appSession.barberId);
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    const canReadHidden = authRuntimeMode === "canonical"
+      ? Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "catalog.manage_global")
+        || hasCanonicalCapability(
+          canonicalContext,
+          "catalog.manage_location",
+          Number(res.locals.locationId),
+        )
+      ))
+      : Boolean(appSession.adminId || appSession.barberId);
+    const includeHidden = req.query.includeHidden === "true" && canReadHidden;
     const services = await loadLocationServiceCatalogue(Number(res.locals.locationId), includeHidden);
     res.json(services.map((service) => serializeServiceCatalogueItem(service, includeHidden)));
   });
@@ -3600,14 +3677,50 @@ export async function registerRoutes(
     const filterError = validateAppointmentFilters(req.query);
     if (filterError) return res.status(400).json({ message: filterError });
     const appSession = getAppSession(req);
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    const locationId = Number(res.locals.locationId);
     const isBarberTeamAgenda = appSession.role === "barber" && req.query.scope === "team";
-    const barberId = appSession.role === "barber"
-      ? (isBarberTeamAgenda ? undefined : Number(appSession.barberId))
-      : (req.query.barberId ? Number(req.query.barberId) : undefined);
+    let barberId: number | undefined;
+    if (authRuntimeMode === "canonical") {
+      const requestedBarberId = req.query.barberId ? Number(req.query.barberId) : undefined;
+      const canViewTeam = Boolean(canonicalContext && hasCanonicalCapability(
+        canonicalContext,
+        "agenda.view_team",
+        locationId,
+      ));
+      const canViewOwn = Boolean(canonicalContext?.professionalId && hasCanonicalOwnCapability(
+        canonicalContext,
+        "agenda.view_own",
+        canonicalContext.professionalId,
+        locationId,
+      ));
+      if (req.query.scope === "busy") {
+        if (!enforceCanonicalCapability(req, res, "appointments.create_manual", locationId)) return;
+        barberId = requestedBarberId;
+      } else if (req.query.scope === "team") {
+        if (!canViewTeam) return res.status(403).json({ message: "Não autorizado" });
+        barberId = requestedBarberId;
+      } else if (requestedBarberId !== undefined && requestedBarberId !== 0) {
+        const requestsOwnProfessional = requestedBarberId === canonicalContext?.professionalId;
+        if (!canViewTeam && !(canViewOwn && requestsOwnProfessional)) {
+          return res.status(403).json({ message: "Não autorizado" });
+        }
+        barberId = requestedBarberId;
+      } else if (canViewOwn && !canViewTeam) {
+        barberId = canonicalContext!.professionalId!;
+      } else if (canViewTeam) {
+        barberId = undefined;
+      } else {
+        return res.status(403).json({ message: "Não autorizado" });
+      }
+    } else {
+      barberId = appSession.role === "barber"
+        ? (isBarberTeamAgenda ? undefined : Number(appSession.barberId))
+        : (req.query.barberId ? Number(req.query.barberId) : undefined);
+    }
     const date = req.query.date as string | undefined;
     // If barberId is 0 (Any), we fetch for all barbers to find combined busy slots
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
-    const locationId = Number(res.locals.locationId);
     if (req.query.scope === "busy") {
       if (req.query.barberId === undefined || !effectiveBarberId) {
         return res.status(400).json({
@@ -3630,31 +3743,60 @@ export async function registerRoutes(
     }
     const appointments = await storage.getAppointments(effectiveBarberId, date, locationId);
 
-    if (appSession.role !== "barber") {
+    const canonicalProfessionalId = canonicalContext?.professionalId ?? undefined;
+    const canViewAllCustomerData = Boolean(canonicalContext && hasCanonicalCapability(
+      canonicalContext,
+      "customers.view_team",
+      locationId,
+    ));
+    if (authRuntimeMode === "canonical" && canViewAllCustomerData) {
+      const appointmentsWithExtras = await attachAppointmentExtras(appointments);
+      return res.json(appointmentsWithExtras.map((appointment) => ({
+        ...appointment,
+        canManage: hasCanonicalCapability(canonicalContext!, "appointments.manage_team", locationId)
+          || Boolean(canonicalProfessionalId && hasCanonicalOwnCapability(
+            canonicalContext!,
+            "appointments.manage_own",
+            appointment.barberId,
+            locationId,
+          )),
+      })));
+    }
+    if (authRuntimeMode !== "canonical" && appSession.role !== "barber") {
       const appointmentsWithExtras = await attachAppointmentExtras(appointments);
       return res.json(appointmentsWithExtras.map((appointment) => ({ ...appointment, canManage: true })));
     }
 
-    const ownBarberId = Number(appSession.barberId);
+    const ownBarberId = authRuntimeMode === "canonical"
+      ? Number(canonicalProfessionalId)
+      : Number(appSession.barberId);
     const ownAppointments = await attachCommercialAppointmentExtras(
       appointments.filter((appointment) => appointment.barberId === ownBarberId),
     );
     const ownAppointmentsById = new Map(ownAppointments.map((appointment) => [appointment.id, appointment]));
     return res.json(appointments.map((appointment) => {
-      const canManage = appointment.barberId === ownBarberId;
-      if (canManage) return { ...ownAppointmentsById.get(appointment.id)!, canManage: true };
+      const isOwnAppointment = appointment.barberId === ownBarberId;
+      const canViewCustomer = authRuntimeMode === "canonical"
+        ? Boolean(canonicalContext && hasCanonicalOwnCapability(
+          canonicalContext,
+          "customers.view_own",
+          appointment.barberId,
+          locationId,
+        ))
+        : isOwnAppointment;
+      const canManage = authRuntimeMode === "canonical"
+        ? Boolean(canonicalContext && hasCanonicalOwnOrTeamCapability(canonicalContext, {
+          ownCapability: "appointments.manage_own",
+          teamCapability: "appointments.manage_team",
+          ownerProfessionalId: appointment.barberId,
+          locationId,
+        }))
+        : isOwnAppointment;
+      if (canViewCustomer) {
+        return { ...ownAppointmentsById.get(appointment.id)!, canManage };
+      }
 
-      return {
-        ...appointment,
-        customerEmail: null,
-        customerPhone: "",
-        cancelToken: "",
-        paymentMethod: "pending",
-        depositRequired: false,
-        depositReason: null,
-        createdAt: null,
-        canManage: false,
-      };
+      return { ...redactTeamAgendaAppointment(appointment), canManage };
     }));
   });
 
@@ -3861,7 +4003,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/appointments/block", requireAdmin, async (req, res) => {
+  app.post("/api/appointments/block", requireAuth, async (req, res) => {
     try {
       const locationId = Number(res.locals.locationId);
       if (MULTI_LOCATION_CONFIG.enabled && res.locals.location?.isActive === false) {
@@ -3895,6 +4037,17 @@ export async function registerRoutes(
         recurringWeeks,
         recurringMonths,
       } = req.body;
+      if (authRuntimeMode === "canonical") {
+        const requiredCapability = isManualBooking === true
+          ? "appointments.create_manual"
+          : "appointments.block_time";
+        if (!enforceCanonicalCapability(req, res, requiredCapability, locationId)) return;
+      } else {
+        const appSession = getAppSession(req);
+        if (appSession.role !== "admin" || !appSession.adminId) {
+          return res.status(401).json({ message: "Não autorizado" });
+        }
+      }
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
         (allowOutsideHours !== undefined && typeof allowOutsideHours !== "boolean") ||
@@ -4413,7 +4566,7 @@ export async function registerRoutes(
     res.json(publicAppointments);
   });
   
-  app.patch("/api/appointments/:id", requireAdmin, async (req, res) => {
+  app.patch("/api/appointments/:id", requireAuth, async (req, res) => {
     try {
       if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
@@ -4461,6 +4614,33 @@ export async function registerRoutes(
       const hasAppointmentDetailsPatch = hasStartTimePatch || hasBarberPatch || hasServicePatch
         || hasServiceModePatch || hasCustomNamePatch || hasCustomDurationPatch
         || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch;
+      if (authRuntimeMode === "canonical") {
+        if ((hasAppointmentDetailsPatch || !hasStatusPatch) && !enforceCanonicalOwnOrTeamCapability(req, res, {
+          ownCapability: "appointments.manage_own",
+          teamCapability: "appointments.manage_team",
+          ownerProfessionalId: currentApp.barberId,
+          locationId,
+        })) return;
+        if (hasStatusPatch && !enforceCanonicalAnyOwnOrTeamCapability(req, res, [
+          {
+            ownCapability: "appointments.change_status_own",
+            teamCapability: "appointments.change_status_team",
+            ownerProfessionalId: currentApp.barberId,
+            locationId,
+          },
+          ...(status === "cancelled" || status === "late_cancelled" ? [{
+            ownCapability: "appointments.manage_own" as const,
+            teamCapability: "appointments.manage_team" as const,
+            ownerProfessionalId: currentApp.barberId,
+            locationId,
+          }] : []),
+        ])) return;
+      } else {
+        const appSession = getAppSession(req);
+        if (appSession.role !== "admin" || !appSession.adminId) {
+          return res.status(401).json({ message: "Não autorizado" });
+        }
+      }
       if (currentApp.status !== "booked" && hasAppointmentDetailsPatch) {
         return res.status(409).json({
           message: "Apenas marcações ativas podem ser editadas.",
@@ -4474,6 +4654,10 @@ export async function registerRoutes(
       const startTimeChanged = hasStartTimePatch
         && newStartTime.getTime() !== new Date(currentApp.startTime).getTime();
       const newBarberId = hasBarberPatch ? Number(barberId) : currentApp.barberId;
+      if (authRuntimeMode === "canonical"
+        && hasBarberPatch
+        && newBarberId !== currentApp.barberId
+        && !enforceCanonicalCapability(req, res, "appointments.manage_team", locationId)) return;
       const services = await loadLocationServiceCatalogue(locationId, true);
       const serviceDurations = new Map(services.map((service) => [service.id, service.duration]));
       const serviceNames = new Map(services.map((service) => [service.id, service.name]));
@@ -4779,6 +4963,22 @@ export async function registerRoutes(
       const currentApp = await storage.getAppointment(appointmentId);
       if (!currentApp || currentApp.locationId !== Number(res.locals.locationId)) return res.status(404).json({ message: "Marcação não encontrada" });
 
+      const locationId = Number(res.locals.locationId);
+      if (!enforceCanonicalAnyOwnOrTeamCapability(req, res, [
+        {
+          ownCapability: "appointments.change_status_own",
+          teamCapability: "appointments.change_status_team",
+          ownerProfessionalId: currentApp.barberId,
+          locationId,
+        },
+        ...(status === "cancelled" || status === "late_cancelled" ? [{
+          ownCapability: "appointments.manage_own" as const,
+          teamCapability: "appointments.manage_team" as const,
+          ownerProfessionalId: currentApp.barberId,
+          locationId,
+        }] : []),
+      ])) return;
+
       if (status === "completed" || status === "no_show") {
         const serviceDurations = new Map(
           (await loadLocationServiceCatalogue(currentApp.locationId, true))
@@ -4791,7 +4991,9 @@ export async function registerRoutes(
       }
 
       const appSession = getAppSession(req);
-      if (appSession.role === "barber" && currentApp.barberId !== Number(appSession.barberId)) {
+      if (authRuntimeMode !== "canonical"
+        && appSession.role === "barber"
+        && currentApp.barberId !== Number(appSession.barberId)) {
         return res.status(403).json({ message: "Não autorizado" });
       }
 
@@ -5059,9 +5261,20 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/admin/dashboard", requireAdmin, async (req, res) => {
+  app.get("/api/admin/dashboard", requireAuth, async (req, res) => {
     const locationId = Number(res.locals.locationId);
     const appSession = getAppSession(req);
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    if (authRuntimeMode === "canonical") {
+      if (!enforceCanonicalAnyCapability(
+        req,
+        res,
+        ["finance.view_own", "finance.view_team"],
+        locationId,
+      )) return;
+    } else if (appSession.role !== "admin" || !appSession.adminId) {
+      return res.status(401).json({ message: "Não autorizado" });
+    }
     const requestedDays = Number(req.query.days || 30);
     const rangeDays = Number.isFinite(requestedDays)
       ? Math.min(Math.max(Math.round(requestedDays), 7), 180)
@@ -5087,9 +5300,25 @@ export async function registerRoutes(
     if (hasRequestedBarber && requestedBarberId === null) {
       return res.status(400).json({ message: "Barbeiro inválido." });
     }
-    const barberId = appSession.role === "barber"
-      ? Number(appSession.barberId)
-      : requestedBarberId ?? undefined;
+    const canonicalCanViewTeam = Boolean(canonicalContext && hasCanonicalCapability(
+      canonicalContext,
+      "finance.view_team",
+      locationId,
+    ));
+    if (authRuntimeMode === "canonical" && requestedBarberId !== undefined
+      && !canonicalCanViewTeam && requestedBarberId !== canonicalContext?.professionalId) {
+      return res.status(403).json({ message: "Não autorizado" });
+    }
+    const barberId = authRuntimeMode === "canonical"
+      ? canonicalCanViewTeam
+        ? requestedBarberId ?? undefined
+        : canonicalContext!.professionalId ?? undefined
+      : appSession.role === "barber"
+        ? Number(appSession.barberId)
+        : requestedBarberId ?? undefined;
+    if (authRuntimeMode === "canonical" && !canonicalCanViewTeam && !barberId) {
+      return res.status(403).json({ message: "Não autorizado" });
+    }
 
     const [allAppointments, rawBarbers, allServices, locationBarberIds] = await Promise.all([
       storage.getAppointments(barberId, undefined, locationId),
@@ -5100,7 +5329,7 @@ export async function registerRoutes(
     const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
     const allBarbers = rawBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
 
-    const visibleBarbers = appSession.role === "barber"
+    const visibleBarbers = (authRuntimeMode === "canonical" ? !canonicalCanViewTeam : appSession.role === "barber")
       ? allBarbers.filter((barber) => barber.id === barberId)
       : allBarbers;
     const servicePrices = new Map(allServices.map((service) => [service.id, service.price]));
@@ -5257,6 +5486,17 @@ export async function registerRoutes(
         lastVisit: customer.lastVisit,
         daysSinceLastVisit: Math.floor((now.getTime() - customer.lastVisit.getTime()) / 86400000),
       }));
+    const canViewDashboardCustomers = authRuntimeMode !== "canonical"
+      || Boolean(canonicalContext && (
+        hasCanonicalCapability(canonicalContext, "customers.view_team", locationId)
+        || (barberId && hasCanonicalOwnCapability(
+          canonicalContext,
+          "customers.view_own",
+          barberId,
+          locationId,
+        ))
+      ));
+    const visibleInactiveCustomers = canViewDashboardCustomers ? inactiveCustomers : [];
 
     const busiestHour = Array.from(hourMap.entries()).sort((a, b) => b[1] - a[1])[0] || null;
 
@@ -5302,13 +5542,13 @@ export async function registerRoutes(
           const date = new Date(appointment.startTime);
           return appointment.status === "booked" && date >= now && date <= addCalendarDays(now, 7);
         }).length,
-        inactiveCustomers: inactiveCustomers.length,
+        inactiveCustomers: visibleInactiveCustomers.length,
         busiestHour: busiestHour ? busiestHour[0] : null,
       },
       daily: Array.from(dailyMap.values()),
       barbers: Array.from(barberMap.values()).sort((a, b) => b.revenueCents - a.revenueCents),
       services: Array.from(serviceMap.values()).sort((a, b) => b.count - a.count).slice(0, 6),
-      inactiveCustomers,
+      inactiveCustomers: visibleInactiveCustomers,
     });
   });
 
@@ -5421,13 +5661,35 @@ export async function registerRoutes(
   app.post("/api/admin/blacklist/:id", requireAdmin, removeBlacklistEntry);
   app.delete("/api/admin/blacklist/:id", requireAdmin, removeBlacklistEntry);
 
-  const canManageCustomer = async (
+  const canAccessCustomer = async (
     req: Request,
     phone: string,
     email?: string,
     customerNameKey?: string,
     locationId?: number,
+    accessKind: "view" | "notes" = "view",
   ) => {
+    if (authRuntimeMode === "canonical") {
+      const context = getCanonicalRequestAuthContext(req);
+      if (!context || locationId === undefined) return false;
+      const teamCapability = accessKind === "notes" ? "customers.notes_team" : "customers.view_team";
+      const ownCapability = accessKind === "notes" ? "customers.notes_own" : "customers.view_own";
+      if (hasCanonicalCapability(context, teamCapability, locationId)) return true;
+      if (!context.professionalId || !hasCanonicalOwnCapability(
+        context,
+        ownCapability,
+        context.professionalId,
+        locationId,
+      )) return false;
+      const professionalAppointments = await storage.getAppointments(
+        context.professionalId,
+        undefined,
+        locationId,
+      );
+      return professionalAppointments.some((appointment) =>
+        customerIdentityMatches(appointment, phone, email, customerNameKey),
+      );
+    }
     const appSession = getAppSession(req);
     if (appSession.role === "admin") return true;
     if (appSession.role !== "barber" || !appSession.barberId) return false;
@@ -5474,20 +5736,52 @@ export async function registerRoutes(
     appointmentId?: number;
   }) => {
     const appSession = getAppSession(req);
-    const barberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
     const locationId = Number(res.locals.locationId);
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    if (!enforceCanonicalAnyCapability(
+      req,
+      res,
+      ["customers.view_own", "customers.view_team"],
+      locationId,
+    )) return;
+    const canonicalCanViewTeam = Boolean(canonicalContext && hasCanonicalCapability(
+      canonicalContext,
+      "customers.view_team",
+      locationId,
+    ));
+    const barberId = authRuntimeMode === "canonical"
+      ? canonicalCanViewTeam ? undefined : canonicalContext?.professionalId ?? undefined
+      : appSession.role === "barber" ? Number(appSession.barberId) : undefined;
+    if (authRuntimeMode === "canonical" && !canonicalCanViewTeam && !barberId) {
+      return res.status(403).json({ message: "Não autorizado" });
+    }
     const locationBarberIds = await getBarberIdsForLocation(locationId, true);
     const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
-    const [allAppointments, allBarbers, allServices] = await Promise.all([
+    const [allAppointments, allBarbers, allServices, requestedAppointment] = await Promise.all([
       storage.getAppointments(barberId, undefined, locationId),
       storage.getBarbers(),
       loadLocationServiceCatalogue(locationId, true),
+      options.appointmentId === undefined
+        ? Promise.resolve(undefined)
+        : storage.getAppointment(options.appointmentId),
     ]);
-    const anchorAppointment = options.appointmentId === undefined
-      ? undefined
-      : allAppointments.find((appointment) => appointment.id === options.appointmentId);
-    if (options.appointmentId !== undefined && !anchorAppointment) {
+    if (options.appointmentId !== undefined
+      && (!requestedAppointment || requestedAppointment.locationId !== locationId)) {
       return res.status(404).json({ message: "Marcação não encontrada." });
+    }
+    if (requestedAppointment && authRuntimeMode === "canonical"
+      && !enforceCanonicalOwnOrTeamCapability(req, res, {
+        ownCapability: "customers.view_own",
+        teamCapability: "customers.view_team",
+        ownerProfessionalId: requestedAppointment.barberId,
+        locationId,
+      })) return;
+    const anchorAppointment = requestedAppointment
+      ?? (options.appointmentId === undefined
+        ? undefined
+        : allAppointments.find((appointment) => appointment.id === options.appointmentId));
+    if (options.appointmentId !== undefined && !anchorAppointment) {
+      return res.status(403).json({ message: "Não autorizado" });
     }
 
     const phone = normalizePhone(options.phone || anchorAppointment?.customerPhone);
@@ -5532,7 +5826,11 @@ export async function registerRoutes(
     });
     const metrics = summarizeCustomerAppointments(matchingAppointments);
     let customerNote;
-    if ((phone || email) && (appSession.role === "admin" || matchingAppointments.length > 0)) {
+    if ((phone || email) && (
+      authRuntimeMode === "canonical"
+        ? await canAccessCustomer(req, phone, email, customerNameKey, locationId, "notes")
+        : appSession.role === "admin" || matchingAppointments.length > 0
+    )) {
       try {
         customerNote = (await resolveCustomerNoteIdentity(
           locationId,
@@ -5612,7 +5910,13 @@ export async function registerRoutes(
     if (!phone && !email) {
       return res.status(400).json({ message: "Adicione um telemóvel ou email à marcação para utilizar notas internas." });
     }
-    if (!(await canManageCustomer(req, phone, email, customerNameKey, locationId))) {
+    if (!enforceCanonicalOwnOrTeamCapability(req, res, {
+      ownCapability: "customers.notes_own",
+      teamCapability: "customers.notes_team",
+      ownerProfessionalId: appointment.barberId,
+      locationId,
+    })) return;
+    if (!(await canAccessCustomer(req, phone, email, customerNameKey, locationId, "notes"))) {
       return res.status(403).json({ message: "Não autorizado" });
     }
 
@@ -5658,7 +5962,14 @@ export async function registerRoutes(
 
     const email = normalizeEmail(parsed.data.email);
     const customerNameKey = normalizeCustomerName(parsed.data.customerName);
-    if (!(await canManageCustomer(req, phone, email, customerNameKey, Number(res.locals.locationId)))) {
+    if (!(await canAccessCustomer(
+      req,
+      phone,
+      email,
+      customerNameKey,
+      Number(res.locals.locationId),
+      "notes",
+    ))) {
       return res.status(403).json({ message: "Não autorizado" });
     }
 
@@ -5698,7 +6009,7 @@ export async function registerRoutes(
   });
 
   // === EXPORT RELATÓRIOS ===
-  app.get("/api/admin/export/barbers", requireAdmin, async (req, res) => {
+  app.get("/api/admin/export/barbers", requireCapabilityAtLocation("reports.export_team", requireAdmin), async (req, res) => {
     const startDateKey = String(req.query.startDate || "");
     const endDateKey = String(req.query.endDate || "");
     if (!isCalendarDate(startDateKey) || !isCalendarDate(endDateKey) || startDateKey > endDateKey) {
@@ -5743,7 +6054,22 @@ export async function registerRoutes(
   app.get("/api/admin/export", requireAuth, async (req, res) => {
     const { startDate, endDate, barberId } = req.query;
     const appSession = getAppSession(req);
-    const isBarberSession = appSession.role === "barber";
+    const locationId = Number(res.locals.locationId);
+    const canonicalContext = getCanonicalRequestAuthContext(req);
+    if (!enforceCanonicalAnyCapability(
+      req,
+      res,
+      ["reports.export_own", "reports.export_team"],
+      locationId,
+    )) return;
+    const canonicalCanExportTeam = Boolean(canonicalContext && hasCanonicalCapability(
+      canonicalContext,
+      "reports.export_team",
+      locationId,
+    ));
+    const isBarberSession = authRuntimeMode === "canonical"
+      ? !canonicalCanExportTeam
+      : appSession.role === "barber";
 
     if (!startDate || !endDate) {
       return res.status(400).json({ message: "Datas de início e fim são obrigatórias" });
@@ -5766,18 +6092,25 @@ export async function registerRoutes(
     if (hasSelectedBarber && parsedSelectedBarberId === null) {
       return res.status(400).json({ message: "Barbeiro inválido" });
     }
-    if (isBarberSession && !appSession.barberId) {
+    const ownProfessionalId = authRuntimeMode === "canonical"
+      ? canonicalContext?.professionalId
+      : appSession.barberId;
+    if (isBarberSession && !ownProfessionalId) {
       return res.status(401).json({ message: "Não autorizado" });
     }
-    if (isBarberSession && parsedSelectedBarberId && parsedSelectedBarberId !== appSession.barberId) {
+    if (authRuntimeMode === "canonical" && isBarberSession
+      && (!parsedSelectedBarberId || parsedSelectedBarberId !== ownProfessionalId)) {
+      return res.status(403).json({ message: "Não autorizado" });
+    }
+    if (authRuntimeMode !== "canonical" && isBarberSession
+      && parsedSelectedBarberId && parsedSelectedBarberId !== ownProfessionalId) {
       return res.status(403).json({ message: "Não autorizado" });
     }
     const selectedBarberId = isBarberSession
-      ? Number(appSession.barberId)
+      ? Number(ownProfessionalId)
       : parsedSelectedBarberId ?? undefined;
 
     try {
-      const locationId = Number(res.locals.locationId);
       const [rawBarbers, effectiveServices, allAppointments, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
         storage.getBarbers(),
         loadLocationServiceCatalogue(locationId, true),

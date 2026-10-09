@@ -506,6 +506,8 @@ export function WeeklyAgenda({
   selectedStatusFilter,
   canFilterBarbers,
   canManageSchedule,
+  canCreateManualAppointment = canManageSchedule,
+  canBlockTime = canManageSchedule,
   onBarberFilterChange,
   onStatusFilterChange,
   onPreviousWeek,
@@ -527,6 +529,8 @@ export function WeeklyAgenda({
   selectedStatusFilter: AppointmentStatusFilter;
   canFilterBarbers: boolean;
   canManageSchedule?: boolean;
+  canCreateManualAppointment?: boolean;
+  canBlockTime?: boolean;
   onBarberFilterChange: (value: string) => void;
   onStatusFilterChange: (value: AppointmentStatusFilter) => void;
   onPreviousWeek?: () => void;
@@ -654,7 +658,7 @@ export function WeeklyAgenda({
   );
 
   const handleDragStart = (event: DragEvent, appointment: WeeklyAgendaAppointment) => {
-    if (!canManageSchedule || appointment.status !== "booked") {
+    if (!canManageSchedule || appointment.canManage === false || appointment.status !== "booked") {
       event.preventDefault();
       return;
     }
@@ -771,14 +775,18 @@ export function WeeklyAgenda({
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
-              {canManageSchedule && (
+              {(canCreateManualAppointment || canBlockTime) && (
                 <div className="grid grid-cols-2 gap-2 sm:flex">
-                  <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={() => onException()}>
-                    <AlertTriangle className="h-4 w-4" /> Ausência
-                  </Button>
-                  <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking(selectedDay)}>
-                    <Plus className="h-4 w-4" /> Marcação manual
-                  </Button>
+                  {canBlockTime && (
+                    <Button type="button" variant="outline" className="h-10 gap-2 border-white/10" onClick={() => onException()}>
+                      <AlertTriangle className="h-4 w-4" /> Ausência
+                    </Button>
+                  )}
+                  {canCreateManualAppointment && (
+                    <Button type="button" variant="gold" className="h-10 gap-2" onClick={() => onManualBooking(selectedDay)}>
+                      <Plus className="h-4 w-4" /> Marcação manual
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -846,7 +854,7 @@ export function WeeklyAgenda({
                           <p className="text-xs text-gray-500">{format(day, "dd/MM/yyyy")}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          {canManageSchedule && (
+                          {canCreateManualAppointment && (
                             <Button
                               type="button"
                               variant="outline"
@@ -1042,7 +1050,7 @@ export function WeeklyAgenda({
                                     style={{ top: getAgendaTopPx(hour * 60, selectedDayAgendaStartMinutes) }}
                                   />
                                 ))}
-                                {canManageSchedule && selectedDayAgendaSlots.map((slotMinutes) => {
+                                {canCreateManualAppointment && selectedDayAgendaSlots.map((slotMinutes) => {
                                   const time = formatAgendaMinutes(slotMinutes);
                                   const top = getAgendaTopPx(slotMinutes, selectedDayAgendaStartMinutes);
                                   const height = getAgendaHeightPx(slotMinutes, slotMinutes + weeklyAgendaSlotMinutes);
@@ -1085,7 +1093,7 @@ export function WeeklyAgenda({
                                     <button
                                       key={appointment.id}
                                       type="button"
-                                      draggable={Boolean(canManageSchedule && appointment.status === "booked")}
+                                      draggable={Boolean(canManageSchedule && appointment.canManage !== false && appointment.status === "booked")}
                                       aria-label={appointmentLabel}
                                       title={appointmentLabel}
                                       onDragStart={(event) => handleDragStart(event, appointment)}
@@ -1410,7 +1418,7 @@ export function WeeklyAgenda({
                               <button
                                 key={appointment.id}
                                 type="button"
-                                draggable={Boolean(canManageSchedule && appointment.status === "booked")}
+                                draggable={Boolean(canManageSchedule && appointment.canManage !== false && appointment.status === "booked")}
                                 aria-label={appointmentLabel}
                                 title={appointmentLabel}
                                 onDragStart={(event) => handleDragStart(event, appointment)}

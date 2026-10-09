@@ -24,6 +24,7 @@
     "test:auth-schema": "tsx script/test-auth-users-migration.ts",
     "test:auth-backfill": "tsx script/test-auth-users-backfill.ts",
     "test:auth-runtime": "tsx --test tests/unit/auth-runtime-mode.test.ts tests/unit/auth-session.test.ts && tsx script/test-auth-runtime.ts",
+    "test:auth-authorization": "tsx --test tests/unit/auth-capabilities.test.ts tests/unit/auth-authorization.test.ts && cross-env AUTH_RUNTIME_MODE=canonical tsx --test tests/unit/auth-route-enforcement.test.ts",
     "db:migrate": "tsx script/migrate.ts",
     "db:push": "drizzle-kit push"
   },
