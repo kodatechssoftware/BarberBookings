@@ -19,7 +19,6 @@ export function setCanonicalRequestAuthContext(
 ) {
   canonicalRequestContexts.set(request, context);
 }
-
 export function getCanonicalRequestAuthContext(request: Request) {
   return canonicalRequestContexts.get(request);
 }
@@ -256,4 +255,3 @@ export function requireAllGlobalCapabilities(
     next();
   };
 }
-

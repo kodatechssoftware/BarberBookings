@@ -60,7 +60,6 @@ test("professional preset grants team agenda and manual creation at its location
     "creating for B must not grant later management of B",
   );
 });
-
 function ownOrTeamDecision(
   ownCapability: "appointments.manage_own" | "appointments.change_status_own" | "customers.notes_own",
   teamCapability: "appointments.manage_team" | "appointments.change_status_team" | "customers.notes_team",
@@ -375,4 +374,3 @@ test("frontend capability checks prefer canonical access and preserve legacy fal
     (role) => role === "admin",
   ), true, "legacy UI behaviour remains unchanged without canonical access DTO");
 });
-

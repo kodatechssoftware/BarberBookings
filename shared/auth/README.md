@@ -82,3 +82,12 @@ attempts. The winning transaction creates one active canonical user and one
 global `administrator` scope, without creating a legacy admin or professional.
 The token is never stored or included in audit metadata; after any canonical
 user exists, bootstrap remains closed regardless of user status.
+
+P7 adds no runtime mode switch or schema. The read-only
+`auth:cutover-check` command validates migrations, unresolved legacy cases,
+identity links, login collisions, active-user access, the global Administrator
+invariant, Professional one-to-one links, scope/capability coherence and closed
+bootstrap state. The operational runbook keeps legacy mode authoritative until
+all checks report `READY`, defines forced reauthentication at cutover, and
+limits simple ENV rollback to a frozen window before canonical-only identity or
+access mutations occur.

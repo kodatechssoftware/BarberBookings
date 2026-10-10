@@ -22,4 +22,3 @@ export function canUseRuntimeCapability(
     ? hasCapabilityAtLocation(user.access, capability, locationId)
     : hasCapability(user.access, capability);
 }
-
