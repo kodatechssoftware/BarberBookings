@@ -1,5 +1,6 @@
 import { parseBookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
 import { authRuntimeMode } from "./auth-runtime";
+import { validateBootstrapTokenConfiguration } from "./auth-bootstrap";
 
 export { authRuntimeMode };
 
@@ -35,6 +36,7 @@ export const bookingSlotIntervalMinutes = parseBookingSlotIntervalMinutes(
 );
 
 export function validateRuntimeConfiguration() {
+  validateBootstrapTokenConfiguration();
   if (process.env.NODE_ENV === "production" && !["development", "production"].includes(appEnvironment || "")) {
     throw new Error("APP_ENV must be explicitly set to development or production when NODE_ENV=production.");
   }

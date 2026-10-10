@@ -46,3 +46,7 @@ export {
   type CanonicalUserCreateInput,
   type CanonicalUserIdentityUpdateInput,
 } from "./user-management";
+export {
+  canonicalBootstrapInputSchema,
+  type CanonicalBootstrapInput,
+} from "./bootstrap";

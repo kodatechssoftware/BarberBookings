@@ -58,6 +58,20 @@ test("Production preserves legacy auth by default and rejects an unknown explici
   ));
 });
 
+test("bootstrap token is optional but fails startup when explicitly configured with weak entropy", () => {
+  const withoutBootstrap = { ...baseEnvironment };
+  delete withoutBootstrap.BOOTSTRAP_ADMIN_TOKEN;
+  evaluate(withoutBootstrap, "m.validateRuntimeConfiguration()");
+  assert.throws(() => evaluate(
+    { ...baseEnvironment, BOOTSTRAP_ADMIN_TOKEN: "too-short" },
+    "m.validateRuntimeConfiguration()",
+  ));
+  evaluate(
+    { ...baseEnvironment, BOOTSTRAP_ADMIN_TOKEN: "a-secure-bootstrap-token-with-32-chars" },
+    "m.validateRuntimeConfiguration()",
+  );
+});
+
 test("booking slot interval accepts 15, 30 and 60 and fails fast for every other configured value", () => {
   for (const value of ["15", "30", "60"]) {
     const output = evaluate(

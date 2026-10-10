@@ -18,6 +18,7 @@ const Admin = lazy(preloadAdminPage);
 const Cancellation = lazy(preloadCancellationPage);
 const Reschedule = lazy(preloadReschedulePage);
 const BarberInvite = lazy(() => import("@/pages/BarberInvite"));
+const Setup = lazy(() => import("@/pages/Setup"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function PageLoader() {
@@ -39,6 +40,7 @@ function Router() {
         <Route path="/cancel/:token">{() => <Cancellation />}</Route>
         <Route path="/reschedule/:token">{() => <Reschedule />}</Route>
         <Route path="/barber-invite/:token">{() => <BarberInvite />}</Route>
+        <Route path="/setup">{() => <Setup />}</Route>
         <Route>{() => <NotFound />}</Route>
       </Switch>
     </Suspense>

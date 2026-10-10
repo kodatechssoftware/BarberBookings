@@ -73,3 +73,12 @@ transaction lock prevents concurrent mutations from removing the final active
 global Administrator. These endpoints fail closed while
 `AUTH_RUNTIME_MODE=legacy`; `admins`, `barbers.password` and `barber_invites`
 remain compatibility-only until the separately approved cutover.
+
+P6 provides a one-time bootstrap for a new canonical installation. It is
+available only while `users` is empty and requires a high-entropy
+`BOOTSTRAP_ADMIN_TOKEN` supplied through the environment and the `/setup`
+form. A PostgreSQL transaction-scoped advisory lock serializes concurrent
+attempts. The winning transaction creates one active canonical user and one
+global `administrator` scope, without creating a legacy admin or professional.
+The token is never stored or included in audit metadata; after any canonical
+user exists, bootstrap remains closed regardless of user status.

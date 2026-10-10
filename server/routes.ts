@@ -204,6 +204,11 @@ import {
   updateCanonicalUserIdentity,
 } from "./auth-user-management";
 import { createFixedWindowRateLimiter } from "./auth-rate-limit";
+import {
+  bootstrapCanonicalAdministrator,
+  CanonicalBootstrapError,
+  getCanonicalBootstrapStatus,
+} from "./auth-bootstrap";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -221,6 +226,10 @@ const canonicalInviteRateLimiter = createFixedWindowRateLimiter({
 });
 const canonicalPasswordRateLimiter = createFixedWindowRateLimiter({
   maxAttempts: 8,
+  windowMs: 15 * 60 * 1_000,
+});
+const canonicalBootstrapRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 5,
   windowMs: 15 * 60 * 1_000,
 });
 const CANCELLATION_POLICY_HOURS = Number(process.env.CANCELLATION_POLICY_HOURS || 4);
@@ -423,6 +432,13 @@ function sendCanonicalUserManagementError(res: Response, error: unknown) {
     return res.status(409).json({ code: "IDENTITY_CONFLICT", message: "O utilizador ou associação já existe." });
   }
   throw error;
+}
+
+function sendCanonicalBootstrapError(res: Response, error: unknown) {
+  if (error instanceof CanonicalBootstrapError) {
+    return res.status(error.status).json({ code: error.code, message: error.message });
+  }
+  return sendCanonicalUserManagementError(res, error);
 }
 
 let blacklistMutationQueue: Promise<void> = Promise.resolve();
@@ -1901,6 +1917,44 @@ export async function registerRoutes(
       ...MULTI_LOCATION_CONFIG,
       bookingSlotIntervalMinutes,
     });
+  });
+
+  // Bootstrap deliberately runs before location resolution: a fresh canonical
+  // installation may not yet have an authenticated actor or selected location.
+  app.get("/api/auth/bootstrap/status", async (_req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(await getCanonicalBootstrapStatus(pool));
+  });
+
+  app.post("/api/auth/bootstrap", async (req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    const rateLimitKey = applyRateLimit(
+      req,
+      res,
+      canonicalBootstrapRateLimiter,
+      "canonical-bootstrap",
+    );
+    if (!rateLimitKey) return;
+    try {
+      const identity = await bootstrapCanonicalAdministrator(pool, req.body);
+      canonicalBootstrapRateLimiter.reset(rateLimitKey);
+      await establishCanonicalSession(req, identity);
+      const context = await loadCanonicalAuthContext(pool, identity.userId);
+      if (!context) throw new Error("Canonical administrator unavailable after bootstrap.");
+      setCanonicalRequestAuthContext(req, context);
+      res.setHeader("Cache-Control", "no-store");
+      return res.status(201).json({
+        message: "Primeiro administrador criado com sucesso.",
+        ...toCanonicalMeResponse(context),
+      });
+    } catch (error) {
+      return sendCanonicalBootstrapError(res, error);
+    }
   });
 
   app.get("/api/locations", async (_req, res) => {
