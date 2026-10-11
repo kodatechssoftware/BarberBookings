@@ -1464,6 +1464,8 @@ export default function Admin() {
   const [barberCompensationDrafts, setBarberCompensationDrafts] = useState<Record<number, BarberCompensationFormData>>({});
   const [savingBarberId, setSavingBarberId] = useState<number | null>(null);
   const savingBarberIdRef = useRef<number | null>(null);
+  const [invitingBarberId, setInvitingBarberId] = useState<number | null>(null);
+  const invitingBarberIdRef = useRef<number | null>(null);
   const [editingBarberId, setEditingBarberId] = useState<number | null>(null);
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
@@ -2543,6 +2545,9 @@ export default function Admin() {
   };
 
   const handleCreateBarberInvite = async (barber: any) => {
+    if (invitingBarberIdRef.current !== null) return;
+    invitingBarberIdRef.current = barber.id;
+    setInvitingBarberId(barber.id);
     try {
       const res = await apiRequest("POST", `/api/barbers/${barber.id}/invite`, {});
       const data = await res.json();
@@ -2560,6 +2565,9 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Não foi possível criar o convite.", variant: "destructive" });
+    } finally {
+      invitingBarberIdRef.current = null;
+      setInvitingBarberId(null);
     }
   };
 
@@ -4644,8 +4652,12 @@ export default function Admin() {
                           variant="outline"
                           size="sm"
                           className="flex-1 h-8 text-[10px] border-red-500/20 text-red-400 hover:bg-red-500/10"
+                          disabled={invitingBarberId === barber.id}
                         >
-                          <Copy className="mr-1 h-3 w-3" /> Convite
+                          {invitingBarberId === barber.id
+                            ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            : <Copy className="mr-1 h-3 w-3" />}
+                          {invitingBarberId === barber.id ? "A criar..." : "Convite"}
                         </Button>
                       </ConfirmAction>}
                       {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <Button

@@ -37,6 +37,7 @@ export {
   canonicalAccessScopesSchema,
   canonicalInviteAcceptanceSchema,
   canonicalInviteOptionsSchema,
+  canonicalInviteTokenSchema,
   canonicalPasswordChangeSchema,
   canonicalProfessionalLinkSchema,
   canonicalUserCreateSchema,

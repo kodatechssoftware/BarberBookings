@@ -19,12 +19,14 @@ test("P5A exposes canonical lifecycle endpoints behind explicit capability check
     'app.delete("/api/admin/users/:id/invites", requireCanonicalUsersManage',
     'app.post("/api/admin/users/:id/revoke-sessions", requireCanonicalUsersManage',
     'app.post("/api/user-invites/accept"',
+    'app.post("/api/user-invites/validate"',
     'app.post("/api/account/password", requireAuth',
   ]) assert.ok(routes.includes(expected), expected);
 
   assert.match(routes, /authRuntimeMode !== "canonical"[\s\S]*Endpoint indisponível/);
   assert.match(routes, /enforceCanonicalCapability\(req, res, "users\.manage"\)/);
   assert.match(management, /hasCapabilityAtLocation\(actor\.access, "access\.manage"/);
+  assert.match(routes, /createOrReplaceCanonicalProfessionalInvite/);
 });
 
 test("canonical management persists credentials only in users and never creates legacy admins", () => {

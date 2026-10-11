@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle, Loader2, XCircle } from "lucide-react";
@@ -14,6 +14,7 @@ export default function BarberInvite() {
   const token = params?.token;
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const submittingRef = useRef(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -32,6 +33,7 @@ export default function BarberInvite() {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (submittingRef.current) return;
 
     if (password.length < 8) {
       toast({ title: "Palavra-passe curta", description: "Use pelo menos 8 caracteres.", variant: "destructive" });
@@ -43,6 +45,7 @@ export default function BarberInvite() {
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
       const res = await apiFetch(`/api/barber-invites/${token}/accept`, {
@@ -59,6 +62,7 @@ export default function BarberInvite() {
     } catch (error: any) {
       toast({ title: "Erro", description: error.message, variant: "destructive" });
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };

@@ -179,6 +179,7 @@ import {
   canonicalAccessReplaceSchema,
   canonicalInviteAcceptanceSchema,
   canonicalInviteOptionsSchema,
+  canonicalInviteTokenSchema,
   canonicalPasswordChangeSchema,
   canonicalProfessionalLinkSchema,
   canonicalUserCreateSchema,
@@ -191,9 +192,11 @@ import {
   acceptCanonicalUserInvite,
   CanonicalUserManagementError,
   changeCanonicalPassword,
+  createOrReplaceCanonicalProfessionalInvite,
   createCanonicalInvitedUser,
   getCanonicalUser,
   getCanonicalUserAccess,
+  inspectCanonicalUserInvite,
   listCanonicalUsers,
   replaceCanonicalUserAccess,
   replaceCanonicalUserInvite,
@@ -1988,6 +1991,7 @@ export async function registerRoutes(
         "/admin/login",
         "/admin/logout",
         "/admin/me",
+        "/user-invites/validate",
         "/user-invites/accept",
       ].includes(req.path)
         || /^\/appointments\/(token|reschedule|cancel)\//.test(req.path)
@@ -2248,6 +2252,25 @@ export async function registerRoutes(
         message: "Convite aceite e acesso ativado.",
         ...toCanonicalMeResponse(context),
       });
+    } catch (error) {
+      return sendCanonicalUserManagementError(res, error);
+    }
+  });
+
+  app.post("/api/user-invites/validate", async (req, res) => {
+    if (authRuntimeMode !== "canonical") {
+      return res.status(404).json({ message: "Endpoint indisponível." });
+    }
+    const rateLimitKey = applyRateLimit(
+      req,
+      res,
+      canonicalInviteRateLimiter,
+      "user-invite-validation",
+    );
+    if (!rateLimitKey) return;
+    try {
+      const input = canonicalInviteTokenSchema.parse(req.body);
+      return res.json(await inspectCanonicalUserInvite(pool, input.token));
     } catch (error) {
       return sendCanonicalUserManagementError(res, error);
     }
@@ -3360,6 +3383,26 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Adicione um email ao barbeiro antes de criar o convite." });
       }
 
+      if (authRuntimeMode === "canonical") {
+        const actor = getCanonicalRequestAuthContext(req)!;
+        const created = await createOrReplaceCanonicalProfessionalInvite(
+          pool,
+          actor,
+          barberId,
+          Number(res.locals.locationId),
+          BARBER_INVITE_EXPIRY_DAYS * 24,
+        );
+        return res.status(201).json({
+          message: created.createdUser
+            ? "Utilizador criado e convite canónico emitido."
+            : "Convite canónico substituído.",
+          userId: created.user.id,
+          createdUser: created.createdUser,
+          inviteUrl: `${buildPublicUrl("/user-invite")}#token=${encodeURIComponent(created.invite.token)}`,
+          expiresAt: created.invite.expiresAt,
+        });
+      }
+
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + BARBER_INVITE_EXPIRY_DAYS);
       const token = randomUUID();
@@ -3380,6 +3423,9 @@ export async function registerRoutes(
         expiresAt: invite.expiresAt,
       });
     } catch (error) {
+      if (authRuntimeMode === "canonical") {
+        return sendCanonicalUserManagementError(res, error);
+      }
       console.error("Create barber invite error:", error);
       res.status(500).json({ message: "Erro ao criar convite de acesso" });
     }
@@ -3421,6 +3467,13 @@ export async function registerRoutes(
       const barber = await storage.getBarber(invite.barberId);
       if (!barber || barber.isVisible === false) {
         return res.status(404).json({ message: "Convite inválido ou expirado." });
+      }
+
+      if (authRuntimeMode === "canonical" && !barber.userId) {
+        return res.status(409).json({
+          code: "CANONICAL_IDENTITY_REQUIRED",
+          message: "Este profissional ainda não tem uma identidade canónica associada. Peça um novo convite ao administrador.",
+        });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);

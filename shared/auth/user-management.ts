@@ -135,8 +135,12 @@ export const canonicalInviteOptionsSchema = z.object({
   expiresInHours: z.number().int().min(1).max(168).optional(),
 });
 
-export const canonicalInviteAcceptanceSchema = z.object({
+export const canonicalInviteTokenSchema = z.object({
   token: z.string().trim().min(32).max(500),
+});
+
+export const canonicalInviteAcceptanceSchema = z.object({
+  token: canonicalInviteTokenSchema.shape.token,
   password: z.string().min(8).max(200),
 });
 

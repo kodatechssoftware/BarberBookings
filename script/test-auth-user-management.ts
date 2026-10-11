@@ -10,9 +10,11 @@ import {
   acceptCanonicalUserInvite,
   CanonicalUserManagementError,
   changeCanonicalPassword,
+  createOrReplaceCanonicalProfessionalInvite,
   createCanonicalInvitedUser,
   getCanonicalUser,
   getCanonicalUserAccess,
+  inspectCanonicalUserInvite,
   listCanonicalUsers,
   replaceCanonicalUserAccess,
   replaceCanonicalUserInvite,
@@ -49,6 +51,12 @@ async function createLegacyFoundation(pool: pg.Pool, schema: string) {
     CREATE TABLE ${table(schema, "barbers")} (
       id serial PRIMARY KEY, name text NOT NULL, specialty text NOT NULL,
       email text, password text, is_visible boolean DEFAULT true
+    );
+    CREATE TABLE ${table(schema, "barber_locations")} (
+      barber_id integer NOT NULL REFERENCES ${table(schema, "barbers")}(id),
+      location_id integer NOT NULL REFERENCES ${table(schema, "locations")}(id),
+      is_active boolean NOT NULL DEFAULT true,
+      PRIMARY KEY (barber_id, location_id)
     );
     CREATE TABLE ${table(schema, "admins")} (
       id serial PRIMARY KEY, username text NOT NULL UNIQUE, email text UNIQUE, password text NOT NULL
@@ -125,9 +133,15 @@ try {
       ('Profissional Um', 'Especialidade', 'pro1@example.test', $1),
       ('Bruno Santos', 'Especialidade', 'bs881366@gmail.com', $1),
       ('Profissional Livre', 'Especialidade', 'free@example.test', NULL),
-      ('Outro Profissional Livre', 'Especialidade', 'other-free@example.test', NULL)
+      ('Outro Profissional Livre', 'Especialidade', 'other-free@example.test', NULL),
+      ('Profissional para Convite Canónico', 'Especialidade', 'canonical-invite@example.test', NULL),
+      ('Profissional para Convite Concorrente', 'Especialidade', 'canonical-concurrent@example.test', NULL)
     RETURNING id
   `, [legacyHash])).rows.map((row) => Number(row.id));
+  await pool.query(`
+    INSERT INTO ${table(schema, "barber_locations")} (barber_id, location_id)
+    SELECT id, 1 FROM ${table(schema, "barbers")}
+  `);
 
   const rootPassword = "Root-password-2026";
   const rootHash = await bcrypt.hash(rootPassword, 4);
@@ -160,7 +174,7 @@ try {
   assert.equal(administratorContext.professionalId, null);
   await assert.rejects(
     accept(administrator.invite.token, "Admin-password-2026"),
-    expectManagementCode("INVITE_INVALID"),
+    expectManagementCode("INVITE_USED"),
   );
   assert.equal((await pool.query(`SELECT count(*)::integer AS count FROM ${table(schema, "admins")}`)).rows[0].count, 1);
 
@@ -195,7 +209,7 @@ try {
   });
   await assert.rejects(
     accept(invitedOnly.invite.token, "Expired-password-2026", new Date(invitedOnly.invite.expiresAt.getTime() + 1)),
-    expectManagementCode("INVITE_INVALID"),
+    expectManagementCode("INVITE_EXPIRED"),
   );
   await assert.rejects(
     setCanonicalUserStatus(pool, root, invitedOnly.user.id, "active", options),
@@ -214,12 +228,114 @@ try {
   assert.equal(await revokeCanonicalUserInvites(pool, root, revokedInviteUser.user.id, options), 1);
   await assert.rejects(
     accept(revokedInviteUser.invite.token, "Revoked-password-2026"),
-    expectManagementCode("INVITE_INVALID"),
+    expectManagementCode("INVITE_REVOKED"),
   );
   const replacement = await replaceCanonicalUserInvite(pool, root, revokedInviteUser.user.id, 24, options);
   const replacementAgain = await replaceCanonicalUserInvite(pool, root, revokedInviteUser.user.id, 24, options);
-  await assert.rejects(accept(replacement.token, "Replacement-password-2026"), expectManagementCode("INVITE_INVALID"));
+  await assert.rejects(accept(replacement.token, "Replacement-password-2026"), expectManagementCode("INVITE_REVOKED"));
   await accept(replacementAgain.token, "Replacement-password-2026");
+
+  const professionalInvite = await createOrReplaceCanonicalProfessionalInvite(
+    pool,
+    root,
+    professionalIds[4],
+    1,
+    24,
+    options,
+  );
+  assert.equal(professionalInvite.createdUser, true);
+  assert.equal(professionalInvite.user.status, "invited");
+  assert.equal(professionalInvite.user.professionalId, professionalIds[4]);
+  assert.deepEqual(professionalInvite.user.access, [{
+    kind: "location",
+    locationId: 1,
+    preset: "professional",
+    capabilities: [],
+  }]);
+  await assert.rejects(
+    createOrReplaceCanonicalProfessionalInvite(pool, root, professionalIds[4], 2, 24, options),
+    expectManagementCode("PROFESSIONAL_LOCATION_REQUIRED"),
+  );
+  assert.deepEqual(await inspectCanonicalUserInvite(pool, professionalInvite.invite.token, options), {
+    state: "valid",
+    expiresAt: professionalInvite.invite.expiresAt,
+  });
+  const replacementProfessionalInvite = await createOrReplaceCanonicalProfessionalInvite(
+    pool,
+    root,
+    professionalIds[4],
+    1,
+    24,
+    options,
+  );
+  assert.equal(replacementProfessionalInvite.createdUser, false);
+  assert.equal(replacementProfessionalInvite.user.id, professionalInvite.user.id);
+  assert.equal((await inspectCanonicalUserInvite(pool, professionalInvite.invite.token, options)).state, "revoked");
+  assert.equal((await inspectCanonicalUserInvite(pool, replacementProfessionalInvite.invite.token, options)).state, "valid");
+  const professionalInviteIdentity = await accept(
+    replacementProfessionalInvite.invite.token,
+    "Canonical-professional-password-2026",
+  );
+  assert.equal(professionalInviteIdentity.userId, professionalInvite.user.id);
+  assert.equal((await inspectCanonicalUserInvite(pool, replacementProfessionalInvite.invite.token, options)).state, "used");
+  await assert.rejects(
+    accept(replacementProfessionalInvite.invite.token, "Canonical-professional-password-2026"),
+    expectManagementCode("INVITE_USED"),
+  );
+  await assert.rejects(
+    createOrReplaceCanonicalProfessionalInvite(pool, root, professionalIds[4], 1, 24, options),
+    expectManagementCode("USER_ALREADY_ACTIVE"),
+  );
+  const canonicalProfessionalRows = await pool.query<{
+    user_count: number;
+    professional_links: number;
+    scope_count: number;
+    legacy_invite_count: number;
+    password_configured: boolean;
+    status: string;
+  }>(`
+    SELECT
+      (SELECT count(*)::integer FROM ${table(schema, "users")} WHERE email_key = 'canonical-invite@example.test') AS user_count,
+      (SELECT count(*)::integer FROM ${table(schema, "barbers")} WHERE id = $1 AND user_id = $2) AS professional_links,
+      (SELECT count(*)::integer FROM ${table(schema, "user_access_scopes")}
+        WHERE user_id = $2 AND location_id = 1 AND preset_key = 'professional') AS scope_count,
+      (SELECT count(*)::integer FROM ${table(schema, "barber_invites")} WHERE barber_id = $1) AS legacy_invite_count,
+      (SELECT password_hash IS NOT NULL AND btrim(password_hash) <> '' FROM ${table(schema, "users")} WHERE id = $2) AS password_configured,
+      (SELECT status FROM ${table(schema, "users")} WHERE id = $2) AS status
+  `, [professionalIds[4], professionalInvite.user.id]);
+  assert.deepEqual(canonicalProfessionalRows.rows[0], {
+    user_count: 1,
+    professional_links: 1,
+    scope_count: 1,
+    legacy_invite_count: 0,
+    password_configured: true,
+    status: "active",
+  });
+
+  const concurrentProfessionalInvites = await Promise.all([
+    createOrReplaceCanonicalProfessionalInvite(pool, root, professionalIds[5], 1, 24, options),
+    createOrReplaceCanonicalProfessionalInvite(pool, root, professionalIds[5], 1, 24, options),
+  ]);
+  assert.equal(concurrentProfessionalInvites[0].user.id, concurrentProfessionalInvites[1].user.id);
+  const concurrentProfessionalRows = await pool.query<{
+    user_count: number;
+    professional_links: number;
+    active_invite_count: number;
+    legacy_invite_count: number;
+  }>(`
+    SELECT
+      (SELECT count(*)::integer FROM ${table(schema, "users")} WHERE email_key = 'canonical-concurrent@example.test') AS user_count,
+      (SELECT count(*)::integer FROM ${table(schema, "barbers")} WHERE id = $1 AND user_id = $2) AS professional_links,
+      (SELECT count(*)::integer FROM ${table(schema, "user_invites")}
+        WHERE user_id = $2 AND accepted_at IS NULL AND revoked_at IS NULL) AS active_invite_count,
+      (SELECT count(*)::integer FROM ${table(schema, "barber_invites")} WHERE barber_id = $1) AS legacy_invite_count
+  `, [professionalIds[5], concurrentProfessionalInvites[0].user.id]);
+  assert.deepEqual(concurrentProfessionalRows.rows[0], {
+    user_count: 1,
+    professional_links: 1,
+    active_invite_count: 1,
+    legacy_invite_count: 0,
+  });
 
   const professional = await create(root, {
     displayName: "Profissional Um",

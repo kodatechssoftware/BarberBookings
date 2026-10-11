@@ -76,6 +76,13 @@ export type CanonicalInviteSecret = {
   expiresAt: Date;
 };
 
+export type CanonicalInviteState = "valid" | "used" | "revoked" | "expired" | "invalid";
+
+export type CanonicalInviteInspection = {
+  state: CanonicalInviteState;
+  expiresAt: Date | null;
+};
+
 const LAST_ADMIN_LOCK_NAMESPACE = 915_001;
 const LAST_ADMIN_LOCK_KEY = 1;
 const LOGIN_IDENTITY_LOCK_NAMESPACE = 915_002;
@@ -463,6 +470,141 @@ export async function createCanonicalInvitedUser(
     };
   });
 }
+
+export async function createOrReplaceCanonicalProfessionalInvite(
+  pool: Pool,
+  actor: CanonicalAuthContext,
+  professionalId: number,
+  locationId: number,
+  expiresInHours = 72,
+  options: { schemaName?: string; now?: Date } = {},
+) {
+  const schema = resolveSchemaName(options.schemaName);
+  const now = options.now ?? new Date();
+  const access: AccessScope[] = [{
+    kind: "location",
+    locationId,
+    preset: "professional",
+    capabilities: [],
+  }];
+  assertGrantCeiling(actor, access);
+
+  return transaction(pool, async (client) => {
+    await assertLocationsExist(client, schema, access);
+    const professionalResult = await client.query<{
+      id: number;
+      name: string;
+      email: string | null;
+      is_visible: boolean | null;
+      user_id: number | null;
+    }>(`
+      SELECT id, name, email, is_visible, user_id
+      FROM ${table(schema, "barbers")}
+      WHERE id = $1
+      FOR UPDATE
+    `, [professionalId]);
+    const professional = professionalResult.rows[0];
+    if (!professional || professional.is_visible === false) {
+      throw new CanonicalUserManagementError("PROFESSIONAL_NOT_FOUND", 404, "Profissional não encontrado.");
+    }
+    if (!professional.email?.trim()) {
+      throw new CanonicalUserManagementError(
+        "PROFESSIONAL_EMAIL_REQUIRED",
+        400,
+        "Adicione um email ao profissional antes de criar o convite.",
+      );
+    }
+    const locationAssignment = await client.query(`
+      SELECT 1
+      FROM ${table(schema, "barber_locations")}
+      WHERE barber_id = $1 AND location_id = $2 AND is_active = true
+      FOR KEY SHARE
+    `, [professionalId, locationId]);
+    if (locationAssignment.rows.length !== 1) {
+      throw new CanonicalUserManagementError(
+        "PROFESSIONAL_LOCATION_REQUIRED",
+        409,
+        "Este profissional não está ativo na localização selecionada.",
+      );
+    }
+
+    let userId = professional.user_id === null ? null : Number(professional.user_id);
+    let createdUser = false;
+    if (userId === null) {
+      const email = normalizeEmail(professional.email);
+      await lockLoginIdentity(client, email);
+      await assertEmailAvailable(client, schema, email);
+      const inserted = await client.query<{ id: number }>(`
+        INSERT INTO ${table(schema, "users")} (
+          display_name, email, password_hash, status, auth_version, created_at, updated_at
+        ) VALUES ($1, $2, NULL, 'invited', 1, $3, $3)
+        RETURNING id
+      `, [professional.name, email, now]);
+      userId = Number(inserted.rows[0].id);
+      await linkProfessionalInsideTransaction(client, schema, userId, professionalId);
+      await insertScopes(client, schema, userId, access);
+      createdUser = true;
+      await writeAudit(client, schema, actor, {
+        action: "user.created",
+        targetUserId: userId,
+        locationId,
+        summary: `Utilizador convidado para o profissional: ${professional.name}`,
+        metadata: {
+          status: "invited",
+          professionalId,
+          access: safeScopeMetadata(access),
+        },
+      });
+    } else {
+      const user = await requireUserRow(client, schema, userId, true);
+      if (user.professional_id !== professionalId) {
+        throw new CanonicalUserManagementError(
+          "PROFESSIONAL_LINK_CONFLICT",
+          409,
+          "A identidade canónica está associada a outro profissional.",
+        );
+      }
+      if (user.status === "active") {
+        throw new CanonicalUserManagementError(
+          "USER_ALREADY_ACTIVE",
+          409,
+          "Este profissional já tem acesso ativo.",
+        );
+      }
+      if (user.status === "disabled") {
+        throw new CanonicalUserManagementError(
+          "USER_DISABLED",
+          409,
+          "Reative o utilizador antes de criar um novo convite.",
+        );
+      }
+      const existingScopes = scopeRowsToScopes(await loadScopeRows(client, schema, userId));
+      if (existingScopes.length === 0) {
+        throw new CanonicalUserManagementError(
+          "ACCESS_REQUIRED",
+          409,
+          "Atribua acesso ao utilizador antes de criar um novo convite.",
+        );
+      }
+    }
+
+    const invite = await createInvite(client, schema, userId, actor.user.id, expiresInHours, now);
+    await writeAudit(client, schema, actor, {
+      action: createdUser ? "user.invite_created" : "user.invite_replaced",
+      targetUserId: userId,
+      locationId,
+      summary: createdUser
+        ? "Convite canónico criado para o profissional."
+        : "Convite canónico substituído para o profissional.",
+      metadata: { professionalId, expiresAt: invite.expiresAt },
+    });
+    return {
+      user: await getCanonicalUserWithClient(client, schema, userId),
+      invite,
+      createdUser,
+    };
+  });
+}
 async function getCanonicalUserWithClient(client: PoolClient, schema: string, userId: number) {
   const row = await requireUserRow(client, schema, userId);
   return {
@@ -753,6 +895,53 @@ export async function revokeCanonicalUserInvites(
   });
 }
 
+type CanonicalInviteRow = {
+  expires_at: Date;
+  accepted_at: Date | null;
+  revoked_at: Date | null;
+};
+
+function canonicalInviteState(invite: CanonicalInviteRow | undefined, now: Date): CanonicalInviteState {
+  if (!invite) return "invalid";
+  if (invite.accepted_at) return "used";
+  if (invite.revoked_at) return "revoked";
+  if (invite.expires_at <= now) return "expired";
+  return "valid";
+}
+
+function throwCanonicalInviteState(state: Exclude<CanonicalInviteState, "valid">): never {
+  if (state === "used") {
+    throw new CanonicalUserManagementError("INVITE_USED", 409, "Este convite já foi utilizado.");
+  }
+  if (state === "revoked") {
+    throw new CanonicalUserManagementError("INVITE_REVOKED", 410, "Este convite foi revogado ou substituído.");
+  }
+  if (state === "expired") {
+    throw new CanonicalUserManagementError("INVITE_EXPIRED", 410, "Este convite expirou.");
+  }
+  throw new CanonicalUserManagementError("INVITE_INVALID", 400, "Convite inválido.");
+}
+
+export async function inspectCanonicalUserInvite(
+  pool: Pool,
+  token: string,
+  options: { schemaName?: string; now?: Date } = {},
+): Promise<CanonicalInviteInspection> {
+  const schema = resolveSchemaName(options.schemaName);
+  const now = options.now ?? new Date();
+  const digest = inviteDigest(token);
+  const result = await pool.query<CanonicalInviteRow>(`
+    SELECT expires_at, accepted_at, revoked_at
+    FROM ${table(schema, "user_invites")}
+    WHERE token_digest = $1
+  `, [digest]);
+  const invite = result.rows[0];
+  return {
+    state: canonicalInviteState(invite, now),
+    expiresAt: invite?.expires_at ?? null,
+  };
+}
+
 export async function acceptCanonicalUserInvite(
   pool: Pool,
   token: string,
@@ -770,11 +959,13 @@ export async function acceptCanonicalUserInvite(
       display_name: string;
       email: string;
       professional_id: number | null;
+      status: "invited" | "active" | "disabled";
       expires_at: Date;
       accepted_at: Date | null;
       revoked_at: Date | null;
     }>(`
       SELECT invite.id, invite.user_id, canonical_user.display_name, canonical_user.email,
+        canonical_user.status,
         professional.id AS professional_id,
         invite.expires_at, invite.accepted_at, invite.revoked_at
       FROM ${table(schema, "user_invites")} invite
@@ -784,8 +975,14 @@ export async function acceptCanonicalUserInvite(
       FOR UPDATE OF invite, canonical_user
     `, [digest]);
     const invite = claimed.rows[0];
-    if (!invite || invite.accepted_at || invite.revoked_at || invite.expires_at <= now) {
-      throw new CanonicalUserManagementError("INVITE_INVALID", 400, "Convite inválido ou expirado.");
+    const state = canonicalInviteState(invite, now);
+    if (state !== "valid") throwCanonicalInviteState(state);
+    if (invite.status !== "invited") {
+      throw new CanonicalUserManagementError(
+        "USER_NOT_INVITED",
+        409,
+        "Este utilizador já não está a aguardar ativação.",
+      );
     }
     const updated = await client.query<{ id: number; auth_version: number }>(`
       UPDATE ${table(schema, "users")}
@@ -797,7 +994,7 @@ export async function acceptCanonicalUserInvite(
       RETURNING id, auth_version
     `, [invite.user_id, passwordHash, now]);
     if (updated.rows.length !== 1) {
-      throw new CanonicalUserManagementError("INVITE_INVALID", 400, "Convite inválido ou expirado.");
+      throw new CanonicalUserManagementError("USER_NOT_INVITED", 409, "Este utilizador já não está a aguardar ativação.");
     }
     await client.query(`UPDATE ${table(schema, "user_invites")} SET accepted_at = $2 WHERE id = $1`, [invite.id, now]);
     await client.query(`
