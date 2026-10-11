@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
 import { useExtras } from "@/hooks/use-extras";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -916,6 +916,9 @@ type ServiceListItem = {
 type BarberListItem = {
   id: number;
   name: string;
+  email?: string | null;
+  userId?: number | null;
+  locationCount?: number;
   specialty?: string | null;
   bio?: string | null;
   avatar?: string | null;
@@ -1466,6 +1469,7 @@ export default function Admin() {
   const savingBarberIdRef = useRef<number | null>(null);
   const [invitingBarberId, setInvitingBarberId] = useState<number | null>(null);
   const invitingBarberIdRef = useRef<number | null>(null);
+  const [accessInviteBarber, setAccessInviteBarber] = useState<BarberListItem | null>(null);
   const [editingBarberId, setEditingBarberId] = useState<number | null>(null);
   const [showArchivedBarbers, setShowArchivedBarbers] = useState(false);
   const [barberRemovalCandidate, setBarberRemovalCandidate] = useState<BarberListItem | null>(null);
@@ -2545,7 +2549,7 @@ export default function Admin() {
   };
 
   const handleCreateBarberInvite = async (barber: any) => {
-    if (invitingBarberIdRef.current !== null) return;
+    if (invitingBarberIdRef.current !== null) return false;
     invitingBarberIdRef.current = barber.id;
     setInvitingBarberId(barber.id);
     try {
@@ -2562,9 +2566,12 @@ export default function Admin() {
         title: "Convite criado",
         description: `Link copiado para enviar a ${barber.name}: ${data.inviteUrl}`,
       });
+      queryClient.invalidateQueries({ queryKey: ["/api/barbers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
+      return true;
     } catch (err: any) {
       toast({ title: "Erro", description: err.message || "Não foi possível criar o convite.", variant: "destructive" });
+      return false;
     } finally {
       invitingBarberIdRef.current = null;
       setInvitingBarberId(null);
@@ -4475,6 +4482,22 @@ export default function Admin() {
                     {canSeeCompensation && <p className="mb-3 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs text-gray-400">
                       {getCompensationSummary(barber)}
                     </p>}
+                    {usesCanonicalAuth && canManageUsers && (
+                      <div className="mb-3 flex flex-col gap-2 rounded-lg border border-white/10 bg-background/40 p-3 text-xs min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+                        <span className="text-gray-300">
+                          Acesso ao painel: <strong className={barber.userId ? "text-emerald-300" : "text-gray-100"}>{barber.userId ? "Sim" : "Não"}</strong>
+                        </span>
+                        {barber.userId ? (
+                          <Button type="button" variant="ghost" size="sm" className="h-7 justify-start px-2 text-[11px] min-[420px]:justify-center" onClick={() => setActiveTab("users")}>
+                            Gerir acesso
+                          </Button>
+                        ) : (
+                          <Button type="button" variant="outline" size="sm" className="h-7 justify-start px-2 text-[11px] min-[420px]:justify-center" onClick={() => setAccessInviteBarber(barber)}>
+                            Dar acesso
+                          </Button>
+                        )}
+                      </div>
+                    )}
                     {multiLocationConfig?.enabled && activeLocation
                       && (canManageTeamHours || (canManageOwnHours && operationalProfessionalId === barber.id)) && (
                       <BarberLocationScheduleDialog
@@ -4641,12 +4664,12 @@ export default function Admin() {
                           </div>
                         </DialogContent>
                       </Dialog>}
-                      {canManageUsers && <ConfirmAction
+                      {!usesCanonicalAuth && canManageUsers && <ConfirmAction
                         title={`Criar convite para ${barber.name}?`}
                         description="Se já existir outro convite, esse link deixa de funcionar. A palavra-passe atual mantém-se válida até o novo convite ser aceite."
                         confirmLabel="Criar convite"
                         confirmClassName="bg-primary text-primary-foreground hover:bg-primary/90"
-                        onConfirm={() => handleCreateBarberInvite(barber)}
+                        onConfirm={async () => { await handleCreateBarberInvite(barber); }}
                       >
                         <Button
                           variant="outline"
@@ -4749,6 +4772,53 @@ export default function Admin() {
                 </div>
               </div>
             ) : null}
+            <Dialog open={Boolean(accessInviteBarber)} onOpenChange={(open) => { if (!open && invitingBarberIdRef.current === null) setAccessInviteBarber(null); }}>
+              <DialogContent className="w-[calc(100vw-1rem)] border-white/10 bg-card text-white sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Dar acesso ao painel</DialogTitle>
+                  <DialogDescription>
+                    O sistema cria o User, associa o Professional e envia um convite seguro, sem expor a complexidade interna.
+                  </DialogDescription>
+                </DialogHeader>
+                {accessInviteBarber && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="professional-access-email">Email</Label>
+                      <Input id="professional-access-email" type="email" value={accessInviteBarber.email || ""} readOnly className="border-white/10 bg-background" />
+                      {!accessInviteBarber.email && <p role="alert" className="text-xs text-amber-200">Adicione primeiro um email na edição do Professional.</p>}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                        <p className="text-xs text-gray-400">Tipo de acesso</p>
+                        <p className="mt-1 font-semibold text-white">Professional</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-background/40 p-3">
+                        <p className="text-xs text-gray-400">Localização</p>
+                        <p className="mt-1 font-semibold text-white">{activeLocation?.name || "Localização ativa"}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs leading-relaxed text-gray-400">
+                      Terá acesso operacional à agenda, marcações, clientes e resultados próprios nesta localização. Não recebe acesso administrativo.
+                    </p>
+                  </div>
+                )}
+                <DialogFooter>
+                  <Button type="button" variant="outline" disabled={invitingBarberId !== null} onClick={() => setAccessInviteBarber(null)}>Cancelar</Button>
+                  <Button
+                    type="button"
+                    variant="gold"
+                    disabled={!accessInviteBarber?.email || invitingBarberId !== null}
+                    onClick={async () => {
+                      if (!accessInviteBarber) return;
+                      if (await handleCreateBarberInvite(accessInviteBarber)) setAccessInviteBarber(null);
+                    }}
+                  >
+                    {invitingBarberId === accessInviteBarber?.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {invitingBarberId === accessInviteBarber?.id ? "A enviar..." : "Enviar convite"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           <TabsContent value="blacklist" className="outline-none">

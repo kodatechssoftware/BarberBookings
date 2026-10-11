@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { capabilityCodes, professionalCapabilityCodes, type AccessScope, type EffectiveAccess } from "../../shared/auth";
+import {
+  canGrantCapabilityAtLocation,
+  capabilityCodes,
+  professionalCapabilityCodes,
+  type AccessScope,
+  type EffectiveAccess,
+} from "../../shared/auth";
 import {
   canActorGrantScope,
   isGlobalAdministrator,
+  professionalAdditionalCapabilities,
 } from "../../client/src/components/admin/UserAccessManager";
 
 const globalAdministratorAccess: EffectiveAccess = {
@@ -83,6 +90,22 @@ test("location access only grants supported capabilities inside the actor's loca
     preset: "custom",
     capabilities: ["locations.manage"],
   }), false);
+});
+
+test("Professional UI exposes only operational, location-safe additional permissions", () => {
+  assert.ok(professionalAdditionalCapabilities.length > 0);
+  assert.ok(professionalAdditionalCapabilities.every(canGrantCapabilityAtLocation));
+  for (const forbidden of [
+    "users.manage",
+    "locations.manage",
+    "settings.manage",
+    "system.diagnostics",
+    "team.manage_global",
+    "catalog.manage_global",
+    "access.manage",
+  ] as const) {
+    assert.equal(professionalAdditionalCapabilities.includes(forbidden as never), false);
+  }
 });
 
 test("Admin exposes the canonical area only behind a canonical session and users.manage", () => {

@@ -84,6 +84,7 @@ async function mockCanonicalAdmin(
     inviteReplacements: 0,
     inviteRevocations: 0,
     sessionRevocations: 0,
+    professionalInvites: [] as number[],
     professionalLocationHeaders: new Set<string>(),
   };
   let rejectNextAccessUpdate = options.rejectNextAccessUpdate ?? false;
@@ -101,7 +102,18 @@ async function mockCanonicalAdmin(
   } }));
   await page.route("**/api/account/locations", (route) => route.fulfill({ json: locations }));
   await page.route("**/api/barbers**", async (route) => {
-    if (new URL(route.request().url()).pathname === "/api/barbers") {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const professionalInvite = pathname.match(/^\/api\/barbers\/(\d+)\/invite$/);
+    if (professionalInvite && request.method() === "POST") {
+      observed.professionalInvites.push(Number(professionalInvite[1]));
+      await route.fulfill({ status: 201, json: {
+        inviteUrl: "https://example.test/user-invite#token=professional-one-time-secret",
+        expiresAt: "2026-10-13T08:00:00.000Z",
+      } });
+      return;
+    }
+    if (pathname === "/api/barbers") {
       const locationHeader = route.request().headers()["x-location-id"];
       if (locationHeader) observed.professionalLocationHeaders.add(locationHeader);
       await route.fulfill({ json: professionals });
@@ -229,6 +241,21 @@ test.describe("canonical User & Access Management UI", () => {
     await expect.poll(() => Array.from(observed.professionalLocationHeaders).sort()).toEqual(["1", "2"]);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)).toBe(false);
+    await page.getByRole("tab", { name: "Equipa", exact: true }).click();
+    const anaCard = page.locator('[data-testid="team-barber-card"][data-barber-id="11"]');
+    const brunoCard = page.locator('[data-testid="team-barber-card"][data-barber-id="12"]');
+    await expect(anaCard).toContainText("Acesso ao painel: Não");
+    await expect(brunoCard).toContainText("Acesso ao painel: Sim");
+    await expect(brunoCard.getByRole("button", { name: "Gerir acesso" })).toBeVisible();
+    await anaCard.getByRole("button", { name: "Dar acesso" }).click();
+    const professionalInviteDialog = page.getByRole("dialog", { name: "Dar acesso ao painel" });
+    await expect(professionalInviteDialog.getByLabel("Email")).toHaveValue("ana@example.test");
+    await expect(professionalInviteDialog.getByText("Professional", { exact: true })).toBeVisible();
+    await expect(professionalInviteDialog.getByText("Loja A", { exact: true })).toBeVisible();
+    await professionalInviteDialog.getByRole("button", { name: "Enviar convite" }).click();
+    await expect.poll(() => observed.professionalInvites).toEqual([11]);
+
+    await page.getByRole("tab", { name: "Utilizadores", exact: true }).click();
     await page.setViewportSize({ width: 1440, height: 1000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)).toBe(false);
 
@@ -236,7 +263,8 @@ test.describe("canonical User & Access Management UI", () => {
     const createDialog = page.getByRole("dialog", { name: "Convidar novo utilizador" });
     await createDialog.getByLabel("Nome").fill("Receção");
     await createDialog.getByLabel("Email").fill("rececao@example.test");
-    await createDialog.getByRole("button", { name: "Criar e gerar convite" }).click();
+    await expect(createDialog.getByTestId("access-type-professional")).toHaveAttribute("aria-checked", "true");
+    await createDialog.getByRole("button", { name: "Enviar convite" }).click();
     await expect(page.getByRole("dialog", { name: "Convite pronto" })).toBeVisible();
     expect(observed.created).toMatchObject({
       displayName: "Receção",
@@ -249,7 +277,10 @@ test.describe("canonical User & Access Management UI", () => {
     await bruno.getByRole("button", { name: "Editar" }).click();
     const editDialog = page.getByRole("dialog", { name: "Editar utilizador" });
     await expect(editDialog.getByText("Identidade", { exact: true })).toBeVisible();
-    await expect(editDialog.getByText("Perfis e permissões", { exact: true })).toBeVisible();
+    await expect(editDialog.getByText("Tipo de acesso e permissões", { exact: true })).toBeVisible();
+    await expect(editDialog.getByTestId("access-type-administrator")).toHaveAttribute("aria-checked", "true");
+    await expect(editDialog.getByText("Acesso administrativo global completo.", { exact: true })).toBeVisible();
+    await expect(editDialog.getByText("Não é necessário selecionar permissões individualmente.", { exact: true })).toBeVisible();
     await editDialog.getByLabel("Nome").fill("Bruno Santos QA");
     await editDialog.getByLabel("Email").fill("bruno.qa@example.test");
     await editDialog.getByLabel("Vínculo Professional").click();
@@ -298,12 +329,12 @@ test.describe("canonical User & Access Management UI", () => {
     await page.getByTestId("managed-user-103").getByRole("button", { name: "Editar" }).click();
     const dialog = page.getByRole("dialog", { name: "Editar utilizador" });
 
-    await dialog.getByLabel("Preset de Loja A").click();
-    await page.getByRole("option", { name: "Personalizado" }).click();
-    await dialog.getByText("Permissões explícitas (0)").click();
-    await dialog.getByLabel("Ver o catálogo").click();
-    await dialog.getByRole("button", { name: "Acesso global" }).click();
-    await expect(dialog.getByLabel("Preset de Toda a instalação")).toBeVisible();
+    await expect(dialog.getByTestId("access-type-professional")).toHaveAttribute("aria-checked", "true");
+    await dialog.getByText("Permissões adicionais (0)").click();
+    await dialog.getByLabel("Criar ausências e bloqueios").click();
+    await expect(dialog.getByLabel("Gerir identidades de utilizador")).toHaveCount(0);
+    await expect(dialog.getByLabel("Gerir localizações")).toHaveCount(0);
+    await expect(dialog.getByLabel("Gerir configuração da instalação")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Guardar acesso" }).click();
     await expect(dialog.getByRole("alert")).toContainText("Não pode conceder acesso superior ao seu.");
 
@@ -335,15 +366,15 @@ test.describe("canonical User & Access Management UI", () => {
     await expect(lastAdmin.getByRole("button", { name: "Desativar" })).toBeDisabled();
     await lastAdmin.getByRole("button", { name: "Editar" }).click();
     const lastAdminDialog = page.getByRole("dialog", { name: "Editar utilizador" });
-    await expect(lastAdminDialog.getByLabel("Preset de Toda a instalação")).toBeDisabled();
+    await expect(lastAdminDialog.getByTestId("access-type-professional")).toBeDisabled();
+    await expect(lastAdminDialog.getByTestId("access-type-administrator")).toBeDisabled();
+    await expect(lastAdminDialog.getByText("O último Administrator global ativo não pode ser despromovido.")).toBeVisible();
     await lastAdminDialog.getByRole("button", { name: "Fechar" }).click();
 
     await page.getByRole("button", { name: "Convidar utilizador" }).click();
     const createDialog = page.getByRole("dialog", { name: "Convidar novo utilizador" });
-    await expect(createDialog.getByRole("button", { name: "Acesso global" })).toBeDisabled();
-    await createDialog.getByLabel("Preset de Loja A").click();
-    await expect(page.getByRole("option", { name: "Administrator" })).toHaveCount(0);
-    await page.keyboard.press("Escape");
+    await expect(createDialog.getByTestId("access-type-administrator")).toBeDisabled();
+    await expect(createDialog.getByLabel("Gerir identidades de utilizador")).toHaveCount(0);
     await createDialog.getByRole("button", { name: "Cancelar" }).click();
   });
 

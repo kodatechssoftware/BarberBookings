@@ -14,16 +14,13 @@ import {
   UserRound,
 } from "lucide-react";
 import {
-  accessPresets,
   canGrantCapabilityAtLocation,
   capabilityCodes,
-  capabilityRegistry,
   hasCapability,
   hasCapabilityAtLocation,
   resolvePresetCapabilities,
   type AccessPresetKey,
   type AccessScope,
-  type CapabilityArea,
   type CapabilityCode,
   type EffectiveAccess,
 } from "@shared/auth";
@@ -32,7 +29,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders } from "@/lib/location-context";
 import { useToast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,24 +93,6 @@ const statusCopy: Record<ManagedCanonicalUser["status"], { label: string; classN
   disabled: { label: "Desativado", className: "border-red-400/30 bg-red-500/10 text-red-200" },
 };
 
-const capabilityAreaLabels: Record<CapabilityArea, string> = {
-  agenda: "Agenda",
-  appointments: "Marcações",
-  customers: "Clientes",
-  team: "Equipa",
-  catalog: "Catálogo",
-  hours: "Horários",
-  extras: "Extras",
-  finance: "Financeiro",
-  reports: "Relatórios",
-  locations: "Localizações",
-  users: "Utilizadores",
-  access: "Acessos",
-  settings: "Configuração",
-  audit: "Auditoria",
-  system: "Sistema",
-};
-
 const capabilityLabels: Record<CapabilityCode, string> = {
   "agenda.view_own": "Ver a própria agenda",
   "agenda.view_team": "Ver a agenda da equipa",
@@ -152,6 +130,50 @@ const capabilityLabels: Record<CapabilityCode, string> = {
   "audit.view": "Ver o registo de auditoria",
   "system.diagnostics": "Usar diagnósticos protegidos",
 };
+
+export const professionalAdditionalCapabilities = [
+  "appointments.block_time",
+  "appointments.manage_team",
+  "appointments.change_status_team",
+  "customers.view_team",
+  "customers.notes_team",
+  "finance.view_team",
+  "reports.export_team",
+] as const satisfies readonly CapabilityCode[];
+
+const professionalPermissionGroups: ReadonlyArray<{
+  label: string;
+  description: string;
+  capabilities: readonly CapabilityCode[];
+}> = [
+  {
+    label: "Agenda",
+    description: "Operações adicionais na agenda da localização.",
+    capabilities: ["appointments.block_time"],
+  },
+  {
+    label: "Marcações",
+    description: "Gestão operacional das marcações da equipa.",
+    capabilities: ["appointments.manage_team", "appointments.change_status_team"],
+  },
+  {
+    label: "Clientes",
+    description: "Consulta e notas dos clientes da equipa.",
+    capabilities: ["customers.view_team", "customers.notes_team"],
+  },
+  {
+    label: "Financeiro",
+    description: "Consulta dos resultados da equipa, sem gestão financeira.",
+    capabilities: ["finance.view_team"],
+  },
+  {
+    label: "Exportações",
+    description: "Exportação dos relatórios da equipa.",
+    capabilities: ["reports.export_team"],
+  },
+];
+
+const professionalAdditionalCapabilitySet: ReadonlySet<CapabilityCode> = new Set(professionalAdditionalCapabilities);
 
 function accessScopeKey(scope: AccessScope, index: number) {
   return scope.kind === "global" ? `global-${index}` : `location-${scope.locationId}-${index}`;
@@ -214,12 +236,13 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function scopeSummary(scope: AccessScope, locations: readonly ShopLocation[]) {
+  if (scope.kind === "global" && scope.preset === "administrator") return "Administrador global";
   const context = scope.kind === "global"
     ? "Global"
     : locations.find((location) => location.id === scope.locationId)?.name ?? `Localização #${scope.locationId}`;
-  const preset = scope.preset ? accessPresets[scope.preset].label : "Personalizado";
   const explicitCount = scope.capabilities?.length ?? 0;
-  return `${context}: ${preset}${explicitCount ? ` + ${explicitCount}` : ""}`;
+  const type = scope.preset === "professional" ? "Professional" : "Acesso personalizado";
+  return `${type} · ${context}${explicitCount ? ` · ${explicitCount} adicionais` : ""}`;
 }
 
 function AccessEditor({
@@ -240,10 +263,14 @@ function AccessEditor({
   const canManageGlobal = hasCapability(actorAccess, "access.manage");
   const manageableLocations = locations.filter((location) =>
     hasCapabilityAtLocation(actorAccess, "access.manage", location.id));
+  const accessType = value.some((scope) => scope.kind === "global" && scope.preset === "administrator")
+    ? "administrator"
+    : "professional";
   const usedLocationIds = new Set(value.flatMap((scope) =>
     scope.kind === "location" && scope.locationId ? [scope.locationId] : []));
-  const canAddGlobal = canManageGlobal && !value.some((scope) => scope.kind === "global");
   const availableLocations = manageableLocations.filter((location) => !usedLocationIds.has(location.id));
+  const canUseAdministrator = canManageGlobal
+    && capabilityCodes.every((capability) => hasCapability(actorAccess, capability));
 
   const updateScope = (key: string, patch: Partial<AccessDraft>) => {
     onChange(value.map((scope) => scope.key === key ? { ...scope, ...patch } : scope));
@@ -254,15 +281,6 @@ function AccessEditor({
     onChange(value.filter((candidate) => candidate.key !== scope.key));
   };
 
-  const addGlobal = () => onChange([...value, {
-    key: `global-${Date.now()}`,
-    kind: "global",
-    locationId: null,
-    preset: resolvePresetCapabilities("professional").every((capability) =>
-      hasCapability(actorAccess, capability)) ? "professional" : "custom",
-    capabilities: [],
-  }]);
-
   const addLocation = (locationId: number) => onChange([...value, {
     key: `location-${locationId}-${Date.now()}`,
     kind: "location",
@@ -272,25 +290,96 @@ function AccessEditor({
     capabilities: [],
   }]);
 
+  const selectAdministrator = () => {
+    if (!canUseAdministrator || lastAdministrator) return;
+    onChange([{
+      key: "global-administrator",
+      kind: "global",
+      locationId: null,
+      preset: "administrator",
+      capabilities: [],
+    }]);
+  };
+
+  const selectProfessional = () => {
+    if (lastAdministrator) return;
+    const existingProfessionalScopes = value.filter(
+      (scope) => !(scope.kind === "global" && scope.preset === "administrator"),
+    );
+    if (existingProfessionalScopes.length > 0) {
+      onChange(existingProfessionalScopes);
+      return;
+    }
+    const location = manageableLocations[0];
+    onChange(location ? [{
+      key: `location-${location.id}-${Date.now()}`,
+      kind: "location",
+      locationId: location.id,
+      preset: "professional",
+      capabilities: [],
+    }] : []);
+  };
+
   return (
     <div className="space-y-4" data-testid="access-editor">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h4 className="font-semibold text-white">Acesso</h4>
-          <p className="text-xs text-gray-400">O vínculo a um Profissional não concede permissões por si só.</p>
-        </div>
-        {!disabled && (
-          <div className="flex flex-col gap-2 min-[420px]:flex-row">
-            <Button type="button" variant="outline" size="sm" disabled={!canAddGlobal} onClick={addGlobal}>
-              Acesso global
-            </Button>
+      <div>
+        <h4 className="font-semibold text-white">Tipo de acesso</h4>
+        <p className="mt-1 text-xs text-gray-400">Escolha o perfil funcional. O sistema aplica internamente as permissões seguras desse perfil.</p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Tipo de acesso">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={accessType === "professional"}
+          data-testid="access-type-professional"
+          disabled={disabled || Boolean(lastAdministrator)}
+          onClick={selectProfessional}
+          className={`rounded-xl border p-4 text-left transition-colors ${accessType === "professional" ? "border-primary bg-primary/10" : "border-white/10 bg-background/40 hover:border-white/25"} disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          <span className="flex items-center gap-2 font-semibold text-white"><UserRound className="h-4 w-4 text-primary" /> Professional</span>
+          <span className="mt-2 block text-xs text-gray-400">Acesso operacional à agenda, marcações, clientes e resultados próprios.</span>
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={accessType === "administrator"}
+          data-testid="access-type-administrator"
+          disabled={disabled || !canUseAdministrator || Boolean(lastAdministrator)}
+          onClick={selectAdministrator}
+          className={`rounded-xl border p-4 text-left transition-colors ${accessType === "administrator" ? "border-primary bg-primary/10" : "border-white/10 bg-background/40 hover:border-white/25"} disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          <span className="flex items-center gap-2 font-semibold text-white"><ShieldCheck className="h-4 w-4 text-primary" /> Administrator</span>
+          <span className="mt-2 block text-xs text-gray-400">Acesso administrativo global completo.</span>
+        </button>
+      </div>
+
+      {accessType === "administrator" ? (
+        <section className="rounded-xl border border-primary/30 bg-primary/5 p-4" aria-label="Administrador global">
+          <div className="flex items-center gap-2 font-semibold text-white"><ShieldCheck className="h-4 w-4 text-primary" /> Administrador global</div>
+          <p className="mt-2 text-sm text-gray-300">
+            Pode gerir utilizadores, equipa, serviços, localizações, finanças, relatórios e configurações.
+          </p>
+          <p className="mt-2 text-xs text-gray-400">Não é necessário selecionar permissões individualmente.</p>
+          {lastAdministrator && (
+            <p role="note" className="mt-3 rounded-md border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+              O último Administrator global ativo não pode ser despromovido.
+            </p>
+          )}
+        </section>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-white/10 bg-background/30 p-3 text-xs text-gray-300">
+            Inclui agenda própria e da equipa, criação manual, gestão das próprias marcações, clientes próprios, financeiro próprio e exportação própria.
+          </div>
+          {!disabled && (
             <Select
               value=""
               onValueChange={(raw) => addLocation(Number(raw))}
               disabled={availableLocations.length === 0}
             >
-              <SelectTrigger className="h-9 min-w-48 border-white/10 bg-background" aria-label="Adicionar acesso por localização">
-                <SelectValue placeholder="Acesso por localização" />
+              <SelectTrigger className="h-10 w-full border-white/10 bg-background sm:max-w-sm" aria-label="Adicionar localização ao Professional">
+                <SelectValue placeholder="Adicionar outra localização" />
               </SelectTrigger>
               <SelectContent>
                 {availableLocations.map((location) => (
@@ -298,65 +387,33 @@ function AccessEditor({
                 ))}
               </SelectContent>
             </Select>
-          </div>
-        )}
-      </div>
-
-      {value.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/15 p-4 text-sm text-gray-400">
-          Sem acesso atribuído.
-        </div>
-      ) : value.map((scope) => {
+          )}
+          {value.length === 0 && (
+            <div className="rounded-lg border border-dashed border-white/15 p-4 text-sm text-gray-400">Escolha pelo menos uma localização.</div>
+          )}
+          {value.map((scope) => {
         const locationName = scope.kind === "location"
           ? locations.find((location) => location.id === scope.locationId)?.name ?? `Localização #${scope.locationId}`
-          : "Toda a instalação";
+          : "Global (configuração existente)";
         const scopeGrantable = canActorGrantScope(actorAccess, scope);
-        const protectsLastAdministrator = Boolean(
-          lastAdministrator && scope.kind === "global" && scope.preset === "administrator",
-        );
-        const allowedCapabilities = capabilityCodes.filter((capability) =>
+        const allowedCapabilities = professionalAdditionalCapabilities.filter((capability) =>
           scope.kind === "global"
             ? hasCapability(actorAccess, capability)
             : Boolean(scope.locationId
               && canGrantCapabilityAtLocation(capability)
               && hasCapabilityAtLocation(actorAccess, capability, scope.locationId)),
         );
-        const capabilitiesByArea = allowedCapabilities.reduce((groups, capability) => {
-          const area = capabilityRegistry[capability].area;
-          const group = groups.get(area) ?? [];
-          group.push(capability);
-          groups.set(area, group);
-          return groups;
-        }, new Map<CapabilityArea, CapabilityCode[]>());
-        const canUseAdministrator = scope.kind === "global"
-          && capabilityCodes.every((capability) => hasCapability(actorAccess, capability));
-        const canUseProfessional = resolvePresetCapabilities("professional").every((capability) =>
-          scope.kind === "global"
-            ? hasCapability(actorAccess, capability)
-            : Boolean(scope.locationId && hasCapabilityAtLocation(actorAccess, capability, scope.locationId)));
+        const allowedCapabilitySet: ReadonlySet<CapabilityCode> = new Set(allowedCapabilities);
+        const hiddenCapabilities = scope.capabilities.filter(
+          (capability) => !professionalAdditionalCapabilitySet.has(capability),
+        );
 
         return (
           <section key={scope.key} className="rounded-xl border border-white/10 bg-background/40 p-4" aria-label={`Acesso ${locationName}`}>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div className="min-w-0 flex-1">
-                <Label htmlFor={`preset-${scope.key}`}>{scope.kind === "global" ? "Âmbito global" : locationName}</Label>
-                <Select
-                  value={scope.preset}
-                  disabled={disabled || protectsLastAdministrator || !scopeGrantable}
-                  onValueChange={(preset) => updateScope(scope.key, {
-                    preset: preset as AccessDraft["preset"],
-                    capabilities: [],
-                  })}
-                >
-                  <SelectTrigger id={`preset-${scope.key}`} className="mt-2 border-white/10 bg-card" aria-label={`Preset de ${locationName}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {canUseAdministrator && <SelectItem value="administrator">Administrator</SelectItem>}
-                    {canUseProfessional && <SelectItem value="professional">Professional</SelectItem>}
-                    <SelectItem value="custom">Personalizado</SelectItem>
-                  </SelectContent>
-                </Select>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold text-white">{locationName}</p>
+                <p className="mt-1 text-xs text-gray-400">Perfil Professional</p>
               </div>
               {!disabled && (
                 <Button
@@ -364,49 +421,39 @@ function AccessEditor({
                   variant="ghost"
                   size="sm"
                   className="text-red-300 hover:text-red-200"
-                  disabled={protectsLastAdministrator || !scopeGrantable}
-                  title={protectsLastAdministrator ? "O último Administrator global ativo não pode perder acesso." : undefined}
+                  disabled={!scopeGrantable}
                   onClick={() => removeScope(scope)}
                 >
-                  Remover âmbito
+                  Remover localização
                 </Button>
               )}
             </div>
-
-            {scope.preset !== "custom" && (
-              <p className="mt-3 text-xs text-gray-400">
-                {accessPresets[scope.preset].description} Pode acrescentar permissões explícitas abaixo.
-              </p>
-            )}
             {!scopeGrantable && (
               <p role="alert" className="mt-3 rounded-md border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-                Este âmbito contém acesso acima do seu teto de concessão e fica apenas em leitura.
+                Este acesso contém permissões acima do seu limite de concessão e fica apenas em leitura.
               </p>
             )}
 
-            <details className="mt-4 rounded-lg border border-white/10 p-3">
+            <details className="mt-4 rounded-lg border border-white/10 p-3" data-testid={`professional-additional-${scope.key}`}>
               <summary className="cursor-pointer text-sm font-medium text-white">
-                Permissões explícitas ({scope.capabilities.length})
+                Permissões adicionais ({scope.capabilities.filter((capability) => professionalAdditionalCapabilitySet.has(capability)).length})
               </summary>
               <div className="mt-4 space-y-4">
-                {Array.from(capabilitiesByArea.entries()).map(([area, capabilities]) => (
-                  <fieldset key={area} className="space-y-2">
-                    <legend className="text-xs font-semibold uppercase tracking-wide text-primary">
-                      {capabilityAreaLabels[area]}
-                    </legend>
+                {professionalPermissionGroups.map((group) => {
+                  const capabilities = group.capabilities.filter((capability) => allowedCapabilitySet.has(capability));
+                  if (capabilities.length === 0) return null;
+                  return (
+                  <fieldset key={group.label} className="space-y-2">
+                    <legend className="text-xs font-semibold uppercase tracking-wide text-primary">{group.label}</legend>
+                    <p className="text-[11px] text-gray-500">{group.description}</p>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {capabilities.map((capability) => {
                         const checked = scope.capabilities.includes(capability);
-                        const inherited = scope.preset !== "custom"
-                          && resolvePresetCapabilities(scope.preset).includes(capability as never);
                         return (
-                          <label key={capability} className={cn(
-                            "flex items-start gap-3 rounded-md border border-white/5 p-2 text-xs",
-                            inherited ? "bg-primary/5 text-gray-400" : "bg-card text-gray-200",
-                          )}>
+                          <label key={capability} className="flex items-start gap-3 rounded-md border border-white/5 bg-card p-2 text-xs text-gray-200">
                             <Checkbox
-                              checked={checked || inherited}
-                              disabled={disabled || inherited || !scopeGrantable}
+                              checked={checked}
+                              disabled={disabled || !scopeGrantable}
                               aria-label={capabilityLabels[capability]}
                               onCheckedChange={(next) => updateScope(scope.key, {
                                 capabilities: next
@@ -414,21 +461,26 @@ function AccessEditor({
                                   : scope.capabilities.filter((item) => item !== capability),
                               })}
                             />
-                            <span>
-                              {capabilityLabels[capability]}
-                              {inherited && <span className="ml-1 text-[10px] text-primary">(incluída no preset)</span>}
-                            </span>
+                            <span>{capabilityLabels[capability]}</span>
                           </label>
                         );
                       })}
                     </div>
                   </fieldset>
-                ))}
+                  );
+                })}
+                {hiddenCapabilities.length > 0 && (
+                  <p role="note" className="rounded-md border border-amber-400/20 bg-amber-500/5 p-3 text-xs text-amber-100">
+                    {hiddenCapabilities.length} permissão(ões) avançada(s) existente(s) está(ão) preservada(s), mas não é possível atribuí-las neste perfil.
+                  </p>
+                )}
               </div>
             </details>
           </section>
         );
-      })}
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -789,7 +841,7 @@ export function UserAccessManager({
                 <UserCog className="h-5 w-5 text-primary" /> Utilizadores e acessos
               </CardTitle>
               <p className="mt-2 max-w-2xl text-sm text-gray-400">
-                Gerir identidade, vínculo profissional e permissões como conceitos independentes.
+                Convide pessoas e escolha um perfil simples. As regras de segurança continuam a ser aplicadas automaticamente.
               </p>
             </div>
             <Button variant="gold" className="w-full gap-2 sm:w-auto" disabled={!canCreateWithAccess} onClick={openCreate}>
@@ -830,6 +882,7 @@ export function UserAccessManager({
                           <h3 className="truncate font-semibold text-white">{managedUser.displayName}</h3>
                           <Badge variant="outline" className={statusCopy[managedUser.status].className}>{statusCopy[managedUser.status].label}</Badge>
                           {globalAdministrator && <Badge className="bg-primary text-primary-foreground">Administrator global</Badge>}
+                          {!globalAdministrator && <Badge className="border-sky-400/30 bg-sky-500/10 text-sky-100">Professional</Badge>}
                           {managedUser.professionalId && <Badge variant="secondary">Professional associado</Badge>}
                           {isSelf && <Badge variant="outline">A sua conta</Badge>}
                         </div>
@@ -908,9 +961,10 @@ export function UserAccessManager({
         <DialogContent className="max-h-[90dvh] w-[calc(100vw-1rem)] overflow-y-auto border-white/10 bg-card text-white sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Convidar novo utilizador</DialogTitle>
-            <DialogDescription>Cria uma identidade canónica e um convite de ativação. Nenhuma palavra-passe é apresentada ao Admin.</DialogDescription>
+            <DialogDescription>Escolha o tipo de acesso e envie um convite de ativação. Nenhuma palavra-passe é apresentada ao Admin.</DialogDescription>
           </DialogHeader>
           <div className="space-y-6">
+            <AccessEditor value={accessDrafts} onChange={setAccessDrafts} actorAccess={currentAccess} locations={locations} />
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="new-user-name">Nome</Label>
@@ -935,13 +989,12 @@ export function UserAccessManager({
                 </SelectContent>
               </Select>
             </div>
-            <AccessEditor value={accessDrafts} onChange={setAccessDrafts} actorAccess={currentAccess} locations={locations} />
             {formError && <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">{formError}</p>}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={Boolean(pendingAction)} onClick={() => setCreateOpen(false)}>Cancelar</Button>
             <Button type="button" variant="gold" disabled={Boolean(pendingAction)} onClick={() => void createUser()}>
-              {pendingAction === "create" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Criar e gerar convite
+              {pendingAction === "create" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Enviar convite
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -997,7 +1050,7 @@ export function UserAccessManager({
               </section>
 
               <section className="space-y-4 rounded-xl border border-white/10 bg-background/40 p-4">
-                <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="h-4 w-4 text-primary" /> Perfis e permissões</div>
+                <div className="flex items-center gap-2 font-semibold"><ShieldCheck className="h-4 w-4 text-primary" /> Tipo de acesso e permissões</div>
                 <AccessEditor
                   value={accessDrafts}
                   onChange={setAccessDrafts}
