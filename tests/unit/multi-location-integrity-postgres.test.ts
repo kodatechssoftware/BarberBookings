@@ -139,9 +139,10 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
     `, [barberId, locationA, locationB]);
     await pool.query(`
       INSERT INTO service_locations (
-        service_id, location_id, is_active, price_override, duration_override
+        service_id, location_id, is_active, price_override, duration_override,
+        buffer_before_minutes, buffer_after_minutes
       )
-      VALUES ($1, $2, true, NULL, NULL), ($1, $3, true, 1800, 45)
+      VALUES ($1, $2, true, NULL, NULL, 10, 15), ($1, $3, true, 1800, 45, 5, 20)
     `, [serviceId, locationA, locationB]);
     await pool.query(
       "INSERT INTO barber_services (barber_id, service_id, location_id) VALUES ($1, $2, $3), ($1, $2, $4)",
@@ -204,7 +205,12 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
       isActive: offerA.isActive,
       priceOverride: offerA.priceOverride,
       durationOverride: offerA.durationOverride,
-    }, { serviceId, locationId: locationA, isActive: true, priceOverride: null, durationOverride: null });
+      bufferBeforeMinutes: offerA.bufferBeforeMinutes,
+      bufferAfterMinutes: offerA.bufferAfterMinutes,
+    }, {
+      serviceId, locationId: locationA, isActive: true, priceOverride: null, durationOverride: null,
+      bufferBeforeMinutes: 10, bufferAfterMinutes: 15,
+    });
     const [offerB] = await locationStore.getServiceLocationOffersForLocation(locationB);
     assert.deepEqual({
       serviceId: offerB.serviceId,
@@ -212,23 +218,40 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
       isActive: offerB.isActive,
       priceOverride: offerB.priceOverride,
       durationOverride: offerB.durationOverride,
-    }, { serviceId, locationId: locationB, isActive: true, priceOverride: 1800, durationOverride: 45 });
+      bufferBeforeMinutes: offerB.bufferBeforeMinutes,
+      bufferAfterMinutes: offerB.bufferAfterMinutes,
+    }, {
+      serviceId, locationId: locationB, isActive: true, priceOverride: 1800, durationOverride: 45,
+      bufferBeforeMinutes: 5, bufferAfterMinutes: 20,
+    });
     await locationStore.assignServiceToLocation(serviceId, locationA, {
       priceOverride: 1600,
       durationOverride: 35,
+      bufferBeforeMinutes: 12,
+      bufferAfterMinutes: 18,
     });
     const updatedOfferA = await locationStore.getServiceLocationOffer(serviceId, locationA);
     assert.deepEqual({
       isActive: updatedOfferA?.isActive,
       priceOverride: updatedOfferA?.priceOverride,
       durationOverride: updatedOfferA?.durationOverride,
-    }, { isActive: true, priceOverride: 1600, durationOverride: 35 });
+      bufferBeforeMinutes: updatedOfferA?.bufferBeforeMinutes,
+      bufferAfterMinutes: updatedOfferA?.bufferAfterMinutes,
+    }, {
+      isActive: true, priceOverride: 1600, durationOverride: 35,
+      bufferBeforeMinutes: 12, bufferAfterMinutes: 18,
+    });
     const unchangedOfferB = await locationStore.getServiceLocationOffer(serviceId, locationB);
     assert.deepEqual({
       isActive: unchangedOfferB?.isActive,
       priceOverride: unchangedOfferB?.priceOverride,
       durationOverride: unchangedOfferB?.durationOverride,
-    }, { isActive: true, priceOverride: 1800, durationOverride: 45 });
+      bufferBeforeMinutes: unchangedOfferB?.bufferBeforeMinutes,
+      bufferAfterMinutes: unchangedOfferB?.bufferAfterMinutes,
+    }, {
+      isActive: true, priceOverride: 1800, durationOverride: 45,
+      bufferBeforeMinutes: 5, bufferAfterMinutes: 20,
+    });
     await locationStore.removeServiceFromLocation(serviceId, locationB);
     await locationStore.assignServiceToLocation(serviceId, locationB, { priceOverride: 1900 });
     const inactiveOfferB = await locationStore.getServiceLocationOffer(serviceId, locationB);

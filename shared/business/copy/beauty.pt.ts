@@ -2,7 +2,7 @@ import type { BusinessCopy } from "./types";
 
 export const beautyBusinessCopy = {
   booking: {
-    steps: ["Profissional", "Serviço", "Data e hora", "Detalhes"],
+    steps: ["Serviço", "Profissional", "Data e hora", "Detalhes"],
     navigation: {
       back: "Voltar",
       backHome: "Voltar ao início",
@@ -578,6 +578,10 @@ export const beautyBusinessCopy = {
       priceLabel: "Preço (€)",
       durationRequiredLabel: "Duração (Min) *",
       durationLabel: "Duração (Min)",
+      bufferBeforeLabel: "Preparação antes (min)",
+      bufferAfterLabel: "Tempo após o serviço (min)",
+      buffersHelp: "Tempo operacional reservado antes e depois da marcação. Não altera a duração apresentada ao cliente.",
+      buffersSummary: "Ocupação adicional: {before} min antes · {after} min depois",
       categoryLabel: "Categoria",
       noCategory: "Sem categoria",
       inactiveCategorySuffix: "inativa",
@@ -610,6 +614,8 @@ export const beautyBusinessCopy = {
       associateEmpty: "Todos os serviços existentes já estão associados a este estabelecimento.",
       associatePriceLabel: "Preço neste estabelecimento (€)",
       associateDurationLabel: "Duração neste estabelecimento (min)",
+      associateBufferBeforeLabel: "Preparação antes (min)",
+      associateBufferAfterLabel: "Tempo após o serviço (min)",
       associateBasePrice: "Base global: {price} €",
       associateBaseDuration: "Base global: {duration} min",
       associateAction: "Associar neste estabelecimento",

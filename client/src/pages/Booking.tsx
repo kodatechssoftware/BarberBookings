@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, dateKeyInTimeZone, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
+import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
@@ -43,7 +43,9 @@ import {
 import type { ServiceCatalogueItem } from "@shared/schema";
 import { groupServicesForDisplay } from "@/lib/service-groups";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import { useBusinessConfig } from "@/business/use-business-config";
 import { formatBusinessCopy } from "@shared/business/copy";
+import type { BusinessBookingFlow } from "@shared/business/booking-flow";
 
 type BookingPreference = {
   step: number;
@@ -124,7 +126,7 @@ const readLastBookingPreference = () => {
   }
 };
 
-const getInitialBookingPreference = (): BookingPreference => {
+const getInitialBookingPreference = (bookingFlow: BusinessBookingFlow): BookingPreference => {
   const emptyPreference = {
     step: 1,
     barberId: null,
@@ -147,9 +149,19 @@ const getInitialBookingPreference = (): BookingPreference => {
   const selectedDate = validRequestedDate ?? today;
   const selectedTime = validRequestedDate ? parseTimeParam(params.get("time")) : null;
   const phonePreference = splitStoredPhone(lastBooking?.customerPhone || "");
+  const firstSelectionPresent = bookingFlow[0] === "service"
+    ? serviceId !== null
+    : barberId !== null;
+  const bothSelectionsPresent = barberId !== null && serviceId !== null;
 
   return {
-    step: barberId !== null && serviceId !== null && selectedTime ? 4 : barberId !== null && serviceId !== null ? 3 : barberId !== null ? 2 : 1,
+    step: bothSelectionsPresent && selectedTime
+      ? 4
+      : bothSelectionsPresent
+        ? 3
+        : firstSelectionPresent
+          ? 2
+          : 1,
     barberId,
     serviceId,
     selectedDate,
@@ -304,8 +316,9 @@ const StepIndicator = ({
 };
 
 export default function Booking() {
+  const businessConfig = useBusinessConfig();
   const copy = useBusinessCopy().booking;
-  const [initialPreference] = useState(getInitialBookingPreference);
+  const [initialPreference] = useState(() => getInitialBookingPreference(businessConfig.booking.flow));
   const [step, setStep] = useState(initialPreference.step);
   const [selectedBarberId, setSelectedBarberId] = useState<number | null>(initialPreference.barberId);
   const [selectedServiceId, setSelectedServiceId] = useState<number | null>(initialPreference.serviceId);
@@ -386,6 +399,9 @@ export default function Booking() {
   } = useRuntimeConfig();
   const bookingSlotIntervalMinutes = runtimeConfig?.bookingSlotIntervalMinutes
     ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
+  const bookingFlow = businessConfig.booking.flow;
+  const currentStepKey = bookingFlow[step - 1];
+  const isServiceFirst = bookingFlow[0] === "service";
   useEffect(() => {
     if (!runtimeConfig || !selectedTime || isClockTimeAligned(selectedTime, bookingSlotIntervalMinutes)) return;
     setSelectedTime(null);
@@ -401,15 +417,21 @@ export default function Booking() {
   const visibleBarbers = useMemo(() => barbers?.filter((barber) => barber.isVisible) ?? [], [barbers]);
   const visibleServices = useMemo(() => services?.filter((service) => service.isVisible) ?? [], [services]);
   const selectedBarber = visibleBarbers.find((barber) => barber.id === selectedBarberId);
+  const selectableBarbers = useMemo(
+    () => selectedServiceId
+      ? visibleBarbers.filter((barber) => canBarberPerformService(barber, selectedServiceId))
+      : visibleBarbers,
+    [selectedServiceId, visibleBarbers],
+  );
   const locationTimeZone = activeLocation?.timezone || "Europe/Lisbon";
   useEffect(() => {
     if (!activeLocation || !barbers || selectedBarberId === null || selectedBarberId === 0) return;
     if (visibleBarbers.some((barber) => barber.id === selectedBarberId)) return;
     setSelectedBarberId(null);
-    setSelectedServiceId(null);
+    if (!isServiceFirst) setSelectedServiceId(null);
     setSelectedTime(null);
-    setStep(1);
-  }, [activeLocation, barbers, selectedBarberId, visibleBarbers]);
+    setStep(bookingFlow.indexOf("professional") + 1);
+  }, [activeLocation, barbers, bookingFlow, isServiceFirst, selectedBarberId, visibleBarbers]);
   const availableServices = useMemo(() => {
     if (selectedBarberId && selectedBarberId !== 0) {
       return visibleServices.filter((service) => canBarberPerformService(selectedBarber, service.id));
@@ -427,7 +449,12 @@ export default function Booking() {
   const renderServiceCard = (service: ServiceCatalogueItem) => (
     <div
       key={service.id}
-      onClick={() => setSelectedServiceId(service.id)}
+      onClick={() => {
+        setSelectedServiceId(service.id);
+        if (isServiceFirst) setSelectedBarberId(null);
+        setSelectedDate(undefined);
+        setSelectedTime(null);
+      }}
       className={cn(
         "flex min-h-[112px] items-stretch justify-between p-4 md:p-6 rounded-xl border bg-card cursor-pointer transition-all duration-200",
         selectedServiceId === service.id
@@ -489,11 +516,8 @@ export default function Booking() {
   });
   const existingAppointments = useMemo(() => {
     if (bookingWindowAppointments === undefined || !selectedDate) return selectedDateAppointments;
-    const selectedDateKey = format(selectedDate, "yyyy-MM-dd");
-    return bookingWindowAppointments.filter((appointment) =>
-      dateKeyInTimeZone(new Date(appointment.startTime), locationTimeZone) === selectedDateKey,
-    );
-  }, [bookingWindowAppointments, locationTimeZone, selectedDate, selectedDateAppointments]);
+    return bookingWindowAppointments;
+  }, [bookingWindowAppointments, selectedDate, selectedDateAppointments]);
   const loadingAppointments = bookingWindowAppointments === undefined && loadingSelectedDateAppointments;
   const appointmentsError = bookingWindowAppointments === undefined && selectedDateAppointmentsError;
 
@@ -580,8 +604,9 @@ export default function Booking() {
 
     setSelectedServiceId(null);
     setSelectedTime(null);
-    if (step > 2) setStep(2);
-  }, [availableServices, barbers, selectedServiceId, services, step]);
+    const serviceStep = bookingFlow.indexOf("service") + 1;
+    if (step > serviceStep) setStep(serviceStep);
+  }, [availableServices, barbers, bookingFlow, selectedServiceId, services, step]);
 
   // Generate Time Slots
   const timeSlots = useMemo(() => {
@@ -687,7 +712,7 @@ export default function Booking() {
     locationTimeZone, maxPublicBookingDate, runtimeConfig, selectedBarberId, selectedService, shopAvailabilityForCalendar, visibleBarbers]);
 
   useEffect(() => {
-    if (step !== 3 || loadingInitialAvailability
+    if (currentStepKey !== "datetime" || loadingInitialAvailability
       || completedInitialAvailabilityKey.current === initialAvailabilitySelectionKey) return;
     if (initialAvailabilityHasError) {
       completedInitialAvailabilityKey.current = initialAvailabilitySelectionKey;
@@ -705,7 +730,7 @@ export default function Booking() {
     setSelectedTime(null);
     setShowTimeError(false);
   }, [bookingWindowStart, firstAvailableDate, initialAvailabilityHasError, initialAvailabilitySelectionKey,
-    loadingInitialAvailability, step]);
+    currentStepKey, loadingInitialAvailability]);
   const loadingSelectedDateAvailability = loadingBarbers || loadingServices || loadingAvailability
     || loadingShopAvailability || loadingPublicBookingWindow || loadingRuntimeConfig || loadingAppointments;
   const initialAvailabilityError = step === 3
@@ -715,7 +740,7 @@ export default function Booking() {
     && firstAvailableDate === null;
 
   const handleNext = () => {
-    if (step === 3 && !selectedTime) {
+    if (currentStepKey === "datetime" && !selectedTime) {
       setShowTimeError(true);
       toast({
         title: copy.validation.selectionRequiredTitle,
@@ -969,7 +994,7 @@ export default function Booking() {
             className="w-full"
           >
             {/* STEP 1: SELECT BARBER */}
-            {step === 1 && (
+            {currentStepKey === "professional" && (
               <BookingStepContent className="space-y-7 sm:space-y-8">
                 <BookingStepHeading title={copy.professional.heading} description={copy.professional.description} />
 
@@ -981,16 +1006,16 @@ export default function Booking() {
                   <BookingEmptyState tone="error">
                     {copy.professional.loadError}
                   </BookingEmptyState>
-                ) : visibleBarbers.length === 0 ? (
+                ) : selectableBarbers.length === 0 ? (
                   <BookingEmptyState>
                     {copy.professional.empty}
                   </BookingEmptyState>
                 ) : (
                   <div className={cn(
                     "mx-auto grid w-full grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5",
-                    visibleBarbers.length === 1 && "max-w-2xl",
-                    visibleBarbers.length === 2 && "md:max-w-4xl md:grid-cols-3",
-                    visibleBarbers.length >= 3 && "md:grid-cols-3 lg:grid-cols-4",
+                    selectableBarbers.length === 1 && "max-w-2xl",
+                    selectableBarbers.length === 2 && "md:max-w-4xl md:grid-cols-3",
+                    selectableBarbers.length >= 3 && "md:grid-cols-3 lg:grid-cols-4",
                   )}>
                     <motion.div 
                       whileHover={{ scale: 1.02 }}
@@ -1028,7 +1053,7 @@ export default function Booking() {
                       )}
                     </motion.div>
 
-                    {visibleBarbers.map((barber) => {
+                    {selectableBarbers.map((barber) => {
                       const avatarSrc = getBarberAvatar(
                         barber,
                         activeLocation?.logoUrl?.trim() || shopBranding.logoUrl,
@@ -1092,7 +1117,7 @@ export default function Booking() {
             )}
 
             {/* STEP 2: SELECT SERVICE */}
-            {step === 2 && (
+            {currentStepKey === "service" && (
               <BookingStepContent className="space-y-7 sm:space-y-8">
                 <BookingStepHeading title={copy.service.heading} description={copy.service.description} />
 
@@ -1133,7 +1158,7 @@ export default function Booking() {
             )}
 
             {/* STEP 3: DATE & TIME */}
-            {step === 3 && (
+            {currentStepKey === "datetime" && (
               <BookingStepContent className="grid grid-cols-1 gap-7 sm:gap-8 lg:grid-cols-[minmax(300px,380px)_1fr] lg:items-start">
                 <div className="w-full">
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
@@ -1270,7 +1295,7 @@ export default function Booking() {
             )}
 
             {/* STEP 4: CUSTOMER DETAILS */}
-            {step === 4 && (
+            {currentStepKey === "customer" && (
               <BookingStepContent className="space-y-7 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-7 lg:space-y-0">
                 <div className="bg-card border border-white/10 rounded-xl p-6 space-y-4">
                   <h3 className="font-bold text-lg mb-4 border-b border-white/10 pb-2">{copy.details.summaryTitle}</h3>
@@ -1412,15 +1437,15 @@ export default function Booking() {
         {/* Footer Actions */}
         <div data-testid="booking-actions" className="fixed bottom-0 left-0 z-40 w-full border-t border-white/10 bg-card/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-12px_30px_rgba(0,0,0,0.18)] backdrop-blur sm:px-6 md:static md:mt-8 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none">
           <div className="mx-auto flex w-full max-w-5xl justify-end">
-            {step < 4 ? (
+            {currentStepKey !== "customer" ? (
               <Button 
                 variant="gold" 
                 onClick={handleNext}
                 className="w-full disabled:opacity-40 sm:w-auto sm:min-w-32"
                 disabled={
-                  (step === 1 && selectedBarberId === null) ||
-                  (step === 2 && !selectedServiceId) ||
-                  (step === 3 && (!selectedDate || !selectedTime || !isPublicDateAllowed(selectedDate)))
+                  (currentStepKey === "professional" && selectedBarberId === null) ||
+                  (currentStepKey === "service" && !selectedServiceId) ||
+                  (currentStepKey === "datetime" && (!selectedDate || !selectedTime || !isPublicDateAllowed(selectedDate)))
                 }
               >
                 {copy.navigation.next}

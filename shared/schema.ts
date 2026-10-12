@@ -256,6 +256,8 @@ export const appointments = appPgTable("appointments", {
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone").notNull(),
   durationMinutes: integer("duration_minutes").default(30).notNull(),
+  bufferBeforeMinutesSnapshot: integer("buffer_before_minutes_snapshot").default(0).notNull(),
+  bufferAfterMinutesSnapshot: integer("buffer_after_minutes_snapshot").default(0).notNull(),
   serviceNameSnapshot: text("service_name_snapshot"),
   servicePriceCentsSnapshot: integer("service_price_cents_snapshot"),
   compensationRuleIdSnapshot: integer("compensation_rule_id_snapshot"),
@@ -295,6 +297,10 @@ export const appointments = appPgTable("appointments", {
   servicePriceSnapshotCheck: check("appointments_service_price_snapshot_check", sql`
     ${table.servicePriceCentsSnapshot} IS NULL
     OR (${table.servicePriceCentsSnapshot} >= 0 AND ${table.servicePriceCentsSnapshot} <= 1000000)
+  `),
+  bufferSnapshotCheck: check("appointments_buffer_snapshot_check", sql`
+    ${table.bufferBeforeMinutesSnapshot} BETWEEN 0 AND 720
+    AND ${table.bufferAfterMinutesSnapshot} BETWEEN 0 AND 720
   `),
   compensationSnapshotCheck: check("appointments_compensation_snapshot_check", sql`
     ((${table.compensationModelSnapshot} IS NULL
@@ -495,6 +501,8 @@ export const serviceLocations = appPgTable("service_locations", {
   isActive: boolean("is_active").notNull().default(true),
   priceOverride: integer("price_override"),
   durationOverride: integer("duration_override"),
+  bufferBeforeMinutes: integer("buffer_before_minutes").notNull().default(0),
+  bufferAfterMinutes: integer("buffer_after_minutes").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.serviceId, table.locationId] }),
@@ -505,6 +513,10 @@ export const serviceLocations = appPgTable("service_locations", {
   durationOverrideCheck: check(
     "service_locations_duration_override_check",
     sql`${table.durationOverride} IS NULL OR ${table.durationOverride} > 0`,
+  ),
+  bufferMinutesCheck: check(
+    "service_locations_buffer_minutes_check",
+    sql`${table.bufferBeforeMinutes} BETWEEN 0 AND 720 AND ${table.bufferAfterMinutes} BETWEEN 0 AND 720`,
   ),
 }));
 
@@ -931,6 +943,8 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   cancelledAt: true,
   paymentMethod: true,
   durationMinutes: true,
+  bufferBeforeMinutesSnapshot: true,
+  bufferAfterMinutesSnapshot: true,
   serviceNameSnapshot: true,
   servicePriceCentsSnapshot: true,
   manualOutsideHours: true,
@@ -1013,6 +1027,8 @@ export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
   isActive?: boolean;
   priceOverride?: number | null;
   durationOverride?: number | null;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
   basePrice?: number;
   baseDuration?: number;
   baseIsVisible?: boolean | null;

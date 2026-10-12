@@ -40,7 +40,7 @@ test("mixed professional and service mutations authorize independent payload fie
   assert.match(routes, /inputFields\.has\("serviceIds"\)[\s\S]*catalog\.manage_location/);
   assert.match(routes, /compensationModel[\s\S]*finance\.manage_compensation/);
   assert.match(routes, /\["name", "description", "agendaLabel", "categoryId"\][\s\S]*catalog\.manage_global/);
-  assert.match(routes, /\["priceOverride", "durationOverride", "isActive", "isVisible", "price", "duration"\][\s\S]*catalog\.manage_location/);
+  assert.match(routes, /\["priceOverride", "durationOverride", "bufferBeforeMinutes", "bufferAfterMinutes", "isActive", "isVisible", "price", "duration"\][\s\S]*catalog\.manage_location/);
   assert.match(routes, /includePrivateFields \? \{ email \} : \{\}/);
   assert.match(routes, /includeFinancialFields[\s\S]*compensationModel[\s\S]*chairRentPeriod/);
   assert.doesNotMatch(routes, /canViewTeam \|\| canViewTeamFinance \|\|/);

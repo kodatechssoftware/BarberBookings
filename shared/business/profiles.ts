@@ -14,7 +14,7 @@ export type BusinessProfile = {
   featureDefaults: BusinessFeatures;
 };
 
-const currentFeatureDefaults: BusinessFeatures = {
+const barberFeatureDefaults: BusinessFeatures = {
   clientProfile: false,
   consentForms: false,
   treatmentContraindications: false,
@@ -28,6 +28,11 @@ const currentFeatureDefaults: BusinessFeatures = {
   multiLocation: false,
 };
 
+const beautyFeatureDefaults: BusinessFeatures = {
+  ...barberFeatureDefaults,
+  preparationBuffers: true,
+};
+
 export const businessProfiles = {
   barber: {
     vertical: "barber",
@@ -35,7 +40,7 @@ export const businessProfiles = {
     copy: businessCopy.barber,
     bookingFlow: businessBookingFlows.barber,
     defaultTheme: defaultBusinessThemes.barber,
-    featureDefaults: currentFeatureDefaults,
+    featureDefaults: barberFeatureDefaults,
   },
   beauty: {
     vertical: "beauty",
@@ -43,8 +48,7 @@ export const businessProfiles = {
     copy: businessCopy.beauty,
     bookingFlow: businessBookingFlows.beauty,
     defaultTheme: defaultBusinessThemes.beauty,
-    // Future Beauty capabilities remain disabled until their implementation is shipped.
-    featureDefaults: currentFeatureDefaults,
+    featureDefaults: beautyFeatureDefaults,
   },
 } as const satisfies Record<BusinessVertical, BusinessProfile>;
 

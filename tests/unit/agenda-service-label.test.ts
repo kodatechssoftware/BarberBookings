@@ -38,3 +38,13 @@ test("Weekly Agenda no longer contains haircut or beard name heuristics", () => 
   assert.doesNotMatch(source, /includes\(["'](?:corte|cabelo|degrade|barba|simples)["']\)/i);
   assert.match(source, /getAgendaServiceLabel/);
 });
+
+test("Weekly Agenda distinguishes commercial time from operational buffer bands", () => {
+  const source = readFileSync("client/src/components/admin/WeeklyAgenda.tsx", "utf8");
+
+  assert.match(source, /getOperationalAppointmentBounds/);
+  assert.match(source, /OperationalBufferBands/);
+  assert.match(source, /bufferBeforeMinutesSnapshot/);
+  assert.match(source, /bufferAfterMinutesSnapshot/);
+  assert.match(source, /Ocupação:/);
+});

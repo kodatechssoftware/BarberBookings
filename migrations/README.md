@@ -77,6 +77,12 @@ booking checks, removals and future-appointment cancellations are then scoped
 to that location. The migration is additive and does not alter appointments or
 customer contact data.
 
+Migration `0017_service_buffers.sql` adds location-specific preparation and
+cleanup buffers to service offers and immutable buffer snapshots to new
+appointments. Existing offers and appointments receive zero-minute defaults.
+The booked-appointment exclusion constraint uses the resulting operational
+interval while commercial duration and price remain unchanged.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification

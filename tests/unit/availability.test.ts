@@ -120,3 +120,34 @@ test("accepts the public duration contract and blocks appointments without an ex
     durationMinutes: 30,
   }), true);
 });
+
+test("availability blocks conflicts caused only by service buffers and permits the exact boundary", () => {
+  const existingStart = calendarTimeInTimeZone(date(2026, 10, 8), "10:00", timeZone);
+  const appointments = [{
+    barberId: 1,
+    startTime: existingStart,
+    durationMinutes: 60,
+    bufferBeforeMinutesSnapshot: 10,
+    bufferAfterMinutesSnapshot: 15,
+    status: "booked",
+  }];
+
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments,
+    barberId: 1,
+    startTime: calendarTimeInTimeZone(date(2026, 10, 8), "09:30", timeZone),
+    durationMinutes: 20,
+  }), false);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments,
+    barberId: 1,
+    startTime: calendarTimeInTimeZone(date(2026, 10, 8), "09:40", timeZone),
+    durationMinutes: 20,
+  }), true);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments,
+    barberId: 1,
+    startTime: calendarTimeInTimeZone(date(2026, 10, 8), "11:15", timeZone),
+    durationMinutes: 30,
+  }), false);
+});

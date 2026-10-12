@@ -24,6 +24,8 @@ export type AppointmentRecord = {
   customerEmail: string | null;
   customerPhone: string;
   durationMinutes: number;
+  bufferBeforeMinutesSnapshot: number;
+  bufferAfterMinutesSnapshot: number;
   serviceNameSnapshot: string | null;
   servicePriceCentsSnapshot: number | null;
   manualOutsideHours: boolean;
@@ -53,6 +55,8 @@ export type PublicAppointment = {
   serviceId: number | null;
   startTime: string;
   duration: number;
+  bufferBeforeMinutes: number;
+  bufferAfterMinutes: number;
 };
 
 export type AppointmentByToken = {
@@ -63,6 +67,8 @@ export type AppointmentByToken = {
   locationTimeZone: string;
   barberId: number;
   serviceId: number | null;
+  bufferBeforeMinutes: number;
+  bufferAfterMinutes: number;
   startTime: string;
   status: AppointmentStatus;
   customerName: string;

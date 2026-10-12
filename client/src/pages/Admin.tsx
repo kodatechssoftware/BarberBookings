@@ -102,6 +102,7 @@ import {
 import type { EffectiveAccess } from "@shared/auth";
 import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import { useBusinessConfig } from "@/business/use-business-config";
 import { formatBusinessCopy, type AdminCopy } from "@shared/business/copy/types";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
@@ -123,6 +124,8 @@ type AdminAppointment = {
   serviceId: number | null;
   startTime: string;
   durationMinutes: number;
+  bufferBeforeMinutesSnapshot?: number;
+  bufferAfterMinutesSnapshot?: number;
   serviceNameSnapshot?: string | null;
   servicePriceCentsSnapshot?: number | null;
   manualOutsideHours?: boolean;
@@ -920,6 +923,8 @@ type ServiceListItem = {
   locationId?: number;
   priceOverride?: number | null;
   durationOverride?: number | null;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
   basePrice?: number;
   baseDuration?: number;
   baseIsVisible?: boolean | null;
@@ -965,6 +970,8 @@ type ServiceFormData = {
   agendaLabel: string;
   price: number;
   duration: number;
+  bufferBeforeMinutes: number;
+  bufferAfterMinutes: number;
   categoryId: number | null;
 };
 
@@ -974,6 +981,8 @@ const emptyServiceFormData: ServiceFormData = {
   agendaLabel: "",
   price: 0,
   duration: 30,
+  bufferBeforeMinutes: 0,
+  bufferAfterMinutes: 0,
   categoryId: null,
 };
 
@@ -1474,6 +1483,7 @@ function validateAvailabilityForm(
 }
 
 export default function Admin() {
+  const businessConfig = useBusinessConfig();
   const businessCopy = useBusinessCopy();
   const adminCopy = businessCopy.admin;
   const agendaCopy = businessCopy.agenda;
@@ -3146,11 +3156,19 @@ export default function Admin() {
     }).length === 0;
   };
 
-  const isTimeAvailableForDay = (date: Date, timeStr: string, duration = 30, barberId?: string) => {
+  const isTimeAvailableForDay = (
+    date: Date,
+    timeStr: string,
+    duration = 30,
+    barberId?: string,
+    bufferBefore = 0,
+    bufferAfter = 0,
+  ) => {
     const day = date.getDay();
     const [hours, minutes] = timeStr.split(':').map(Number);
     const startMinutes = hours * 60 + minutes;
-    const endMinutes = startMinutes + duration;
+    const operationalStartMinutes = startMinutes - bufferBefore;
+    const operationalEndMinutes = startMinutes + duration + bufferAfter;
 
     const periods = barberId
       ? getEffectivePeriodsForBarber({
@@ -3164,7 +3182,7 @@ export default function Admin() {
           shopAvailabilityRows: (blockShopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? [],
         });
 
-    return periods.some((period: any) => startMinutes >= period.start && endMinutes <= period.end);
+    return periods.some((period: any) => operationalStartMinutes >= period.start && operationalEndMinutes <= period.end);
   };
 
   const selectedBlockBarber = blockBarbers.find((barber) => String(barber.id) === blockData.barberId);
@@ -3193,6 +3211,9 @@ export default function Admin() {
     : blockData.isManualBooking && blockData.serviceId
       ? blockServices?.find((service) => String(service.id) === blockData.serviceId)?.duration ?? 30
       : 30;
+  const selectedBlockService = blockServices?.find((service) => String(service.id) === blockData.serviceId);
+  const selectedBlockBufferBefore = blockData.serviceMode === "custom" ? 0 : selectedBlockService?.bufferBeforeMinutes ?? 0;
+  const selectedBlockBufferAfter = blockData.serviceMode === "custom" ? 0 : selectedBlockService?.bufferAfterMinutes ?? 0;
 
   const manualBookingTimeOptions = useMemo(() => [
     ...createClockAlignedTimeOptions({
@@ -3278,7 +3299,14 @@ export default function Admin() {
       : blockTimeOptions;
 
     return timeOptions.filter((time) => {
-      if (!blockData.allowOutsideHours && !isTimeAvailableForDay(blockData.date, time, selectedBlockDuration, blockData.barberId)) {
+      if (!blockData.allowOutsideHours && !isTimeAvailableForDay(
+        blockData.date,
+        time,
+        selectedBlockDuration,
+        blockData.barberId,
+        selectedBlockBufferBefore,
+        selectedBlockBufferAfter,
+      )) {
         return false;
       }
 
@@ -3287,6 +3315,8 @@ export default function Admin() {
         barberId,
         startTime: createBlockStartTime(blockData.date, time),
         durationMinutes: selectedBlockDuration,
+        bufferBeforeMinutes: selectedBlockBufferBefore,
+        bufferAfterMinutes: selectedBlockBufferAfter,
       });
     });
   }, [
@@ -3301,6 +3331,8 @@ export default function Admin() {
     manualBookingOutsideHoursTimeOptions,
     manualBookingTimeOptions,
     selectedBlockDuration,
+    selectedBlockBufferBefore,
+    selectedBlockBufferAfter,
     blockShopAvailabilityRows,
   ]);
   const availableBlockTimesKey = availableBlockTimes.join("|");
@@ -5055,6 +5087,33 @@ export default function Admin() {
                         required
                       />
                     </div>
+                    {businessConfig.features.preparationBuffers && (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <Label>{adminCopy.services.bufferBeforeLabel}</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={720}
+                            value={serviceFormData.bufferBeforeMinutes}
+                            onChange={e => setServiceFormData({ ...serviceFormData, bufferBeforeMinutes: Number(e.target.value) })}
+                            className="bg-background border-white/10 text-white"
+                          />
+                        </div>
+                        <div>
+                          <Label>{adminCopy.services.bufferAfterLabel}</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={720}
+                            value={serviceFormData.bufferAfterMinutes}
+                            onChange={e => setServiceFormData({ ...serviceFormData, bufferAfterMinutes: Number(e.target.value) })}
+                            className="bg-background border-white/10 text-white"
+                          />
+                        </div>
+                        <p className="text-xs text-gray-400 sm:col-span-2">{adminCopy.services.buffersHelp}</p>
+                      </div>
+                    )}
                     {serviceCategories.some((category) => category.isActive) && (
                       <div>
                         <Label>{adminCopy.services.categoryLabel}</Label>
@@ -5121,6 +5180,13 @@ export default function Admin() {
                   <CardContent>
                     <div className="mb-4 space-y-1 text-sm text-gray-400">
                       <p>{service.duration} min</p>
+                      {businessConfig.features.preparationBuffers
+                        && Boolean((service.bufferBeforeMinutes ?? 0) || (service.bufferAfterMinutes ?? 0)) && (
+                        <p className="text-xs text-gray-500">{formatBusinessCopy(adminCopy.services.buffersSummary, {
+                          before: service.bufferBeforeMinutes ?? 0,
+                          after: service.bufferAfterMinutes ?? 0,
+                        })}</p>
+                      )}
                       <p className="text-xs text-gray-500">{formatBusinessCopy(adminCopy.services.agendaDisplayLabel, {
                         label: service.agendaLabel || adminCopy.services.automaticAgendaLabel,
                       })}</p>
@@ -5210,6 +5276,19 @@ export default function Admin() {
                                 price: ((service.basePrice ?? service.price) / 100).toFixed(2),
                               })}</p>}
                             </div>}
+                            {canManageCatalogLocation && businessConfig.features.preparationBuffers && (
+                              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <div>
+                                  <Label htmlFor={`edit-service-buffer-before-${service.id}`}>{adminCopy.services.bufferBeforeLabel}</Label>
+                                  <Input type="number" min={0} max={720} defaultValue={service.bufferBeforeMinutes ?? 0} id={`edit-service-buffer-before-${service.id}`} className="bg-background border-white/10" />
+                                </div>
+                                <div>
+                                  <Label htmlFor={`edit-service-buffer-after-${service.id}`}>{adminCopy.services.bufferAfterLabel}</Label>
+                                  <Input type="number" min={0} max={720} defaultValue={service.bufferAfterMinutes ?? 0} id={`edit-service-buffer-after-${service.id}`} className="bg-background border-white/10" />
+                                </div>
+                                <p className="text-xs text-gray-400 sm:col-span-2">{adminCopy.services.buffersHelp}</p>
+                              </div>
+                            )}
                             {canManageCatalogLocation && <div>
                               <Label htmlFor={`edit-service-dur-${service.id}`}>{multiLocationConfig?.enabled ? adminCopy.services.localDurationLabel : adminCopy.services.durationLabel}</Label>
                               <Input type="number" defaultValue={service.duration} id={`edit-service-dur-${service.id}`} className="bg-background border-white/10" />
@@ -5228,6 +5307,8 @@ export default function Admin() {
                                 const agendaLabel = getAgendaLabelPayload(formRoot?.querySelector<HTMLInputElement>(`#edit-service-agenda-label-${service.id}`)?.value);
                                 const price = Math.round(Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-price-${service.id}`)?.value || 0) * 100);
                                 const duration = Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-dur-${service.id}`)?.value || 0);
+                                const bufferBeforeMinutes = Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-buffer-before-${service.id}`)?.value || 0);
+                                const bufferAfterMinutes = Number(formRoot?.querySelector<HTMLInputElement>(`#edit-service-buffer-after-${service.id}`)?.value || 0);
                                 const categoryId = Object.prototype.hasOwnProperty.call(serviceCategoryDrafts, service.id)
                                   ? serviceCategoryDrafts[service.id]
                                   : service.categoryId ?? null;
@@ -5235,8 +5316,16 @@ export default function Admin() {
                                   ...(canManageCatalogGlobal ? { name, description, agendaLabel, categoryId } : {}),
                                   ...(canManageCatalogLocation
                                     ? multiLocationConfig?.enabled
-                                      ? { priceOverride: price, durationOverride: duration }
-                                      : { price, duration }
+                                      ? {
+                                          priceOverride: price,
+                                          durationOverride: duration,
+                                          ...(businessConfig.features.preparationBuffers ? { bufferBeforeMinutes, bufferAfterMinutes } : {}),
+                                        }
+                                      : {
+                                          price,
+                                          duration,
+                                          ...(businessConfig.features.preparationBuffers ? { bufferBeforeMinutes, bufferAfterMinutes } : {}),
+                                        }
                                     : {}),
                                 };
                                 const response = await apiRequest("PATCH", `/api/services/${service.id}`, payload);

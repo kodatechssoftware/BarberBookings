@@ -34,7 +34,7 @@ export const businessCapabilityRegistry = {
     environmentVariable: "BUSINESS_FEATURE_TREATMENT_CONTRAINDICATIONS_ENABLED",
   },
   preparationBuffers: {
-    implemented: false,
+    implemented: true,
     environmentVariable: "BUSINESS_FEATURE_PREPARATION_BUFFERS_ENABLED",
   },
   resources: {

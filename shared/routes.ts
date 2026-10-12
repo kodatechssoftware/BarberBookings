@@ -40,12 +40,18 @@ const barberProfileInputSchema = insertBarberSchema.extend({
 
 export const barberInputSchema = barberProfileInputSchema.merge(barberCompensationInputSchema);
 export type CreateBarberRequest = z.infer<typeof barberInputSchema>;
-export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
+export const serviceCreateInputSchema = insertServiceSchema.extend({
+  bufferBeforeMinutes: z.number().int().min(0).max(720).optional(),
+  bufferAfterMinutes: z.number().int().min(0).max(720).optional(),
+}).strict();
+export type CreateServiceRequest = z.infer<typeof serviceCreateInputSchema>;
 export const serviceLocationOfferInputSchema = z.object({
   serviceId: z.number().int().positive(),
   priceOverride: z.number().int().min(0).max(1_000_000).nullable().optional(),
   durationOverride: z.number().int().min(1).max(720).nullable().optional(),
+  bufferBeforeMinutes: z.number().int().min(0).max(720).optional(),
+  bufferAfterMinutes: z.number().int().min(0).max(720).optional(),
   isActive: z.boolean().optional(),
 }).strict();
 export const serviceLocationOfferUpdateSchema = serviceLocationOfferInputSchema
@@ -56,6 +62,8 @@ export const serviceUpdateInputSchema = insertServiceSchema.partial().extend({
   isActive: z.boolean().optional(),
   priceOverride: z.number().int().min(0).max(1_000_000).nullable().optional(),
   durationOverride: z.number().int().min(1).max(720).nullable().optional(),
+  bufferBeforeMinutes: z.number().int().min(0).max(720).optional(),
+  bufferAfterMinutes: z.number().int().min(0).max(720).optional(),
 }).strict();
 export type ServiceLocationOfferInput = z.infer<typeof serviceLocationOfferInputSchema>;
 export type ServiceLocationOfferUpdate = z.infer<typeof serviceLocationOfferUpdateSchema>;
@@ -126,7 +134,7 @@ export const api = {
     create: {
       method: "POST" as const,
       path: "/api/services",
-      input: insertServiceSchema,
+      input: serviceCreateInputSchema,
       responses: {
         201: z.custom<typeof services.$inferSelect>(),
         400: errorSchemas.validation,

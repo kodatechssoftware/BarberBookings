@@ -11,6 +11,8 @@ export type ServiceLocationTerms = {
   isActive: boolean;
   priceOverride: number | null;
   durationOverride: number | null;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
 };
 
 export function resolveServiceLocationTerms(
@@ -29,6 +31,8 @@ export function resolveServiceLocationTerms(
     durationMinutes: offer.durationOverride ?? service.duration,
     priceOverride: offer.priceOverride,
     durationOverride: offer.durationOverride,
+    bufferBeforeMinutes: offer.bufferBeforeMinutes ?? 0,
+    bufferAfterMinutes: offer.bufferAfterMinutes ?? 0,
     basePrice: service.price,
     baseDuration: service.duration,
   };

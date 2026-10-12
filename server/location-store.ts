@@ -71,6 +71,8 @@ export type ServiceLocationOfferRecord = {
   isActive: boolean;
   priceOverride: number | null;
   durationOverride: number | null;
+  bufferBeforeMinutes: number;
+  bufferAfterMinutes: number;
   createdAt: Date;
 };
 const memoryServiceLocationOffers = new Map<string, ServiceLocationOfferRecord>();
@@ -86,6 +88,8 @@ function mapServiceLocationOffer(row: any): ServiceLocationOfferRecord {
     isActive: Boolean(row.is_active),
     priceOverride: row.price_override === null || row.price_override === undefined ? null : Number(row.price_override),
     durationOverride: row.duration_override === null || row.duration_override === undefined ? null : Number(row.duration_override),
+    bufferBeforeMinutes: Number(row.buffer_before_minutes ?? 0),
+    bufferAfterMinutes: Number(row.buffer_after_minutes ?? 0),
     createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
   };
 }
@@ -138,7 +142,8 @@ export async function getServiceLocationOffersForLocation(locationId: number, in
       .sort((left, right) => left.serviceId - right.serviceId);
   }
   const result = await pool.query(`
-    SELECT service_id, location_id, is_active, price_override, duration_override, created_at
+    SELECT service_id, location_id, is_active, price_override, duration_override,
+      buffer_before_minutes, buffer_after_minutes, created_at
     FROM ${serviceLocationsTable}
     WHERE location_id = $1 ${includeInactive ? "" : "AND is_active = true"}
     ORDER BY service_id
@@ -151,7 +156,8 @@ export async function getServiceLocationOffer(serviceId: number, locationId: num
     return memoryServiceLocationOffers.get(serviceLocationOfferKey(serviceId, locationId));
   }
   const result = await pool.query(`
-    SELECT service_id, location_id, is_active, price_override, duration_override, created_at
+    SELECT service_id, location_id, is_active, price_override, duration_override,
+      buffer_before_minutes, buffer_after_minutes, created_at
     FROM ${serviceLocationsTable}
     WHERE service_id = $1 AND location_id = $2
   `, [serviceId, locationId]);
@@ -234,7 +240,13 @@ export async function assignBarberToLocation(barberId: number, locationId: numbe
 export async function assignServiceToLocation(
   serviceId: number,
   locationId: number,
-  input: { isActive?: boolean; priceOverride?: number | null; durationOverride?: number | null } = {},
+  input: {
+    isActive?: boolean;
+    priceOverride?: number | null;
+    durationOverride?: number | null;
+    bufferBeforeMinutes?: number;
+    bufferAfterMinutes?: number;
+  } = {},
 ) {
   if (useMemoryStorage) {
     const key = serviceLocationOfferKey(serviceId, locationId);
@@ -245,6 +257,8 @@ export async function assignServiceToLocation(
       isActive: input.isActive === undefined ? existing?.isActive ?? true : input.isActive,
       priceOverride: input.priceOverride === undefined ? existing?.priceOverride ?? null : input.priceOverride,
       durationOverride: input.durationOverride === undefined ? existing?.durationOverride ?? null : input.durationOverride,
+      bufferBeforeMinutes: input.bufferBeforeMinutes === undefined ? existing?.bufferBeforeMinutes ?? 0 : input.bufferBeforeMinutes,
+      bufferAfterMinutes: input.bufferAfterMinutes === undefined ? existing?.bufferAfterMinutes ?? 0 : input.bufferAfterMinutes,
       createdAt: existing?.createdAt ?? new Date(),
     };
     memoryServiceLocationOffers.set(key, offer);
@@ -252,23 +266,31 @@ export async function assignServiceToLocation(
   }
   const result = await pool.query(`
     INSERT INTO ${serviceLocationsTable} (
-      service_id, location_id, is_active, price_override, duration_override
+      service_id, location_id, is_active, price_override, duration_override,
+      buffer_before_minutes, buffer_after_minutes
     )
-    VALUES ($1, $2, $3, $4, $5)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (service_id, location_id) DO UPDATE SET
-      is_active = CASE WHEN $6 THEN EXCLUDED.is_active ELSE ${serviceLocationsTable}.is_active END,
-      price_override = CASE WHEN $7 THEN EXCLUDED.price_override ELSE ${serviceLocationsTable}.price_override END,
-      duration_override = CASE WHEN $8 THEN EXCLUDED.duration_override ELSE ${serviceLocationsTable}.duration_override END
-    RETURNING service_id, location_id, is_active, price_override, duration_override, created_at
+      is_active = CASE WHEN $8 THEN EXCLUDED.is_active ELSE ${serviceLocationsTable}.is_active END,
+      price_override = CASE WHEN $9 THEN EXCLUDED.price_override ELSE ${serviceLocationsTable}.price_override END,
+      duration_override = CASE WHEN $10 THEN EXCLUDED.duration_override ELSE ${serviceLocationsTable}.duration_override END,
+      buffer_before_minutes = CASE WHEN $11 THEN EXCLUDED.buffer_before_minutes ELSE ${serviceLocationsTable}.buffer_before_minutes END,
+      buffer_after_minutes = CASE WHEN $12 THEN EXCLUDED.buffer_after_minutes ELSE ${serviceLocationsTable}.buffer_after_minutes END
+    RETURNING service_id, location_id, is_active, price_override, duration_override,
+      buffer_before_minutes, buffer_after_minutes, created_at
   `, [
     serviceId,
     locationId,
     input.isActive ?? true,
     input.priceOverride ?? null,
     input.durationOverride ?? null,
+    input.bufferBeforeMinutes ?? 0,
+    input.bufferAfterMinutes ?? 0,
     input.isActive !== undefined,
     input.priceOverride !== undefined,
     input.durationOverride !== undefined,
+    input.bufferBeforeMinutes !== undefined,
+    input.bufferAfterMinutes !== undefined,
   ]);
   return mapServiceLocationOffer(result.rows[0]);
 }
@@ -329,7 +351,8 @@ export async function removeServiceFromLocation(serviceId: number, locationId: n
     UPDATE ${serviceLocationsTable}
     SET is_active = false
     WHERE service_id = $1 AND location_id = $2
-    RETURNING service_id, location_id, is_active, price_override, duration_override, created_at
+    RETURNING service_id, location_id, is_active, price_override, duration_override,
+      buffer_before_minutes, buffer_after_minutes, created_at
   `, [serviceId, locationId]);
   return result.rowCount ? mapServiceLocationOffer(result.rows[0]) : undefined;
 }

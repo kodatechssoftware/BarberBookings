@@ -12,6 +12,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { moneyInputToCents } from "@/lib/money-input";
 import { useActiveLocationId } from "@/lib/location-context";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import { useBusinessConfig } from "@/business/use-business-config";
 import { formatBusinessCopy } from "@shared/business/copy/types";
 
 type Props = {
@@ -23,12 +24,15 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
   const activeLocationId = useActiveLocationId();
   const { toast } = useToast();
   const adminCopy = useBusinessCopy().admin;
+  const businessConfig = useBusinessConfig();
   const copy = adminCopy.services;
   const locationLabel = locationName || copy.associateLocationFallback;
   const [open, setOpen] = useState(false);
   const [serviceId, setServiceId] = useState("");
   const [price, setPrice] = useState("");
   const [duration, setDuration] = useState("");
+  const [bufferBefore, setBufferBefore] = useState("0");
+  const [bufferAfter, setBufferAfter] = useState("0");
   const [isSaving, setIsSaving] = useState(false);
   const savingRef = useRef(false);
   const { data: available = [], isLoading, isError } = useQuery<ServiceCatalogueItem[]>({
@@ -44,19 +48,27 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
     if (!selected) return;
     setPrice(((selected.basePrice ?? selected.price) / 100).toFixed(2).replace(".", ","));
     setDuration(String(selected.baseDuration ?? selected.duration));
+    setBufferBefore("0");
+    setBufferAfter("0");
   }, [selected]);
 
   const reset = () => {
     setServiceId("");
     setPrice("");
     setDuration("");
+    setBufferBefore("0");
+    setBufferAfter("0");
   };
 
   const submit = async () => {
     if (savingRef.current || !selected) return;
     const priceOverride = moneyInputToCents(price);
     const durationOverride = Number(duration);
-    if (priceOverride === null || !Number.isInteger(durationOverride) || durationOverride <= 0 || durationOverride > 720) {
+    const bufferBeforeMinutes = Number(bufferBefore);
+    const bufferAfterMinutes = Number(bufferAfter);
+    if (priceOverride === null || !Number.isInteger(durationOverride) || durationOverride <= 0 || durationOverride > 720
+      || !Number.isInteger(bufferBeforeMinutes) || bufferBeforeMinutes < 0 || bufferBeforeMinutes > 720
+      || !Number.isInteger(bufferAfterMinutes) || bufferAfterMinutes < 0 || bufferAfterMinutes > 720) {
       toast({ title: copy.associateInvalidTitle, description: copy.associateInvalidDescription, variant: "destructive" });
       return;
     }
@@ -67,6 +79,7 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
         serviceId: selected.id,
         priceOverride,
         durationOverride,
+        ...(businessConfig.features.preparationBuffers ? { bufferBeforeMinutes, bufferAfterMinutes } : {}),
         isActive: true,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/services"] });
@@ -136,6 +149,19 @@ export function AssociateServiceDialog({ locationName, onChanged }: Props) {
                   duration: selected.baseDuration ?? selected.duration,
                 })}</p>
               </div>
+              {businessConfig.features.preparationBuffers && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="associate-service-buffer-before">{copy.associateBufferBeforeLabel}</Label>
+                    <Input id="associate-service-buffer-before" type="number" min={0} max={720} value={bufferBefore} onChange={(event) => setBufferBefore(event.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="associate-service-buffer-after">{copy.associateBufferAfterLabel}</Label>
+                    <Input id="associate-service-buffer-after" type="number" min={0} max={720} value={bufferAfter} onChange={(event) => setBufferAfter(event.target.value)} />
+                  </div>
+                  <p className="text-xs text-gray-400 sm:col-span-2">{copy.buffersHelp}</p>
+                </>
+              )}
             </div>
           )}
           <Button className="w-full" variant="gold" disabled={!selected || isSaving || isLoading} onClick={submit}>

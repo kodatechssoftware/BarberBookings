@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import {
   canBarberPerformService,
   getEffectivePeriodsForBarber,
+  hasAppointmentIntervalConflict,
   timeToMinutes,
   type AvailabilityRow,
   type ShopAvailabilityRow,
@@ -64,6 +65,8 @@ type AdminAppointment = {
   serviceId: number | null;
   startTime: string;
   durationMinutes: number;
+  bufferBeforeMinutesSnapshot?: number;
+  bufferAfterMinutesSnapshot?: number;
   serviceNameSnapshot?: string | null;
   servicePriceCentsSnapshot?: number | null;
   manualOutsideHours?: boolean;
@@ -90,6 +93,8 @@ type ServiceListItem = {
   duration?: number;
   price?: number;
   isVisible?: boolean | null;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
 };
 
 function parseAppointmentPriceInput(value: string) {
@@ -187,11 +192,21 @@ function EditAppointmentDialog({
   const selectedDuration = serviceId === "custom"
     ? Number.isInteger(parsedCustomDuration) && parsedCustomDuration > 0 ? parsedCustomDuration : 30
     : selectedService?.duration || appointment.durationMinutes || 30;
+  const keepsAppointmentService = selectedService?.id === appointment.serviceId;
+  const selectedBufferBefore = serviceId === "custom" || serviceId === "none"
+    ? 0
+    : keepsAppointmentService
+      ? appointment.bufferBeforeMinutesSnapshot ?? 0
+      : selectedService?.bufferBeforeMinutes ?? 0;
+  const selectedBufferAfter = serviceId === "custom" || serviceId === "none"
+    ? 0
+    : keepsAppointmentService
+      ? appointment.bufferAfterMinutesSnapshot ?? 0
+      : selectedService?.bufferAfterMinutes ?? 0;
   const requestedStartTime = useMemo(() => new Date(`${dateValue}T${timeValue}`), [dateValue, timeValue]);
   const availableBarbers = useMemo(() => {
     if (Number.isNaN(requestedStartTime.getTime())) return [];
 
-    const requestedEndTime = new Date(requestedStartTime.getTime() + selectedDuration * 60000);
     const appointmentList = appointments ?? [];
 
     return activeBarbers.filter((barber) => {
@@ -203,18 +218,17 @@ function EditAppointmentDialog({
         dayOfWeek: requestedStartTime.getDay(),
         shopAvailabilityRows: shopAvailabilityRows ?? [],
         availabilityRows: availabilityRows ?? [],
-      }).some((period) => startMinutes >= period.start && startMinutes + selectedDuration <= period.end);
+      }).some((period) => startMinutes - selectedBufferBefore >= period.start
+        && startMinutes + selectedDuration + selectedBufferAfter <= period.end);
       if (!fitsSchedule && !allowOutsideHours) return false;
 
-      return !appointmentList.some((candidate) => {
-        if (candidate.id === appointment.id) return false;
-        if (candidate.barberId !== barber.id) return false;
-        if (candidate.status !== "booked") return false;
-
-        const candidateStart = parseISO(candidate.startTime);
-        const candidateDuration = candidate.durationMinutes || 30;
-        const candidateEnd = new Date(candidateStart.getTime() + candidateDuration * 60000);
-        return requestedStartTime < candidateEnd && requestedEndTime > candidateStart;
+      return !hasAppointmentIntervalConflict({
+        appointments: appointmentList.filter((candidate) => candidate.id !== appointment.id),
+        barberId: barber.id,
+        startTime: requestedStartTime,
+        durationMinutes: selectedDuration,
+        bufferBeforeMinutes: selectedBufferBefore,
+        bufferAfterMinutes: selectedBufferAfter,
       });
     });
   }, [
@@ -225,6 +239,8 @@ function EditAppointmentDialog({
     availabilityRows,
     requestedStartTime,
     selectedDuration,
+    selectedBufferAfter,
+    selectedBufferBefore,
     selectedService?.id,
     shopAvailabilityRows,
     timeValue,
@@ -243,7 +259,8 @@ function EditAppointmentDialog({
     shopAvailabilityRows: shopAvailabilityRows ?? [],
     availabilityRows: availabilityRows ?? [],
   }).some((period) =>
-    selectedStartMinutes >= period.start && selectedStartMinutes + selectedDuration <= period.end,
+    selectedStartMinutes - selectedBufferBefore >= period.start
+      && selectedStartMinutes + selectedDuration + selectedBufferAfter <= period.end,
   ) : false;
   const selectedIsOutsideHours = Boolean(selectedBarber && !selectedFitsSchedule);
   const hasExistingSpecificPrice = serviceId !== "custom"

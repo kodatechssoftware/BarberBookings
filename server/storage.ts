@@ -80,6 +80,10 @@ import {
   createAppointmentCompensationSnapshot,
   getCompensationRuleForDate,
 } from "./appointment-finance";
+import {
+  appointmentOccupancyOverlaps,
+  getOperationalAppointmentBounds,
+} from "@shared/appointment-occupancy";
 
 export type AppointmentNotificationEventType =
   | "appointment_confirmation"
@@ -150,6 +154,8 @@ export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "wh
   durationMinutes: number;
   serviceNameSnapshot?: string | null;
   servicePriceCentsSnapshot?: number | null;
+  bufferBeforeMinutesSnapshot?: number;
+  bufferAfterMinutesSnapshot?: number;
   manualOutsideHours?: boolean;
   status?: AppointmentStatus;
   paymentMethod?: AppointmentPaymentMethod;
@@ -458,11 +464,6 @@ function getDurationMinutes(duration?: number | null) {
   return typeof duration === "number" && Number.isFinite(duration) && duration > 0
     ? duration
     : DEFAULT_APPOINTMENT_DURATION_MINUTES;
-}
-
-function getAppointmentEndTime(startTime: Date | string, durationMinutes?: number | null) {
-  const start = toAppointmentDate(startTime);
-  return new Date(start.getTime() + getDurationMinutes(durationMinutes) * 60000);
 }
 
 function getAppointmentLockDayKey(date: Date) {
@@ -800,15 +801,31 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  private async lockAppointmentDay(
+  private async lockAppointmentOccupancy(
     tx: Pick<typeof db, "execute">,
-    barberId: number,
-    startTime: Date | string,
+    appointment: {
+      barberId: number;
+      startTime: Date | string;
+      durationMinutes?: number | null;
+      bufferBeforeMinutesSnapshot?: number | null;
+      bufferAfterMinutesSnapshot?: number | null;
+    },
   ) {
-    const date = toAppointmentDate(startTime);
-    await tx.execute(sql`
-      SELECT pg_advisory_xact_lock(${barberId}, ${getAppointmentLockDayKey(date)})
-    `);
+    const bounds = getOperationalAppointmentBounds({
+      startTime: appointment.startTime,
+      durationMinutes: appointment.durationMinutes,
+      bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+      bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+    });
+    const dayKeys = Array.from(new Set([
+      getAppointmentLockDayKey(bounds.operationalStart),
+      getAppointmentLockDayKey(bounds.operationalEnd),
+    ])).sort((left, right) => left - right);
+    for (const dayKey of dayKeys) {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(${appointment.barberId}, ${dayKey})
+      `);
+    }
   }
 
   private async assertNoAppointmentConflict(
@@ -817,19 +834,25 @@ export class DatabaseStorage implements IStorage {
       barberId: number;
       startTime: Date | string;
       durationMinutes?: number | null;
+      bufferBeforeMinutesSnapshot?: number | null;
+      bufferAfterMinutesSnapshot?: number | null;
       status?: string | null;
     },
     ignoreAppointmentId?: number,
   ) {
     if (!shouldProtectAppointment(candidate.status)) return;
 
-    const startTime = toAppointmentDate(candidate.startTime);
-    const endTime = getAppointmentEndTime(startTime, candidate.durationMinutes);
+    const bounds = getOperationalAppointmentBounds({
+      startTime: candidate.startTime,
+      durationMinutes: candidate.durationMinutes,
+      bufferBeforeMinutes: candidate.bufferBeforeMinutesSnapshot,
+      bufferAfterMinutes: candidate.bufferAfterMinutesSnapshot,
+    });
     const conflictConditions: SQL[] = [
       eq(appointments.barberId, candidate.barberId),
       eq(appointments.status, "booked"),
-      sql`${appointments.startTime} < ${endTime}`,
-      sql`${appointments.startTime} + make_interval(mins => ${appointments.durationMinutes}) > ${startTime}`,
+      sql`${appointments.startTime} - make_interval(mins => ${appointments.bufferBeforeMinutesSnapshot}) < ${bounds.operationalEnd}`,
+      sql`${appointments.startTime} + make_interval(mins => ${appointments.durationMinutes} + ${appointments.bufferAfterMinutesSnapshot}) > ${bounds.operationalStart}`,
     ];
 
     if (ignoreAppointmentId !== undefined) {
@@ -1239,18 +1262,12 @@ export class DatabaseStorage implements IStorage {
     try {
       return await db.transaction(async (tx) => {
         await this.lockAndValidateAppointmentScopes(tx, appointmentInputs);
-        const lockTargets = new Map<string, CreateAppointmentStorageRequest>();
-        for (const appointment of appointmentInputs) {
-          const dayKey = getAppointmentLockDayKey(toAppointmentDate(appointment.startTime));
-          lockTargets.set(`${appointment.barberId}:${dayKey}`, appointment);
-        }
-
-        const sortedLockTargets = Array.from(lockTargets.values()).sort((left, right) => {
+        const sortedLockTargets = [...appointmentInputs].sort((left, right) => {
           if (left.barberId !== right.barberId) return left.barberId - right.barberId;
           return toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime();
         });
         for (const appointment of sortedLockTargets) {
-          await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
+          await this.lockAppointmentOccupancy(tx, appointment);
         }
 
         const createdAppointments: Appointment[] = [];
@@ -1346,7 +1363,7 @@ export class DatabaseStorage implements IStorage {
           if (introducesBookedOccupancy) {
             await this.lockAndValidateAppointmentScopes(tx, [candidate]);
           }
-          await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
+          await this.lockAppointmentOccupancy(tx, candidate);
           await this.assertNoAppointmentConflict(tx, candidate, id);
         }
 
@@ -1424,7 +1441,7 @@ export class DatabaseStorage implements IStorage {
           if (introducesBookedOccupancy) {
             await this.lockAndValidateAppointmentScopes(tx, [changes.candidate]);
           }
-          await this.lockAppointmentDay(tx, changes.candidate.barberId, changes.candidate.startTime);
+          await this.lockAppointmentOccupancy(tx, changes.candidate);
           await this.assertNoAppointmentConflict(tx, changes.candidate, id);
         }
 
@@ -1544,7 +1561,7 @@ export class DatabaseStorage implements IStorage {
         : {};
       if (status === "booked" && current.status !== "booked") {
         await this.lockAndValidateAppointmentScopes(tx, [current]);
-        await this.lockAppointmentDay(tx, current.barberId, current.startTime);
+        await this.lockAppointmentOccupancy(tx, current);
         await this.assertNoAppointmentConflict(tx, { ...current, status }, id);
       }
       const [updated] = await tx
@@ -1594,7 +1611,7 @@ export class DatabaseStorage implements IStorage {
 
         const candidate = { ...current, startTime };
         await this.lockAndValidateAppointmentScopes(tx, [candidate]);
-        await this.lockAppointmentDay(tx, candidate.barberId, candidate.startTime);
+        await this.lockAppointmentOccupancy(tx, candidate);
         await this.assertNoAppointmentConflict(tx, candidate, id);
 
         const nextRescheduleRevision = current.rescheduleRevision + 1;
@@ -1645,14 +1662,9 @@ export class DatabaseStorage implements IStorage {
     try {
       return await db.transaction(async (tx) => {
         await this.lockAndValidateAppointmentScopes(tx, request.appointments);
-        const lockTargets = new Map<string, CreateAppointmentStorageRequest>();
-        for (const appointment of request.appointments) {
-          const dayKey = getAppointmentLockDayKey(toAppointmentDate(appointment.startTime));
-          lockTargets.set(`${appointment.barberId}:${dayKey}`, appointment);
-        }
-        for (const appointment of Array.from(lockTargets.values()).sort((left, right) =>
+        for (const appointment of [...request.appointments].sort((left, right) =>
           left.barberId - right.barberId || toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime())) {
-          await this.lockAppointmentDay(tx, appointment.barberId, appointment.startTime);
+          await this.lockAppointmentOccupancy(tx, appointment);
         }
 
         const [series] = await tx.insert(appointmentSeries).values({
@@ -2433,22 +2445,30 @@ export class MemoryStorage implements IStorage {
       barberId: number;
       startTime: Date | string;
       durationMinutes?: number | null;
+      bufferBeforeMinutesSnapshot?: number | null;
+      bufferAfterMinutesSnapshot?: number | null;
       status?: string | null;
     },
     ignoreAppointmentId?: number,
   ) {
     if (!shouldProtectAppointment(candidate.status)) return;
 
-    const startTime = toAppointmentDate(candidate.startTime);
-    const endTime = getAppointmentEndTime(startTime, candidate.durationMinutes);
     const conflictingAppointment = this.appointments.find((appointment) => {
       if (appointment.status !== "booked") return false;
       if (appointment.barberId !== candidate.barberId) return false;
       if (ignoreAppointmentId !== undefined && appointment.id === ignoreAppointmentId) return false;
 
-      const appointmentStart = toAppointmentDate(appointment.startTime);
-      const appointmentEnd = getAppointmentEndTime(appointmentStart, appointment.durationMinutes);
-      return startTime < appointmentEnd && endTime > appointmentStart;
+      return appointmentOccupancyOverlaps({
+        startTime: candidate.startTime,
+        durationMinutes: candidate.durationMinutes,
+        bufferBeforeMinutes: candidate.bufferBeforeMinutesSnapshot,
+        bufferAfterMinutes: candidate.bufferAfterMinutesSnapshot,
+      }, {
+        startTime: appointment.startTime,
+        durationMinutes: appointment.durationMinutes,
+        bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+        bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+      });
     });
 
     if (conflictingAppointment) {
@@ -2871,6 +2891,8 @@ export class MemoryStorage implements IStorage {
           customerEmail: appointment.customerEmail ?? null,
           customerPhone: appointment.customerPhone,
           durationMinutes: appointment.durationMinutes,
+          bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot ?? 0,
+          bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot ?? 0,
           serviceNameSnapshot: appointment.serviceNameSnapshot ?? null,
           servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot ?? null,
           ...compensationSnapshot,
@@ -2957,6 +2979,8 @@ export class MemoryStorage implements IStorage {
           startTime: appointment.startTime, customerName: appointment.customerName,
           customerEmail: appointment.customerEmail ?? null, customerPhone: appointment.customerPhone,
           durationMinutes: appointment.durationMinutes, status: appointment.status ?? "booked",
+          bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot ?? 0,
+          bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot ?? 0,
           serviceNameSnapshot: appointment.serviceNameSnapshot ?? null,
           servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot ?? null,
           compensationRuleIdSnapshot: null,

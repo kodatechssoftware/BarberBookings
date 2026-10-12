@@ -98,7 +98,12 @@ export default function Reschedule() {
 
     const duration = appointment.duration || 30;
     return getAvailableTimeSlots({
-      selectedService: { id: appointment.serviceId || 0, duration },
+      selectedService: {
+        id: appointment.serviceId || 0,
+        duration,
+        bufferBeforeMinutes: appointment.bufferBeforeMinutes,
+        bufferAfterMinutes: appointment.bufferAfterMinutes,
+      },
       selectedDate,
       selectedBarberId: appointment.barberId,
       visibleBarbers: [{ id: appointment.barberId }],

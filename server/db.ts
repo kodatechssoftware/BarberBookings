@@ -160,12 +160,16 @@ export async function ensureMultiLocationFoundation() {
         is_active boolean NOT NULL DEFAULT true,
         price_override integer,
         duration_override integer,
+        buffer_before_minutes integer NOT NULL DEFAULT 0,
+        buffer_after_minutes integer NOT NULL DEFAULT 0,
         created_at timestamp NOT NULL DEFAULT now(),
         PRIMARY KEY (service_id, location_id),
         CONSTRAINT service_locations_price_override_check
           CHECK (price_override IS NULL OR price_override >= 0),
         CONSTRAINT service_locations_duration_override_check
-          CHECK (duration_override IS NULL OR duration_override > 0)
+          CHECK (duration_override IS NULL OR duration_override > 0),
+        CONSTRAINT service_locations_buffer_minutes_check
+          CHECK (buffer_before_minutes BETWEEN 0 AND 720 AND buffer_after_minutes BETWEEN 0 AND 720)
       )
     `);
     await client.query(`
@@ -239,9 +243,9 @@ export async function ensureAppointmentOverlapProtection() {
 
   await pool.query("CREATE EXTENSION IF NOT EXISTS btree_gist");
 
-  const existingConstraint = await pool.query(
+  const existingConstraint = await pool.query<{ definition: string }>(
     `
-      SELECT 1
+      SELECT pg_get_constraintdef(constraint_info.oid) AS definition
       FROM pg_constraint constraint_info
       JOIN pg_class table_info ON table_info.oid = constraint_info.conrelid
       JOIN pg_namespace namespace_info ON namespace_info.oid = table_info.relnamespace
@@ -253,7 +257,16 @@ export async function ensureAppointmentOverlapProtection() {
     [constraintName, schemaName, tableName],
   );
 
-  if (existingConstraint.rowCount) return;
+  const definition = existingConstraint.rows[0]?.definition ?? "";
+  if (definition.includes("buffer_before_minutes_snapshot")
+    && definition.includes("buffer_after_minutes_snapshot")) return;
+
+  if (existingConstraint.rowCount) {
+    await pool.query(`
+      ALTER TABLE ${qualifiedTableName}
+      DROP CONSTRAINT ${quoteIdentifier(constraintName)}
+    `);
+  }
 
   await pool.query(`
     ALTER TABLE ${qualifiedTableName}
@@ -261,8 +274,8 @@ export async function ensureAppointmentOverlapProtection() {
     EXCLUDE USING gist (
       barber_id WITH =,
       tsrange(
-        start_time,
-        start_time + make_interval(mins => duration_minutes),
+        start_time - make_interval(mins => buffer_before_minutes_snapshot),
+        start_time + make_interval(mins => duration_minutes + buffer_after_minutes_snapshot),
         '[)'
       ) WITH &&
     )

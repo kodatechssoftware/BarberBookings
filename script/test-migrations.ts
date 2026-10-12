@@ -273,7 +273,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 16, "a fresh empty application schema must apply migrations 0001 through 0016");
+  assert.equal(freshRun.applied.length, 17, "a fresh empty application schema must apply migrations 0001 through 0017");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -296,6 +296,24 @@ try {
     WHERE table_schema = $1 AND table_name = 'barber_services'
   `, [freshSchema])).rows;
   assert.ok(freshBarberServiceColumns.some((column) => column.column_name === "location_id" && column.is_nullable === "NO"));
+  const freshServiceLocationBufferColumns = (await pool.query(`
+    SELECT column_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'service_locations'
+      AND column_name IN ('buffer_before_minutes', 'buffer_after_minutes')
+  `, [freshSchema])).rows;
+  assert.equal(freshServiceLocationBufferColumns.length, 2);
+  assert.ok(freshServiceLocationBufferColumns.every((column) =>
+    column.is_nullable === "NO" && column.column_default === "0"));
+  const freshAppointmentBufferColumns = (await pool.query(`
+    SELECT column_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'appointments'
+      AND column_name IN ('buffer_before_minutes_snapshot', 'buffer_after_minutes_snapshot')
+  `, [freshSchema])).rows;
+  assert.equal(freshAppointmentBufferColumns.length, 2);
+  assert.ok(freshAppointmentBufferColumns.every((column) =>
+    column.is_nullable === "NO" && column.column_default === "0"));
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("users")}`)).rows[0].count), 0,
     "the auth foundation must not create canonical users during a fresh migration");
   const secondFreshRun = await runSchemaMigrations(pool, {
@@ -304,7 +322,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 16);
+  assert.equal(secondFreshRun.alreadyApplied, 17);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1018,8 +1036,61 @@ try {
     "0014_barber_location_compensation.sql",
     "0015_auth_users_foundation.sql",
     "0016_blacklist_location_scope.sql",
+    "0017_service_buffers.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("service_locations")}
+    WHERE buffer_before_minutes <> 0 OR buffer_after_minutes <> 0
+  `)).rows[0].count), 0, "legacy service offers must upgrade with zero buffers");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointments")}
+    WHERE buffer_before_minutes_snapshot <> 0 OR buffer_after_minutes_snapshot <> 0
+  `)).rows[0].count), 0, "legacy appointments must upgrade with immutable zero-buffer snapshots");
+  const bookedOverlapDefinition = String((await pool.query(`
+    SELECT pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conrelid = $1::regclass
+      AND conname = 'appointments_no_booked_overlap'
+  `, [`${schema}.appointments`])).rows[0]?.definition ?? "");
+  assert.match(bookedOverlapDefinition, /buffer_before_minutes_snapshot/);
+  assert.match(bookedOverlapDefinition, /buffer_after_minutes_snapshot/);
+  await assert.rejects(pool.query(`
+    UPDATE ${table("service_locations")}
+    SET buffer_before_minutes = -1
+    WHERE service_id = 1 AND location_id = $1
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "service buffers must reject negative values");
+  await assert.rejects(pool.query(`
+    UPDATE ${table("service_locations")}
+    SET buffer_after_minutes = 721
+    WHERE service_id = 1 AND location_id = $1
+  `, [defaultLocation.id]), (error: any) => error?.code === "23514",
+  "service buffers must reject values above the supported maximum");
+  const bufferConstraintAppointments = (await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+      duration_minutes, status, cancel_token
+    ) VALUES
+      ($1, 1, 1, '2045-06-05 10:00:00', 'Buffer A', '910000001', 60, 'booked', 'buffer-constraint-a'),
+      ($1, 1, 1, '2045-06-05 11:00:00', 'Buffer B', '910000002', 60, 'booked', 'buffer-constraint-b')
+    RETURNING id
+  `, [defaultLocation.id])).rows;
+  await assert.rejects(pool.query(`
+    UPDATE ${table("appointments")}
+    SET buffer_after_minutes_snapshot = 1
+    WHERE id = $1
+  `, [bufferConstraintAppointments[0].id]), (error: any) => error?.code === "23P01",
+  "the PostgreSQL exclusion constraint must reject overlap caused only by a buffer");
+  await assert.rejects(pool.query(`
+    UPDATE ${table("appointments")}
+    SET buffer_before_minutes_snapshot = 721
+    WHERE id = $1
+  `, [bufferConstraintAppointments[0].id]), (error: any) => error?.code === "23514",
+  "appointment snapshots must reject invalid buffers");
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE id = ANY($1::int[])`, [
+    bufferConstraintAppointments.map((appointment) => appointment.id),
+  ]);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("users")}`)).rows[0].count), 0,
     "migration 0015 must not backfill canonical users");
   assert.equal((await pool.query(`SELECT user_id FROM ${table("admins")} WHERE id = 1`)).rows[0].user_id, null,
@@ -1158,7 +1229,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 16);
+  assert.equal(secondCompensationRun.alreadyApplied, 17);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1813,7 +1884,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0016, additive auth foundation, location-scoped blacklist, location-specific service offers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0017, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

@@ -579,6 +579,10 @@ export type AdminCopy = {
     priceLabel: string;
     durationRequiredLabel: string;
     durationLabel: string;
+    bufferBeforeLabel: string;
+    bufferAfterLabel: string;
+    buffersHelp: string;
+    buffersSummary: string;
     categoryLabel: string;
     noCategory: string;
     inactiveCategorySuffix: string;
@@ -611,6 +615,8 @@ export type AdminCopy = {
     associateEmpty: string;
     associatePriceLabel: string;
     associateDurationLabel: string;
+    associateBufferBeforeLabel: string;
+    associateBufferAfterLabel: string;
     associateBasePrice: string;
     associateBaseDuration: string;
     associateAction: string;

@@ -165,7 +165,7 @@ test("Barber Booking keeps the existing public wording", () => {
 
 test("Beauty Booking uses neutral professional and establishment wording", () => {
   const copy = beautyBusinessCopy.booking;
-  assert.deepEqual(copy.steps, ["Profissional", "Serviço", "Data e hora", "Detalhes"]);
+  assert.deepEqual(copy.steps, ["Serviço", "Profissional", "Data e hora", "Detalhes"]);
   assert.equal(copy.professional.heading, "Selecione o profissional");
   assert.equal(copy.professional.anyAvailable, "Qualquer profissional disponível");
   assert.equal(copy.locations.description,

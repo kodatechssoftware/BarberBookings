@@ -6,6 +6,7 @@ process.env.USE_MEMORY_STORAGE = "true";
 
 const {
   AppointmentConflictError,
+  MemoryStorage,
   isAppointmentConflictError,
 } = await import("../../server/storage");
 
@@ -50,4 +51,55 @@ test("stops safely when a cause chain contains a cycle", () => {
   first.cause = second;
 
   assert.equal(isAppointmentConflictError(first), false);
+});
+
+test("MemoryStorage protects operational buffer intervals and preserves their snapshots", async () => {
+  const storage = new MemoryStorage();
+  const first = await storage.createAppointment({
+    locationId: 1,
+    barberId: 41,
+    serviceId: 71,
+    startTime: new Date("2036-06-05T10:00:00.000Z"),
+    customerName: "Cliente com preparação",
+    customerEmail: null,
+    customerPhone: "910000041",
+    durationMinutes: 60,
+    bufferBeforeMinutesSnapshot: 10,
+    bufferAfterMinutesSnapshot: 15,
+    cancelToken: "buffer-memory-first",
+  });
+
+  assert.equal(first.bufferBeforeMinutesSnapshot, 10);
+  assert.equal(first.bufferAfterMinutesSnapshot, 15);
+  await assert.rejects(storage.createAppointment({
+    locationId: 1,
+    barberId: 41,
+    serviceId: 71,
+    startTime: new Date("2036-06-05T09:40:00.000Z"),
+    customerName: "Conflito apenas no buffer anterior",
+    customerEmail: null,
+    customerPhone: "910000042",
+    durationMinutes: 20,
+    cancelToken: "buffer-memory-conflict",
+  }), (error: unknown) => isAppointmentConflictError(error));
+
+  const boundary = await storage.createAppointment({
+    locationId: 1,
+    barberId: 41,
+    serviceId: 71,
+    startTime: new Date("2036-06-05T11:15:00.000Z"),
+    customerName: "Limite exato",
+    customerEmail: null,
+    customerPhone: "910000043",
+    durationMinutes: 30,
+    cancelToken: "buffer-memory-boundary",
+  });
+  await assert.rejects(
+    storage.rescheduleAppointment(boundary.id, 0, new Date("2036-06-05T11:14:00.000Z")),
+    (error: unknown) => isAppointmentConflictError(error),
+  );
+
+  const renamed = await storage.updateAppointment(first.id, { customerName: "Cliente renomeado" });
+  assert.equal(renamed?.bufferBeforeMinutesSnapshot, 10);
+  assert.equal(renamed?.bufferAfterMinutesSnapshot, 15);
 });

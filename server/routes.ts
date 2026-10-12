@@ -137,6 +137,7 @@ import {
 } from "./location-store";
 import { getPublicBaseUrl } from "./public-url";
 import { resolveServiceLocationTerms } from "@shared/service-location-terms";
+import { appointmentOccupancyOverlaps, getOperationalAppointmentBounds } from "@shared/appointment-occupancy";
 import {
   acceptLegacyProfessionalInviteCanonical,
   authenticateCanonicalUser,
@@ -985,6 +986,12 @@ function isCalendarDate(value: unknown): value is string {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
+function shiftCalendarDateKey(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
 function getErrorCode(error: unknown) {
   if (!error || typeof error !== "object") return undefined;
   const directCode = (error as { code?: unknown }).code;
@@ -1014,6 +1021,8 @@ function serializeServiceCatalogueItem(item: ServiceCatalogueItem, includeAdminO
     category,
     priceOverride,
     durationOverride,
+    bufferBeforeMinutes,
+    bufferAfterMinutes,
     basePrice,
     baseDuration,
     baseIsVisible,
@@ -1022,11 +1031,12 @@ function serializeServiceCatalogueItem(item: ServiceCatalogueItem, includeAdminO
   const adminOfferFields = includeAdminOfferFields
     ? { priceOverride, durationOverride, basePrice, baseDuration, baseIsVisible }
     : {};
-  if (category) return { ...effectiveService, ...adminOfferFields, categoryId, category };
+  const effectiveOfferFields = { bufferBeforeMinutes, bufferAfterMinutes };
+  if (category) return { ...effectiveService, ...effectiveOfferFields, ...adminOfferFields, categoryId, category };
   if (includeAdminOfferFields && categoryId !== null) {
-    return { ...effectiveService, ...adminOfferFields, categoryId };
+    return { ...effectiveService, ...effectiveOfferFields, ...adminOfferFields, categoryId };
   }
-  return { ...effectiveService, ...adminOfferFields };
+  return { ...effectiveService, ...effectiveOfferFields, ...adminOfferFields };
 }
 
 async function loadLocationServiceCatalogue(locationId: number, includeInactive = false) {
@@ -1049,6 +1059,12 @@ async function loadLocationServiceCatalogue(locationId: number, includeInactive 
       duration: terms.durationMinutes,
       priceOverride: terms.priceOverride,
       durationOverride: terms.durationOverride,
+      bufferBeforeMinutes: resolvedBusinessConfig.features.preparationBuffers
+        ? terms.bufferBeforeMinutes
+        : 0,
+      bufferAfterMinutes: resolvedBusinessConfig.features.preparationBuffers
+        ? terms.bufferAfterMinutes
+        : 0,
       basePrice: terms.basePrice,
       baseDuration: terms.baseDuration,
       baseIsVisible: service.isVisible,
@@ -1581,6 +1597,7 @@ function getScheduleValidationError(
     establishmentClosed: string;
     outsideEstablishmentHours: string;
   },
+  buffers: { before?: number | null; after?: number | null } = {},
 ) {
   if (Number.isNaN(startTime.getTime())) {
     return publicCopy?.invalidDate ?? "Data ou hora inválida.";
@@ -1590,8 +1607,14 @@ function getScheduleValidationError(
     return "Duração inválida.";
   }
 
-  const start = getShopDateParts(startTime);
-  const end = getShopDateParts(new Date(startTime.getTime() + durationMinutes * 60000));
+  const bounds = getOperationalAppointmentBounds({
+    startTime,
+    durationMinutes,
+    bufferBeforeMinutes: buffers.before,
+    bufferAfterMinutes: buffers.after,
+  });
+  const start = getShopDateParts(bounds.operationalStart);
+  const end = getShopDateParts(bounds.operationalEnd);
 
   if (start.weekday < 0 || Number.isNaN(start.hour) || Number.isNaN(start.minute)) {
     return publicCopy?.invalidDate ?? "Data ou hora inválida.";
@@ -1619,9 +1642,19 @@ function getScheduleValidationError(
   return null;
 }
 
-function crossesShopCalendarDay(startTime: Date, durationMinutes: number) {
-  const start = getShopDateParts(startTime);
-  const end = getShopDateParts(new Date(startTime.getTime() + durationMinutes * 60000));
+function crossesShopCalendarDay(
+  startTime: Date,
+  durationMinutes: number,
+  buffers: { before?: number | null; after?: number | null } = {},
+) {
+  const bounds = getOperationalAppointmentBounds({
+    startTime,
+    durationMinutes,
+    bufferBeforeMinutes: buffers.before,
+    bufferAfterMinutes: buffers.after,
+  });
+  const start = getShopDateParts(bounds.operationalStart);
+  const end = getShopDateParts(bounds.operationalEnd);
   return start.dateKey !== end.dateKey;
 }
 
@@ -1645,7 +1678,9 @@ function parseCustomAppointmentDuration(value: unknown) {
 
 function resolveEffectiveServiceTerms(
   locationId: number,
-  service: Pick<ServiceCatalogueItem, "id" | "name" | "duration" | "price" | "locationId" | "isActive">,
+  service: Pick<ServiceCatalogueItem,
+    "id" | "name" | "duration" | "price" | "locationId" | "isActive"
+    | "bufferBeforeMinutes" | "bufferAfterMinutes">,
 ) {
   if (service.locationId !== locationId) return null;
   return {
@@ -1653,6 +1688,8 @@ function resolveEffectiveServiceTerms(
     name: service.name,
     durationMinutes: service.duration,
     priceCents: service.price,
+    bufferBeforeMinutes: service.bufferBeforeMinutes ?? 0,
+    bufferAfterMinutes: service.bufferAfterMinutes ?? 0,
   };
 }
 
@@ -1662,6 +1699,8 @@ type AppointmentLike = AppointmentServiceTermsLike & {
   serviceId?: number | null;
   startTime: Date | string;
   durationMinutes?: number;
+  bufferBeforeMinutesSnapshot?: number;
+  bufferAfterMinutesSnapshot?: number;
   status?: string;
 };
 
@@ -1727,16 +1766,25 @@ function hasAppointmentConflict(
   serviceDurations: Map<number, number>,
   ignoreAppointmentId?: number,
   conflictStatuses: ReadonlySet<string> = activeAppointmentConflictStatuses,
+  candidateBuffers: { before?: number | null; after?: number | null } = {},
 ) {
+  const candidateDuration = Math.max(1, Math.round((endTime.getTime() - startTime.getTime()) / 60_000));
   return appointments.some((appointment) => {
     if (appointment.barberId !== barberId) return false;
     if (!conflictStatuses.has(appointment.status || "booked")) return false;
     if (ignoreAppointmentId !== undefined && appointment.id === ignoreAppointmentId) return false;
 
-    const appointmentStart = toDate(appointment.startTime);
-    const appointmentEnd = getAppointmentEndTime(appointment, serviceDurations);
-
-    return startTime < appointmentEnd && endTime > appointmentStart;
+    return appointmentOccupancyOverlaps({
+      startTime,
+      durationMinutes: candidateDuration,
+      bufferBeforeMinutes: candidateBuffers.before,
+      bufferAfterMinutes: candidateBuffers.after,
+    }, {
+      startTime: appointment.startTime,
+      durationMinutes: getEffectiveAppointmentDurationMinutes(appointment, serviceDurations),
+      bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+      bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+    });
   });
 }
 
@@ -1762,9 +1810,15 @@ function getOverlappingBookedAppointments(
     if (appointment.barberId !== barberId) return false;
     if (appointment.status !== "booked") return false;
 
-    const appointmentStart = toDate(appointment.startTime);
-    const appointmentEnd = getAppointmentEndTime(appointment, serviceDurations);
-    return startTime < appointmentEnd && endTime > appointmentStart;
+    return appointmentOccupancyOverlaps({
+      startTime,
+      durationMinutes: Math.max(1, Math.round((endTime.getTime() - startTime.getTime()) / 60_000)),
+    }, {
+      startTime: appointment.startTime,
+      durationMinutes: getEffectiveAppointmentDurationMinutes(appointment, serviceDurations),
+      bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+      bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+    });
   });
 }
 
@@ -3649,12 +3703,16 @@ export async function registerRoutes(
     requireCatalogLocationManage,
     async (req, res) => {
     try {
-      const input = insertServiceSchema.parse(req.body);
+      const input = api.services.create.input.parse(req.body);
       await validateServiceCategoryAssignment(input.categoryId);
       const locationId = Number(res.locals.locationId);
-      const { isVisible, ...serviceInput } = input;
+      const { isVisible, bufferBeforeMinutes, bufferAfterMinutes, ...serviceInput } = input;
       const service = await storage.createService({ ...serviceInput, isVisible: true });
-      await assignServiceToLocation(service.id, locationId, { isActive: isVisible ?? true });
+      await assignServiceToLocation(service.id, locationId, {
+        isActive: isVisible ?? true,
+        bufferBeforeMinutes: bufferBeforeMinutes ?? 0,
+        bufferAfterMinutes: bufferAfterMinutes ?? 0,
+      });
       const effectiveService = (await loadLocationServiceCatalogue(locationId, true))
         .find((item) => item.id === service.id)!;
       await recordAuditLog(req, {
@@ -3694,7 +3752,7 @@ export async function registerRoutes(
         if (["name", "description", "agendaLabel", "categoryId"]
           .some((field) => inputFields.has(field))
           && !enforceCanonicalCapability(req, res, "catalog.manage_global")) return;
-        if (["priceOverride", "durationOverride", "isActive", "isVisible", "price", "duration"]
+        if (["priceOverride", "durationOverride", "bufferBeforeMinutes", "bufferAfterMinutes", "isActive", "isVisible", "price", "duration"]
           .some((field) => inputFields.has(field))
           && !enforceCanonicalCapability(req, res, "catalog.manage_location", locationId)) return;
       }
@@ -3708,6 +3766,8 @@ export async function registerRoutes(
       const {
         priceOverride,
         durationOverride,
+        bufferBeforeMinutes,
+        bufferAfterMinutes,
         isActive,
         isVisible,
         price,
@@ -3734,11 +3794,14 @@ export async function registerRoutes(
       const localActive = isActive !== undefined
         ? isActive
         : isVisible === null || isVisible === undefined ? undefined : isVisible;
-      if (localPriceOverride !== undefined || localDurationOverride !== undefined || localActive !== undefined) {
+      if (localPriceOverride !== undefined || localDurationOverride !== undefined || localActive !== undefined
+        || bufferBeforeMinutes !== undefined || bufferAfterMinutes !== undefined) {
         await assignServiceToLocation(serviceId, locationId, {
           ...(localPriceOverride !== undefined ? { priceOverride: localPriceOverride } : {}),
           ...(localDurationOverride !== undefined ? { durationOverride: localDurationOverride } : {}),
           ...(localActive !== undefined ? { isActive: localActive } : {}),
+          ...(bufferBeforeMinutes !== undefined ? { bufferBeforeMinutes } : {}),
+          ...(bufferAfterMinutes !== undefined ? { bufferAfterMinutes } : {}),
         });
       }
       const effectiveService = (await loadLocationServiceCatalogue(locationId, true))
@@ -3865,7 +3928,13 @@ export async function registerRoutes(
         entityType: "service",
         entityId: input.serviceId,
         summary: `Serviço associado a esta loja: ${service.name}`,
-        metadata: { locationId, priceOverride: input.priceOverride ?? null, durationOverride: input.durationOverride ?? null },
+        metadata: {
+          locationId,
+          priceOverride: input.priceOverride ?? null,
+          durationOverride: input.durationOverride ?? null,
+          bufferBeforeMinutes: input.bufferBeforeMinutes ?? 0,
+          bufferAfterMinutes: input.bufferAfterMinutes ?? 0,
+        },
       });
       return res.status(201).json(effectiveService);
     } catch (error) {
@@ -4306,13 +4375,21 @@ export async function registerRoutes(
       if (!await isBarberAssignedToLocation(effectiveBarberId, locationId)) {
         return res.status(404).json({ message: "Barbeiro não encontrado." });
       }
-      const busyAppointments = await storage.getAppointments(effectiveBarberId, date);
+      const busyAppointments = date
+        ? await storage.getAppointmentsRange(
+            effectiveBarberId,
+            shiftCalendarDateKey(date, -1),
+            shiftCalendarDateKey(date, 1),
+          )
+        : await storage.getAppointments(effectiveBarberId);
       return res.json(busyAppointments
         .filter((appointment) => appointment.status === "booked")
         .map((appointment) => ({
           barberId: appointment.barberId,
           startTime: appointment.startTime,
           durationMinutes: appointment.durationMinutes,
+          bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot,
+          bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot,
           status: "booked" as const,
         })));
     }
@@ -4440,7 +4517,11 @@ export async function registerRoutes(
         const locationBarberIds = await getBarberIdsForLocation(locationId);
         const allowedBarberIds = locationBarberIds === undefined ? null : new Set(locationBarberIds);
         const barbers = (await storage.getBarbers()).filter((barber) => !allowedBarberIds || allowedBarberIds.has(barber.id));
-        const existingAppointments = await storage.getAppointments(undefined, dateStr);
+        const existingAppointments = await storage.getAppointmentsRange(
+          undefined,
+          shiftCalendarDateKey(dateStr, -1),
+          shiftCalendarDateKey(dateStr, 1),
+        );
         
         const visibleBarbers = barbers.filter((barber) =>
           barber.isVisible && barberCanPerformService(barberServiceMap, barber.id, input.serviceId),
@@ -4458,7 +4539,10 @@ export async function registerRoutes(
 
         for (const barber of visibleBarbers) {
           const workingPeriods = await getBarberWorkingPeriods(barber.id, getShopDateParts(input.startTime).weekday, locationId);
-          const scheduleError = getScheduleValidationError(input.startTime, requestedDuration, workingPeriods);
+          const scheduleError = getScheduleValidationError(input.startTime, requestedDuration, workingPeriods, undefined, {
+            before: requestedServiceTerms.bufferBeforeMinutes,
+            after: requestedServiceTerms.bufferAfterMinutes,
+          });
           if (scheduleError) continue;
 
           const hasConflict = hasAppointmentConflict(
@@ -4467,6 +4551,9 @@ export async function registerRoutes(
             input.startTime,
             requestedEndTime,
             serviceDurations,
+            undefined,
+            activeAppointmentConflictStatuses,
+            { before: requestedServiceTerms.bufferBeforeMinutes, after: requestedServiceTerms.bufferAfterMinutes },
           );
           if (!hasConflict) {
             availableBarbers.push(barber);
@@ -4493,12 +4580,19 @@ export async function registerRoutes(
         }
 
         const workingPeriods = await getBarberWorkingPeriods(finalBarberId, getShopDateParts(input.startTime).weekday, locationId);
-        const scheduleError = getScheduleValidationError(input.startTime, requestedDuration, workingPeriods);
+        const scheduleError = getScheduleValidationError(input.startTime, requestedDuration, workingPeriods, undefined, {
+          before: requestedServiceTerms.bufferBeforeMinutes,
+          after: requestedServiceTerms.bufferAfterMinutes,
+        });
         if (scheduleError) {
           return res.status(400).json({ message: scheduleError });
         }
 
-        const existingAppointments = await storage.getAppointments(finalBarberId, dateStr);
+        const existingAppointments = await storage.getAppointmentsRange(
+          finalBarberId,
+          shiftCalendarDateKey(dateStr, -1),
+          shiftCalendarDateKey(dateStr, 1),
+        );
         if (
           hasAppointmentConflict(
             existingAppointments,
@@ -4506,6 +4600,9 @@ export async function registerRoutes(
             input.startTime,
             requestedEndTime,
             serviceDurations,
+            undefined,
+            activeAppointmentConflictStatuses,
+            { before: requestedServiceTerms.bufferBeforeMinutes, after: requestedServiceTerms.bufferAfterMinutes },
           )
         ) {
           return res.status(409).json({ message: "Este horário já está reservado." });
@@ -4523,6 +4620,8 @@ export async function registerRoutes(
         durationMinutes: requestedDuration,
         serviceNameSnapshot: requestedServiceTerms.name,
         servicePriceCentsSnapshot: requestedServiceTerms.priceCents,
+        bufferBeforeMinutesSnapshot: requestedServiceTerms.bufferBeforeMinutes,
+        bufferAfterMinutesSnapshot: requestedServiceTerms.bufferAfterMinutes,
         manualOutsideHours: false,
         depositRequired: false,
         depositReason: null,
@@ -4822,6 +4921,8 @@ export async function registerRoutes(
       const servicePriceCentsSnapshot = isManualBooking
         ? isCustomService ? parsedManualPrice : hasManualPrice ? parsedManualPrice : selectedServiceTerms?.priceCents ?? null
         : null;
+      const bufferBeforeMinutesSnapshot = isCustomService ? 0 : selectedServiceTerms?.bufferBeforeMinutes ?? 0;
+      const bufferAfterMinutesSnapshot = isCustomService ? 0 : selectedServiceTerms?.bufferAfterMinutes ?? 0;
       if (isManualBooking && serviceIdNumber) {
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
         if (!barberCanPerformService(barberServiceMap, barberIdNumber, serviceIdNumber)) {
@@ -4888,12 +4989,18 @@ export async function registerRoutes(
           workingPeriods = await getBarberWorkingPeriods(barberIdNumber, shopDateParts.weekday, locationId);
           workingPeriodsByWeekday.set(shopDateParts.weekday, workingPeriods);
         }
-        if (crossesShopCalendarDay(currentStart, duration)) {
+        if (crossesShopCalendarDay(currentStart, duration, {
+          before: bufferBeforeMinutesSnapshot,
+          after: bufferAfterMinutesSnapshot,
+        })) {
           return res.status(400).json({
             message: `A marcação não pode atravessar a meia-noite (${formatShopDateTime(currentStart)}, ${duration} min).`,
           });
         }
-        const scheduleError = getScheduleValidationError(currentStart, duration, workingPeriods);
+        const scheduleError = getScheduleValidationError(currentStart, duration, workingPeriods, undefined, {
+          before: bufferBeforeMinutesSnapshot,
+          after: bufferAfterMinutesSnapshot,
+        });
         const isActuallyOutsideHours = Boolean(scheduleError);
         outsideHoursByOccurrence.push(isActuallyOutsideHours);
         if (isActuallyOutsideHours && !(isManualBooking && allowOutsideHours)) {
@@ -4903,7 +5010,11 @@ export async function registerRoutes(
         }
         let existingAppointments = existingAppointmentsByDate.get(shopDateParts.dateKey);
         if (!existingAppointments) {
-          existingAppointments = await storage.getAppointments(barberIdNumber, shopDateParts.dateKey);
+          existingAppointments = await storage.getAppointmentsRange(
+            barberIdNumber,
+            shiftCalendarDateKey(shopDateParts.dateKey, -1),
+            shiftCalendarDateKey(shopDateParts.dateKey, 1),
+          );
           existingAppointmentsByDate.set(shopDateParts.dateKey, existingAppointments);
         }
 
@@ -4945,6 +5056,7 @@ export async function registerRoutes(
             hasEndedManualBooking
               ? historicalAppointmentConflictStatuses
               : activeAppointmentConflictStatuses,
+            { before: bufferBeforeMinutesSnapshot, after: bufferAfterMinutesSnapshot },
           )
         ) {
           conflicts.push(formatShopDateTime(currentStart));
@@ -4964,6 +5076,8 @@ export async function registerRoutes(
           durationMinutes: duration,
           serviceNameSnapshot,
           servicePriceCentsSnapshot,
+          bufferBeforeMinutesSnapshot,
+          bufferAfterMinutesSnapshot,
           manualOutsideHours: Boolean(isManualBooking && outsideHoursByOccurrence[occurrenceIndex]),
           status: shouldCreateAsCompleted ? "completed" : "booked",
           paymentMethod: shouldCreateAsCompleted ? requestedPaymentMethod : "pending",
@@ -5125,8 +5239,16 @@ export async function registerRoutes(
     }
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
     const appointments = date
-      ? await storage.getAppointments(effectiveBarberId, date)
-      : await storage.getAppointmentsRange(effectiveBarberId, startDate, endDate);
+      ? await storage.getAppointmentsRange(
+          effectiveBarberId,
+          shiftCalendarDateKey(date, -1),
+          shiftCalendarDateKey(date, 1),
+        )
+      : await storage.getAppointmentsRange(
+          effectiveBarberId,
+          startDate ? shiftCalendarDateKey(startDate, -1) : startDate,
+          endDate ? shiftCalendarDateKey(endDate, 1) : endDate,
+        );
     const locationBarberIds = await getBarberIdsForLocation(locationId);
     const allowedBarberIds = locationBarberIds === undefined ? null : new Set(locationBarberIds);
     const visibleBarberIds = new Set(
@@ -5145,6 +5267,8 @@ export async function registerRoutes(
         barberId: app.barberId,
         serviceId: app.locationId === locationId ? app.serviceId : null,
         duration: getEffectiveAppointmentDurationMinutes(app, serviceDurations),
+        bufferBeforeMinutes: app.bufferBeforeMinutesSnapshot,
+        bufferAfterMinutes: app.bufferAfterMinutesSnapshot,
       }));
     res.json(publicAppointments);
   });
@@ -5341,6 +5465,8 @@ export async function registerRoutes(
         let finalServiceName = currentApp.serviceNameSnapshot;
         let finalServicePrice = currentApp.servicePriceCentsSnapshot;
         let finalDuration = getEffectiveAppointmentDurationMinutes(currentApp, serviceDurations);
+        let finalBufferBefore = currentApp.bufferBeforeMinutesSnapshot ?? 0;
+        let finalBufferAfter = currentApp.bufferAfterMinutesSnapshot ?? 0;
 
         if (requestedServiceMode === "custom") {
           const customName = hasCustomNamePatch
@@ -5365,6 +5491,8 @@ export async function registerRoutes(
           finalServiceName = customName;
           finalServicePrice = customPrice;
           finalDuration = customDuration;
+          finalBufferBefore = 0;
+          finalBufferAfter = 0;
         } else if (selectedService) {
           const terms = resolveEffectiveServiceTerms(locationId, selectedService);
           if (!terms) {
@@ -5374,6 +5502,8 @@ export async function registerRoutes(
             finalServiceName = terms.name;
             finalServicePrice = terms.priceCents;
             finalDuration = terms.durationMinutes;
+            finalBufferBefore = terms.bufferBeforeMinutes;
+            finalBufferAfter = terms.bufferAfterMinutes;
           } else {
             finalServiceName = resolveAppointmentServiceName(currentApp, serviceNames);
             finalServicePrice = resolveAppointmentPriceCents(currentApp, servicePrices);
@@ -5390,7 +5520,7 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Selecione um serviço do catálogo ou mantenha o serviço personalizado." });
         }
 
-        if (crossesShopCalendarDay(newStartTime, finalDuration)) {
+        if (crossesShopCalendarDay(newStartTime, finalDuration, { before: finalBufferBefore, after: finalBufferAfter })) {
           return res.status(400).json({ message: "A marcação não pode atravessar a meia-noite." });
         }
         const workingPeriods = await getBarberWorkingPeriods(
@@ -5398,10 +5528,13 @@ export async function registerRoutes(
           getShopDateParts(newStartTime).weekday,
           locationId,
         );
-        let scheduleError = getScheduleValidationError(newStartTime, finalDuration, workingPeriods);
+        let scheduleError = getScheduleValidationError(newStartTime, finalDuration, workingPeriods, undefined, {
+          before: finalBufferBefore,
+          after: finalBufferAfter,
+        });
         let isOutsideHours = Boolean(scheduleError);
 
-        if (crossesShopCalendarDay(newStartTime, finalDuration)) {
+        if (crossesShopCalendarDay(newStartTime, finalDuration, { before: finalBufferBefore, after: finalBufferAfter })) {
           return res.status(400).json({ message: "A marcação não pode atravessar a meia-noite." });
         }
 
@@ -5422,11 +5555,17 @@ export async function registerRoutes(
           updateData.serviceNameSnapshot = finalServiceName;
           updateData.servicePriceCentsSnapshot = finalServicePrice;
           updateData.durationMinutes = finalDuration;
+          updateData.bufferBeforeMinutesSnapshot = finalBufferBefore;
+          updateData.bufferAfterMinutesSnapshot = finalBufferAfter;
           updateData.manualOutsideHours = isOutsideHours;
         }
 
         const dateStr = getShopDateParts(newStartTime).dateKey;
-        const existingAppointments = await storage.getAppointments(newBarberId, dateStr);
+        const existingAppointments = await storage.getAppointmentsRange(
+          newBarberId,
+          shiftCalendarDateKey(dateStr, -1),
+          shiftCalendarDateKey(dateStr, 1),
+        );
         const newEndTime = new Date(newStartTime.getTime() + finalDuration * 60000);
         if (hasAppointmentConflict(
           existingAppointments,
@@ -5435,6 +5574,8 @@ export async function registerRoutes(
           newEndTime,
           serviceDurations,
           appointmentId,
+          activeAppointmentConflictStatuses,
+          { before: finalBufferBefore, after: finalBufferAfter },
         )) {
           return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
         }
@@ -5646,6 +5787,8 @@ export async function registerRoutes(
       locationTimeZone: location?.timezone || SHOP_TIME_ZONE,
       barberId: appointment.barberId,
       serviceId: appointment.serviceId,
+      bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+      bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
       startTime: appointment.startTime,
       status: appointment.status,
       customerName: appointment.customerName,
@@ -5732,13 +5875,21 @@ export async function registerRoutes(
         duration,
         workingPeriods,
         PUBLIC_CYCLE_COPY.reschedule.backend,
+        {
+          before: appointment.bufferBeforeMinutesSnapshot,
+          after: appointment.bufferAfterMinutesSnapshot,
+        },
       );
       if (scheduleError) {
         return res.status(400).json({ message: scheduleError });
       }
 
       const dateStr = getShopDateParts(startTime).dateKey;
-      const existingAppointments = await storage.getAppointments(appointment.barberId, dateStr);
+      const existingAppointments = await storage.getAppointmentsRange(
+        appointment.barberId,
+        shiftCalendarDateKey(dateStr, -1),
+        shiftCalendarDateKey(dateStr, 1),
+      );
       const endTime = new Date(startTime.getTime() + duration * 60000);
       if (
         hasAppointmentConflict(
@@ -5748,6 +5899,11 @@ export async function registerRoutes(
           endTime,
           serviceDurations,
           appointment.id,
+          activeAppointmentConflictStatuses,
+          {
+            before: appointment.bufferBeforeMinutesSnapshot,
+            after: appointment.bufferAfterMinutesSnapshot,
+          },
         )
       ) {
         return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.slotReserved });

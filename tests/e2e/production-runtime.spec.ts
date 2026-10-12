@@ -148,8 +148,21 @@ test("Production-equivalent runtime remains single-location and keeps external f
   const busyAppointments = await busyResponse.json();
   const busyAppointment = busyAppointments.find((item: any) => item.startTime === publicStart);
   expect(busyAppointment).toBeTruthy();
-  expect(Object.keys(busyAppointment).sort()).toEqual(["barberId", "durationMinutes", "startTime", "status"]);
-  expect(busyAppointment).toMatchObject({ barberId: barber.id, startTime: publicStart, status: "booked" });
+  expect(Object.keys(busyAppointment).sort()).toEqual([
+    "barberId",
+    "bufferAfterMinutesSnapshot",
+    "bufferBeforeMinutesSnapshot",
+    "durationMinutes",
+    "startTime",
+    "status",
+  ]);
+  expect(busyAppointment).toMatchObject({
+    barberId: barber.id,
+    startTime: publicStart,
+    status: "booked",
+    bufferBeforeMinutesSnapshot: 0,
+    bufferAfterMinutesSnapshot: 0,
+  });
 
   const standardResponse = await request.get(`/api/appointments?barberId=${barber.id}`, { headers: authHeaders });
   expect(standardResponse.status(), await standardResponse.text()).toBe(200);

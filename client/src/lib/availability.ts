@@ -5,6 +5,7 @@ import {
   firstClockAlignedMinute,
   type BookingSlotIntervalMinutes,
 } from "@shared/booking-slot-interval";
+import { appointmentOccupancyOverlaps } from "@shared/appointment-occupancy";
 
 export type AvailabilityRow = {
   barberId: number;
@@ -30,6 +31,8 @@ export type BarberOption = {
 export type ServiceOption = {
   id: number;
   duration: number;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
 };
 
 export type TimeSlot = {
@@ -43,6 +46,10 @@ export type AvailabilityAppointment = {
   duration?: number | null;
   durationMinutes?: number | null;
   status?: string;
+  bufferBeforeMinutes?: number | null;
+  bufferAfterMinutes?: number | null;
+  bufferBeforeMinutesSnapshot?: number | null;
+  bufferAfterMinutesSnapshot?: number | null;
 };
 
 function calendarDateKey(date: Date) {
@@ -85,14 +92,16 @@ export function hasAppointmentIntervalConflict({
   barberId,
   startTime,
   durationMinutes,
+  bufferBeforeMinutes = 0,
+  bufferAfterMinutes = 0,
 }: {
   appointments: AvailabilityAppointment[];
   barberId: number;
   startTime: Date;
   durationMinutes: number;
+  bufferBeforeMinutes?: number;
+  bufferAfterMinutes?: number;
 }) {
-  const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
-
   return appointments.some((appointment) => {
     if (appointment.barberId !== barberId) return false;
     if (appointment.status !== undefined && appointment.status !== "booked") return false;
@@ -103,9 +112,17 @@ export function hasAppointmentIntervalConflict({
     const appointmentDuration = Number.isFinite(storedDuration) && storedDuration > 0
       ? storedDuration
       : 30;
-    const appointmentEnd = new Date(appointmentStart.getTime() + appointmentDuration * 60000);
-
-    return startTime < appointmentEnd && endTime > appointmentStart;
+    return appointmentOccupancyOverlaps({
+      startTime,
+      durationMinutes,
+      bufferBeforeMinutes,
+      bufferAfterMinutes,
+    }, {
+      startTime: appointmentStart,
+      durationMinutes: appointmentDuration,
+      bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot ?? appointment.bufferBeforeMinutes,
+      bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot ?? appointment.bufferAfterMinutes,
+    });
   });
 }
 
@@ -230,7 +247,8 @@ export function getAvailableTimeSlots({
     }).forEach((period) => {
       const firstMinute = firstClockAlignedMinute(period.start, slotIntervalMinutes);
       for (let minutes = firstMinute; minutes < period.end; minutes += slotIntervalMinutes) {
-        if (minutes + selectedService.duration <= period.end) {
+        if (minutes - (selectedService.bufferBeforeMinutes ?? 0) >= period.start
+          && minutes + selectedService.duration + (selectedService.bufferAfterMinutes ?? 0) <= period.end) {
           candidateStartMinutes.add(minutes);
         }
       }
@@ -255,6 +273,8 @@ export function getAvailableTimeSlots({
           barberId: barber.id,
           startTime: slotDateTime,
           durationMinutes: selectedService.duration,
+          bufferBeforeMinutes: selectedService.bufferBeforeMinutes,
+          bufferAfterMinutes: selectedService.bufferAfterMinutes,
         }))
         .map((barber) => barber.id),
     );
@@ -266,8 +286,8 @@ export function getAvailableTimeSlots({
         shopAvailabilityRows: shopAvailability,
         availabilityRows: availability,
       }).some(
-        (period) => minutesFromDayStart >= period.start &&
-          minutesFromDayStart + selectedService.duration <= period.end,
+        (period) => minutesFromDayStart - (selectedService.bufferBeforeMinutes ?? 0) >= period.start &&
+          minutesFromDayStart + selectedService.duration + (selectedService.bufferAfterMinutes ?? 0) <= period.end,
       );
       return fitsBarberSchedule && !busyBarberIds.has(barber.id);
     });

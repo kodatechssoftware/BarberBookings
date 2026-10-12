@@ -16,6 +16,8 @@ test("service location terms inherit the global base when overrides are null", (
     isActive: true,
     priceOverride: null,
     durationOverride: null,
+    bufferBeforeMinutes: 0,
+    bufferAfterMinutes: 0,
   }), {
     serviceId: 7,
     locationId: 1,
@@ -25,6 +27,8 @@ test("service location terms inherit the global base when overrides are null", (
     durationMinutes: 30,
     priceOverride: null,
     durationOverride: null,
+    bufferBeforeMinutes: 0,
+    bufferAfterMinutes: 0,
     basePrice: 1500,
     baseDuration: 30,
   });
@@ -37,12 +41,16 @@ test("service location terms use the local price and duration overrides", () => 
     isActive: true,
     priceOverride: 1800,
     durationOverride: 45,
+    bufferBeforeMinutes: 10,
+    bufferAfterMinutes: 15,
   });
 
   assert.equal(terms?.priceCents, 1800);
   assert.equal(terms?.durationMinutes, 45);
   assert.equal(terms?.basePrice, 1500);
   assert.equal(terms?.baseDuration, 30);
+  assert.equal(terms?.bufferBeforeMinutes, 10);
+  assert.equal(terms?.bufferAfterMinutes, 15);
 });
 
 test("service location terms reject a missing or mismatched association", () => {

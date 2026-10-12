@@ -11,6 +11,7 @@ import type { AppointmentStatus } from "@/hooks/use-appointments";
 import { shopBranding } from "@/lib/branding";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { getAgendaServiceLabel } from "@shared/agenda-service-label";
+import { getOperationalAppointmentBounds } from "@shared/appointment-occupancy";
 
 export type WeeklyAgendaAppointment = {
   id: number;
@@ -18,6 +19,8 @@ export type WeeklyAgendaAppointment = {
   serviceId: number | null;
   startTime: string;
   durationMinutes: number;
+  bufferBeforeMinutesSnapshot?: number;
+  bufferAfterMinutesSnapshot?: number;
   serviceNameSnapshot?: string | null;
   servicePriceCentsSnapshot?: number | null;
   manualOutsideHours?: boolean;
@@ -96,6 +99,24 @@ export function getWeeklyAppointmentEnd(appointment: WeeklyAgendaAppointment) {
   return new Date(start.getTime() + getWeeklyAppointmentDuration(appointment) * 60000);
 }
 
+function getWeeklyAppointmentOperationalStart(appointment: WeeklyAgendaAppointment) {
+  return getOperationalAppointmentBounds({
+    startTime: appointment.startTime,
+    durationMinutes: getWeeklyAppointmentDuration(appointment),
+    bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+    bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+  }).operationalStart;
+}
+
+function getWeeklyAppointmentOperationalEnd(appointment: WeeklyAgendaAppointment) {
+  return getOperationalAppointmentBounds({
+    startTime: appointment.startTime,
+    durationMinutes: getWeeklyAppointmentDuration(appointment),
+    bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+    bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+  }).operationalEnd;
+}
+
 function getAgendaMinutes(date: Date) {
   return date.getHours() * 60 + date.getMinutes();
 }
@@ -110,6 +131,33 @@ function getAgendaHeightPx(startMinutes: number, endMinutes: number) {
 
 function getAgendaWindowHeight(startMinutes: number, endMinutes: number) {
   return getAgendaHeightPx(startMinutes, endMinutes) + weeklyAgendaBottomPadding;
+}
+
+function OperationalBufferBands({ appointment, color }: {
+  appointment: WeeklyAgendaAppointment;
+  color: string;
+}) {
+  const before = appointment.bufferBeforeMinutesSnapshot ?? 0;
+  const after = appointment.bufferAfterMinutesSnapshot ?? 0;
+  if (before === 0 && after === 0) return null;
+  return (
+    <>
+      {before > 0 && (
+        <span
+          data-testid="agenda-buffer-before"
+          className="pointer-events-none absolute inset-x-0 top-0 border-b border-dashed"
+          style={{ height: before * weeklyAgendaPixelsPerMinute, borderColor: colorWithAlpha(color, 0.55), backgroundColor: colorWithAlpha(color, 0.08) }}
+        />
+      )}
+      {after > 0 && (
+        <span
+          data-testid="agenda-buffer-after"
+          className="pointer-events-none absolute inset-x-0 bottom-0 border-t border-dashed"
+          style={{ height: after * weeklyAgendaPixelsPerMinute, borderColor: colorWithAlpha(color, 0.55), backgroundColor: colorWithAlpha(color, 0.08) }}
+        />
+      )}
+    </>
+  );
 }
 
 function createAgendaHours(startMinutes: number, endMinutes: number) {
@@ -133,10 +181,10 @@ function getDayAgendaWindow(appointments: WeeklyAgendaAppointment[]) {
     };
   }
 
-  const appointmentStartMinutes = appointments.map((appointment) => getAgendaMinutes(parseISO(appointment.startTime)));
+  const appointmentStartMinutes = appointments.map((appointment) => getAgendaMinutes(getWeeklyAppointmentOperationalStart(appointment)));
   const appointmentEndMinutes = appointments.map((appointment) => {
-    const start = parseISO(appointment.startTime);
-    const end = getWeeklyAppointmentEnd(appointment);
+    const start = getWeeklyAppointmentOperationalStart(appointment);
+    const end = getWeeklyAppointmentOperationalEnd(appointment);
     const endMinutes = getAgendaMinutes(end);
     return format(start, "yyyy-MM-dd") === format(end, "yyyy-MM-dd") ? endMinutes : 24 * 60;
   });
@@ -153,8 +201,8 @@ function getDayAgendaWindow(appointments: WeeklyAgendaAppointment[]) {
 }
 
 function isAppointmentVisibleOnGrid(appointment: WeeklyAgendaAppointment, startMinutes: number, endMinutes: number) {
-  const start = parseISO(appointment.startTime);
-  const end = getWeeklyAppointmentEnd(appointment);
+  const start = getWeeklyAppointmentOperationalStart(appointment);
+  const end = getWeeklyAppointmentOperationalEnd(appointment);
   return getAgendaMinutes(end) > startMinutes && getAgendaMinutes(start) < endMinutes;
 }
 
@@ -206,8 +254,8 @@ function getClippedAppointmentMinutes(
   startMinutes: number,
   endMinutes: number,
 ) {
-  const start = parseISO(appointment.startTime);
-  const end = getWeeklyAppointmentEnd(appointment);
+  const start = getWeeklyAppointmentOperationalStart(appointment);
+  const end = getWeeklyAppointmentOperationalEnd(appointment);
 
   return {
     startMinutes: Math.max(startMinutes, getAgendaMinutes(start)),
@@ -680,6 +728,11 @@ export function WeeklyAgenda({
             </span>
           </div>
           <p className="mt-1 text-[11px] uppercase tracking-wide text-gray-500">{getStatusLabel(appointment.status)}</p>
+          {Boolean((appointment.bufferBeforeMinutesSnapshot ?? 0) || (appointment.bufferAfterMinutesSnapshot ?? 0)) && (
+            <p className="mt-1 text-[11px] text-gray-500">
+              Ocupação: -{appointment.bufferBeforeMinutesSnapshot ?? 0} / +{appointment.bufferAfterMinutesSnapshot ?? 0} min
+            </p>
+          )}
         </div>
       </button>
     );
@@ -1077,6 +1130,7 @@ export function WeeklyAgenda({
                                         boxShadow: `0 12px 24px ${colorWithAlpha(color, 0.12)}`,
                                       }}
                                     >
+                                      <OperationalBufferBands appointment={appointment} color={color} />
                                       <div className="flex min-w-0 items-center justify-between gap-2">
                                         <span className={cn("min-w-0 truncate font-bold text-white", isTiny ? "text-[10px] leading-none" : "text-xs")}>
                                           {format(start, "HH:mm")} - {appointment.customerName}
@@ -1404,6 +1458,7 @@ export function WeeklyAgenda({
                                   boxShadow: `0 12px 24px ${colorWithAlpha(color, 0.12)}`,
                                 }}
                               >
+                                <OperationalBufferBands appointment={appointment} color={color} />
                                 <span
                                   className={cn(
                                     "inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-black/15 font-semibold uppercase text-gray-100",
