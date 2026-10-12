@@ -113,6 +113,25 @@ function futureWeekdayIso(dayOffsetFromThursday: number, weeksAhead = 3, hour = 
   return date.toISOString();
 }
 
+function nthWeekdayOfMonth(year: number, monthIndex: number, weekday: number, occurrence: number) {
+  const firstDay = new Date(year, monthIndex, 1, 12);
+  const day = 1 + ((weekday - firstDay.getDay() + 7) % 7) + (occurrence - 1) * 7;
+  return new Date(year, monthIndex, day, 12);
+}
+
+function annualLisbonDstRecurrenceFixture(referenceDate = new Date()) {
+  const startYear = referenceDate.getFullYear() + 1;
+  const startDate = nthWeekdayOfMonth(startYear, 8, 4, 4);
+  const afterAutumnChange = nthWeekdayOfMonth(startYear, 10, 4, 1);
+  const afterSpringChange = nthWeekdayOfMonth(startYear + 1, 3, 4, 1);
+
+  return {
+    startTime: calendarTimeInTimeZone(startDate, "14:00", "Europe/Lisbon").toISOString(),
+    expectedLocalDates: [afterAutumnChange, afterSpringChange]
+      .map((date) => localDateKey(date)),
+  };
+}
+
 function dateKeyFromIso(isoDate: string) {
   return isoDate.slice(0, 10);
 }
@@ -5100,6 +5119,7 @@ test.describe("booking rules", () => {
     const barber = await createBarberResponse.json();
 
     const customerName = "Recorrente Anual Hora Lisboa QA";
+    const dstFixture = annualLisbonDstRecurrenceFixture();
     let createdSeries: any[] = [];
 
     try {
@@ -5107,8 +5127,7 @@ test.describe("booking rules", () => {
         data: {
           barberId: barber.id,
           serviceId: service.id,
-          // 14:00 in Lisbon while WEST (UTC+1).
-          startTime: "2026-09-24T13:00:00.000Z",
+          startTime: dstFixture.startTime,
           name: customerName,
           phone: "912695738",
           isManualBooking: true,
@@ -5134,8 +5153,9 @@ test.describe("booking rules", () => {
       });
 
       expect(localDateTimes.every((dateTime: string) => dateTime.endsWith(" 14:00"))).toBe(true);
-      expect(localDateTimes).toContain("2026-10-29 14:00");
-      expect(localDateTimes).toContain("2027-04-01 14:00");
+      for (const dateKey of dstFixture.expectedLocalDates) {
+        expect(localDateTimes).toContain(`${dateKey} 14:00`);
+      }
 
       const utcHours = [...new Set(createdSeries.map((appointment: any) =>
         new Date(appointment.startTime).getUTCHours(),

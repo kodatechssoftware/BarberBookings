@@ -11,6 +11,10 @@ import { runSchemaMigrations } from "../../server/migrations";
 import { createMigrationSubsetThrough } from "../helpers/migration-subset";
 import { installCurrentLocationFinanceSchema } from "../helpers/current-postgres-location-schema";
 
+// PostgreSQL `timestamp without time zone` values must be parsed consistently in
+// this integration fixture, independently of the workstation running the test.
+process.env.TZ = "UTC";
+
 async function availablePort() {
   const server = net.createServer();
   await new Promise<void>((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));

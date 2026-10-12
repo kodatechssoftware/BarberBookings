@@ -903,7 +903,9 @@ test("inbound user message types trigger one auto-reply while reactions and tech
   }
 });
 
-test("duplicate, concurrent and repeated inbound messages are limited to one auto-reply per number in 24 hours", async () => {
+test("duplicate, concurrent and repeated inbound messages are limited to one auto-reply per number in 24 hours", async (context) => {
+  const initialNow = new Date("2035-01-15T12:00:00.000Z");
+  context.mock.timers.enable({ apis: ["Date"], now: initialNow });
   process.env.META_WHATSAPP_WABA_ID = "waba"; process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
   process.env.META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED = "true";
   const storage = new MemoryStorage(); let replies = 0;
@@ -917,8 +919,9 @@ test("duplicate, concurrent and repeated inbound messages are limited to one aut
   await recordMetaWebhookStatuses(inboundWebhook("wamid.inbound.second", "image"), storage, undefined, sender, now);
   assert.equal(replies, 1);
 
+  context.mock.timers.setTime(now.getTime() + 24 * 60 * 60 * 1000 + 1);
   await recordMetaWebhookStatuses(inboundWebhook("wamid.inbound.after-window", "audio"), storage, undefined,
-    sender, new Date(now.getTime() + 24 * 60 * 60 * 1000 + 1));
+    sender, new Date());
   assert.equal(replies, 2);
 
   const concurrentStorage = new MemoryStorage(); let concurrentReplies = 0;
