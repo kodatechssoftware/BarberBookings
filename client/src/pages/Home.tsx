@@ -8,7 +8,10 @@ import { periodsForShop } from "@/lib/availability";
 import { preloadAdminPage, preloadBookingPage } from "@/lib/page-preloads";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
-import { shopBranding } from "@/lib/branding";
+import type { ResolvedShopBranding } from "@/lib/branding";
+import { useBusinessBranding } from "@/business/use-business-branding";
+import { useBusinessConfig } from "@/business/use-business-config";
+import type { BusinessBrandingProfile } from "@shared/business/branding";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 import { resolveLocationMapLinks } from "@shared/location-maps";
@@ -17,7 +20,6 @@ import { groupServicesForDisplay } from "@/lib/service-groups";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 
-const instagramUrl = shopBranding.instagramUrl;
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
 
@@ -38,8 +40,12 @@ function formatScheduleHour(time: string) {
   return minutes === "00" ? `${hour}h` : `${hour}h${minutes}`;
 }
 
-function getTodayOpeningStatus(rows: Array<{ dayOfWeek: number; startTime: string; endTime: string; isOpen: boolean }> | undefined, timeZone: string) {
-  if (!rows) return { title: "Consulte os horários", detail: "Atendimento por hora marcada." };
+function getTodayOpeningStatus(
+  rows: Array<{ dayOfWeek: number; startTime: string; endTime: string; isOpen: boolean }> | undefined,
+  timeZone: string,
+  copy: BusinessBrandingProfile["home"],
+) {
+  if (!rows) return { title: copy.openingUnavailableTitle, detail: copy.appointmentOnlyDetail };
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
   const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
@@ -51,8 +57,8 @@ function getTodayOpeningStatus(rows: Array<{ dayOfWeek: number; startTime: strin
 
   if (periods.length === 0) {
     return {
-      title: "Fechado hoje",
-      detail: "Atendimento por hora marcada nos restantes dias.",
+      title: copy.closedTodayTitle,
+      detail: copy.closedTodayDetail,
     };
   }
 
@@ -65,34 +71,43 @@ function getTodayOpeningStatus(rows: Array<{ dayOfWeek: number; startTime: strin
 
   if (activePeriod) {
     return {
-      title: `Aberto hoje até às ${formatScheduleHour(activePeriod.end)}`,
-      detail: "Atendimento em curso na barbearia.",
+      title: `${copy.openUntilPrefix} ${formatScheduleHour(activePeriod.end)}`,
+      detail: copy.openDetail,
     };
   }
 
   const nextPeriod = periods.find((period) => timeToMinutes(period.start) > currentMinutes);
   if (nextPeriod) {
     return {
-      title: `${currentMinutes > timeToMinutes(periods[0].end) ? "Reabre" : "Abre"} hoje às ${formatScheduleHour(nextPeriod.start)}`,
-      detail: "Atendimento por hora marcada.",
+      title: `${currentMinutes > timeToMinutes(periods[0].end) ? copy.reopensPrefix : copy.opensPrefix} ${formatScheduleHour(nextPeriod.start)}`,
+      detail: copy.appointmentOnlyDetail,
     };
   }
 
   return {
-    title: "Fechado agora",
-    detail: "Atendimento por hora marcada no próximo horário.",
+    title: copy.closedNowTitle,
+    detail: copy.closedNowDetail,
   };
 }
 
-function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
+function getBarberAvatar(
+  barber: { name: string; avatar?: string | null },
+  branding: ResolvedShopBranding,
+) {
   if (barber.avatar) return barber.avatar;
   const name = barber.name.toLowerCase();
-  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
-  if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
-  return shopBranding.logoUrl;
+  if (branding.professionalFallbackMode === "legacy-barber-avatars" && branding.useLegacyBarberAvatars) {
+    if (name.includes("baptista")) return fabioAvatar;
+    if (name.includes("bruno")) return brunoAvatar;
+  }
+  return branding.logoUrl;
 }
 
 export default function Home() {
+  const businessConfig = useBusinessConfig();
+  const shopBranding = useBusinessBranding();
+  const homeCopy = businessConfig.branding.home;
+  const instagramUrl = shopBranding.instagramUrl;
   const [activeSection, setActiveSection] = useState("");
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const [mapFrame, setMapFrame] = useState({ key: "", src: "", loaded: false });
@@ -184,7 +199,7 @@ export default function Home() {
   // [] is valid availability data. A background refetch must not hide a known status.
   const showOpeningSkeleton = shopHours === undefined && (isLoadingShopHours || isFetchingShopHours);
   const showOpeningFallback = shopHours === undefined && isShopHoursError;
-  const openingStatus = getTodayOpeningStatus(shopHours, selectedLocation.timezone);
+  const openingStatus = getTodayOpeningStatus(shopHours, selectedLocation.timezone, homeCopy);
   const warmBookingFlow = useCallback(() => {
     void preloadBookingPage();
   }, []);
@@ -254,7 +269,7 @@ export default function Home() {
         <div className="absolute inset-0">
           <img
             src={shopBranding.heroImageUrl}
-            alt={shopBranding.theme === "barber-pole" ? "Barbeiro da Powerhouse a executar um corte" : "Interior de barbearia"}
+            alt={shopBranding.heroImageAlt}
             loading="eager"
             className="h-full w-full object-cover"
           />
@@ -397,7 +412,7 @@ export default function Home() {
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Equipa</p>
               <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Conhece a equipa</h2>
               <p className="mt-4 text-sm leading-relaxed text-gray-400 md:text-base">
-                Diferentes estilos, o mesmo cuidado nos detalhes e no acabamento final.
+                {homeCopy.teamDescription}
               </p>
             </div>
           </div>
@@ -416,7 +431,7 @@ export default function Home() {
                 >
                   <div className="grid flex-1 grid-cols-[112px_1fr] gap-0 sm:grid-cols-[160px_1fr]">
                     <img
-                      src={getBarberAvatar(barber)}
+                      src={getBarberAvatar(barber, shopBranding)}
                       alt={barber.name}
                       loading="lazy"
                       decoding="async"

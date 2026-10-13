@@ -47,6 +47,7 @@ export function resolveBusinessRuntimeConfig(
       terms: profile.terms,
       copy: profile.copy,
       booking: { flow: profile.bookingFlow },
+      branding: profile.branding,
       features,
       theme: { id: themeId },
       runtime: {

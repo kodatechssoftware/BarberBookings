@@ -12,6 +12,7 @@ import {
 } from "@/lib/page-preloads";
 import { applyShopBrandingToDocument } from "@/lib/branding";
 import { BusinessConfigProvider } from "@/business/BusinessConfigProvider";
+import { useBusinessBranding } from "@/business/use-business-branding";
 
 const Home = lazy(() => import("@/pages/Home"));
 const Booking = lazy(preloadBookingPage);
@@ -50,14 +51,19 @@ function Router() {
   );
 }
 
-function App() {
+function BusinessDocumentBranding() {
+  const branding = useBusinessBranding();
   useEffect(() => {
-    applyShopBrandingToDocument();
-  }, []);
+    applyShopBrandingToDocument(branding);
+  }, [branding]);
+  return null;
+}
 
+function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BusinessConfigProvider loadingFallback={<PageLoader />}>
+        <BusinessDocumentBranding />
         <TooltipProvider>
           <Toaster />
           <Router />

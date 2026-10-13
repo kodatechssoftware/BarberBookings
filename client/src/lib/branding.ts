@@ -1,47 +1,105 @@
+import { businessBrandingProfiles, type BusinessBrandingProfile } from "@shared/business/branding";
+import type { BusinessThemeId } from "@shared/business/themes";
+
 const env = import.meta.env;
 
 declare const __DEMO_MODE__: boolean;
 
-const requestedTheme = env.VITE_BRAND_THEME?.trim() || "classic-gold";
 const isPowerhouseDemo = __DEMO_MODE__;
-const resolvedTheme = isPowerhouseDemo
-  ? "barber-pole"
-  : requestedTheme === "barber-pole"
-    ? "classic-gold"
-    : requestedTheme;
+const requestedTheme = env.VITE_BRAND_THEME?.trim().toLowerCase();
 const powerhouseAddress = "Rua Adelino de Oliveira 85, 4470-025 Maia";
-const defaultHeroImageUrl =
-  "https://images.unsplash.com/photo-1585747860715-2ba37e788b70?q=80&w=2074&auto=format&fit=crop";
 
-export const shopBranding = {
-  theme: resolvedTheme,
-  name: isPowerhouseDemo ? "Powerhouse barbershop" : env.VITE_SHOP_NAME?.trim() || "Baptista Barber Shop",
-  shortName: isPowerhouseDemo ? "Powerhouse" : env.VITE_SHOP_SHORT_NAME?.trim() || "Baptista",
-  address: isPowerhouseDemo ? powerhouseAddress : env.VITE_SHOP_ADDRESS?.trim() || "Rua Comandante Agatão Lança Nº28",
-  logoUrl: isPowerhouseDemo ? "/images/demo-logo.svg" : env.VITE_SHOP_LOGO_URL?.trim() || "/images/logo.jpg",
-  mapUrl: isPowerhouseDemo
-    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(powerhouseAddress)}`
-    : env.VITE_SHOP_MAP_URL?.trim() || "https://www.google.com/maps/search/?api=1&query=Rua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%20N%C2%BA28",
-  mapEmbedUrl: isPowerhouseDemo ? "" : env.VITE_SHOP_MAP_EMBED_URL?.trim() || "",
-  showMap: env.VITE_HIDE_SHOP_MAP !== "true",
-  useLegacyBarberAvatars: isPowerhouseDemo ? false : env.VITE_USE_LEGACY_BARBER_AVATARS !== "false",
-  instagramUrl: env.VITE_INSTAGRAM_URL?.trim() || "",
-  heroTitle: isPowerhouseDemo ? "Estilo, precisão e atitude" : "Corte e barba com hora marcada",
-  heroDescription: isPowerhouseDemo
-    ? "Barbearia masculina na Maia, com cortes, barba e tratamentos feitos ao detalhe."
-    : "Cortes, barba e acabamentos cuidados, com atenção ao detalhe.",
-  heroImageUrl: isPowerhouseDemo ? "/images/powerhouse-hero.jpg" : defaultHeroImageUrl,
+export type ResolvedShopBranding = {
+  theme: BusinessThemeId | "barber-pole";
+  name: string;
+  shortName: string;
+  address: string;
+  logoUrl: string;
+  mapUrl: string;
+  mapEmbedUrl: string;
+  showMap: boolean;
+  useLegacyBarberAvatars: boolean;
+  professionalFallbackMode: BusinessBrandingProfile["professionalFallbackMode"];
+  instagramUrl: string;
+  heroTitle: string;
+  heroDescription: string;
+  heroImageUrl: string;
+  heroImageAlt: string;
 };
+
+function resolveTheme(profileTheme: BusinessThemeId): ResolvedShopBranding["theme"] {
+  if (isPowerhouseDemo) return "barber-pole";
+  if (requestedTheme === "barber-pole") return "classic-gold";
+  if (requestedTheme === "classic-gold" || requestedTheme === "beauty-clean") return requestedTheme;
+  return profileTheme;
+}
+
+export function resolveShopBranding(
+  profile: BusinessBrandingProfile,
+  profileTheme: BusinessThemeId,
+): ResolvedShopBranding {
+  if (isPowerhouseDemo) {
+    return {
+      theme: "barber-pole",
+      name: "Powerhouse barbershop",
+      shortName: "Powerhouse",
+      address: powerhouseAddress,
+      logoUrl: "/images/demo-logo.svg",
+      mapUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(powerhouseAddress)}`,
+      mapEmbedUrl: "",
+      showMap: env.VITE_HIDE_SHOP_MAP !== "true",
+      useLegacyBarberAvatars: false,
+      professionalFallbackMode: "brand-logo",
+      instagramUrl: env.VITE_INSTAGRAM_URL?.trim() || "",
+      heroTitle: "Estilo, precisão e atitude",
+      heroDescription: "Barbearia masculina na Maia, com cortes, barba e tratamentos feitos ao detalhe.",
+      heroImageUrl: "/images/powerhouse-hero.jpg",
+      heroImageAlt: "Barbeiro da Powerhouse a executar um corte",
+    };
+  }
+
+  return {
+    theme: resolveTheme(profileTheme),
+    name: env.VITE_SHOP_NAME?.trim() || profile.defaultName,
+    shortName: env.VITE_SHOP_SHORT_NAME?.trim() || profile.defaultShortName,
+    address: env.VITE_SHOP_ADDRESS?.trim() || profile.defaultAddress,
+    logoUrl: env.VITE_SHOP_LOGO_URL?.trim() || profile.defaultLogoUrl,
+    mapUrl: env.VITE_SHOP_MAP_URL?.trim() || profile.defaultMapUrl,
+    mapEmbedUrl: env.VITE_SHOP_MAP_EMBED_URL?.trim() || profile.defaultMapEmbedUrl,
+    showMap: env.VITE_HIDE_SHOP_MAP !== "true",
+    useLegacyBarberAvatars:
+      profile.professionalFallbackMode === "legacy-barber-avatars"
+      && env.VITE_USE_LEGACY_BARBER_AVATARS !== "false",
+    professionalFallbackMode: profile.professionalFallbackMode,
+    instagramUrl: env.VITE_INSTAGRAM_URL?.trim() || "",
+    heroTitle: profile.hero.title,
+    heroDescription: profile.hero.description,
+    heroImageUrl: profile.hero.imageUrl,
+    heroImageAlt: profile.hero.imageAlt,
+  };
+}
+
+// Compatibility export for surfaces not yet migrated to runtime branding. Its
+// Barber defaults remain unchanged; Home and setup resolve the active profile.
+export const shopBranding = resolveShopBranding(
+  businessBrandingProfiles.barber,
+  "classic-gold",
+);
 
 export function resolveLocationLogoUrl(logoUrl?: string | null) {
   return logoUrl?.trim() || shopBranding.logoUrl;
 }
 
-export function applyShopBrandingToDocument() {
-  document.documentElement.dataset.brandTheme = shopBranding.theme;
-  document.title = shopBranding.name;
-  document.querySelector('meta[name="application-name"]')?.setAttribute("content", shopBranding.name);
-  document.querySelector('meta[name="description"]')?.setAttribute("content", `Marcações online da ${shopBranding.name}.`);
-  document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", shopBranding.shortName);
-  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute("href", shopBranding.logoUrl);
+export function applyShopBrandingToDocument(branding: ResolvedShopBranding = shopBranding) {
+  document.documentElement.dataset.brandTheme = branding.theme;
+  document.title = branding.name;
+  document.querySelector('meta[name="application-name"]')?.setAttribute("content", branding.name);
+  document.querySelector('meta[name="description"]')?.setAttribute("content", `Marcações online de ${branding.name}.`);
+  document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", branding.shortName);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute(
+    "content",
+    branding.theme === "beauty-clean" ? "#2f2029" : "#d4af37",
+  );
+  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute("href", branding.logoUrl);
+  document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.setAttribute("href", branding.logoUrl);
 }

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Beauty Salon</title>
+  <desc id="desc">Símbolo abstrato de pétalas em rosa e champanhe</desc>
+  <defs>
+    <linearGradient id="background" x1="24" y1="18" x2="138" y2="145" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4b2d40"/>
+      <stop offset="1" stop-color="#251820"/>
+    </linearGradient>
+    <linearGradient id="petal" x1="47" y1="38" x2="116" y2="124" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f0c7d4"/>
+      <stop offset="1" stop-color="#c87593"/>
+    </linearGradient>
+  </defs>
+  <circle cx="80" cy="80" r="76" fill="url(#background)"/>
+  <circle cx="80" cy="80" r="69" fill="none" stroke="#e9c7a9" stroke-opacity=".55" stroke-width="2"/>
+  <path d="M80 30c18 13 25 30 20 48-5 17-20 29-20 29S65 95 60 78c-5-18 2-35 20-48Z" fill="url(#petal)"/>
+  <path d="M37 58c21-2 38 6 47 22 8 16 5 35 5 35S70 113 56 102C41 91 35 76 37 58Z" fill="#e6b5c5" fill-opacity=".88"/>
+  <path d="M123 58c2 18-4 33-19 44-14 11-33 13-33 13s-3-19 5-35c9-16 26-24 47-22Z" fill="#d890a9" fill-opacity=".9"/>
+  <circle cx="80" cy="86" r="8" fill="#f2d7bd"/>
+  <path d="M54 129c17 7 35 7 52 0" fill="none" stroke="#e9c7a9" stroke-linecap="round" stroke-width="3"/>
+</svg>

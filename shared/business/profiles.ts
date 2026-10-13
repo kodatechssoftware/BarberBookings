@@ -1,4 +1,5 @@
 import { businessBookingFlows, type BusinessBookingFlow } from "./booking-flow";
+import { businessBrandingProfiles, type BusinessBrandingProfile } from "./branding";
 import { businessCopy, type BusinessCopy } from "./copy";
 import type { BusinessFeatures } from "./features";
 import { businessTerms, type BusinessTerms } from "./terms";
@@ -10,6 +11,7 @@ export type BusinessProfile = {
   terms: BusinessTerms;
   copy: BusinessCopy;
   bookingFlow: BusinessBookingFlow;
+  branding: BusinessBrandingProfile;
   defaultTheme: BusinessThemeId;
   featureDefaults: BusinessFeatures;
 };
@@ -39,6 +41,7 @@ export const businessProfiles = {
     terms: businessTerms.barber,
     copy: businessCopy.barber,
     bookingFlow: businessBookingFlows.barber,
+    branding: businessBrandingProfiles.barber,
     defaultTheme: defaultBusinessThemes.barber,
     featureDefaults: barberFeatureDefaults,
   },
@@ -47,6 +50,7 @@ export const businessProfiles = {
     terms: businessTerms.beauty,
     copy: businessCopy.beauty,
     bookingFlow: businessBookingFlows.beauty,
+    branding: businessBrandingProfiles.beauty,
     defaultTheme: defaultBusinessThemes.beauty,
     featureDefaults: beautyFeatureDefaults,
   },

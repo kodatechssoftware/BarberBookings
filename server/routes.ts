@@ -147,6 +147,7 @@ import {
   toCanonicalMeResponse,
   validateCanonicalSession,
 } from "./auth-runtime";
+import { runInitialSeedPolicy } from "./initial-seed-policy";
 import {
   clearAuthenticatedSessionIdentity,
   destroyAuthenticatedSession,
@@ -2039,6 +2040,25 @@ export async function registerRoutes(
 
   app.get("/api/runtime-config", (_req, res) => {
     res.json(resolvedBusinessConfig);
+  });
+
+  app.get("/manifest.webmanifest", (_req, res) => {
+    const manifest = resolvedBusinessConfig.branding.manifest;
+    res
+      .type("application/manifest+json")
+      .setHeader("Cache-Control", "no-store")
+      .send(JSON.stringify({
+        name: manifest.name,
+        short_name: manifest.shortName,
+        description: manifest.description,
+        start_url: "/admin",
+        scope: "/",
+        display: "standalone",
+        background_color: manifest.backgroundColor,
+        theme_color: manifest.themeColor,
+        orientation: "portrait-primary",
+        icons: manifest.icons,
+      }));
   });
 
   app.get("/api/locations", async (_req, res) => {
@@ -8339,7 +8359,33 @@ async function synchronizePowerhouseDemoData() {
   await replaceBarberServicesForLocation(primaryBarber.id, desiredServiceIds, defaultLocation.id);
 }
 
+async function hasCanonicalUsers() {
+  if (authRuntimeMode !== "canonical" || useMemoryStorage) return false;
+  const schemaName = databaseSchema || "public";
+  const usersTable = `${quoteSqlIdentifier(schemaName)}.${quoteSqlIdentifier("users")}`;
+  const result = await pool.query(`SELECT 1 FROM ${usersTable} LIMIT 1`);
+  return result.rows.length > 0;
+}
+
 async function seedDatabase() {
+  const hasLegacyProfessionalData = await startupTimings.measure("seed.hasData", () => storage.hasData());
+  const canonicalUsersPresent = hasLegacyProfessionalData
+    ? await hasCanonicalUsers()
+    : false;
+
+  await runInitialSeedPolicy({
+    authRuntimeMode,
+    hasLegacyProfessionalData,
+    hasCanonicalUsers: canonicalUsersPresent,
+    prepareCanonicalInstallation: () => startupTimings.measure(
+      "ensureDefaultShopAvailability",
+      ensureDefaultShopAvailability,
+    ),
+    runLegacySeed: () => seedLegacyDatabase(hasLegacyProfessionalData),
+  });
+}
+
+async function seedLegacyDatabase(hasExistingData: boolean) {
   const isDemoEnvironment = process.env.DEMO_MODE === "true";
   const configuredAdminPassword = (
     isDemoEnvironment ? process.env.DEMO_ADMIN_PASSWORD : process.env.ADMIN_INITIAL_PASSWORD
@@ -8348,7 +8394,7 @@ async function seedDatabase() {
     throw new Error("DEMO_ADMIN_PASSWORD é obrigatória em modo demo e deve ter pelo menos 4 caracteres.");
   }
 
-  if (await startupTimings.measure("seed.hasData", () => storage.hasData())) {
+  if (hasExistingData) {
     // Check if admin exists, if not create one
     const admin = await startupTimings.measure("seed.admin-read", () => storage.getAdminByUsername("admin"));
     if (!admin) {

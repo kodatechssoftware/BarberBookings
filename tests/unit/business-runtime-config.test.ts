@@ -43,12 +43,16 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
     { productionDeployment: true },
   ).config;
 
-  assert.equal(barber.schemaVersion, 1);
+  assert.equal(barber.schemaVersion, 2);
   assert.deepEqual(barber.booking.flow, ["professional", "service", "datetime", "customer"]);
   assert.equal(barber.copy.booking.professional.heading, "Seleciona o barbeiro");
   assert.equal(barber.copy.admin.team.heading, "Equipa de Barbeiros");
   assert.equal(barber.copy.agenda.professional.allFilter, "Todos os barbeiros");
   assert.equal(barber.theme.id, "classic-gold");
+  assert.equal(barber.branding.defaultName, "Baptista Barber Shop");
+  assert.equal(barber.branding.hero.title, "Corte e barba com hora marcada");
+  assert.equal(barber.branding.professionalFallbackMode, "legacy-barber-avatars");
+  assert.equal(barber.branding.manifest.name, "BarberBookings");
   assert.equal(barber.features.workspaceRent, true);
   assert.equal(barber.features.multiLocation, false);
   assert.equal(barber.features.preparationBuffers, false);
@@ -59,6 +63,13 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
   assert.equal(beauty.copy.admin.team.heading, "Equipa de Profissionais");
   assert.equal(beauty.copy.agenda.professional.allFilter, "Todos os profissionais");
   assert.equal(beauty.theme.id, "beauty-clean");
+  assert.equal(beauty.branding.defaultName, "Beauty Salon");
+  assert.equal(beauty.branding.hero.title, "Beleza e cuidado com hora marcada");
+  assert.equal(beauty.branding.hero.imageUrl, "/images/beauty-hero.svg");
+  assert.equal(beauty.branding.professionalFallbackMode, "brand-logo");
+  assert.equal(beauty.branding.manifest.name, "Beauty Salon");
+  assert.equal(beauty.branding.manifest.icons[0]?.src, "/images/beauty-logo.svg");
+  assert.doesNotMatch(JSON.stringify(beauty.branding), /Baptista|Powerhouse|barbeiro|barbearia|corte e barba/i);
   assert.deepEqual(beauty.runtime.multiLocation, { enabled: true, maxLocations: 3 });
   assert.equal(beauty.features.multiLocation, true);
   assert.equal(beauty.features.preparationBuffers, true);

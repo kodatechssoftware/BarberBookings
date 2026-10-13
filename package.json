@@ -28,7 +28,7 @@
     "test:auth-runtime": "tsx --test tests/unit/auth-runtime-mode.test.ts tests/unit/auth-session.test.ts && tsx script/test-auth-runtime.ts",
     "test:auth-authorization": "cross-env NODE_ENV=test USE_MEMORY_STORAGE=true tsx --test tests/unit/audit-log-security.test.ts tests/unit/auth-capabilities.test.ts tests/unit/auth-authorization.test.ts tests/unit/auth-p4b-route-contract.test.ts tests/unit/blacklist-location-scope.test.ts && cross-env AUTH_RUNTIME_MODE=canonical tsx --test tests/unit/auth-route-enforcement.test.ts",
     "test:auth-management": "tsx --test tests/unit/auth-rate-limit.test.ts tests/unit/auth-user-management-dto.test.ts tests/unit/auth-user-management-route-contract.test.ts && tsx script/test-auth-user-management.ts",
-    "test:auth-bootstrap": "tsx --test tests/unit/auth-bootstrap.test.ts && tsx script/test-auth-bootstrap.ts",
+    "test:auth-bootstrap": "tsx --test tests/unit/auth-bootstrap.test.ts tests/unit/initial-seed-policy.test.ts && tsx script/test-auth-bootstrap.ts",
     "test:auth-cutover": "tsx script/test-auth-cutover-check.ts",
     "db:migrate": "tsx script/migrate.ts",
     "db:push": "drizzle-kit push"

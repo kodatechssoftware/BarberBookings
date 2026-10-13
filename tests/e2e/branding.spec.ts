@@ -16,6 +16,14 @@ test("applies environment-specific branding without leaking production identity"
   const logoUrl = isPowerhouseDemo ? "/images/demo-logo.svg" : process.env.VITE_SHOP_LOGO_URL || "/images/logo.jpg";
   const hideMap = process.env.VITE_HIDE_SHOP_MAP === "true";
 
+  const manifestResponse = await page.request.get("/manifest.webmanifest");
+  expect(manifestResponse.ok()).toBe(true);
+  await expect(manifestResponse.json()).resolves.toMatchObject({
+    name: "BarberBookings",
+    short_name: "BarberBookings",
+    theme_color: "#d4af37",
+  });
+
   await page.goto("/");
 
   await expect(page).toHaveTitle(shopName);

@@ -83,6 +83,35 @@
   --brand-red: 350 58% 40%;
 }
 
+:root[data-brand-theme="beauty-clean"] {
+  --background: 330 20% 10%;
+  --foreground: 30 38% 96%;
+  --primary: 343 54% 68%;
+  --primary-foreground: 330 28% 12%;
+  --secondary: 330 18% 17%;
+  --secondary-foreground: 30 38% 96%;
+  --muted: 330 13% 22%;
+  --muted-foreground: 330 8% 70%;
+  --accent: 27 62% 76%;
+  --accent-foreground: 330 28% 12%;
+  --destructive: 355 70% 58%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 330 16% 24%;
+  --input: 330 16% 24%;
+  --ring: 343 54% 68%;
+  --card: 330 20% 14%;
+  --card-foreground: 30 38% 96%;
+  --popover: 330 20% 14%;
+  --popover-foreground: 30 38% 96%;
+  --brand-gradient-from: 343 54% 68%;
+  --brand-gradient-to: 322 38% 48%;
+  --brand-highlight: 27 62% 76%;
+  --brand-red: 343 54% 55%;
+  --radius: 0.875rem;
+  --font-display: 'Playfair Display', serif;
+  --font-body: 'DM Sans', sans-serif;
+}
+
 @layer base {
   body {
     @apply bg-background text-foreground antialiased selection:bg-primary/30 selection:text-primary-foreground;
@@ -103,6 +132,13 @@
       hsl(0 0% 10%) 44px 66px
     );
     box-shadow: 0 1px 12px hsl(350 58% 40% / 0.35);
+  }
+
+  :root[data-brand-theme="beauty-clean"] body {
+    background-image:
+      radial-gradient(circle at 12% 8%, hsl(343 54% 68% / 0.1), transparent 28rem),
+      radial-gradient(circle at 88% 22%, hsl(27 62% 76% / 0.08), transparent 24rem);
+    background-attachment: fixed;
   }
 
   h1, h2, h3, h4, h5, h6 {

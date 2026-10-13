@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
-import { shopBranding } from "@/lib/branding";
+import { useBusinessBranding } from "@/business/use-business-branding";
 
 type BootstrapStatus = { available: boolean; configured: boolean };
 
@@ -21,6 +21,7 @@ async function responseMessage(response: Response, fallback: string) {
 }
 
 export default function Setup() {
+  const shopBranding = useBusinessBranding();
   const [, navigate] = useLocation();
   const submittingRef = useRef(false);
   const [status, setStatus] = useState<BootstrapStatus | null>(null);

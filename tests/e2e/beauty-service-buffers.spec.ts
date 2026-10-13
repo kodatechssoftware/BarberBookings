@@ -35,6 +35,53 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
   let eligibleProfessional: any;
   let ineligibleProfessional: any;
 
+  test("renders a local Beauty Home and beauty-clean theme at responsive widths", async ({ page }) => {
+    const manifestResponse = await page.request.get("/manifest.webmanifest");
+    expect(manifestResponse.ok()).toBe(true);
+    const manifest = await manifestResponse.json();
+    expect(manifest).toMatchObject({
+      name: "Beauty Salon",
+      short_name: "Beauty",
+      theme_color: "#2f2029",
+      icons: [{ src: "/images/beauty-logo.svg", type: "image/svg+xml" }],
+    });
+    expect(JSON.stringify(manifest).toLowerCase()).not.toMatch(/barber|baptista|powerhouse/);
+
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 820, height: 1180 },
+      { width: 1440, height: 1000 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      await expect(page).toHaveTitle("Beauty Salon");
+      await expect(page.locator("html")).toHaveAttribute("data-brand-theme", "beauty-clean");
+      await expect(page.getByRole("heading", { name: "Beleza e cuidado com hora marcada" })).toBeVisible();
+      await expect(page.getByText("Serviços personalizados num ambiente tranquilo, cuidado e profissional.")).toBeVisible();
+      await expect(page.locator('img[src="/images/beauty-hero.svg"]')).toBeVisible();
+      await expect(page.locator('img[src="/images/beauty-logo.svg"]').first()).toBeVisible();
+      await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/images/beauty-logo.svg");
+      await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/images/beauty-logo.svg");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+    }
+
+    const colors = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      return {
+        primary: root.getPropertyValue("--primary").trim(),
+        background: root.getPropertyValue("--background").trim(),
+      };
+    });
+    expect(colors).toEqual({ primary: "343 54% 68%", background: "330 20% 10%" });
+
+    const baptistaCard = page.locator("#team article").filter({ hasText: "Fábio Baptista" });
+    if (await baptistaCard.count()) {
+      await expect(baptistaCard.locator("img")).toHaveAttribute("src", "/images/beauty-logo.svg");
+    }
+    await expect(page.getByText("Corte e barba com hora marcada", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Baptista Barber Shop", { exact: true })).toHaveCount(0);
+  });
+
   test("applies buffers to public/manual/edit/reschedule/recurrence and preserves snapshots", async ({ request }) => {
     await loginAdmin(request);
     expect((await request.patch("/api/shop/availability", { data: openEveryDay })).ok()).toBe(true);

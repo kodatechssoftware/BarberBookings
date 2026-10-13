@@ -33,8 +33,12 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(runtimeConfigResponse.ok()).toBe(true);
   const runtimeConfig = await runtimeConfigResponse.json();
   expect(runtimeConfig).toMatchObject({
-    schemaVersion: 1,
+    schemaVersion: 2,
     vertical: "barber",
+    branding: {
+      defaultName: "Baptista Barber Shop",
+      hero: { title: "Corte e barba com hora marcada" },
+    },
     copy: {
       booking: {
         professional: {
