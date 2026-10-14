@@ -204,6 +204,10 @@ try {
     CREATE UNIQUE INDEX customer_notes_phone_name_idx
       ON ${table("customer_notes")} (phone, customer_name_key);
     CREATE TABLE ${table("blacklist")} (id serial PRIMARY KEY, email text, phone text NOT NULL, reason text, created_at timestamp NOT NULL DEFAULT now());
+    CREATE TABLE ${table("verification_codes")} (
+      id serial PRIMARY KEY, phone text NOT NULL, code text NOT NULL,
+      expires_at timestamp NOT NULL, used boolean NOT NULL DEFAULT false
+    );
     CREATE TABLE ${table("business_expenses")} (
       id serial PRIMARY KEY, category text NOT NULL, description text NOT NULL, amount_cents integer NOT NULL,
       expense_date timestamp NOT NULL, recurrence text NOT NULL DEFAULT 'once', notes text,
@@ -242,8 +246,11 @@ try {
     ) VALUES ('admin', 1, 'admin', 'legacy.action', 'legacy', 1, 'Legacy audit');
   `);
 
+  // Complete pre-0001 baseline. The physically-empty bootstrap path is tested
+  // separately by test:database-bootstrap; this fixture focuses on preserving
+  // legacy data while applying the incremental migrations.
   const preservedTables = ["admins", "barbers", "services", "appointments", "shop_availability", "barber_availability",
-    "barber_services", "barber_invites", "customer_notes", "blacklist", "business_expenses", "audit_logs"];
+    "barber_services", "barber_invites", "customer_notes", "blacklist", "verification_codes", "business_expenses", "audit_logs"];
   const legacyServicesBefore = (await pool.query(`
     SELECT id, name, description, agenda_label, price, duration, is_visible
     FROM ${table("services")} ORDER BY id
@@ -273,7 +280,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 17, "a fresh empty application schema must apply migrations 0001 through 0017");
+  assert.equal(freshRun.applied.length, 17, "an empty legacy baseline must apply migrations 0001 through 0017");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);

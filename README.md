@@ -29,10 +29,10 @@ docker compose up -d
 npm install
 ```
 
-3. Criar o schema na base de dados:
+3. Criar o schema numa base de dados vazia e aplicar as migrations:
 
 ```powershell
-npm run db:push
+npm run db:bootstrap
 ```
 
 4. Arrancar a aplicacao:
@@ -339,7 +339,10 @@ dos dados da Agenda; as despesas carregam ao abrir Relatorios. O refetch com
 dados existentes nao volta a bloquear estes paineis. Blacklist e dados necessarios
 as marcacoes continuam disponiveis no carregamento inicial.
 
-Depois de ligares a base de dados, executa `npm run db:push` uma vez para criar/atualizar as tabelas.
+Numa instalação nova, usa `npm run db:bootstrap`. O comando instala a baseline
+legacy apenas quando o schema está realmente vazio e aplica depois as migrations
+versionadas. É idempotente e também pode ser usado nos deploys seguintes. Não uses
+`db:push` como substituto das migrations num ambiente persistente.
 
 ## Deploy separado
 
@@ -350,7 +353,7 @@ Para publicar o frontend na Cloudflare e a API no Render:
   - Output directory: `dist/public`
   - Environment variable: `VITE_API_URL=https://api.teudominio.com`
 - Render Web Service
-  - Build command: `npm run build:server`
+  - Build command numa instalação com base de dados persistente: `npm ci && npm run build && npm run db:bootstrap`
   - Start command: `npm start`
   - Environment variables:
     - `DATABASE_URL=postgresql://...`

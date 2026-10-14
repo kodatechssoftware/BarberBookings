@@ -1,6 +1,22 @@
 # Database migrations
 
-Run the versioned migrations as a separate release step before starting code that uses the new schema:
+For a brand-new, physically empty PostgreSQL schema, run:
+
+```sh
+npm run db:bootstrap
+```
+
+The bootstrap command installs the immutable DDL-only legacy baseline from
+`database/baseline/0000_legacy_baseline.sql`, records its checksum, and then
+applies migrations `0001` onward. It also safely resumes a partial versioned
+installation and is a no-op when every migration is already present. Unknown,
+mixed or non-contiguous schemas fail closed without being rebuilt. Do not edit
+the baseline after it has been published, and do not use `drizzle-kit push` to
+initialize a persistent deployment.
+
+Existing installations that already have their legacy foundation can continue
+to run the versioned migrations directly as a separate release step before
+starting code that uses the new schema:
 
 ```sh
 npm run db:migrate
