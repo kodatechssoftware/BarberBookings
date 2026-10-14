@@ -1490,6 +1490,14 @@ export default function Admin() {
   const adminCopy = businessCopy.admin;
   const agendaCopy = businessCopy.agenda;
   const inviteCopy = businessCopy.publicCycle.invite;
+
+  useEffect(() => {
+    document.documentElement.dataset.adminSurface = "true";
+    return () => {
+      delete document.documentElement.dataset.adminSurface;
+    };
+  }, []);
+
   const weekDays = useMemo(() => getScheduleWeekDays(adminCopy.schedules), [adminCopy.schedules]);
   const [user, setUser] = useState<AdminUser | null>(null);
   const sessionExpiryHandledRef = useRef(false);
@@ -3666,12 +3674,12 @@ export default function Admin() {
   };
 
   if (user === null) {
-    return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+    return <div className="admin-shell min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
   if (!user.authorized) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="admin-shell min-h-screen bg-background flex items-center justify-center p-4">
         <Card className="max-w-md w-full bg-card border-white/10">
           <CardHeader>
             <img
@@ -3703,7 +3711,7 @@ export default function Admin() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-background text-foreground font-body p-4 md:p-8">
+    <div className="admin-shell min-h-screen overflow-x-hidden bg-background text-foreground font-body p-4 md:p-8">
       <div className="container mx-auto max-w-full overflow-x-hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8 text-white">
           <div className="flex-1">

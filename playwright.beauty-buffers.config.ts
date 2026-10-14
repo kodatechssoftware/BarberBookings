@@ -5,7 +5,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: "beauty-service-buffers.spec.ts",
+  testMatch: ["beauty-service-buffers.spec.ts", "beauty-admin-contrast.spec.ts"],
   timeout: 45_000,
   expect: { timeout: 7_500 },
   fullyParallel: false,
