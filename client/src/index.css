@@ -84,30 +84,30 @@
 }
 
 :root[data-brand-theme="beauty-clean"] {
-  --background: 330 20% 10%;
-  --foreground: 30 38% 96%;
-  --primary: 343 54% 68%;
-  --primary-foreground: 330 28% 12%;
-  --secondary: 330 18% 17%;
-  --secondary-foreground: 30 38% 96%;
-  --muted: 330 13% 22%;
-  --muted-foreground: 330 8% 70%;
-  --accent: 27 62% 76%;
-  --accent-foreground: 330 28% 12%;
+  --background: 35 38% 97%;
+  --foreground: 25 14% 29%;
+  --primary: 348 42% 68%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 32 31% 92%;
+  --secondary-foreground: 25 14% 29%;
+  --muted: 31 22% 90%;
+  --muted-foreground: 25 10% 46%;
+  --accent: 42 43% 67%;
+  --accent-foreground: 25 20% 22%;
   --destructive: 355 70% 58%;
   --destructive-foreground: 0 0% 100%;
-  --border: 330 16% 24%;
-  --input: 330 16% 24%;
-  --ring: 343 54% 68%;
-  --card: 330 20% 14%;
-  --card-foreground: 30 38% 96%;
-  --popover: 330 20% 14%;
-  --popover-foreground: 30 38% 96%;
-  --brand-gradient-from: 343 54% 68%;
-  --brand-gradient-to: 322 38% 48%;
-  --brand-highlight: 27 62% 76%;
-  --brand-red: 343 54% 55%;
-  --radius: 0.875rem;
+  --border: 31 22% 83%;
+  --input: 31 22% 83%;
+  --ring: 42 43% 67%;
+  --card: 40 43% 99%;
+  --card-foreground: 25 14% 29%;
+  --popover: 40 43% 99%;
+  --popover-foreground: 25 14% 29%;
+  --brand-gradient-from: 350 47% 72%;
+  --brand-gradient-to: 342 39% 62%;
+  --brand-highlight: 42 47% 70%;
+  --brand-red: 348 42% 58%;
+  --radius: 1.125rem;
   --font-display: 'Playfair Display', serif;
   --font-body: 'DM Sans', sans-serif;
 }
@@ -136,9 +136,18 @@
 
   :root[data-brand-theme="beauty-clean"] body {
     background-image:
-      radial-gradient(circle at 12% 8%, hsl(343 54% 68% / 0.1), transparent 28rem),
-      radial-gradient(circle at 88% 22%, hsl(27 62% 76% / 0.08), transparent 24rem);
+      radial-gradient(circle at 12% 8%, hsl(348 42% 78% / 0.18), transparent 30rem),
+      radial-gradient(circle at 88% 22%, hsl(42 43% 76% / 0.13), transparent 26rem);
     background-attachment: fixed;
+  }
+
+  :root[data-brand-theme="beauty-clean"] h1,
+  :root[data-brand-theme="beauty-clean"] h2,
+  :root[data-brand-theme="beauty-clean"] h3,
+  :root[data-brand-theme="beauty-clean"] h4,
+  :root[data-brand-theme="beauty-clean"] h5,
+  :root[data-brand-theme="beauty-clean"] h6 {
+    color: hsl(var(--foreground));
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -246,6 +255,24 @@
   box-shadow: 0 0 24px hsl(var(--primary) / 0.48);
 }
 
+:root[data-brand-theme="beauty-clean"] .brand-primary-button {
+  min-height: 2.875rem;
+  border: 1px solid hsl(var(--brand-highlight) / 0.7);
+  border-radius: 9999px;
+  box-shadow: 0 0.65rem 1.6rem hsl(var(--primary) / 0.18);
+  letter-spacing: 0.01em;
+}
+
+:root[data-brand-theme="beauty-clean"] .brand-primary-button:hover {
+  box-shadow: 0 0.8rem 1.9rem hsl(var(--primary) / 0.26);
+  transform: translateY(-1px);
+}
+
+:root[data-brand-theme="beauty-clean"] .brand-default-button {
+  border-radius: 9999px;
+  box-shadow: 0 0.45rem 1.2rem hsl(var(--primary) / 0.14);
+}
+
 .brand-default-button {
   box-shadow: 0 0 15px hsl(var(--primary) / 0.3);
 }
@@ -260,6 +287,243 @@
 
 :root[data-brand-theme="barber-pole"] .brand-primary-button {
   border-bottom: 2px solid hsl(var(--brand-red));
+}
+
+/*
+ * Ana Isabel Beauty presentation. These selectors are deliberately scoped to
+ * beauty-clean so classic-gold/barber-pole retain their established layout.
+ */
+:root[data-brand-theme="beauty-clean"] .home-shell {
+  background:
+    radial-gradient(circle at 8% 26%, hsl(348 42% 86% / 0.32), transparent 24rem),
+    hsl(var(--background));
+}
+
+:root[data-brand-theme="beauty-clean"] .home-nav {
+  border-color: hsl(var(--border) / 0.72);
+  background: hsl(var(--background) / 0.9);
+  box-shadow: 0 0.35rem 1.6rem hsl(25 14% 29% / 0.04);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-brand-logo {
+  width: 10.75rem;
+  height: 3rem;
+  border: 0;
+  border-radius: 0;
+  object-fit: contain;
+  object-position: left center;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-brand-name {
+  display: none;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-nav-link {
+  color: hsl(var(--muted-foreground));
+  letter-spacing: 0.16em;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-nav-link:hover {
+  color: hsl(var(--foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero {
+  min-height: 78vh;
+  background: hsl(37 38% 96%);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-inner {
+  min-height: calc(78vh - 5rem);
+  padding-top: 3rem;
+  padding-bottom: 4rem;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-image {
+  object-position: center;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-overlay {
+  background: linear-gradient(
+    90deg,
+    hsl(37 38% 97% / 0.99) 0%,
+    hsl(37 38% 97% / 0.95) 35%,
+    hsl(37 38% 97% / 0.58) 56%,
+    hsl(37 38% 97% / 0.08) 82%
+  );
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-fade {
+  height: 30%;
+  background: linear-gradient(to top, hsl(var(--background)), transparent);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-copy {
+  max-width: 45rem;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-eyebrow {
+  color: hsl(42 43% 48%);
+  font-weight: 600;
+  letter-spacing: 0.22em;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-title {
+  max-width: 12ch;
+  color: hsl(25 18% 27%);
+  font-size: clamp(2.8rem, 6vw, 5.9rem);
+  font-weight: 500;
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-hero-description {
+  max-width: 35rem;
+  color: hsl(var(--muted-foreground));
+  font-size: clamp(1rem, 1.5vw, 1.18rem);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-primary-cta,
+:root[data-brand-theme="beauty-clean"] .home-secondary-cta {
+  min-height: 3.25rem;
+  border-radius: 9999px;
+  padding-inline: 2rem;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-secondary-cta {
+  border-color: hsl(42 43% 60% / 0.58);
+  background: hsl(40 43% 99% / 0.75);
+  color: hsl(var(--foreground));
+  box-shadow: inset 0 0 0 1px hsl(40 43% 99% / 0.6);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-secondary-cta:hover {
+  border-color: hsl(42 43% 55% / 0.82);
+  background: hsl(35 34% 94%);
+  color: hsl(var(--foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .home-opening-card {
+  border-color: hsl(var(--border) / 0.76);
+  border-radius: 1.5rem;
+  background: hsl(40 43% 99% / 0.82);
+  box-shadow: 0 1.2rem 3rem hsl(25 14% 29% / 0.07);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-opening-card .text-white,
+:root[data-brand-theme="beauty-clean"] .home-opening-card .text-gray-400 {
+  color: hsl(var(--foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .home-section {
+  border-color: hsl(var(--border) / 0.62);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-services-section {
+  background: hsl(38 30% 96% / 0.75);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-team-section {
+  background: hsl(350 38% 95% / 0.62);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-location-section {
+  background: hsl(40 43% 99% / 0.56);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-section-title {
+  color: hsl(25 18% 27%);
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-service-card,
+:root[data-brand-theme="beauty-clean"] .home-professional-card {
+  border-color: hsl(var(--border) / 0.72);
+  border-radius: 1.5rem;
+  background: hsl(var(--card) / 0.92);
+  box-shadow: 0 1rem 2.7rem hsl(25 14% 29% / 0.055);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-professional-card {
+  min-height: 13rem;
+}
+
+:root[data-brand-theme="beauty-clean"] .home-professional-card:hover,
+:root[data-brand-theme="beauty-clean"] .home-service-card:hover {
+  border-color: hsl(42 43% 67% / 0.68);
+  box-shadow: 0 1.3rem 3.2rem hsl(348 42% 68% / 0.12);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-shell .text-white {
+  color: hsl(var(--foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .home-shell .text-gray-300,
+:root[data-brand-theme="beauty-clean"] .home-shell .text-gray-400,
+:root[data-brand-theme="beauty-clean"] .home-shell .text-gray-500 {
+  color: hsl(var(--muted-foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .home-shell .border-white\/5,
+:root[data-brand-theme="beauty-clean"] .home-shell .border-white\/10,
+:root[data-brand-theme="beauty-clean"] .home-shell .border-white\/15 {
+  border-color: hsl(var(--border) / 0.72);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-footer {
+  border-color: hsl(var(--border));
+  background: hsl(31 28% 91% / 0.82);
+}
+
+:root[data-brand-theme="beauty-clean"] .home-footer-logo {
+  width: min(15rem, 78vw);
+  height: 3.75rem;
+  border-radius: 0;
+}
+
+@media (max-width: 640px) {
+  :root[data-brand-theme="beauty-clean"] .home-brand-logo {
+    width: 8.75rem;
+    height: 2.65rem;
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-hero {
+    min-height: 47rem;
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-hero-inner {
+    min-height: 42rem;
+    align-items: flex-end;
+    padding-top: 6rem;
+    padding-bottom: 2.5rem;
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-hero-image {
+    object-position: 63% center;
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-hero-overlay {
+    background: linear-gradient(
+      180deg,
+      hsl(37 38% 97% / 0.38) 0%,
+      hsl(37 38% 97% / 0.78) 36%,
+      hsl(37 38% 97% / 0.99) 65%
+    );
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-hero-title {
+    max-width: 11ch;
+    font-size: clamp(2.55rem, 12vw, 3.3rem);
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-hero-actions {
+    gap: 0.65rem;
+  }
+
+  :root[data-brand-theme="beauty-clean"] .home-section {
+    padding-top: 3.75rem;
+    padding-bottom: 3.75rem;
+  }
 }
 
 .booking-day-available::after {

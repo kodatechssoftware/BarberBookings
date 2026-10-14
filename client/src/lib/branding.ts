@@ -15,6 +15,8 @@ export type ResolvedShopBranding = {
   shortName: string;
   address: string;
   logoUrl: string;
+  horizontalLogoUrl: string;
+  iconUrl: string;
   mapUrl: string;
   mapEmbedUrl: string;
   showMap: boolean;
@@ -25,6 +27,8 @@ export type ResolvedShopBranding = {
   heroDescription: string;
   heroImageUrl: string;
   heroImageAlt: string;
+  heroPrimaryCtaLabel: string;
+  heroSecondaryCtaLabel: string;
 };
 
 function resolveTheme(profileTheme: BusinessThemeId): ResolvedShopBranding["theme"] {
@@ -45,6 +49,8 @@ export function resolveShopBranding(
       shortName: "Powerhouse",
       address: powerhouseAddress,
       logoUrl: "/images/demo-logo.svg",
+      horizontalLogoUrl: "/images/demo-logo.svg",
+      iconUrl: "/images/demo-logo.svg",
       mapUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(powerhouseAddress)}`,
       mapEmbedUrl: "",
       showMap: env.VITE_HIDE_SHOP_MAP !== "true",
@@ -55,6 +61,8 @@ export function resolveShopBranding(
       heroDescription: "Barbearia masculina na Maia, com cortes, barba e tratamentos feitos ao detalhe.",
       heroImageUrl: "/images/powerhouse-hero.jpg",
       heroImageAlt: "Barbeiro da Powerhouse a executar um corte",
+      heroPrimaryCtaLabel: "Marcar agora",
+      heroSecondaryCtaLabel: "Ver serviços",
     };
   }
 
@@ -64,6 +72,8 @@ export function resolveShopBranding(
     shortName: env.VITE_SHOP_SHORT_NAME?.trim() || profile.defaultShortName,
     address: env.VITE_SHOP_ADDRESS?.trim() || profile.defaultAddress,
     logoUrl: env.VITE_SHOP_LOGO_URL?.trim() || profile.defaultLogoUrl,
+    horizontalLogoUrl: env.VITE_SHOP_HORIZONTAL_LOGO_URL?.trim() || profile.defaultHorizontalLogoUrl,
+    iconUrl: env.VITE_SHOP_ICON_URL?.trim() || profile.defaultIconUrl,
     mapUrl: env.VITE_SHOP_MAP_URL?.trim() || profile.defaultMapUrl,
     mapEmbedUrl: env.VITE_SHOP_MAP_EMBED_URL?.trim() || profile.defaultMapEmbedUrl,
     showMap: env.VITE_HIDE_SHOP_MAP !== "true",
@@ -76,6 +86,8 @@ export function resolveShopBranding(
     heroDescription: profile.hero.description,
     heroImageUrl: profile.hero.imageUrl,
     heroImageAlt: profile.hero.imageAlt,
+    heroPrimaryCtaLabel: profile.hero.primaryCtaLabel,
+    heroSecondaryCtaLabel: profile.hero.secondaryCtaLabel,
   };
 }
 
@@ -86,8 +98,8 @@ export const shopBranding = resolveShopBranding(
   "classic-gold",
 );
 
-export function resolveLocationLogoUrl(logoUrl?: string | null) {
-  return logoUrl?.trim() || shopBranding.logoUrl;
+export function resolveLocationLogoUrl(logoUrl?: string | null, fallbackLogoUrl = shopBranding.logoUrl) {
+  return logoUrl?.trim() || fallbackLogoUrl;
 }
 
 export function applyShopBrandingToDocument(branding: ResolvedShopBranding = shopBranding) {
@@ -98,8 +110,8 @@ export function applyShopBrandingToDocument(branding: ResolvedShopBranding = sho
   document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", branding.shortName);
   document.querySelector('meta[name="theme-color"]')?.setAttribute(
     "content",
-    branding.theme === "beauty-clean" ? "#2f2029" : "#d4af37",
+    branding.theme === "beauty-clean" ? "#d6a1ad" : "#d4af37",
   );
-  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute("href", branding.logoUrl);
-  document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.setAttribute("href", branding.logoUrl);
+  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute("href", branding.iconUrl);
+  document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')?.setAttribute("href", branding.iconUrl);
 }

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 230" role="img" aria-labelledby="title desc">
+  <title id="title">Ana Isabel Nail Art &amp; Design</title>
+  <desc id="desc">Assinatura horizontal com monograma dourado e detalhe floral blush</desc>
+  <defs>
+    <linearGradient id="gold" x1="54" y1="33" x2="164" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#dcc477"/><stop offset=".5" stop-color="#b58c38"/><stop offset="1" stop-color="#d8bd77"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="230" rx="38" fill="#fffdf9" fill-opacity=".02"/>
+  <path d="M108 16 190 65 198 159 120 215 31 178 22 83Z" fill="none" stroke="#c4a155" stroke-opacity=".68" stroke-width="2"/>
+  <g fill="#dfa2b0"><ellipse cx="50" cy="70" rx="22" ry="11" transform="rotate(-34 50 70)"/><ellipse cx="73" cy="54" rx="18" ry="9" transform="rotate(18 73 54)"/></g>
+  <circle cx="69" cy="73" r="8" fill="#f2ced5"/>
+  <path d="m53 177 56-142 58 142h-21l-14-36H84l-13 36Zm39-57h32l-16-42Z" fill="url(#gold)"/>
+  <path d="M43 183h132" stroke="#b58c38" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="244" y="113" fill="#574c47" font-family="Georgia, 'Times New Roman', serif" font-size="73" letter-spacing="1">Ana Isabel</text>
+  <text x="250" y="158" fill="#8b7a72" font-family="Arial, sans-serif" font-size="22" letter-spacing="8">NAIL ART &amp; DESIGN</text>
+  <path d="M251 178h493" stroke="#c7a55a" stroke-opacity=".5"/>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-labelledby="title desc">
+  <title id="title">Ana Isabel</title>
+  <desc id="desc">Monograma A dourado com pétalas blush</desc>
+  <defs>
+    <linearGradient id="ivory" x1="20" y1="12" x2="170" y2="182" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffdf9"/>
+      <stop offset="1" stop-color="#f7eee8"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="57" y1="38" x2="132" y2="151" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d8bd79"/>
+      <stop offset=".52" stop-color="#b99545"/>
+      <stop offset="1" stop-color="#d6bd7f"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="48" fill="url(#ivory)"/>
+  <path d="M96 16 159 53 168 128 107 174 35 145 22 70Z" fill="none" stroke="#c7a65a" stroke-opacity=".7" stroke-width="2"/>
+  <g fill="#e5a9b7" fill-opacity=".9">
+    <ellipse cx="48" cy="55" rx="14" ry="8" transform="rotate(-31 48 55)"/>
+    <ellipse cx="61" cy="45" rx="12" ry="7" transform="rotate(18 61 45)"/>
+    <ellipse cx="144" cy="128" rx="14" ry="8" transform="rotate(-24 144 128)"/>
+    <ellipse cx="132" cy="140" rx="12" ry="7" transform="rotate(24 132 140)"/>
+  </g>
+  <g fill="#f1cbd2">
+    <circle cx="61" cy="59" r="6"/><circle cx="137" cy="124" r="6"/>
+  </g>
+  <path d="m58 143 38-99 39 99h-15l-10-27H80l-10 27Zm28-42h19L96 73Z" fill="url(#gold)"/>
+  <path d="M52 148h88" stroke="#b99545" stroke-width="2" stroke-linecap="round"/>
+</svg>

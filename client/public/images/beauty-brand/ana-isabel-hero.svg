@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Ana Isabel Nail Art &amp; Design</title>
+  <desc id="desc">Composição editorial delicada em marfim, blush e champanhe</desc>
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fcfaf6"/><stop offset=".58" stop-color="#f7eee9"/><stop offset="1" stop-color="#ead4d7"/>
+    </linearGradient>
+    <radialGradient id="blush" cx="0" cy="0" r="1" gradientTransform="translate(1250 420) rotate(145) scale(530 470)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#dfa3b1" stop-opacity=".72"/><stop offset="1" stop-color="#dfa3b1" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="nail" x1="1110" y1="175" x2="1335" y2="696" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffaf8"/><stop offset=".66" stop-color="#e9b9c4"/><stop offset="1" stop-color="#ca8c9d"/>
+    </linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="30"/></filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#base)"/>
+  <rect width="1600" height="900" fill="url(#blush)"/>
+  <circle cx="1370" cy="155" r="150" fill="#e6c77c" fill-opacity=".13" filter="url(#soft)"/>
+  <circle cx="1110" cy="710" r="210" fill="#e8aeb9" fill-opacity=".18" filter="url(#soft)"/>
+  <path d="M1174 92 1491 274 1516 624 1221 829 895 681 866 342Z" fill="none" stroke="#c2a052" stroke-opacity=".42" stroke-width="3"/>
+  <path d="M1201 127 1458 286 1479 598 1215 783 930 656 907 361Z" fill="none" stroke="#d1b46c" stroke-opacity=".24" stroke-width="1.5"/>
+  <g transform="rotate(12 1215 447)">
+    <rect x="1050" y="185" width="112" height="474" rx="56" fill="url(#nail)"/>
+    <rect x="1181" y="139" width="116" height="520" rx="58" fill="url(#nail)"/>
+    <rect x="1317" y="202" width="108" height="457" rx="54" fill="url(#nail)"/>
+    <path d="M1083 257c34-21 62-21 94 0" fill="none" stroke="#c19b4d" stroke-opacity=".75" stroke-width="5" stroke-linecap="round"/>
+    <path d="M1212 222c35-25 68-24 101 1" fill="none" stroke="#c19b4d" stroke-opacity=".75" stroke-width="5" stroke-linecap="round"/>
+    <path d="M1347 269c32-20 61-19 91 2" fill="none" stroke="#c19b4d" stroke-opacity=".75" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <g fill="#dfa2b0" fill-opacity=".8">
+    <ellipse cx="973" cy="238" rx="52" ry="24" transform="rotate(-38 973 238)"/>
+    <ellipse cx="1024" cy="202" rx="45" ry="21" transform="rotate(17 1024 202)"/>
+    <ellipse cx="1461" cy="674" rx="56" ry="25" transform="rotate(-24 1461 674)"/>
+    <ellipse cx="1410" cy="725" rx="47" ry="21" transform="rotate(22 1410 725)"/>
+  </g>
+  <g fill="#f4d8dd"><circle cx="1011" cy="244" r="19"/><circle cx="1432" cy="690" r="19"/></g>
+  <path d="M845 766c188-70 391-67 610 10" fill="none" stroke="#c2a052" stroke-opacity=".42" stroke-width="3" stroke-linecap="round"/>
+</svg>

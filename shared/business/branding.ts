@@ -5,6 +5,8 @@ export type BusinessBrandingProfile = {
   defaultShortName: string;
   defaultAddress: string;
   defaultLogoUrl: string;
+  defaultHorizontalLogoUrl: string;
+  defaultIconUrl: string;
   defaultMapUrl: string;
   defaultMapEmbedUrl: string;
   hero: {
@@ -12,8 +14,13 @@ export type BusinessBrandingProfile = {
     description: string;
     imageUrl: string;
     imageAlt: string;
+    primaryCtaLabel: string;
+    secondaryCtaLabel: string;
   };
   home: {
+    servicesTitle: string;
+    teamTitle: string;
+    locationTitle: string;
     openingUnavailableTitle: string;
     appointmentOnlyDetail: string;
     closedTodayTitle: string;
@@ -51,6 +58,8 @@ export const businessBrandingProfiles = {
     defaultShortName: "Baptista",
     defaultAddress: "Rua Comandante Agatão Lança Nº28",
     defaultLogoUrl: "/images/logo.jpg",
+    defaultHorizontalLogoUrl: "/images/logo.jpg",
+    defaultIconUrl: "/images/logo.jpg",
     defaultMapUrl: "https://www.google.com/maps/search/?api=1&query=Rua%20Comandante%20Agat%C3%A3o%20Lan%C3%A7a%20N%C2%BA28",
     defaultMapEmbedUrl: "",
     hero: {
@@ -58,8 +67,13 @@ export const businessBrandingProfiles = {
       description: "Cortes, barba e acabamentos cuidados, com atenção ao detalhe.",
       imageUrl: barberHeroImageUrl,
       imageAlt: "Interior de barbearia",
+      primaryCtaLabel: "Marcar agora",
+      secondaryCtaLabel: "Ver serviços",
     },
     home: {
+      servicesTitle: "Serviços e preços",
+      teamTitle: "Conhece a equipa",
+      locationTitle: "Estamos à tua espera",
       openingUnavailableTitle: "Consulte os horários",
       appointmentOnlyDetail: "Atendimento por hora marcada.",
       closedTodayTitle: "Fechado hoje",
@@ -96,19 +110,26 @@ export const businessBrandingProfiles = {
     },
   },
   beauty: {
-    defaultName: "Beauty Salon",
-    defaultShortName: "Beauty",
+    defaultName: "Ana Isabel Nail Art & Design",
+    defaultShortName: "Ana Isabel",
     defaultAddress: "Morada a definir",
-    defaultLogoUrl: "/images/beauty-logo.svg",
+    defaultLogoUrl: "/images/beauty-brand/ana-isabel-logo.svg",
+    defaultHorizontalLogoUrl: "/images/beauty-brand/ana-isabel-logo-horizontal.svg",
+    defaultIconUrl: "/images/beauty-brand/ana-isabel-icon.svg",
     defaultMapUrl: "",
     defaultMapEmbedUrl: "",
     hero: {
-      title: "Beleza e cuidado com hora marcada",
-      description: "Serviços personalizados num ambiente tranquilo, cuidado e profissional.",
-      imageUrl: "/images/beauty-hero.svg",
-      imageAlt: "Ambiente sereno de cuidados de beleza",
+      title: "Unhas com detalhe, elegância e personalidade",
+      description: "Cuidados personalizados, nail art e beleza com atenção a cada detalhe.",
+      imageUrl: "/images/beauty-brand/ana-isabel-hero.svg",
+      imageAlt: "Composição delicada de nail art em tons blush, marfim e dourado",
+      primaryCtaLabel: "Marcar agora",
+      secondaryCtaLabel: "Ver serviços",
     },
     home: {
+      servicesTitle: "Nail art e cuidados personalizados",
+      teamTitle: "Cuidado em cada detalhe",
+      locationTitle: "Um espaço pensado para ti",
       openingUnavailableTitle: "Consulte os horários",
       appointmentOnlyDetail: "Atendimento por marcação.",
       closedTodayTitle: "Fechado hoje",
@@ -119,18 +140,18 @@ export const businessBrandingProfiles = {
       opensPrefix: "Abre hoje às",
       closedNowTitle: "Fechado agora",
       closedNowDetail: "Atendimento por marcação no próximo horário.",
-      teamDescription: "Profissionais dedicados a um atendimento personalizado, confortável e cuidado.",
+      teamDescription: "Profissionais dedicados a realçar a tua personalidade com técnica, delicadeza e atenção.",
     },
     professionalFallbackMode: "brand-logo",
     manifest: {
-      name: "Beauty Salon",
-      shortName: "Beauty",
-      description: "Marcações e gestão para profissionais de beleza.",
-      backgroundColor: "#20151c",
-      themeColor: "#2f2029",
+      name: "Ana Isabel Nail Art & Design",
+      shortName: "Ana Isabel",
+      description: "Nail art e cuidados de beleza com atenção a cada detalhe.",
+      backgroundColor: "#fbf8f4",
+      themeColor: "#d6a1ad",
       icons: [
         {
-          src: "/images/beauty-logo.svg",
+          src: "/images/beauty-brand/ana-isabel-icon.svg",
           sizes: "any",
           type: "image/svg+xml",
           purpose: "any maskable",

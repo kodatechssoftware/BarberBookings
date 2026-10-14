@@ -1,6 +1,7 @@
 import { type SyntheticEvent, useEffect, useState } from "react";
-import { resolveLocationLogoUrl, shopBranding } from "@/lib/branding";
+import { resolveLocationLogoUrl } from "@/lib/branding";
 import { cn } from "@/lib/utils";
+import { useBusinessBranding } from "@/business/use-business-branding";
 
 type MutationPendingOverlayProps = {
   active: boolean;
@@ -10,11 +11,11 @@ type MutationPendingOverlayProps = {
   className?: string;
 };
 
-function handleLogoLoadError(event: SyntheticEvent<HTMLImageElement>) {
+function handleLogoLoadError(event: SyntheticEvent<HTMLImageElement>, fallbackLogoUrl: string) {
   const image = event.currentTarget;
   if (image.dataset.fallbackApplied !== "true") {
     image.dataset.fallbackApplied = "true";
-    image.src = shopBranding.logoUrl;
+    image.src = fallbackLogoUrl;
     return;
   }
 
@@ -28,8 +29,9 @@ export function MutationPendingOverlay({
   delayMs = 180,
   className,
 }: MutationPendingOverlayProps) {
+  const shopBranding = useBusinessBranding();
   const [isVisible, setIsVisible] = useState(active && delayMs <= 0);
-  const resolvedLogoUrl = resolveLocationLogoUrl(logoUrl);
+  const resolvedLogoUrl = resolveLocationLogoUrl(logoUrl, shopBranding.logoUrl);
 
   useEffect(() => {
     if (!active) {
@@ -76,7 +78,7 @@ export function MutationPendingOverlay({
             src={resolvedLogoUrl}
             alt=""
             aria-hidden="true"
-            onError={handleLogoLoadError}
+            onError={(event) => handleLogoLoadError(event, shopBranding.logoUrl)}
             className="absolute h-14 w-14 rounded-full bg-card object-contain shadow-lg shadow-black/40"
           />
         </div>

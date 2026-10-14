@@ -236,16 +236,16 @@ export default function Home() {
   }, [warmBookingFlow]);
 
   return (
-    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background text-foreground font-body">
-      <nav className="fixed top-0 z-50 w-full border-b border-white/5 bg-background/85 backdrop-blur-xl">
+    <div className="home-shell flex min-h-screen flex-col overflow-x-hidden bg-background text-foreground font-body">
+      <nav className="home-nav fixed top-0 z-50 w-full border-b border-white/5 bg-background/85 backdrop-blur-xl">
         <div className="container mx-auto flex min-w-0 items-center justify-between px-4 py-3 md:px-6 md:py-4">
-          <a href="#top" className="flex items-center gap-3">
+          <a href="#top" className="home-brand flex items-center gap-3" aria-label={`${shopBranding.name} — início`}>
             <img
-              src={shopBranding.logoUrl}
+              src={shopBranding.horizontalLogoUrl}
               alt={shopBranding.name}
-              className="h-10 w-10 rounded-full border border-primary/20 object-contain md:h-12 md:w-12"
+              className="home-brand-logo h-10 w-10 rounded-full border border-primary/20 object-contain md:h-12 md:w-12"
             />
-            <span className="hidden font-display text-lg font-bold text-white sm:inline">{shopBranding.shortName}</span>
+            <span className="home-brand-name hidden font-display text-lg font-bold text-white sm:inline">{shopBranding.shortName}</span>
           </a>
 
           <div className="hidden gap-7 text-xs font-semibold uppercase tracking-widest md:flex">
@@ -254,7 +254,7 @@ export default function Home() {
                 key={item.id}
                 href={`#${item.id}`}
                 className={cn(
-                  "transition-colors",
+                  "home-nav-link transition-colors",
                   activeSection === item.id ? "text-primary" : "text-gray-400 hover:text-primary",
                 )}
               >
@@ -265,20 +265,20 @@ export default function Home() {
         </div>
       </nav>
 
-      <section id="top" className="relative min-h-[68vh] overflow-hidden pt-20 md:min-h-[72vh]">
-        <div className="absolute inset-0">
+      <section id="top" className="home-hero relative min-h-[68vh] overflow-hidden pt-20 md:min-h-[72vh]">
+        <div className="home-hero-media absolute inset-0">
           <img
             src={shopBranding.heroImageUrl}
             alt={shopBranding.heroImageAlt}
             loading="eager"
-            className="h-full w-full object-cover"
+            className="home-hero-image h-full w-full object-cover"
           />
-          <div className="absolute inset-0 bg-black/65" />
-          <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-background to-transparent" />
+          <div className="home-hero-overlay absolute inset-0 bg-black/65" />
+          <div className="home-hero-fade absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-background to-transparent" />
         </div>
 
-        <div className="container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center px-4 pb-10 md:min-h-[calc(72vh-5rem)] md:pb-12">
-          <div className="w-full min-w-0 sm:max-w-xl md:max-w-3xl">
+        <div className="home-hero-inner container relative z-10 mx-auto flex min-h-[calc(68vh-5rem)] items-center px-4 pb-10 md:min-h-[calc(72vh-5rem)] md:pb-12">
+          <div className="home-hero-copy w-full min-w-0 sm:max-w-xl md:max-w-3xl">
             {shopBranding.theme === "barber-pole" && (
               <img
                 src={shopBranding.logoUrl}
@@ -287,35 +287,35 @@ export default function Home() {
                 className="mb-5 h-20 w-20 rounded-full object-contain drop-shadow-[0_10px_24px_rgba(0,0,0,0.55)] md:h-24 md:w-24"
               />
             )}
-            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">{shopBranding.name}</p>
-            <h1 className="font-display text-3xl font-bold leading-[0.98] text-white sm:text-5xl md:text-7xl">
+            <p className="home-eyebrow mb-4 text-xs font-semibold uppercase tracking-[0.28em] text-primary">{shopBranding.name}</p>
+            <h1 className="home-hero-title font-display text-3xl font-bold leading-[0.98] text-white sm:text-5xl md:text-7xl">
               {shopBranding.heroTitle}
             </h1>
-            <p className="mt-6 max-w-xl text-base leading-relaxed text-gray-300 md:text-lg">
+            <p className="home-hero-description mt-6 max-w-xl text-base leading-relaxed text-gray-300 md:text-lg">
               {shopBranding.heroDescription}
             </p>
 
-            <div className="mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+            <div className="home-hero-actions mt-8 flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
               <Button
                 asChild
                 variant="gold"
                 size="lg"
-                className="h-12 w-full px-8 text-base sm:w-auto"
+                className="home-primary-cta h-12 w-full px-8 text-base sm:w-auto"
                 onFocus={warmBookingFlow}
                 onMouseEnter={warmBookingFlow}
                 onTouchStart={warmBookingFlow}
               >
-                <Link href="/book">Marcar agora</Link>
+                <Link href="/book">{shopBranding.heroPrimaryCtaLabel}</Link>
               </Button>
-              <Button asChild variant="outline" size="lg" className="h-12 w-full border-white/15 bg-black/30 px-8 text-base text-white hover:bg-white/10 hover:text-white sm:w-auto">
-                <a href="#services">Ver serviços</a>
+              <Button asChild variant="outline" size="lg" className="home-secondary-cta h-12 w-full border-white/15 bg-black/30 px-8 text-base text-white hover:bg-white/10 hover:text-white sm:w-auto">
+                <a href="#services">{shopBranding.heroSecondaryCtaLabel}</a>
               </Button>
             </div>
 
             <div
               data-testid="home-opening-card"
               aria-busy={showOpeningSkeleton}
-              className="mt-6 w-full rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm sm:max-w-sm"
+              className="home-opening-card mt-6 w-full rounded-lg border border-white/10 bg-black/30 p-4 backdrop-blur-sm sm:max-w-sm"
             >
               <div className="flex items-start gap-3">
                 <Clock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
@@ -338,12 +338,12 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="services" aria-busy={showServicesSkeleton} className="scroll-mt-20 border-b border-white/5 bg-white/[0.02] py-14 md:py-20">
+      <section id="services" aria-busy={showServicesSkeleton} className="home-section home-services-section scroll-mt-20 border-b border-white/5 bg-white/[0.02] py-14 md:py-20">
         <div className="container mx-auto px-4">
           <div className="mb-8 max-w-2xl">
             <div className="max-w-2xl">
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Serviços</p>
-              <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Serviços e preços</h2>
+              <h2 className="home-section-title mt-2 text-3xl font-bold text-white md:text-5xl">{homeCopy.servicesTitle}</h2>
             </div>
           </div>
 
@@ -379,7 +379,7 @@ export default function Home() {
                   )}
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                     {group.services.map((service) => (
-                      <article key={service.id} className="flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
+                      <article key={service.id} className="home-service-card flex h-full flex-col rounded-lg border border-white/10 bg-card p-5">
                         <div className="flex flex-1 items-start justify-between gap-4">
                           <div className="flex min-w-0 items-start gap-3">
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
@@ -405,12 +405,12 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="team" className="scroll-mt-20 bg-white/[0.03] py-16 md:py-24">
+      <section id="team" className="home-section home-team-section scroll-mt-20 bg-white/[0.03] py-16 md:py-24">
         <div className="container mx-auto px-4">
           <div className="mb-10 max-w-2xl">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Equipa</p>
-              <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Conhece a equipa</h2>
+              <h2 className="home-section-title mt-2 text-3xl font-bold text-white md:text-5xl">{homeCopy.teamTitle}</h2>
               <p className="mt-4 text-sm leading-relaxed text-gray-400 md:text-base">
                 {homeCopy.teamDescription}
               </p>
@@ -427,7 +427,7 @@ export default function Home() {
                 <motion.article
                   key={barber.id}
                   whileHover={{ y: -4 }}
-                  className="flex h-full overflow-hidden rounded-lg border border-white/10 bg-card"
+                  className="home-professional-card flex h-full overflow-hidden rounded-lg border border-white/10 bg-card"
                 >
                   <div className="grid flex-1 grid-cols-[112px_1fr] gap-0 sm:grid-cols-[160px_1fr]">
                     <img
@@ -452,11 +452,11 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="location" className="scroll-mt-20 py-16 md:py-24">
+      <section id="location" className="home-section home-location-section scroll-mt-20 py-16 md:py-24">
         <div className="container mx-auto px-4">
           <div className="mb-10 text-center">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">Morada</p>
-            <h2 className="mt-2 text-3xl font-bold text-white md:text-5xl">Estamos à tua espera</h2>
+            <h2 className="home-section-title mt-2 text-3xl font-bold text-white md:text-5xl">{homeCopy.locationTitle}</h2>
             <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-gray-400">
               {publicLocations.length > 1
                 ? "Escolhe a localização mais conveniente e consulta a respetiva morada e mapa."
@@ -537,9 +537,9 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="mt-auto border-t border-white/10 bg-black/50 py-10">
+      <footer className="home-footer mt-auto border-t border-white/10 bg-black/50 py-10">
         <div className="container mx-auto flex flex-col items-center gap-5 px-4 text-center">
-          <img src={shopBranding.logoUrl} alt={shopBranding.name} className="h-10 w-10 rounded-full object-contain" />
+          <img src={shopBranding.horizontalLogoUrl} alt={shopBranding.name} className="home-footer-logo h-10 w-10 rounded-full object-contain" />
           <p className="text-sm text-gray-500">© 2026 {shopBranding.name}. {shopBranding.address}.</p>
           <div className="flex flex-wrap justify-center gap-5 text-sm">
             {instagramUrl && (

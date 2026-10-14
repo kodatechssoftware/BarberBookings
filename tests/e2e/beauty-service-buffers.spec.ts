@@ -40,10 +40,11 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
     expect(manifestResponse.ok()).toBe(true);
     const manifest = await manifestResponse.json();
     expect(manifest).toMatchObject({
-      name: "Beauty Salon",
-      short_name: "Beauty",
-      theme_color: "#2f2029",
-      icons: [{ src: "/images/beauty-logo.svg", type: "image/svg+xml" }],
+      name: "Ana Isabel Nail Art & Design",
+      short_name: "Ana Isabel",
+      background_color: "#fbf8f4",
+      theme_color: "#d6a1ad",
+      icons: [{ src: "/images/beauty-brand/ana-isabel-icon.svg", type: "image/svg+xml" }],
     });
     expect(JSON.stringify(manifest).toLowerCase()).not.toMatch(/barber|baptista|powerhouse/);
 
@@ -54,14 +55,23 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
     ]) {
       await page.setViewportSize(viewport);
       await page.goto("/");
-      await expect(page).toHaveTitle("Beauty Salon");
+      await expect(page).toHaveTitle("Ana Isabel Nail Art & Design");
       await expect(page.locator("html")).toHaveAttribute("data-brand-theme", "beauty-clean");
-      await expect(page.getByRole("heading", { name: "Beleza e cuidado com hora marcada" })).toBeVisible();
-      await expect(page.getByText("Serviços personalizados num ambiente tranquilo, cuidado e profissional.")).toBeVisible();
-      await expect(page.locator('img[src="/images/beauty-hero.svg"]')).toBeVisible();
-      await expect(page.locator('img[src="/images/beauty-logo.svg"]').first()).toBeVisible();
-      await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/images/beauty-logo.svg");
-      await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/images/beauty-logo.svg");
+      await expect(page.getByRole("heading", { name: "Unhas com detalhe, elegância e personalidade" })).toBeVisible();
+      await expect(page.getByText("Cuidados personalizados, nail art e beleza com atenção a cada detalhe.")).toBeVisible();
+      await expect(page.getByRole("link", { name: "Marcar agora" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Ver serviços" })).toBeVisible();
+      await expect(page.locator('img[src="/images/beauty-brand/ana-isabel-hero.svg"]')).toBeVisible();
+      await expect(page.locator('img[src="/images/beauty-brand/ana-isabel-logo-horizontal.svg"]').first()).toBeVisible();
+      await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/images/beauty-brand/ana-isabel-icon.svg");
+      await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", "/images/beauty-brand/ana-isabel-icon.svg");
+      const primaryCta = page.getByRole("link", { name: "Marcar agora" });
+      const ctaStyle = await primaryCta.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { height: element.getBoundingClientRect().height, radius: style.borderRadius };
+      });
+      expect(ctaStyle.height).toBeGreaterThanOrEqual(52);
+      expect(Number.parseFloat(ctaStyle.radius)).toBeGreaterThanOrEqual(24);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
     }
 
@@ -72,11 +82,11 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
         background: root.getPropertyValue("--background").trim(),
       };
     });
-    expect(colors).toEqual({ primary: "343 54% 68%", background: "330 20% 10%" });
+    expect(colors).toEqual({ primary: "348 42% 68%", background: "35 38% 97%" });
 
     const baptistaCard = page.locator("#team article").filter({ hasText: "Fábio Baptista" });
     if (await baptistaCard.count()) {
-      await expect(baptistaCard.locator("img")).toHaveAttribute("src", "/images/beauty-logo.svg");
+      await expect(baptistaCard.locator("img")).toHaveAttribute("src", "/images/beauty-brand/ana-isabel-logo.svg");
     }
     await expect(page.getByText("Corte e barba com hora marcada", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Baptista Barber Shop", { exact: true })).toHaveCount(0);
@@ -256,6 +266,10 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       await page.setViewportSize(viewport);
       await page.goto("/booking");
       await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
+      await expect(page.getByTestId("public-booking-header").locator("img")).toHaveAttribute(
+        "src",
+        "/images/beauty-brand/ana-isabel-logo.svg",
+      );
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
     }
 

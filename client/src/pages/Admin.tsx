@@ -103,6 +103,7 @@ import type { EffectiveAccess } from "@shared/auth";
 import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { useBusinessConfig } from "@/business/use-business-config";
+import { useBusinessBranding } from "@/business/use-business-branding";
 import { formatBusinessCopy, type AdminCopy } from "@shared/business/copy/types";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
@@ -1484,6 +1485,7 @@ function validateAvailabilityForm(
 
 export default function Admin() {
   const businessConfig = useBusinessConfig();
+  const resolvedShopBranding = useBusinessBranding();
   const businessCopy = useBusinessCopy();
   const adminCopy = businessCopy.admin;
   const agendaCopy = businessCopy.agenda;
@@ -3673,12 +3675,12 @@ export default function Admin() {
         <Card className="max-w-md w-full bg-card border-white/10">
           <CardHeader>
             <img
-              src={shopBranding.logoUrl}
+              src={resolvedShopBranding.logoUrl}
               alt=""
               aria-hidden="true"
               className="mx-auto mb-2 h-20 w-20 rounded-full object-contain"
             />
-            <CardTitle className="text-2xl font-display font-bold text-center text-white">{shopBranding.name}</CardTitle>
+            <CardTitle className="text-2xl font-display font-bold text-center text-white">{resolvedShopBranding.name}</CardTitle>
             <p className="text-center text-gray-400 text-sm mt-2">{adminCopy.auth.accessAudience}</p>
           </CardHeader>
           <CardContent>
@@ -3707,7 +3709,7 @@ export default function Admin() {
           <div className="flex-1">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-2">
               <img
-                src={shopBranding.logoUrl}
+                src={resolvedShopBranding.logoUrl}
                 alt=""
                 aria-hidden="true"
                 className="h-12 w-12 shrink-0 rounded-full object-contain"

@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
-import { shopBranding } from "@/lib/branding";
+import type { ResolvedShopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 import {
   DEFAULT_PHONE_COUNTRY,
@@ -44,6 +44,7 @@ import type { ServiceCatalogueItem } from "@shared/schema";
 import { groupServicesForDisplay } from "@/lib/service-groups";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { useBusinessConfig } from "@/business/use-business-config";
+import { useBusinessBranding } from "@/business/use-business-branding";
 import { formatBusinessCopy } from "@shared/business/copy";
 import type { BusinessBookingFlow } from "@shared/business/booking-flow";
 
@@ -207,21 +208,25 @@ const saveLastBookingPreference = ({
   }
 };
 
-function getBarberAvatar(barber: { name: string; avatar?: string | null }, locationLogoUrl: string) {
+function getBarberAvatar(
+  barber: { name: string; avatar?: string | null },
+  locationLogoUrl: string,
+  branding: ResolvedShopBranding,
+) {
   const customAvatar = barber.avatar?.trim();
   if (customAvatar) return customAvatar;
 
   const name = barber.name.toLowerCase();
-  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
-  if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
+  if (branding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
+  if (branding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
   return locationLogoUrl;
 }
 
-function getBarberAvatarFallback(barber: { name: string }) {
+function getBarberAvatarFallback(barber: { name: string }, branding: ResolvedShopBranding) {
   const name = barber.name.toLowerCase();
-  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
-  if (shopBranding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
-  return shopBranding.logoUrl;
+  if (branding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
+  if (branding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
+  return branding.logoUrl;
 }
 
 const BarberCardSkeleton = () => (
@@ -317,6 +322,7 @@ const StepIndicator = ({
 
 export default function Booking() {
   const businessConfig = useBusinessConfig();
+  const shopBranding = useBusinessBranding();
   const copy = useBusinessCopy().booking;
   const [initialPreference] = useState(() => getInitialBookingPreference(businessConfig.booking.flow));
   const [step, setStep] = useState(initialPreference.step);
@@ -1057,8 +1063,9 @@ export default function Booking() {
                       const avatarSrc = getBarberAvatar(
                         barber,
                         activeLocation?.logoUrl?.trim() || shopBranding.logoUrl,
+                        shopBranding,
                       );
-                      const fallbackAvatarSrc = getBarberAvatarFallback(barber);
+                      const fallbackAvatarSrc = getBarberAvatarFallback(barber, shopBranding);
                       return (
                         <motion.div 
                           key={barber.id}
