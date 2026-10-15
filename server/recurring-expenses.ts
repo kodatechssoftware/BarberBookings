@@ -34,6 +34,10 @@ export type RecurringExpenseSeriesView = {
   status: BusinessExpenseRecurringStatus;
   anchorDate: string;
   endedOn: string | null;
+  occurrenceCount: number;
+  hasOccurrences: boolean;
+  locationToday: string;
+  minimumFutureEffectiveFrom: string;
   nextOccurrenceDate: string | null;
   currentVersion: {
     id: number;
@@ -94,7 +98,7 @@ function nextSeriesOccurrenceDate(input: {
   versions: RecurringExpenseSeriesView["versions"];
   pauses: RecurringExpenseSeriesView["pauses"];
 }) {
-  if (input.status !== "active") return null;
+  if (input.status === "ended") return null;
   const horizon = addCalendarYears(input.fromDate, 5);
   for (let index = 0; index < input.versions.length; index += 1) {
     const version = input.versions[index];
@@ -139,6 +143,25 @@ async function locationTimeZone(tx: ExpenseTransaction, locationId: number) {
   return location.timezone;
 }
 
+async function occurrenceCount(tx: ExpenseTransaction, seriesId: number) {
+  const [row] = await tx.select({ count: sql<number>`count(*)::integer` })
+    .from(businessExpenses)
+    .where(eq(businessExpenses.recurringSeriesId, seriesId));
+  return Number(row?.count ?? 0);
+}
+
+function effectiveSeriesStatus(input: {
+  endedOn: string | null;
+  today: string;
+  pauses: RecurringExpenseSeriesView["pauses"];
+}): BusinessExpenseRecurringStatus {
+  if (input.endedOn && input.endedOn <= input.today) return "ended";
+  if (input.pauses.some((pause) => (
+    pause.pausedFrom <= input.today && (pause.resumedOn === null || input.today < pause.resumedOn)
+  ))) return "paused";
+  return "active";
+}
+
 export async function listRecurringExpenseSeries(locationId: number): Promise<RecurringExpenseSeriesView[]> {
   const [seriesRows, location] = await Promise.all([
     db.select().from(businessExpenseRecurringSeries)
@@ -158,10 +181,7 @@ export async function listRecurringExpenseSeries(locationId: number): Promise<Re
       .where(inArray(businessExpenseRecurringPauses.seriesId, seriesIds))
       .orderBy(asc(businessExpenseRecurringPauses.pausedFrom), asc(businessExpenseRecurringPauses.id)),
     db.select().from(businessExpenses)
-      .where(and(
-        inArray(businessExpenses.recurringSeriesId, seriesIds),
-        lte(businessExpenses.scheduledDate, today),
-      ))
+      .where(inArray(businessExpenses.recurringSeriesId, seriesIds))
       .orderBy(desc(businessExpenses.scheduledDate), desc(businessExpenses.id)),
   ]);
   return seriesRows.map((series) => {
@@ -185,7 +205,7 @@ export async function listRecurringExpenseSeries(locationId: number): Promise<Re
       resumedOn: pause.resumedOn,
       createdAt: pause.createdAt,
     }));
-    const occurrences = occurrenceRows
+    const allOccurrences = occurrenceRows
       .filter((occurrence) => occurrence.recurringSeriesId === series.id && occurrence.scheduledDate !== null)
       .map((occurrence) => ({
         id: occurrence.id,
@@ -198,17 +218,23 @@ export async function listRecurringExpenseSeries(locationId: number): Promise<Re
         isOccurrenceOverride: occurrence.isOccurrenceOverride,
         updatedAt: occurrence.updatedAt,
       }));
+    const occurrences = allOccurrences.filter((occurrence) => occurrence.scheduledDate <= today);
+    const status = effectiveSeriesStatus({ endedOn: series.endedOn, today, pauses });
     const nextSearchDate = occurrences.some((occurrence) => occurrence.scheduledDate === today)
       ? followingDate(today)
       : today;
     return {
       id: series.id,
       locationId: series.locationId,
-      status: series.status,
+      status,
       anchorDate: series.anchorDate,
       endedOn: series.endedOn,
+      occurrenceCount: allOccurrences.length,
+      hasOccurrences: allOccurrences.length > 0,
+      locationToday: today,
+      minimumFutureEffectiveFrom: followingDate(today),
       nextOccurrenceDate: nextSeriesOccurrenceDate({
-        status: series.status,
+        status,
         anchorDate: series.anchorDate,
         endedOn: series.endedOn,
         fromDate: nextSearchDate,
@@ -267,6 +293,51 @@ export async function createRecurringExpenseSeries(input: {
   });
 }
 
+export async function updateRecurringExpenseSeries(input: {
+  seriesId: number;
+  locationId: number;
+  startDate: string;
+  terms: RecurringExpenseTermsInput;
+}) {
+  return db.transaction(async (tx) => {
+    await lockExpenseLocation(tx, input.locationId);
+    const series = await lockSeries(tx, input.seriesId);
+    if (!series || series.locationId !== input.locationId) return null;
+    if (await occurrenceCount(tx, series.id) > 0) throw new Error("SERIES_HAS_OCCURRENCES");
+    await locationTimeZone(tx, input.locationId);
+
+    await tx.delete(businessExpenseRecurringPauses)
+      .where(eq(businessExpenseRecurringPauses.seriesId, series.id));
+    await tx.delete(businessExpenseRecurringVersions)
+      .where(eq(businessExpenseRecurringVersions.seriesId, series.id));
+    const [updatedSeries] = await tx.update(businessExpenseRecurringSeries).set({
+      anchorDate: input.startDate,
+      status: "active",
+      endedOn: null,
+      updatedAt: new Date(),
+    }).where(eq(businessExpenseRecurringSeries.id, series.id)).returning();
+    const [version] = await tx.insert(businessExpenseRecurringVersions).values({
+      seriesId: series.id,
+      effectiveFrom: input.startDate,
+      ...input.terms,
+      ...recurrenceSchedule(input.terms.recurrence, input.startDate),
+    }).returning();
+    return { series: updatedSeries, version };
+  });
+}
+
+export async function deleteRecurringExpenseSeries(input: { seriesId: number; locationId: number }) {
+  return db.transaction(async (tx) => {
+    await lockExpenseLocation(tx, input.locationId);
+    const series = await lockSeries(tx, input.seriesId);
+    if (!series || series.locationId !== input.locationId) return null;
+    if (await occurrenceCount(tx, series.id) > 0) throw new Error("SERIES_HAS_OCCURRENCES");
+    await tx.delete(businessExpenseRecurringSeries)
+      .where(eq(businessExpenseRecurringSeries.id, series.id));
+    return series;
+  });
+}
+
 export async function createRecurringExpenseVersion(input: {
   seriesId: number;
   locationId: number;
@@ -277,10 +348,12 @@ export async function createRecurringExpenseVersion(input: {
     await lockExpenseLocation(tx, input.locationId);
     const series = await lockSeries(tx, input.seriesId);
     if (!series || series.locationId !== input.locationId) return null;
-    if (series.status === "ended") throw new Error("SERIES_ENDED");
     const timeZone = await locationTimeZone(tx, input.locationId);
     const today = getCalendarDateInTimeZone(new Date(), timeZone);
-    if (input.effectiveFrom < today) throw new Error("PAST_EFFECTIVE_DATE");
+    if (series.endedOn && series.endedOn <= today) throw new Error("SERIES_ENDED");
+    if (await occurrenceCount(tx, series.id) === 0) throw new Error("SERIES_WITHOUT_HISTORY_EDIT_INSTEAD");
+    if (input.effectiveFrom <= today) throw new Error("FUTURE_EFFECTIVE_DATE_REQUIRED");
+    if (series.endedOn && input.effectiveFrom >= series.endedOn) throw new Error("EFFECTIVE_DATE_AFTER_END");
     const [previousVersion] = await tx.select().from(businessExpenseRecurringVersions)
       .where(eq(businessExpenseRecurringVersions.seriesId, series.id))
       .orderBy(desc(businessExpenseRecurringVersions.effectiveFrom), desc(businessExpenseRecurringVersions.id))
@@ -319,51 +392,87 @@ export async function setRecurringExpenseSeriesState(input: {
   seriesId: number;
   locationId: number;
   action: "pause" | "resume" | "end";
+  effectiveFrom: string;
+  resumeOn?: string | null;
 }) {
   return db.transaction(async (tx) => {
     await lockExpenseLocation(tx, input.locationId);
     const series = await lockSeries(tx, input.seriesId);
     if (!series || series.locationId !== input.locationId) return null;
     const timeZone = await locationTimeZone(tx, input.locationId);
-    const effectiveOn = getCalendarDateInTimeZone(new Date(), timeZone);
-    if (series.status === "ended") throw new Error("SERIES_ENDED");
+    const today = getCalendarDateInTimeZone(new Date(), timeZone);
+    const count = await occurrenceCount(tx, series.id);
+    if (count === 0) throw new Error("SERIES_WITHOUT_HISTORY_DELETE_INSTEAD");
+    if (series.endedOn && series.endedOn <= today) throw new Error("SERIES_ENDED");
+    if (input.effectiveFrom < today) throw new Error("PAST_EFFECTIVE_DATE");
+    if (input.action !== "resume" && input.effectiveFrom <= today) {
+      throw new Error("FUTURE_EFFECTIVE_DATE_REQUIRED");
+    }
 
     if (input.action === "pause") {
-      if (series.status !== "active") throw new Error("SERIES_NOT_ACTIVE");
+      if (input.resumeOn && input.resumeOn <= input.effectiveFrom) throw new Error("PAUSE_RANGE_INVALID");
+      if (series.endedOn && (
+        input.effectiveFrom >= series.endedOn
+        || (input.resumeOn !== undefined && input.resumeOn !== null && input.resumeOn > series.endedOn)
+      )) throw new Error("EFFECTIVE_DATE_AFTER_END");
+      const pauses = await tx.select().from(businessExpenseRecurringPauses)
+        .where(eq(businessExpenseRecurringPauses.seriesId, series.id));
+      const overlaps = pauses.some((pause) => (
+        (input.resumeOn === null || input.resumeOn === undefined || pause.pausedFrom < input.resumeOn)
+        && (pause.resumedOn === null || input.effectiveFrom < pause.resumedOn)
+      ));
+      if (overlaps) throw new Error("PAUSE_OVERLAP");
       await tx.insert(businessExpenseRecurringPauses).values({
         seriesId: series.id,
-        pausedFrom: effectiveOn,
+        pausedFrom: input.effectiveFrom,
+        resumedOn: input.resumeOn ?? null,
       });
-      await tx.update(businessExpenseRecurringSeries).set({ status: "paused", updatedAt: new Date() })
+      const pausedToday = input.effectiveFrom <= today && (!input.resumeOn || today < input.resumeOn);
+      await tx.update(businessExpenseRecurringSeries).set({
+        status: series.endedOn ? "ended" : pausedToday ? "paused" : "active",
+        updatedAt: new Date(),
+      })
         .where(eq(businessExpenseRecurringSeries.id, series.id));
     } else if (input.action === "resume") {
-      if (series.status !== "paused") throw new Error("SERIES_NOT_PAUSED");
+      const [openPause] = await tx.select().from(businessExpenseRecurringPauses).where(and(
+        eq(businessExpenseRecurringPauses.seriesId, series.id),
+        isNull(businessExpenseRecurringPauses.resumedOn),
+      )).orderBy(desc(businessExpenseRecurringPauses.pausedFrom)).limit(1);
+      if (!openPause || openPause.pausedFrom > input.effectiveFrom) throw new Error("OPEN_PAUSE_NOT_FOUND");
       const [pause] = await tx.update(businessExpenseRecurringPauses)
-        .set({ resumedOn: effectiveOn })
-        .where(and(
-          eq(businessExpenseRecurringPauses.seriesId, series.id),
-          isNull(businessExpenseRecurringPauses.resumedOn),
-        )).returning();
+        .set({ resumedOn: input.effectiveFrom })
+        .where(eq(businessExpenseRecurringPauses.id, openPause.id)).returning();
       if (!pause) throw new Error("OPEN_PAUSE_NOT_FOUND");
-      await tx.update(businessExpenseRecurringSeries).set({ status: "active", updatedAt: new Date() })
+      await tx.update(businessExpenseRecurringSeries).set({
+        status: series.endedOn ? "ended" : "active",
+        updatedAt: new Date(),
+      })
         .where(eq(businessExpenseRecurringSeries.id, series.id));
     } else {
-      await tx.update(businessExpenseRecurringPauses)
-        .set({ resumedOn: effectiveOn })
-        .where(and(eq(businessExpenseRecurringPauses.seriesId, series.id), isNull(businessExpenseRecurringPauses.resumedOn)));
+      const [latestHistorical] = await tx.select({ scheduledDate: businessExpenses.scheduledDate })
+        .from(businessExpenses)
+        .where(and(
+          eq(businessExpenses.recurringSeriesId, series.id),
+          lte(businessExpenses.scheduledDate, today),
+        ))
+        .orderBy(desc(businessExpenses.scheduledDate))
+        .limit(1);
+      if (latestHistorical?.scheduledDate && input.effectiveFrom <= latestHistorical.scheduledDate) {
+        throw new Error("END_DATE_BEFORE_HISTORY");
+      }
       await tx.update(businessExpenseRecurringSeries)
-        .set({ status: "ended", endedOn: effectiveOn, updatedAt: new Date() })
+        .set({ status: "ended", endedOn: input.effectiveFrom, updatedAt: new Date() })
         .where(eq(businessExpenseRecurringSeries.id, series.id));
     }
     await tx.delete(businessExpenses).where(and(
       eq(businessExpenses.recurringSeriesId, series.id),
-      gte(businessExpenses.scheduledDate, effectiveOn),
+      gte(businessExpenses.scheduledDate, input.effectiveFrom),
     ));
     return {
       ...series,
-      status: input.action === "pause" ? "paused" : input.action === "resume" ? "active" : "ended",
-      endedOn: input.action === "end" ? effectiveOn : series.endedOn,
-      effectiveOn,
+      status: input.action === "end" ? "ended" : series.endedOn ? "ended" : "active",
+      endedOn: input.action === "end" ? input.effectiveFrom : series.endedOn,
+      effectiveOn: input.effectiveFrom,
     };
   });
 }

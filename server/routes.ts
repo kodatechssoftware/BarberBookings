@@ -139,9 +139,10 @@ import { getPublicBaseUrl } from "./public-url";
 import {
   createRecurringExpenseSeries,
   createRecurringExpenseVersion,
+  deleteRecurringExpenseSeries,
   listRecurringExpenseSeries,
-  materializeRecurringExpenseOccurrences,
   setRecurringExpenseSeriesState,
+  updateRecurringExpenseSeries,
   updateRecurringExpenseOccurrence,
 } from "./recurring-expenses";
 import { resolveServiceLocationTerms } from "@shared/service-location-terms";
@@ -377,12 +378,27 @@ const recurringExpenseSeriesInputSchema = recurringExpenseTermsInputSchema.exten
   startDate: z.string().trim().refine(isCalendarDate, "Data inválida."),
   idempotencyKey: z.string().uuid("Identificador de pedido inválido."),
 });
+const recurringExpenseSeriesUpdateInputSchema = recurringExpenseTermsInputSchema.extend({
+  startDate: z.string().trim().refine(isCalendarDate, "Data inválida."),
+});
 const recurringExpenseVersionInputSchema = recurringExpenseTermsInputSchema.extend({
   effectiveFrom: z.string().trim().refine(isCalendarDate, "Data inválida."),
 });
-const recurringExpenseStateInputSchema = z.object({
-  action: z.enum(["pause", "resume", "end"]),
-});
+const recurringExpenseStateInputSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("pause"),
+    effectiveFrom: z.string().trim().refine(isCalendarDate, "Data de início inválida."),
+    resumeOn: z.string().trim().refine(isCalendarDate, "Data de retoma inválida.").optional().nullable(),
+  }),
+  z.object({
+    action: z.literal("resume"),
+    effectiveFrom: z.string().trim().refine(isCalendarDate, "Data de retoma inválida."),
+  }),
+  z.object({
+    action: z.literal("end"),
+    effectiveFrom: z.string().trim().refine(isCalendarDate, "Data de término inválida."),
+  }),
+]);
 const recurringExpenseOccurrenceInputSchema = businessExpenseInputSchema.pick({
   category: true,
   description: true,
@@ -2952,6 +2968,14 @@ export async function registerRoutes(
       OPEN_PAUSE_NOT_FOUND: "Não foi encontrada uma pausa ativa para esta série.",
       VERSION_OUT_OF_ORDER: "Já existe uma alteração futura posterior. Escolha uma data igual ou posterior.",
       IDEMPOTENCY_KEY_REUSED: "Este pedido já foi utilizado com dados diferentes.",
+      SERIES_HAS_OCCURRENCES: "Esta despesa já possui ocorrências registadas e não pode ser apagada. Termine a recorrência para impedir novas ocorrências.",
+      SERIES_WITHOUT_HISTORY_EDIT_INSTEAD: "Esta série ainda não tem ocorrências. Pode editá-la ou apagá-la diretamente.",
+      SERIES_WITHOUT_HISTORY_DELETE_INSTEAD: "Esta série ainda não tem ocorrências. Apague-a em vez de alterar o estado.",
+      FUTURE_EFFECTIVE_DATE_REQUIRED: "Escolha uma data futura para não alterar despesas anteriores.",
+      EFFECTIVE_DATE_AFTER_END: "A data tem de ser anterior ao término da série.",
+      END_DATE_BEFORE_HISTORY: "A data de término não pode eliminar ocorrências já registadas.",
+      PAUSE_RANGE_INVALID: "A data de retoma tem de ser posterior ao início da pausa.",
+      PAUSE_OVERLAP: "Já existe uma pausa da série nesse período.",
     };
     if (!messages[code]) return false;
     res.status(409).json({ code, message: messages[code] });
@@ -2982,11 +3006,6 @@ export async function registerRoutes(
           notes: parsed.notes,
         },
       });
-      await materializeRecurringExpenseOccurrences({
-        locationId: Number(res.locals.locationId),
-        startDate: parsed.startDate,
-        endDate: parsed.startDate,
-      });
       if (!created.reused) await recordAuditLog(req, {
         action: "business_expense_series.created",
         entityType: "business_expense_series",
@@ -3007,6 +3026,66 @@ export async function registerRoutes(
       if (sendRecurringExpenseError(res, error)) return;
       console.error("Create recurring expense series error:", error);
       res.status(500).json({ message: "Erro ao criar despesa recorrente" });
+    }
+  });
+
+  app.patch("/api/admin/expense-series/:id", requireExpensesManage, requireRecurringExpenses, async (req, res) => {
+    try {
+      const seriesId = parsePositiveInteger(req.params.id);
+      if (seriesId === null) return res.status(400).json({ message: "Série inválida." });
+      const parsed = recurringExpenseSeriesUpdateInputSchema.parse(req.body);
+      const updated = await updateRecurringExpenseSeries({
+        seriesId,
+        locationId: Number(res.locals.locationId),
+        startDate: parsed.startDate,
+        terms: {
+          category: parsed.category,
+          description: parsed.description,
+          amountCents: parsed.amountCents,
+          recurrence: parsed.recurrence,
+          notes: parsed.notes,
+        },
+      });
+      if (!updated) return res.status(404).json({ message: "Série não encontrada." });
+      await recordAuditLog(req, {
+        action: "business_expense_series.updated",
+        entityType: "business_expense_series",
+        entityId: seriesId,
+        summary: `Despesa recorrente sem histórico atualizada: ${parsed.description}`,
+        metadata: { startDate: parsed.startDate, recurrence: parsed.recurrence, amountCents: parsed.amountCents },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (sendRecurringExpenseError(res, error)) return;
+      console.error("Update recurring expense series error:", error);
+      res.status(500).json({ message: "Erro ao atualizar despesa recorrente" });
+    }
+  });
+
+  app.delete("/api/admin/expense-series/:id", requireExpensesManage, requireRecurringExpenses, async (req, res) => {
+    try {
+      const seriesId = parsePositiveInteger(req.params.id);
+      if (seriesId === null) return res.status(400).json({ message: "Série inválida." });
+      const deleted = await deleteRecurringExpenseSeries({
+        seriesId,
+        locationId: Number(res.locals.locationId),
+      });
+      if (!deleted) return res.status(404).json({ message: "Série não encontrada." });
+      await recordAuditLog(req, {
+        action: "business_expense_series.deleted",
+        entityType: "business_expense_series",
+        entityId: seriesId,
+        summary: "Despesa recorrente sem histórico apagada",
+        metadata: { locationId: Number(res.locals.locationId) },
+      });
+      res.status(204).send();
+    } catch (error) {
+      if (sendRecurringExpenseError(res, error)) return;
+      console.error("Delete recurring expense series error:", error);
+      res.status(500).json({ message: "Erro ao apagar despesa recorrente" });
     }
   });
 
@@ -3054,7 +3133,7 @@ export async function registerRoutes(
       const updated = await setRecurringExpenseSeriesState({
         seriesId,
         locationId: Number(res.locals.locationId),
-        action: parsed.action,
+        ...parsed,
       });
       if (!updated) return res.status(404).json({ message: "Série não encontrada." });
       await recordAuditLog(req, {
@@ -3062,7 +3141,11 @@ export async function registerRoutes(
         entityType: "business_expense_series",
         entityId: seriesId,
         summary: `Estado da despesa recorrente alterado: ${parsed.action}`,
-        metadata: { action: parsed.action, effectiveOn: updated.effectiveOn },
+        metadata: {
+          action: parsed.action,
+          effectiveFrom: updated.effectiveOn,
+          resumeOn: parsed.action === "pause" ? parsed.resumeOn ?? null : null,
+        },
       });
       res.json(updated);
     } catch (error) {

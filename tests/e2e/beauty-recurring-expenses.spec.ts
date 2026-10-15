@@ -23,7 +23,12 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
   await page.setViewportSize({ width: 390, height: 844 });
   await mockReports(page);
   let seriesState: "active" | "paused" | "ended" = "active";
-  const mutationBodies: Array<{ url: string; body: any }> = [];
+  let draftSeriesVisible = true;
+  const mutationBodies: Array<{ method: string; url: string; body: any }> = [];
+  const locationDate = new Date();
+  const locationToday = locationDate.toISOString().slice(0, 10);
+  locationDate.setUTCDate(locationDate.getUTCDate() + 1);
+  const minimumFutureEffectiveFrom = locationDate.toISOString().slice(0, 10);
   const futureDate = new Date();
   futureDate.setDate(futureDate.getDate() + 28);
   const scheduledDate = futureDate.toISOString().slice(0, 10);
@@ -49,8 +54,10 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
   await page.route("**/api/admin/expense-series**", async (route) => {
     const request = route.request();
     if (request.method() !== "GET") {
-      mutationBodies.push({ url: request.url(), body: request.postDataJSON() });
-      if (request.url().endsWith("/state")) seriesState = request.postDataJSON().action === "pause" ? "paused" : "active";
+      const body = request.postData() ? request.postDataJSON() : null;
+      mutationBodies.push({ method: request.method(), url: request.url(), body });
+      if (request.url().endsWith("/state")) seriesState = body.action === "pause" ? "paused" : "active";
+      if (request.method() === "DELETE" && request.url().endsWith("/10")) draftSeriesVisible = false;
       await route.fulfill({ status: 200, json: { ok: true } });
       return;
     }
@@ -60,12 +67,31 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
       status: seriesState,
       anchorDate: "2026-10-01",
       endedOn: null,
+      occurrenceCount: 1,
+      hasOccurrences: true,
+      locationToday,
+      minimumFutureEffectiveFrom,
       nextOccurrenceDate: scheduledDate,
       currentVersion: { id: 12, effectiveFrom: "2026-10-01", category: "rent", description: "Renda do espaço", amountCents: 45000, recurrence: "monthly", weekday: null, monthDay: 1, notes: "Contrato principal", createdAt: "2026-10-01T09:00:00.000Z" },
       versions: [{ id: 12, effectiveFrom: "2026-10-01", category: "rent", description: "Renda do espaço", amountCents: 45000, recurrence: "monthly", weekday: null, monthDay: 1, notes: "Contrato principal", createdAt: "2026-10-01T09:00:00.000Z" }],
       pauses: [],
       occurrences: [{ id: 71, scheduledDate, category: "rent", description: "Renda do espaço", amountCents: 45000, recurrence: "monthly", notes: "Contrato principal", isOccurrenceOverride: false, updatedAt: "2026-10-01T09:00:00.000Z" }],
-    }] });
+    }, ...(draftSeriesVisible ? [{
+      id: 10,
+      locationId: 1,
+      status: "active",
+      anchorDate: scheduledDate,
+      endedOn: null,
+      occurrenceCount: 0,
+      hasOccurrences: false,
+      locationToday,
+      minimumFutureEffectiveFrom,
+      nextOccurrenceDate: scheduledDate,
+      currentVersion: { id: 13, effectiveFrom: scheduledDate, category: "internet", description: "Subscrição futura", amountCents: 2990, recurrence: "monthly", weekday: null, monthDay: 1, notes: null, createdAt: "2026-10-01T09:00:00.000Z" },
+      versions: [{ id: 13, effectiveFrom: scheduledDate, category: "internet", description: "Subscrição futura", amountCents: 2990, recurrence: "monthly", weekday: null, monthDay: 1, notes: null, createdAt: "2026-10-01T09:00:00.000Z" }],
+      pauses: [],
+      occurrences: [],
+    }] : [])] });
   });
 
   await loginAdmin(page);
@@ -73,9 +99,15 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
   await page.getByRole("tab", { name: "Relatórios", exact: true }).click();
   await expect(page.getByTestId("recurring-expenses-manager")).toBeVisible();
   await expect(page.getByTestId("recurring-expense-series-9")).toContainText("Renda do espaço");
-  await expect(page.getByText("Ativa", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("recurring-expense-series-9").getByText("Ativa", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Pausar" }).click();
-  await expect.poll(() => mutationBodies.some((entry) => entry.url.endsWith("/api/admin/expense-series/9/state") && entry.body.action === "pause")).toBe(true);
+  const pauseDialog = page.getByRole("dialog", { name: "Pausar recorrência" });
+  await expect(pauseDialog.getByLabel("Data de início da pausa")).toHaveValue(minimumFutureEffectiveFrom);
+  await pauseDialog.getByRole("button", { name: "Confirmar pausa" }).click();
+  await expect.poll(() => mutationBodies.some((entry) => entry.url.endsWith("/api/admin/expense-series/9/state")
+    && entry.body.action === "pause"
+    && entry.body.effectiveFrom === minimumFutureEffectiveFrom
+    && entry.body.resumeOn === null)).toBe(true);
 
   await page.getByRole("button", { name: "Editar ocorrência Renda do espaço" }).click();
   const dialog = page.getByRole("dialog", { name: "Editar despesa recorrente" });
@@ -85,6 +117,17 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
   await dialog.getByLabel("Valor da ocorrência").fill("475,00");
   await dialog.getByRole("button", { name: "Guardar" }).click();
   await expect.poll(() => mutationBodies.some((entry) => entry.url.endsWith("/api/admin/expense-series/9/versions") && entry.body.amountCents === 47500)).toBe(true);
+
+  const draftCard = page.getByTestId("recurring-expense-series-10");
+  await expect(draftCard.getByRole("button", { name: "Editar", exact: true })).toBeVisible();
+  await expect(draftCard.getByRole("button", { name: "Apagar", exact: true })).toBeVisible();
+  await draftCard.getByRole("button", { name: "Editar", exact: true }).click();
+  const draftDialog = page.getByRole("dialog", { name: "Editar série recorrente" });
+  await expect(draftDialog).toContainText("ainda não teve impacto financeiro");
+  await draftDialog.getByRole("button", { name: "Cancelar" }).click();
+  page.once("dialog", (confirmation) => confirmation.accept());
+  await draftCard.getByRole("button", { name: "Apagar", exact: true }).click();
+  await expect.poll(() => mutationBodies.some((entry) => entry.method === "DELETE" && entry.url.endsWith("/api/admin/expense-series/10"))).toBe(true);
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)).toBe(false);
   await page.setViewportSize({ width: 1440, height: 1000 });

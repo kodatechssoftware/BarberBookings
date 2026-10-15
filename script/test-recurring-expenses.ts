@@ -24,6 +24,16 @@ function addDays(dateKey: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function firstDayOfMonth(dateKey: string) {
+  return `${dateKey.slice(0, 7)}-01`;
+}
+
+function addMonths(dateKey: string, months: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + months, day));
+  return date.toISOString().slice(0, 10);
+}
+
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-recurring-expenses-pg-"));
 const port = await availablePort();
 const password = "recurring-expenses-test";
@@ -73,168 +83,325 @@ try {
   process.env.USE_MEMORY_STORAGE = "false";
   const recurring = await import("../server/recurring-expenses");
   const database = await import("../server/db");
-  const created = await recurring.createRecurringExpenseSeries({
-    locationId,
-    startDate: today,
-    idempotencyKey: "11111111-1111-4111-8111-111111111111",
-    terms: {
-      category: "utilities",
-      description: "Energia semanal",
-      amountCents: 2500,
-      recurrence: "weekly",
-      notes: "Contrato",
-    },
-  });
-  const duplicateCreate = await recurring.createRecurringExpenseSeries({
-    locationId,
-    startDate: today,
-    idempotencyKey: "11111111-1111-4111-8111-111111111111",
-    terms: {
-      category: "utilities",
-      description: "Energia semanal",
-      amountCents: 2500,
-      recurrence: "weekly",
-      notes: "Contrato",
-    },
-  });
-  assert.equal(duplicateCreate.series.id, created.series.id, "same creation key must be idempotent");
 
-  const through = addDays(today, 42);
-  await Promise.all([
-    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through }),
-    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through }),
-  ]);
-  const expectedDates = recurringExpenseDates({
-    anchorDate: today,
-    from: today,
-    through,
-    schedule: { recurrence: "weekly", weekday: new Date(`${today}T00:00:00.000Z`).getUTCDay(), monthDay: null },
+  // A series with no materialized occurrence can be edited and deleted freely.
+  const draftStart = addDays(today, 30);
+  const draft = await recurring.createRecurringExpenseSeries({
+    locationId,
+    startDate: draftStart,
+    idempotencyKey: "11111111-1111-4111-8111-111111111111",
+    terms: {
+      category: "internet",
+      description: "Subscricao futura",
+      amountCents: 1500,
+      recurrence: "monthly",
+      notes: null,
+    },
   });
-  const occurrences = await setupPool.query(`
-    SELECT id, scheduled_date::text, amount_cents, recurring_version_id
+  const editedDraftStart = addDays(draftStart, 5);
+  const editedDraft = await recurring.updateRecurringExpenseSeries({
+    seriesId: draft.series.id,
+    locationId,
+    startDate: editedDraftStart,
+    terms: {
+      category: "internet",
+      description: "Subscricao futura revista",
+      amountCents: 1800,
+      recurrence: "monthly",
+      notes: "Sem impacto financeiro",
+    },
+  });
+  assert.equal(editedDraft?.series.anchorDate, editedDraftStart);
+  assert.equal(editedDraft?.version.amountCents, 1800);
+  const draftView = (await recurring.listRecurringExpenseSeries(locationId)).find((item) => item.id === draft.series.id);
+  assert.equal(draftView?.hasOccurrences, false);
+  assert.equal(draftView?.occurrenceCount, 0);
+  assert.ok(await recurring.deleteRecurringExpenseSeries({ seriesId: draft.series.id, locationId }));
+  assert.equal(Number((await setupPool.query(
+    "SELECT count(*) FROM business_expense_recurring_series WHERE id = $1",
+    [draft.series.id],
+  )).rows[0].count), 0);
+
+  // Delete and materialization serialize on the same location lock. The result
+  // must be either a clean deletion or a protected series with one occurrence.
+  const raceStart = addDays(today, 14);
+  const raceSeries = await recurring.createRecurringExpenseSeries({
+    locationId,
+    startDate: raceStart,
+    idempotencyKey: "22222222-2222-4222-8222-222222222222",
+    terms: {
+      category: "other",
+      description: "Concorrencia delete/materializacao",
+      amountCents: 900,
+      recurrence: "weekly",
+      notes: null,
+    },
+  });
+  const [deleteRace, materializeRace] = await Promise.allSettled([
+    recurring.deleteRecurringExpenseSeries({ seriesId: raceSeries.series.id, locationId }),
+    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: raceStart, endDate: raceStart }),
+  ]);
+  assert.equal(materializeRace.status, "fulfilled");
+  const raceState = await setupPool.query(`
+    SELECT
+      EXISTS (SELECT 1 FROM business_expense_recurring_series WHERE id = $1) AS series_exists,
+      (SELECT count(*)::integer FROM business_expenses WHERE recurring_series_id = $1) AS occurrence_count
+  `, [raceSeries.series.id]);
+  if (raceState.rows[0].series_exists) {
+    assert.equal(raceState.rows[0].occurrence_count, 1);
+    assert.equal(deleteRace.status, "rejected");
+    assert.match(String((deleteRace as PromiseRejectedResult).reason), /SERIES_HAS_OCCURRENCES/);
+  } else {
+    assert.equal(raceState.rows[0].occurrence_count, 0);
+    assert.equal(deleteRace.status, "fulfilled");
+  }
+
+  // Financial history uses ledger occurrences: 250 -> 300 only from the
+  // effective future date, while a one-off correction remains isolated.
+  const monthlyAnchor = firstDayOfMonth(today);
+  const monthlyThrough = addMonths(monthlyAnchor, 2);
+  const monthlyDates = recurringExpenseDates({
+    anchorDate: monthlyAnchor,
+    from: monthlyAnchor,
+    through: monthlyThrough,
+    schedule: { recurrence: "monthly", weekday: null, monthDay: 1 },
+  });
+  assert.equal(monthlyDates.length, 3);
+  const monthly = await recurring.createRecurringExpenseSeries({
+    locationId,
+    startDate: monthlyAnchor,
+    idempotencyKey: "33333333-3333-4333-8333-333333333333",
+    terms: {
+      category: "rent",
+      description: "Renda mensal",
+      amountCents: 25000,
+      recurrence: "monthly",
+      notes: "Contrato",
+    },
+  });
+  const duplicateMonthly = await recurring.createRecurringExpenseSeries({
+    locationId,
+    startDate: monthlyAnchor,
+    idempotencyKey: "33333333-3333-4333-8333-333333333333",
+    terms: {
+      category: "rent",
+      description: "Renda mensal",
+      amountCents: 25000,
+      recurrence: "monthly",
+      notes: "Contrato",
+    },
+  });
+  assert.equal(duplicateMonthly.series.id, monthly.series.id, "same creation key must be idempotent");
+  await Promise.all([
+    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: monthlyAnchor, endDate: monthlyThrough }),
+    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: monthlyAnchor, endDate: monthlyThrough }),
+  ]);
+  await assert.rejects(
+    recurring.deleteRecurringExpenseSeries({ seriesId: monthly.series.id, locationId }),
+    /SERIES_HAS_OCCURRENCES/,
+  );
+  await assert.rejects(
+    recurring.updateRecurringExpenseSeries({
+      seriesId: monthly.series.id,
+      locationId,
+      startDate: monthlyAnchor,
+      terms: { category: "rent", description: "Rewrite forbidden", amountCents: 1, recurrence: "monthly", notes: null },
+    }),
+    /SERIES_HAS_OCCURRENCES/,
+  );
+
+  const newRentDate = monthlyDates[2];
+  await Promise.all([
+    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: monthlyAnchor, endDate: monthlyThrough }),
+    recurring.createRecurringExpenseVersion({
+      seriesId: monthly.series.id,
+      locationId,
+      effectiveFrom: newRentDate,
+      terms: { category: "rent", description: "Renda mensal", amountCents: 30000, recurrence: "monthly", notes: "Novo valor" },
+    }),
+  ]);
+  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: monthlyAnchor, endDate: monthlyThrough });
+  let monthlyRows = (await setupPool.query(`
+    SELECT id, scheduled_date::text, amount_cents, is_occurrence_override
     FROM business_expenses
     WHERE recurring_series_id = $1
     ORDER BY scheduled_date
-  `, [created.series.id]);
-  assert.equal(occurrences.rowCount, expectedDates.length, "concurrent materialization must be idempotent");
-  assert.equal(new Set(occurrences.rows.map((row) => row.scheduled_date)).size, expectedDates.length);
+  `, [monthly.series.id])).rows;
+  assert.deepEqual(monthlyRows.map((row) => row.amount_cents), [25000, 25000, 30000]);
 
-  const concurrentVersionDate = expectedDates[1];
-  await Promise.all([
-    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through }),
-    recurring.createRecurringExpenseVersion({
-      seriesId: created.series.id,
-      locationId,
-      effectiveFrom: concurrentVersionDate,
-      terms: { category: "utilities", description: "Energia revista", amountCents: 3000, recurrence: "weekly", notes: null },
-    }),
-  ]);
-  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through });
-  const concurrentVersionRows = await setupPool.query(`
-    SELECT scheduled_date::text, amount_cents
-    FROM business_expenses
-    WHERE recurring_series_id = $1 AND scheduled_date >= $2
-    ORDER BY scheduled_date
-  `, [created.series.id, concurrentVersionDate]);
-  assert.equal(concurrentVersionRows.rowCount, expectedDates.length - 1);
-  assert.equal(concurrentVersionRows.rows.every((row) => row.amount_cents === 3000), true,
-    "materialization and a concurrent version change must serialize on the location");
-
-  const firstOccurrence = occurrences.rows[0];
   await recurring.updateRecurringExpenseOccurrence({
-    expenseId: Number(firstOccurrence.id),
+    expenseId: Number(monthlyRows[0].id),
     locationId,
-    terms: { category: "utilities", description: "Energia corrigida", amountCents: 2600, notes: "Correção isolada" },
+    terms: { category: "rent", description: "Renda mensal corrigida", amountCents: 24000, notes: "Correcao isolada" },
   });
-  await recurring.createRecurringExpenseVersion({
-    seriesId: created.series.id,
-    locationId,
-    effectiveFrom: expectedDates[1],
-    terms: { category: "utilities", description: "Energia revista", amountCents: 3000, recurrence: "weekly", notes: null },
-  });
-  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through });
-  const afterVersion = await setupPool.query(`
+  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: monthlyAnchor, endDate: monthlyThrough });
+  monthlyRows = (await setupPool.query(`
     SELECT scheduled_date::text, amount_cents, is_occurrence_override
-    FROM business_expenses WHERE recurring_series_id = $1 ORDER BY scheduled_date
-  `, [created.series.id]);
-  assert.deepEqual(afterVersion.rows.slice(0, 2), [
-    { scheduled_date: expectedDates[0], amount_cents: 2600, is_occurrence_override: true },
-    { scheduled_date: expectedDates[1], amount_cents: 3000, is_occurrence_override: false },
+    FROM business_expenses
+    WHERE recurring_series_id = $1
+    ORDER BY scheduled_date
+  `, [monthly.series.id])).rows;
+  assert.deepEqual(monthlyRows, [
+    { scheduled_date: monthlyDates[0], amount_cents: 24000, is_occurrence_override: true },
+    { scheduled_date: monthlyDates[1], amount_cents: 25000, is_occurrence_override: false },
+    { scheduled_date: monthlyDates[2], amount_cents: 30000, is_occurrence_override: false },
   ]);
-  assert.equal(
-    Number((await setupPool.query(`
-      SELECT coalesce(sum(amount_cents), 0) AS total
-      FROM business_expenses WHERE recurring_series_id = $1
-    `, [created.series.id])).rows[0].total),
-    2600 + (expectedDates.length - 1) * 3000,
-    "financial summaries and Excel read the same immutable occurrence values",
-  );
-  const storageModule = await import("../server/storage");
-  const reportRows = await storageModule.storage.getBusinessExpenses({
-    locationId,
-    startDate: today,
-    endDate: through,
-    timeZone: "Europe/Lisbon",
-  });
-  assert.equal(reportRows.filter((expense) => expense.recurringSeriesId === created.series.id).length, expectedDates.length);
-  assert.equal(
-    reportRows.filter((expense) => expense.recurringSeriesId === created.series.id)
-      .reduce((sum, expense) => sum + expense.amountCents, 0),
-    2600 + (expectedDates.length - 1) * 3000,
-    "the shared report/Excel storage path must not duplicate recurring occurrences",
-  );
-  const [seriesView] = await recurring.listRecurringExpenseSeries(locationId);
-  assert.equal(seriesView.occurrences.length, 1, "series history exposes financial occurrences through today");
-  assert.equal(seriesView.occurrences[0].amountCents, 2600);
-  assert.equal(seriesView.occurrences[0].isOccurrenceOverride, true);
-  assert.equal(seriesView.nextOccurrenceDate, expectedDates[1], "next occurrence skips today's materialized entry");
 
-  const simultaneousEditDate = addDays(through, 7);
+  const storageModule = await import("../server/storage");
+  const monthlyReportRows = (await storageModule.storage.getBusinessExpenses({
+    locationId,
+    startDate: monthlyAnchor,
+    endDate: monthlyThrough,
+    timeZone: "Europe/Lisbon",
+  })).filter((expense) => expense.recurringSeriesId === monthly.series.id);
+  assert.equal(monthlyReportRows.length, 3, "Excel/report storage must not duplicate recurring occurrences");
+  assert.equal(monthlyReportRows.reduce((sum, expense) => sum + expense.amountCents, 0), 79000);
+
+  const monthlyView = (await recurring.listRecurringExpenseSeries(locationId)).find((item) => item.id === monthly.series.id)!;
+  assert.equal(monthlyView.hasOccurrences, true);
+  assert.equal(monthlyView.occurrenceCount, 3);
+  assert.equal(monthlyView.occurrences[0].amountCents, 24000);
+  assert.equal(monthlyView.occurrences[0].isOccurrenceOverride, true);
+  assert.equal(monthlyView.nextOccurrenceDate, monthlyDates[1]);
+
+  const simultaneousEditDate = addMonths(monthlyAnchor, 3);
   await Promise.all([
     recurring.createRecurringExpenseVersion({
-      seriesId: created.series.id,
+      seriesId: monthly.series.id,
       locationId,
       effectiveFrom: simultaneousEditDate,
-      terms: { category: "utilities", description: "Edição concorrente A", amountCents: 4000, recurrence: "weekly", notes: null },
+      terms: { category: "rent", description: "Edicao concorrente A", amountCents: 40000, recurrence: "monthly", notes: null },
     }),
     recurring.createRecurringExpenseVersion({
-      seriesId: created.series.id,
+      seriesId: monthly.series.id,
       locationId,
       effectiveFrom: simultaneousEditDate,
-      terms: { category: "utilities", description: "Edição concorrente B", amountCents: 4100, recurrence: "weekly", notes: null },
+      terms: { category: "rent", description: "Edicao concorrente B", amountCents: 41000, recurrence: "monthly", notes: null },
     }),
   ]);
   const simultaneousVersions = await setupPool.query(`
     SELECT amount_cents
     FROM business_expense_recurring_versions
     WHERE series_id = $1 AND effective_from = $2
-  `, [created.series.id, simultaneousEditDate]);
+  `, [monthly.series.id, simultaneousEditDate]);
   assert.equal(simultaneousVersions.rowCount, 1, "simultaneous edits must leave one complete version");
-  assert.equal([4000, 4100].includes(simultaneousVersions.rows[0].amount_cents), true);
+  assert.equal([40000, 41000].includes(simultaneousVersions.rows[0].amount_cents), true);
 
+  // Pauses and termination are future-effective and serialize with on-demand
+  // materialization. Historical occurrences remain unchanged.
+  const weeklyThrough = addDays(today, 70);
+  const weeklyDates = recurringExpenseDates({
+    anchorDate: today,
+    from: today,
+    through: weeklyThrough,
+    schedule: { recurrence: "weekly", weekday: new Date(`${today}T00:00:00.000Z`).getUTCDay(), monthDay: null },
+  });
+  const weekly = await recurring.createRecurringExpenseSeries({
+    locationId,
+    startDate: today,
+    idempotencyKey: "44444444-4444-4444-8444-444444444444",
+    terms: {
+      category: "staff",
+      description: "Limpeza semanal",
+      amountCents: 5000,
+      recurrence: "weekly",
+      notes: null,
+    },
+  });
+  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: weeklyThrough });
+  await assert.rejects(
+    recurring.setRecurringExpenseSeriesState({
+      seriesId: weekly.series.id,
+      locationId,
+      action: "pause",
+      effectiveFrom: today,
+    }),
+    /FUTURE_EFFECTIVE_DATE_REQUIRED/,
+    "pausing must not remove an occurrence that is already applicable today",
+  );
+  await assert.rejects(
+    recurring.setRecurringExpenseSeriesState({
+      seriesId: weekly.series.id,
+      locationId,
+      action: "end",
+      effectiveFrom: today,
+    }),
+    /FUTURE_EFFECTIVE_DATE_REQUIRED/,
+    "termination must not remove an occurrence that is already applicable today",
+  );
   await Promise.all([
-    recurring.setRecurringExpenseSeriesState({ seriesId: created.series.id, locationId, action: "pause" }),
-    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through }),
+    recurring.setRecurringExpenseSeriesState({
+      seriesId: weekly.series.id,
+      locationId,
+      action: "pause",
+      effectiveFrom: weeklyDates[2],
+      resumeOn: weeklyDates[4],
+    }),
+    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: weeklyThrough }),
   ]);
-  assert.equal(Number((await setupPool.query(`
-    SELECT count(*) FROM business_expenses WHERE recurring_series_id = $1
-  `, [created.series.id])).rows[0].count), 0, "a paused series must not rematerialize occurrences");
-  await recurring.setRecurringExpenseSeriesState({ seriesId: created.series.id, locationId, action: "resume" });
-  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through });
-  let scheduledDates = (await setupPool.query(`
-    SELECT scheduled_date::text FROM business_expenses WHERE recurring_series_id = $1 ORDER BY scheduled_date
-  `, [created.series.id])).rows.map((row) => row.scheduled_date);
-  assert.equal(scheduledDates.includes(expectedDates[0]), true);
-  assert.equal(scheduledDates.includes(expectedDates[4]), true);
+  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: weeklyThrough });
+  let weeklyScheduledDates = (await setupPool.query(`
+    SELECT scheduled_date::text FROM business_expenses
+    WHERE recurring_series_id = $1 ORDER BY scheduled_date
+  `, [weekly.series.id])).rows.map((row) => row.scheduled_date);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[0]), true);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[1]), true);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[2]), false);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[3]), false);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[4]), true);
 
+  await recurring.setRecurringExpenseSeriesState({
+    seriesId: weekly.series.id,
+    locationId,
+    action: "pause",
+    effectiveFrom: weeklyDates[5],
+    resumeOn: null,
+  });
+  await recurring.setRecurringExpenseSeriesState({
+    seriesId: weekly.series.id,
+    locationId,
+    action: "resume",
+    effectiveFrom: weeklyDates[6],
+  });
+  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: weeklyThrough });
+  weeklyScheduledDates = (await setupPool.query(`
+    SELECT scheduled_date::text FROM business_expenses
+    WHERE recurring_series_id = $1 ORDER BY scheduled_date
+  `, [weekly.series.id])).rows.map((row) => row.scheduled_date);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[5]), false);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[6]), true);
+
+  const endDate = weeklyDates[8];
   await Promise.all([
-    recurring.setRecurringExpenseSeriesState({ seriesId: created.series.id, locationId, action: "end" }),
-    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: through }),
+    recurring.setRecurringExpenseSeriesState({
+      seriesId: weekly.series.id,
+      locationId,
+      action: "end",
+      effectiveFrom: endDate,
+    }),
+    recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: weeklyThrough }),
   ]);
-  scheduledDates = (await setupPool.query(`
-    SELECT scheduled_date::text FROM business_expenses WHERE recurring_series_id = $1 ORDER BY scheduled_date
-  `, [created.series.id])).rows.map((row) => row.scheduled_date);
-  assert.equal(scheduledDates.length, 0);
+  await recurring.materializeRecurringExpenseOccurrences({ locationId, startDate: today, endDate: weeklyThrough });
+  weeklyScheduledDates = (await setupPool.query(`
+    SELECT scheduled_date::text FROM business_expenses
+    WHERE recurring_series_id = $1 ORDER BY scheduled_date
+  `, [weekly.series.id])).rows.map((row) => row.scheduled_date);
+  assert.equal(weeklyScheduledDates.every((date) => date < endDate), true);
+  assert.equal(weeklyScheduledDates.includes(weeklyDates[0]), true, "termination preserves prior history");
+  assert.deepEqual(weeklyScheduledDates, [weeklyDates[0], weeklyDates[1], weeklyDates[4], weeklyDates[6], weeklyDates[7]]);
+
+  const weeklyReportRows = (await storageModule.storage.getBusinessExpenses({
+    locationId,
+    startDate: today,
+    endDate: weeklyThrough,
+    timeZone: "Europe/Lisbon",
+  })).filter((expense) => expense.recurringSeriesId === weekly.series.id);
+  assert.deepEqual(
+    weeklyReportRows.map((expense) => expense.scheduledDate).sort(),
+    weeklyScheduledDates,
+    "Excel/report output must equal the occurrence ledger after pause and termination",
+  );
+  assert.equal(weeklyReportRows.reduce((sum, expense) => sum + expense.amountCents, 0), weeklyScheduledDates.length * 5000);
 
   const legacy = await setupPool.query("SELECT recurring_series_id, scheduled_date FROM business_expenses WHERE description = 'Legacy weekly label'");
   assert.deepEqual(legacy.rows[0], { recurring_series_id: null, scheduled_date: null });
@@ -246,17 +413,18 @@ try {
   `);
   const secondLocationId = Number(secondLocation.rows[0].id);
   assert.deepEqual(await recurring.listRecurringExpenseSeries(secondLocationId), []);
-  assert.equal((await recurring.listRecurringExpenseSeries(locationId)).length, 1);
+  assert.ok((await recurring.listRecurringExpenseSeries(locationId)).length >= 2);
   assert.equal(await recurring.createRecurringExpenseVersion({
-    seriesId: created.series.id,
+    seriesId: monthly.series.id,
     locationId: secondLocationId,
-    effectiveFrom: addDays(through, 7),
-    terms: { category: "other", description: "Cross-location", amountCents: 1, recurrence: "weekly", notes: null },
+    effectiveFrom: addMonths(monthlyAnchor, 4),
+    terms: { category: "other", description: "Cross-location", amountCents: 1, recurrence: "monthly", notes: null },
   }), null);
   assert.equal(await recurring.setRecurringExpenseSeriesState({
-    seriesId: created.series.id,
+    seriesId: monthly.series.id,
     locationId: secondLocationId,
     action: "pause",
+    effectiveFrom: addDays(today, 1),
   }), null);
 
   await assert.rejects(
@@ -264,17 +432,11 @@ try {
       INSERT INTO business_expense_recurring_versions
         (series_id, effective_from, category, description, amount_cents, recurrence, weekday, month_day)
       VALUES ($1, $2, 'other', 'Invalid', 100, 'weekly', NULL, NULL)
-    `, [created.series.id, addDays(through, 14)]),
+    `, [monthly.series.id, addMonths(monthlyAnchor, 5)]),
     /business_expense_recurring_versions_terms_check/,
   );
 
-  const aggregate = await setupPool.query(`
-    SELECT count(*)::integer AS count, coalesce(sum(amount_cents), 0)::integer AS total
-    FROM business_expenses WHERE recurring_series_id = $1
-  `, [created.series.id]);
-  assert.equal(aggregate.rows[0].count, scheduledDates.length);
-  assert.equal(aggregate.rows[0].total, 0);
-  console.log("Recurring expense migration, materialization, history, pause/resume/end, isolation and totals: PASS");
+  console.log("Recurring expense edit/delete rules, immutable ledger, pause/end, concurrency, isolation and Excel totals: PASS");
   await database.pool.end();
 } finally {
   await setupPool?.end().catch(() => undefined);

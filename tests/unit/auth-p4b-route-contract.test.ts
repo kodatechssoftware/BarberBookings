@@ -19,6 +19,8 @@ test("P4B management endpoints use their explicit capability guards", () => {
     'app.delete("/api/admin/expenses/:id", requireExpensesManage',
     'app.get("/api/admin/expense-series", requireExpensesManage',
     'app.post("/api/admin/expense-series", requireExpensesManage',
+    'app.patch("/api/admin/expense-series/:id", requireExpensesManage',
+    'app.delete("/api/admin/expense-series/:id", requireExpensesManage',
     'app.post("/api/admin/expense-series/:id/versions", requireExpensesManage',
     'app.post("/api/admin/expense-series/:id/state", requireExpensesManage',
     'app.patch("/api/admin/expenses/:id/occurrence", requireExpensesManage',

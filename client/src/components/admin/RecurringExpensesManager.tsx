@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format, startOfToday } from "date-fns";
-import { History, Loader2, Pause, Play, Square } from "lucide-react";
+import { History, Loader2, Pause, Play, Square, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -34,6 +34,10 @@ type Series = {
   status: "active" | "paused" | "ended";
   anchorDate: string;
   endedOn: string | null;
+  occurrenceCount: number;
+  hasOccurrences: boolean;
+  locationToday: string;
+  minimumFutureEffectiveFrom: string;
   nextOccurrenceDate: string | null;
   currentVersion: Version;
   versions: Version[];
@@ -85,6 +89,8 @@ export function RecurringExpensesManager() {
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | Series["status"]>("all");
   const [editing, setEditing] = useState<Series | null>(null);
+  const [stateAction, setStateAction] = useState<{ item: Series; action: "pause" | "end" } | null>(null);
+  const [stateDates, setStateDates] = useState({ effectiveFrom: "", resumeOn: "" });
   const [pendingSeriesId, setPendingSeriesId] = useState<number | null>(null);
   const pendingRef = useRef(false);
   const [draft, setDraft] = useState({
@@ -95,7 +101,6 @@ export function RecurringExpensesManager() {
     recurrence: "monthly" as Frequency,
     notes: "",
   });
-  const todayDateKey = format(startOfToday(), "yyyy-MM-dd");
   const queryKey = ["/api/admin/expense-series", { locationId: activeLocationId }];
   const { data: series = [], isLoading } = useQuery<Series[]>({ queryKey });
   const visible = useMemo(
@@ -104,6 +109,7 @@ export function RecurringExpensesManager() {
   );
   useEffect(() => {
     setEditing(null);
+    setStateAction(null);
     setFilter("all");
   }, [activeLocationId]);
 
@@ -114,14 +120,17 @@ export function RecurringExpensesManager() {
     ]);
   };
 
-  const changeState = async (item: Series, action: "pause" | "resume" | "end") => {
+  const changeState = async (item: Series, action: "pause" | "resume" | "end", input?: { effectiveFrom: string; resumeOn?: string | null }) => {
     if (pendingRef.current) return;
     pendingRef.current = true;
     setPendingSeriesId(item.id);
     try {
       await apiRequest("POST", `/api/admin/expense-series/${item.id}/state`, {
         action,
+        effectiveFrom: input?.effectiveFrom ?? item.locationToday,
+        ...(action === "pause" ? { resumeOn: input?.resumeOn || null } : {}),
       });
+      setStateAction(null);
       await refresh();
       toast({ title: "Despesa recorrente atualizada" });
     } catch (error) {
@@ -134,16 +143,48 @@ export function RecurringExpensesManager() {
 
   const openEdit = (item: Series) => {
     const latestVersion = item.versions.at(-1) ?? item.currentVersion;
-    const today = format(startOfToday(), "yyyy-MM-dd");
     setEditing(item);
     setDraft({
-      effectiveFrom: latestVersion.effectiveFrom > today ? latestVersion.effectiveFrom : today,
+      effectiveFrom: item.hasOccurrences
+        ? [latestVersion.effectiveFrom, item.minimumFutureEffectiveFrom].sort().at(-1)!
+        : item.anchorDate,
       category: latestVersion.category,
       description: latestVersion.description,
       amount: (latestVersion.amountCents / 100).toFixed(2).replace(".", ","),
       recurrence: latestVersion.recurrence,
       notes: latestVersion.notes ?? "",
     });
+  };
+
+  const openStateAction = (item: Series, action: "pause" | "end") => {
+    setStateAction({ item, action });
+    setStateDates({
+      effectiveFrom: action === "end"
+        ? [item.nextOccurrenceDate ?? "", item.minimumFutureEffectiveFrom].sort().at(-1)!
+        : item.minimumFutureEffectiveFrom,
+      resumeOn: "",
+    });
+  };
+
+  const deleteSeries = async (item: Series) => {
+    if (pendingRef.current) return;
+    if (!window.confirm("Apagar esta série sem histórico? Esta ação não pode ser anulada.")) return;
+    pendingRef.current = true;
+    setPendingSeriesId(item.id);
+    try {
+      await apiRequest("DELETE", `/api/admin/expense-series/${item.id}`);
+      await refresh();
+      toast({ title: "Despesa recorrente apagada" });
+    } catch (error) {
+      toast({
+        title: "Não foi possível apagar",
+        description: error instanceof Error ? error.message : "Esta despesa já possui ocorrências registadas e não pode ser apagada. Termine a recorrência para impedir novas ocorrências.",
+        variant: "destructive",
+      });
+    } finally {
+      pendingRef.current = false;
+      setPendingSeriesId(null);
+    }
   };
 
   const saveVersion = async () => {
@@ -156,8 +197,10 @@ export function RecurringExpensesManager() {
     pendingRef.current = true;
     setPendingSeriesId(editing.id);
     try {
-      await apiRequest("POST", `/api/admin/expense-series/${editing.id}/versions`, {
-        effectiveFrom: draft.effectiveFrom,
+      await apiRequest(editing.hasOccurrences ? "POST" : "PATCH", editing.hasOccurrences
+        ? `/api/admin/expense-series/${editing.id}/versions`
+        : `/api/admin/expense-series/${editing.id}`, {
+        ...(editing.hasOccurrences ? { effectiveFrom: draft.effectiveFrom } : { startDate: draft.effectiveFrom }),
         category: draft.category,
         description: draft.description.trim(),
         amountCents,
@@ -166,7 +209,7 @@ export function RecurringExpensesManager() {
       });
       setEditing(null);
       await refresh();
-      toast({ title: "Condições futuras guardadas" });
+      toast({ title: editing.hasOccurrences ? "Condições futuras guardadas" : "Série atualizada" });
     } catch (error) {
       toast({ title: "Não foi possível guardar", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
@@ -213,7 +256,7 @@ export function RecurringExpensesManager() {
                 <p className="mt-2 text-xs text-gray-400">
                   Desde {item.anchorDate}
                   {item.nextOccurrenceDate ? ` · próxima: ${item.nextOccurrenceDate}` : ""}
-                  {item.endedOn ? ` · terminada em ${item.endedOn}` : ""}
+                  {item.endedOn ? ` · ${item.endedOn > item.locationToday ? "termina" : "terminada"} em ${item.endedOn}` : ""}
                 </p>
                 <details className="mt-3 text-sm text-gray-300">
                   <summary className="flex cursor-pointer items-center gap-2 text-primary"><History className="h-4 w-4" />Ver histórico</summary>
@@ -237,10 +280,19 @@ export function RecurringExpensesManager() {
                   </div>
                 </details>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {item.status !== "ended" && <Button size="sm" variant="outline" onClick={() => openEdit(item)}>Alterar futuro</Button>}
-                  {item.status === "active" && <Button size="sm" variant="outline" onClick={() => changeState(item, "pause")} disabled={pendingSeriesId !== null}><Pause className="mr-1 h-4 w-4" />Pausar</Button>}
-                  {item.status === "paused" && <Button size="sm" variant="outline" onClick={() => changeState(item, "resume")} disabled={pendingSeriesId !== null}><Play className="mr-1 h-4 w-4" />Retomar</Button>}
-                  {item.status !== "ended" && <Button size="sm" variant="outline" className="border-red-500/30 text-red-300" onClick={() => changeState(item, "end")} disabled={pendingSeriesId !== null}><Square className="mr-1 h-4 w-4" />Terminar</Button>}
+                  {!item.hasOccurrences ? (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => openEdit(item)}>Editar</Button>
+                      <Button size="sm" variant="outline" className="border-red-500/30 text-red-300" onClick={() => deleteSeries(item)} disabled={pendingSeriesId !== null}><Trash2 className="mr-1 h-4 w-4" />Apagar</Button>
+                    </>
+                  ) : (
+                    <>
+                      {item.status !== "ended" && <Button size="sm" variant="outline" onClick={() => openEdit(item)}>Editar futuro</Button>}
+                      {item.status === "active" && <Button size="sm" variant="outline" onClick={() => openStateAction(item, "pause")} disabled={pendingSeriesId !== null}><Pause className="mr-1 h-4 w-4" />Pausar</Button>}
+                      {item.status === "paused" && <Button size="sm" variant="outline" onClick={() => changeState(item, "resume", { effectiveFrom: item.locationToday })} disabled={pendingSeriesId !== null}><Play className="mr-1 h-4 w-4" />Retomar</Button>}
+                      {item.status !== "ended" && <Button size="sm" variant="outline" className="border-red-500/30 text-red-300" onClick={() => openStateAction(item, "end")} disabled={pendingSeriesId !== null}><Square className="mr-1 h-4 w-4" />{item.endedOn ? "Alterar término" : "Terminar"}</Button>}
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -251,11 +303,13 @@ export function RecurringExpensesManager() {
       <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent mobileViewportAware className="max-w-lg bg-card text-white">
           <DialogHeader>
-            <DialogTitle>Alterar esta e as ocorrências seguintes</DialogTitle>
-            <DialogDescription>É criada uma nova versão. As ocorrências anteriores mantêm os valores originais.</DialogDescription>
+            <DialogTitle>{editing?.hasOccurrences ? "Alterar esta e as ocorrências seguintes" : "Editar série recorrente"}</DialogTitle>
+            <DialogDescription>{editing?.hasOccurrences
+              ? "Esta alteração não modifica despesas anteriores. É criada uma nova versão com efeitos na data escolhida."
+              : "Esta série ainda não teve impacto financeiro e pode ser editada livremente."}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
-            <div className="space-y-2"><Label>Produzir efeitos em</Label><Input aria-label="Data de efeito da série" type="date" min={(editing?.versions.at(-1)?.effectiveFrom ?? todayDateKey) > todayDateKey ? editing?.versions.at(-1)?.effectiveFrom : todayDateKey} value={draft.effectiveFrom} onChange={(event) => setDraft({ ...draft, effectiveFrom: event.target.value })} /></div>
+            <div className="space-y-2"><Label>{editing?.hasOccurrences ? "Aplicar a partir de" : "Data de início"}</Label><Input aria-label={editing?.hasOccurrences ? "Data de efeito da série" : "Data de início da série"} type="date" min={editing?.hasOccurrences ? [editing.minimumFutureEffectiveFrom, editing.versions.at(-1)?.effectiveFrom ?? ""].sort().at(-1) : undefined} value={draft.effectiveFrom} onChange={(event) => setDraft({ ...draft, effectiveFrom: event.target.value })} /></div>
             <div className="space-y-2"><Label>Descrição</Label><Input aria-label="Descrição da série" value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
             <div className="space-y-2"><Label>Categoria</Label><Select value={draft.category} onValueChange={(value) => setDraft({ ...draft, category: value as Category })}><SelectTrigger aria-label="Categoria da série"><SelectValue /></SelectTrigger><SelectContent>{categoryLabels.map((category) => <SelectItem key={category.value} value={category.value}>{category.label}</SelectItem>)}</SelectContent></Select></div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -264,7 +318,46 @@ export function RecurringExpensesManager() {
             </div>
             <div className="space-y-2"><Label>Notas</Label><Textarea aria-label="Notas da série" value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></div>
           </div>
-          <DialogFooter><Button variant="outline" onClick={() => setEditing(null)}>Cancelar</Button><Button variant="gold" onClick={saveVersion} disabled={pendingSeriesId !== null}>Guardar nova versão</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setEditing(null)}>Cancelar</Button><Button variant="gold" onClick={saveVersion} disabled={pendingSeriesId !== null}>{editing?.hasOccurrences ? "Guardar alteração futura" : "Guardar alterações"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(stateAction)} onOpenChange={(open) => !open && setStateAction(null)}>
+        <DialogContent mobileViewportAware className="max-w-md bg-card text-white">
+          <DialogHeader>
+            <DialogTitle>{stateAction?.action === "pause" ? "Pausar recorrência" : "Terminar recorrência"}</DialogTitle>
+            <DialogDescription>{stateAction?.action === "pause"
+              ? "As ocorrências dentro do intervalo não serão geradas. O histórico já registado permanece inalterado."
+              : "Não serão geradas ocorrências a partir da data escolhida. O histórico permanece consultável."}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label>{stateAction?.action === "pause" ? "Início da pausa" : "Terminar a partir de"}</Label>
+              <Input
+                aria-label={stateAction?.action === "pause" ? "Data de início da pausa" : "Data de término da série"}
+                type="date"
+                min={stateAction?.item.minimumFutureEffectiveFrom}
+                value={stateDates.effectiveFrom}
+                onChange={(event) => setStateDates({ ...stateDates, effectiveFrom: event.target.value })}
+              />
+            </div>
+            {stateAction?.action === "pause" && (
+              <div className="space-y-2">
+                <Label>Retomar em <span className="text-gray-400">(opcional)</span></Label>
+                <Input aria-label="Data de retoma da série" type="date" min={stateDates.effectiveFrom} value={stateDates.resumeOn} onChange={(event) => setStateDates({ ...stateDates, resumeOn: event.target.value })} />
+                <p className="text-xs text-gray-400">Sem data de retoma, a série fica pausada até usar “Retomar”.</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStateAction(null)}>Cancelar</Button>
+            <Button
+              variant={stateAction?.action === "end" ? "outline" : "gold"}
+              className={stateAction?.action === "end" ? "border-red-500/30 text-red-300" : undefined}
+              disabled={pendingSeriesId !== null || !stateDates.effectiveFrom}
+              onClick={() => stateAction && changeState(stateAction.item, stateAction.action, stateDates)}
+            >{stateAction?.action === "pause" ? "Confirmar pausa" : "Confirmar término"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </Card>
@@ -343,10 +436,10 @@ export function RecurringExpenseOccurrenceDialog({
               <SelectTrigger aria-label="Âmbito da alteração"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="only">Apenas esta ocorrência</SelectItem>
-                <SelectItem value="following" disabled={Boolean(occurrence && occurrence.scheduledDate < today)}>Esta e as seguintes</SelectItem>
+                <SelectItem value="following" disabled={Boolean(occurrence && occurrence.scheduledDate <= today)}>Esta e as seguintes</SelectItem>
               </SelectContent>
             </Select>
-            {occurrence && occurrence.scheduledDate < today && <p className="text-xs text-gray-400">O histórico passado só pode ser corrigido ocorrência a ocorrência.</p>}
+            {occurrence && occurrence.scheduledDate <= today && <p className="text-xs text-gray-400">Uma ocorrência já aplicável só pode ser corrigida individualmente. Alterações à série exigem uma data futura.</p>}
           </div>
           <div className="space-y-2"><Label>Descrição</Label><Input aria-label="Descrição da ocorrência" value={description} onChange={(event) => setDescription(event.target.value)} /></div>
           <div className="space-y-2"><Label>Categoria</Label><Select value={category} onValueChange={(value) => setCategory(value as Category)}><SelectTrigger aria-label="Categoria da ocorrência"><SelectValue /></SelectTrigger><SelectContent>{categoryLabels.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
