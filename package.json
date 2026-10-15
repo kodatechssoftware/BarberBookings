@@ -32,6 +32,8 @@
     "test:auth-cutover": "tsx script/test-auth-cutover-check.ts",
     "test:database-bootstrap": "tsx script/test-database-bootstrap.ts",
     "test:recurring-expenses": "cross-env NODE_ENV=test BUSINESS_VERTICAL=beauty tsx --test tests/unit/business-expense-recurrence.test.ts tests/unit/business-runtime-config.test.ts && cross-env NODE_ENV=test BUSINESS_VERTICAL=beauty tsx script/test-recurring-expenses.ts",
+    "test:beauty-demo-seed": "tsx script/test-beauty-demo-seed.ts",
+    "demo:beauty": "tsx script/seed-beauty-demo.ts",
     "db:bootstrap": "tsx script/bootstrap-database.ts",
     "db:migrate": "tsx script/migrate.ts",
     "db:push": "drizzle-kit push"

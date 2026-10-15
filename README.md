@@ -370,3 +370,29 @@ Para publicar o frontend na Cloudflare e a API no Render:
 
 Se precisares de aceitar mais do que uma origem no backend, usa `ALLOWED_ORIGINS` com valores separados por virgula.
 Se estiveres a testar com dominios diferentes do fornecedor, como `pages.dev` e `onrender.com`, usa `SESSION_SAME_SITE=none`.
+
+## Dados sintéticos Beauty DEV
+
+A demonstração comercial Beauty usa uma seed explícita, transacional e removível.
+Ela nunca corre no startup e recusa Barber, legacy auth, Production, mais do que
+uma localização ou uma base sem as migrations `0017` e `0018`.
+
+O dry-run é o modo por omissão e não altera dados:
+
+```sh
+npm run demo:beauty -- --dry-run --reference-date 2026-10-15
+```
+
+Aplicar e remover exigem uma confirmação explícita:
+
+```sh
+npm run demo:beauty -- --apply --reference-date 2026-10-15 --confirm beauty-dev
+npm run demo:beauty -- --cleanup --reference-date 2026-10-15 --confirm beauty-dev
+```
+
+O ambiente tem de declarar `APP_ENV=development`, `BUSINESS_VERTICAL=beauty` e
+`AUTH_RUNTIME_MODE=canonical`. A data de referência deve ser uma quinta-feira;
+assim, os offsets determinísticos continuam alinhados com os horários semanais.
+A seed usa apenas contactos `.invalid`, não cria Users ou convites e não cria
+eventos de notificação/outbox. O cleanup para em vez de apagar dados caso o
+catálogo ou a profissional de demonstração tenham sido reutilizados fora da seed.
