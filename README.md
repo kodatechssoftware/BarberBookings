@@ -35,6 +35,12 @@ npm install
 npm run db:bootstrap
 ```
 
+Beauty installations with recurring expense management use migration `0018`.
+Series are generated idempotently into the existing expense ledger only for a
+requested reporting interval, so Dashboard/Excel totals include each
+occurrence exactly once. Future changes create an effective-dated version;
+past materialized occurrences keep their original values.
+
 4. Arrancar a aplicacao:
 
 ```powershell

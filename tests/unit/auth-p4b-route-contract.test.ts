@@ -17,6 +17,11 @@ test("P4B management endpoints use their explicit capability guards", () => {
     'app.post("/api/admin/expenses", requireExpensesManage',
     'app.patch("/api/admin/expenses/:id", requireExpensesManage',
     'app.delete("/api/admin/expenses/:id", requireExpensesManage',
+    'app.get("/api/admin/expense-series", requireExpensesManage',
+    'app.post("/api/admin/expense-series", requireExpensesManage',
+    'app.post("/api/admin/expense-series/:id/versions", requireExpensesManage',
+    'app.post("/api/admin/expense-series/:id/state", requireExpensesManage',
+    'app.patch("/api/admin/expenses/:id/occurrence", requireExpensesManage',
     'app.post("/api/admin/location-barbers", requireTeamLocationAssignment',
     'app.patch("/api/barbers/:id/services", requireCatalogLocationManage',
     'app.patch("/api/barbers/:id/reset-password", requireUsersManage',
@@ -32,6 +37,11 @@ test("P4B management endpoints use their explicit capability guards", () => {
   ]) {
     assert.ok(routes.includes(expected), expected);
   }
+});
+
+test("recurring expense mutations remain location-sensitive", () => {
+  assert.match(routes, /\^\\\/admin\\\/expense-series\(\?:\\\/\\d\+\(\?:\\\/\(\?:versions\|state\)\)\?\)\?\$\//);
+  assert.match(routes, /\^\\\/admin\\\/expenses\\\/\\d\+\\\/occurrence\$\//);
 });
 
 test("mixed professional and service mutations authorize independent payload fields", () => {

@@ -136,6 +136,14 @@ import {
   updateLocation,
 } from "./location-store";
 import { getPublicBaseUrl } from "./public-url";
+import {
+  createRecurringExpenseSeries,
+  createRecurringExpenseVersion,
+  listRecurringExpenseSeries,
+  materializeRecurringExpenseOccurrences,
+  setRecurringExpenseSeriesState,
+  updateRecurringExpenseOccurrence,
+} from "./recurring-expenses";
 import { resolveServiceLocationTerms } from "@shared/service-location-terms";
 import { appointmentOccupancyOverlaps, getOperationalAppointmentBounds } from "@shared/appointment-occupancy";
 import {
@@ -361,6 +369,25 @@ const businessExpenseInputSchema = z.object({
   expenseDate: z.string().trim().refine(isCalendarDate, "Data inválida."),
   recurrence: z.enum(businessExpenseRecurrences).default("once"),
   notes: z.string().trim().max(500, "As notas não podem ter mais de 500 caracteres.").optional().nullable(),
+});
+const recurringExpenseTermsInputSchema = businessExpenseInputSchema.omit({ expenseDate: true }).extend({
+  recurrence: z.enum(["weekly", "monthly"]),
+});
+const recurringExpenseSeriesInputSchema = recurringExpenseTermsInputSchema.extend({
+  startDate: z.string().trim().refine(isCalendarDate, "Data inválida."),
+  idempotencyKey: z.string().uuid("Identificador de pedido inválido."),
+});
+const recurringExpenseVersionInputSchema = recurringExpenseTermsInputSchema.extend({
+  effectiveFrom: z.string().trim().refine(isCalendarDate, "Data inválida."),
+});
+const recurringExpenseStateInputSchema = z.object({
+  action: z.enum(["pause", "resume", "end"]),
+});
+const recurringExpenseOccurrenceInputSchema = businessExpenseInputSchema.pick({
+  category: true,
+  description: true,
+  amountCents: true,
+  notes: true,
 });
 
 type BarberCompensationInput = {
@@ -1126,6 +1153,8 @@ function isLocationSensitiveMutation(req: Request) {
   return [
     /^\/admin\/extras(?:\/\d+)?$/,
     /^\/admin\/expenses(?:\/\d+)?$/,
+    /^\/admin\/expense-series(?:\/\d+(?:\/(?:versions|state))?)?$/,
+    /^\/admin\/expenses\/\d+\/occurrence$/,
     /^\/admin\/blacklist(?:\/\d+)?$/,
     /^\/admin\/location-barbers$/,
     /^\/admin\/service-locations(?:\/\d+)?$/,
@@ -2906,6 +2935,174 @@ export async function registerRoutes(
     }
   });
 
+  const requireRecurringExpenses = (_req: Request, res: Response, next: NextFunction) => {
+    if (!resolvedBusinessConfig.features.recurringExpenses) {
+      return res.status(404).json({ message: "Gestão de despesas recorrentes não disponível." });
+    }
+    next();
+  };
+
+  const sendRecurringExpenseError = (res: Response, error: unknown) => {
+    const code = error instanceof Error ? error.message : "";
+    const messages: Record<string, string> = {
+      PAST_EFFECTIVE_DATE: "A alteração só pode produzir efeitos hoje ou numa data futura.",
+      SERIES_ENDED: "Esta série já terminou.",
+      SERIES_NOT_ACTIVE: "Apenas uma série ativa pode ser pausada.",
+      SERIES_NOT_PAUSED: "Apenas uma série pausada pode ser retomada.",
+      OPEN_PAUSE_NOT_FOUND: "Não foi encontrada uma pausa ativa para esta série.",
+      VERSION_OUT_OF_ORDER: "Já existe uma alteração futura posterior. Escolha uma data igual ou posterior.",
+      IDEMPOTENCY_KEY_REUSED: "Este pedido já foi utilizado com dados diferentes.",
+    };
+    if (!messages[code]) return false;
+    res.status(409).json({ code, message: messages[code] });
+    return true;
+  };
+
+  app.get("/api/admin/expense-series", requireExpensesManage, requireRecurringExpenses, async (_req, res) => {
+    try {
+      res.json(await listRecurringExpenseSeries(Number(res.locals.locationId)));
+    } catch (error) {
+      console.error("List recurring expense series error:", error);
+      res.status(500).json({ message: "Erro ao carregar despesas recorrentes" });
+    }
+  });
+
+  app.post("/api/admin/expense-series", requireExpensesManage, requireRecurringExpenses, async (req, res) => {
+    try {
+      const parsed = recurringExpenseSeriesInputSchema.parse(req.body);
+      const created = await createRecurringExpenseSeries({
+        locationId: Number(res.locals.locationId),
+        startDate: parsed.startDate,
+        idempotencyKey: parsed.idempotencyKey,
+        terms: {
+          category: parsed.category,
+          description: parsed.description,
+          amountCents: parsed.amountCents,
+          recurrence: parsed.recurrence,
+          notes: parsed.notes,
+        },
+      });
+      await materializeRecurringExpenseOccurrences({
+        locationId: Number(res.locals.locationId),
+        startDate: parsed.startDate,
+        endDate: parsed.startDate,
+      });
+      if (!created.reused) await recordAuditLog(req, {
+        action: "business_expense_series.created",
+        entityType: "business_expense_series",
+        entityId: created.series.id,
+        summary: `Despesa recorrente criada: ${parsed.description}`,
+        metadata: {
+          locationId: Number(res.locals.locationId),
+          recurrence: parsed.recurrence,
+          startDate: parsed.startDate,
+          amountCents: parsed.amountCents,
+        },
+      });
+      res.status(created.reused ? 200 : 201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (sendRecurringExpenseError(res, error)) return;
+      console.error("Create recurring expense series error:", error);
+      res.status(500).json({ message: "Erro ao criar despesa recorrente" });
+    }
+  });
+
+  app.post("/api/admin/expense-series/:id/versions", requireExpensesManage, requireRecurringExpenses, async (req, res) => {
+    try {
+      const seriesId = parsePositiveInteger(req.params.id);
+      if (seriesId === null) return res.status(400).json({ message: "Série inválida." });
+      const parsed = recurringExpenseVersionInputSchema.parse(req.body);
+      const version = await createRecurringExpenseVersion({
+        seriesId,
+        locationId: Number(res.locals.locationId),
+        effectiveFrom: parsed.effectiveFrom,
+        terms: {
+          category: parsed.category,
+          description: parsed.description,
+          amountCents: parsed.amountCents,
+          recurrence: parsed.recurrence,
+          notes: parsed.notes,
+        },
+      });
+      if (!version) return res.status(404).json({ message: "Série não encontrada." });
+      await recordAuditLog(req, {
+        action: "business_expense_series.versioned",
+        entityType: "business_expense_series",
+        entityId: seriesId,
+        summary: `Condições futuras alteradas: ${parsed.description}`,
+        metadata: { effectiveFrom: parsed.effectiveFrom, recurrence: parsed.recurrence, amountCents: parsed.amountCents },
+      });
+      res.status(201).json(version);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (sendRecurringExpenseError(res, error)) return;
+      console.error("Version recurring expense series error:", error);
+      res.status(500).json({ message: "Erro ao alterar despesa recorrente" });
+    }
+  });
+
+  app.post("/api/admin/expense-series/:id/state", requireExpensesManage, requireRecurringExpenses, async (req, res) => {
+    try {
+      const seriesId = parsePositiveInteger(req.params.id);
+      if (seriesId === null) return res.status(400).json({ message: "Série inválida." });
+      const parsed = recurringExpenseStateInputSchema.parse(req.body);
+      const updated = await setRecurringExpenseSeriesState({
+        seriesId,
+        locationId: Number(res.locals.locationId),
+        action: parsed.action,
+      });
+      if (!updated) return res.status(404).json({ message: "Série não encontrada." });
+      await recordAuditLog(req, {
+        action: `business_expense_series.${parsed.action}`,
+        entityType: "business_expense_series",
+        entityId: seriesId,
+        summary: `Estado da despesa recorrente alterado: ${parsed.action}`,
+        metadata: { action: parsed.action, effectiveOn: updated.effectiveOn },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (sendRecurringExpenseError(res, error)) return;
+      console.error("Update recurring expense state error:", error);
+      res.status(500).json({ message: "Erro ao alterar estado da despesa recorrente" });
+    }
+  });
+
+  app.patch("/api/admin/expenses/:id/occurrence", requireExpensesManage, requireRecurringExpenses, async (req, res) => {
+    try {
+      const expenseId = parsePositiveInteger(req.params.id);
+      if (expenseId === null) return res.status(400).json({ message: "Despesa inválida." });
+      const parsed = recurringExpenseOccurrenceInputSchema.parse(req.body);
+      const updated = await updateRecurringExpenseOccurrence({
+        expenseId,
+        locationId: Number(res.locals.locationId),
+        terms: parsed,
+      });
+      if (!updated) return res.status(404).json({ message: "Ocorrência recorrente não encontrada." });
+      await recordAuditLog(req, {
+        action: "business_expense_occurrence.updated",
+        entityType: "business_expense",
+        entityId: expenseId,
+        summary: `Ocorrência alterada: ${parsed.description}`,
+        metadata: { recurringSeriesId: updated.recurringSeriesId, scheduledDate: updated.scheduledDate },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      console.error("Update recurring expense occurrence error:", error);
+      res.status(500).json({ message: "Erro ao alterar ocorrência" });
+    }
+  });
+
   app.get("/api/admin/expenses", requireExpensesManage, async (req, res) => {
     try {
       const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
@@ -2925,7 +3122,13 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Categoria inválida." });
       }
 
-      const expenses = await storage.getBusinessExpenses({ startDate, endDate, category, locationId: Number(res.locals.locationId) });
+      const expenses = await storage.getBusinessExpenses({
+        startDate,
+        endDate,
+        category,
+        locationId: Number(res.locals.locationId),
+        timeZone: res.locals.location?.timezone,
+      });
       res.json(expenses);
     } catch (error) {
       console.error("List expenses error:", error);
@@ -2936,6 +3139,12 @@ export async function registerRoutes(
   app.post("/api/admin/expenses", requireExpensesManage, async (req, res) => {
     try {
       const parsed = businessExpenseInputSchema.parse(req.body);
+      if (resolvedBusinessConfig.features.recurringExpenses && parsed.recurrence !== "once") {
+        return res.status(400).json({
+          code: "RECURRING_EXPENSE_REQUIRES_SERIES",
+          message: "Crie uma série para registar uma despesa semanal ou mensal.",
+        });
+      }
       const { start } = getShopDateBounds(parsed.expenseDate);
       const expense = await storage.createBusinessExpense({
         locationId: Number(res.locals.locationId),
@@ -2977,6 +3186,12 @@ export async function registerRoutes(
 
       const existing = (await storage.getBusinessExpenses({ locationId: Number(res.locals.locationId) })).find((expense) => expense.id === expenseId);
       if (!existing) return res.status(404).json({ message: "Despesa não encontrada" });
+      if (existing.recurringSeriesId) {
+        return res.status(409).json({
+          code: "RECURRING_OCCURRENCE_REQUIRES_SCOPED_EDIT",
+          message: "Escolha alterar apenas esta ocorrência ou esta e as seguintes.",
+        });
+      }
       const parsed = businessExpenseInputSchema.partial().parse(req.body);
       const patch = {
         ...parsed,
@@ -3013,6 +3228,12 @@ export async function registerRoutes(
 
       const existing = (await storage.getBusinessExpenses({ locationId: Number(res.locals.locationId) })).find((expense) => expense.id === expenseId);
       if (!existing) return res.status(404).json({ message: "Despesa não encontrada" });
+      if (existing.recurringSeriesId) {
+        return res.status(409).json({
+          code: "RECURRING_OCCURRENCE_DELETE_NOT_ALLOWED",
+          message: "Pause ou termine a série em vez de remover uma ocorrência recorrente.",
+        });
+      }
       await storage.deleteBusinessExpense(expenseId);
       await recordAuditLog(req, {
         action: "business_expense.deleted",
@@ -6887,13 +7108,18 @@ export async function registerRoutes(
       : parsedSelectedBarberId ?? undefined;
 
     try {
-      const [rawBarbers, effectiveServices, allAppointments, businessExpenses, activeLocationBarberIds, location] = await Promise.all([
+      const location = await getLocation(locationId, true);
+      const [rawBarbers, effectiveServices, allAppointments, businessExpenses, activeLocationBarberIds] = await Promise.all([
         storage.getBarbers(),
         loadLocationServiceCatalogue(locationId, true),
         storage.getAppointments(selectedBarberId, undefined, locationId),
-        storage.getBusinessExpenses({ startDate: startDateKey, endDate: endDateKey, locationId }),
+        storage.getBusinessExpenses({
+          startDate: startDateKey,
+          endDate: endDateKey,
+          locationId,
+          timeZone: location?.timezone,
+        }),
         getBarberIdsForLocation(locationId),
-        getLocation(locationId, true),
       ]);
       const activeLocationBarberIdSet = new Set(activeLocationBarberIds);
       const barbersById = new Map(rawBarbers.map((barber) => [barber.id, barber]));

@@ -4,7 +4,7 @@ import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments,
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -46,6 +46,11 @@ import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationS
 import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesManager";
 import { ExtrasManager } from "@/components/admin/ExtrasManager";
 import { UserAccessManager } from "@/components/admin/UserAccessManager";
+import {
+  RecurringExpenseOccurrenceDialog,
+  RecurringExpensesManager,
+  type RecurringExpenseOccurrence,
+} from "@/components/admin/RecurringExpensesManager";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
@@ -276,6 +281,10 @@ type BusinessExpense = {
   expenseDate: string;
   recurrence: BusinessExpenseRecurrence;
   notes?: string | null;
+  recurringSeriesId?: number | null;
+  recurringVersionId?: number | null;
+  scheduledDate?: string | null;
+  isOccurrenceOverride?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -1558,11 +1567,14 @@ export default function Admin() {
   }));
   const [isSavingExpense, setIsSavingExpense] = useState(false);
   const savingExpenseRef = useRef(false);
+  const recurringExpenseCreationKeyRef = useRef(crypto.randomUUID());
   const [deletingExpenseId, setDeletingExpenseId] = useState<number | null>(null);
   const deletingExpenseIdRef = useRef<number | null>(null);
+  const [editingRecurringOccurrence, setEditingRecurringOccurrence] = useState<RecurringExpenseOccurrence | null>(null);
   const businessDashboardRef = useRef<HTMLDivElement>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AdminAppointment | null>(null);
   const activeLocationId = useActiveLocationId();
+  useEffect(() => setEditingRecurringOccurrence(null), [activeLocationId]);
   const canViewTeamAgenda = canUseRuntimeCapability(
     user,
     "agenda.view_team",
@@ -2255,19 +2267,25 @@ export default function Admin() {
     savingExpenseRef.current = true;
     setIsSavingExpense(true);
     try {
-      await apiRequest("POST", "/api/admin/expenses", {
+      const isRecurringSeries = businessConfig.features.recurringExpenses && expenseForm.recurrence !== "once";
+      await apiRequest("POST", isRecurringSeries ? "/api/admin/expense-series" : "/api/admin/expenses", {
         category: expenseForm.category,
         description: expenseForm.description.trim(),
         amountCents,
-        expenseDate: format(expenseForm.expenseDate, "yyyy-MM-dd"),
+        ...(isRecurringSeries
+          ? { startDate: format(expenseForm.expenseDate, "yyyy-MM-dd") }
+          : { expenseDate: format(expenseForm.expenseDate, "yyyy-MM-dd") }),
         recurrence: expenseForm.recurrence,
         notes: expenseForm.notes.trim() || null,
+        ...(isRecurringSeries ? { idempotencyKey: recurringExpenseCreationKeyRef.current } : {}),
       });
+      if (isRecurringSeries) recurringExpenseCreationKeyRef.current = crypto.randomUUID();
       setExpenseForm({
         ...defaultBusinessExpenseForm,
         expenseDate: startOfToday(),
       });
       invalidateExpensesQueries();
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/expense-series"] });
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
       toast({ title: "Sucesso", description: "Despesa registada." });
     } catch (err: any) {
@@ -5894,18 +5912,38 @@ export default function Admin() {
                           </div>
                           <div className="flex items-center justify-between gap-3 md:justify-end">
                             <p className="text-lg font-bold text-white">{(expense.amountCents / 100).toFixed(2).replace(".", ",")} €</p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={deletingExpenseId !== null}
-                              aria-label={formatBusinessCopy(adminCopy.reports.removeExpenseAria, { description: expense.description })}
-                              className="border-red-500/30 text-red-300 hover:bg-red-500/10"
-                              onClick={() => handleDeleteExpense(expense)}
-                            >
-                              {deletingExpenseId === expense.id
-                                ? <Loader2 className="h-4 w-4 animate-spin" />
-                                : <Trash2 className="h-4 w-4" />}
-                            </Button>
+                            {expense.recurringSeriesId && expense.scheduledDate && expense.recurrence !== "once" ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                aria-label={`Editar ocorrência ${expense.description}`}
+                                onClick={() => setEditingRecurringOccurrence({
+                                  id: expense.id,
+                                  recurringSeriesId: expense.recurringSeriesId!,
+                                  scheduledDate: expense.scheduledDate!,
+                                  category: expense.category,
+                                  description: expense.description,
+                                  amountCents: expense.amountCents,
+                                  recurrence: expense.recurrence as "weekly" | "monthly",
+                                  notes: expense.notes,
+                                })}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={deletingExpenseId !== null}
+                                aria-label={formatBusinessCopy(adminCopy.reports.removeExpenseAria, { description: expense.description })}
+                                className="border-red-500/30 text-red-300 hover:bg-red-500/10"
+                                onClick={() => handleDeleteExpense(expense)}
+                              >
+                                {deletingExpenseId === expense.id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                                  : <Trash2 className="h-4 w-4" />}
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -5913,9 +5951,17 @@ export default function Admin() {
                   )}
                 </CardContent>
               </Card>
+              {businessConfig.features.recurringExpenses && <RecurringExpensesManager />}
             </>
             )}
             </div>
+            {businessConfig.features.recurringExpenses && (
+              <RecurringExpenseOccurrenceDialog
+                key={editingRecurringOccurrence?.id ?? "closed"}
+                occurrence={editingRecurringOccurrence}
+                onClose={() => setEditingRecurringOccurrence(null)}
+              />
+            )}
           </TabsContent>
         </Tabs>
       </div>

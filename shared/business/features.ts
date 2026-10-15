@@ -3,6 +3,7 @@ export const businessFeatureNames = [
   "consentForms",
   "treatmentContraindications",
   "preparationBuffers",
+  "recurringExpenses",
   "resources",
   "deposits",
   "treatmentPhotos",
@@ -36,6 +37,10 @@ export const businessCapabilityRegistry = {
   preparationBuffers: {
     implemented: true,
     environmentVariable: "BUSINESS_FEATURE_PREPARATION_BUFFERS_ENABLED",
+  },
+  recurringExpenses: {
+    implemented: true,
+    environmentVariable: "BUSINESS_FEATURE_RECURRING_EXPENSES_ENABLED",
   },
   resources: {
     implemented: false,

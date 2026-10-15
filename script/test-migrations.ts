@@ -280,7 +280,7 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 17, "an empty legacy baseline must apply migrations 0001 through 0017");
+  assert.equal(freshRun.applied.length, 18, "an empty legacy baseline must apply migrations 0001 through 0018");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -329,7 +329,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 17);
+  assert.equal(secondFreshRun.alreadyApplied, 18);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1044,6 +1044,7 @@ try {
     "0015_auth_users_foundation.sql",
     "0016_blacklist_location_scope.sql",
     "0017_service_buffers.sql",
+    "0018_recurring_expense_management.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
   assert.equal(Number((await pool.query(`
@@ -1236,7 +1237,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 17);
+  assert.equal(secondCompensationRun.alreadyApplied, 18);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1891,7 +1892,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0017, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0018, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

@@ -21,6 +21,7 @@ const barberFeatureDefaults: BusinessFeatures = {
   consentForms: false,
   treatmentContraindications: false,
   preparationBuffers: false,
+  recurringExpenses: false,
   resources: false,
   deposits: false,
   treatmentPhotos: false,
@@ -33,6 +34,7 @@ const barberFeatureDefaults: BusinessFeatures = {
 const beautyFeatureDefaults: BusinessFeatures = {
   ...barberFeatureDefaults,
   preparationBuffers: true,
+  recurringExpenses: true,
 };
 
 export const businessProfiles = {

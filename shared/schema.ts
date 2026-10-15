@@ -1,4 +1,4 @@
-import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb, check, foreignKey } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, date, primaryKey, uniqueIndex, index, jsonb, check, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
@@ -24,6 +24,9 @@ export const customerNotesIdSeq = appPgSchema?.sequence("customer_notes_id_seq")
 export const auditLogsIdSeq = appPgSchema?.sequence("audit_logs_id_seq");
 export const barberCompensationRulesIdSeq = appPgSchema?.sequence("barber_compensation_rules_id_seq");
 export const businessExpensesIdSeq = appPgSchema?.sequence("business_expenses_id_seq");
+export const businessExpenseRecurringSeriesIdSeq = appPgSchema?.sequence("business_expense_recurring_series_id_seq");
+export const businessExpenseRecurringVersionsIdSeq = appPgSchema?.sequence("business_expense_recurring_versions_id_seq");
+export const businessExpenseRecurringPausesIdSeq = appPgSchema?.sequence("business_expense_recurring_pauses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
 export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
 export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
@@ -91,6 +94,12 @@ export const businessExpenseRecurrences = [
   "once",
   "weekly",
   "monthly",
+] as const;
+
+export const businessExpenseRecurringStatuses = [
+  "active",
+  "paused",
+  "ended",
 ] as const;
 
 export const extraFinancialRules = [
@@ -643,6 +652,65 @@ export const barberCompensationRules = appPgTable("barber_compensation_rules", {
   `),
 }));
 
+export const businessExpenseRecurringSeries = appPgTable("business_expense_recurring_series", {
+  id: idColumn("business_expense_recurring_series_id_seq"),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
+  creationKey: text("creation_key").notNull(),
+  status: text("status", { enum: businessExpenseRecurringStatuses }).default("active").notNull(),
+  anchorDate: date("anchor_date").notNull(),
+  endedOn: date("ended_on"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  locationStatusIdx: index("business_expense_recurring_series_location_status_idx")
+    .on(table.locationId, table.status),
+  creationKeyUnique: uniqueIndex("business_expense_recurring_series_location_creation_uidx")
+    .on(table.locationId, table.creationKey),
+  statusCheck: check("business_expense_recurring_series_status_check",
+    sql`${table.status} IN ('active', 'paused', 'ended')`),
+  endedStateCheck: check("business_expense_recurring_series_ended_state_check", sql`
+    ((${table.status} = 'ended' AND ${table.endedOn} IS NOT NULL)
+      OR (${table.status} <> 'ended' AND ${table.endedOn} IS NULL)) IS TRUE
+  `),
+}));
+
+export const businessExpenseRecurringVersions = appPgTable("business_expense_recurring_versions", {
+  id: idColumn("business_expense_recurring_versions_id_seq"),
+  seriesId: integer("series_id").references(() => businessExpenseRecurringSeries.id, { onDelete: "cascade" }).notNull(),
+  effectiveFrom: date("effective_from").notNull(),
+  category: text("category", { enum: businessExpenseCategories }).notNull(),
+  description: text("description").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  recurrence: text("recurrence", { enum: ["weekly", "monthly"] }).notNull(),
+  weekday: integer("weekday"),
+  monthDay: integer("month_day"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  seriesEffectiveUnique: uniqueIndex("business_expense_recurring_versions_series_effective_uidx")
+    .on(table.seriesId, table.effectiveFrom),
+  termsCheck: check("business_expense_recurring_versions_terms_check", sql`
+    (${table.amountCents} BETWEEN 0 AND 10000000
+      AND btrim(${table.description}) <> ''
+      AND ((${table.recurrence} = 'weekly' AND ${table.weekday} BETWEEN 0 AND 6 AND ${table.monthDay} IS NULL)
+        OR (${table.recurrence} = 'monthly' AND ${table.monthDay} BETWEEN 1 AND 31 AND ${table.weekday} IS NULL))) IS TRUE
+  `),
+}));
+
+export const businessExpenseRecurringPauses = appPgTable("business_expense_recurring_pauses", {
+  id: idColumn("business_expense_recurring_pauses_id_seq"),
+  seriesId: integer("series_id").references(() => businessExpenseRecurringSeries.id, { onDelete: "cascade" }).notNull(),
+  pausedFrom: date("paused_from").notNull(),
+  resumedOn: date("resumed_on"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  openPauseUnique: uniqueIndex("business_expense_recurring_pauses_open_uidx")
+    .on(table.seriesId)
+    .where(sql`${table.resumedOn} IS NULL`),
+  rangeCheck: check("business_expense_recurring_pauses_range_check",
+    sql`(${table.resumedOn} IS NULL OR ${table.resumedOn} >= ${table.pausedFrom}) IS TRUE`),
+}));
+
 export const businessExpenses = appPgTable("business_expenses", {
   id: idColumn("business_expenses_id_seq"),
   locationId: integer("location_id").references(() => locations.id).notNull().default(1),
@@ -652,9 +720,25 @@ export const businessExpenses = appPgTable("business_expenses", {
   expenseDate: timestamp("expense_date").notNull(),
   recurrence: text("recurrence", { enum: businessExpenseRecurrences }).default("once").notNull(),
   notes: text("notes"),
+  recurringSeriesId: integer("recurring_series_id")
+    .references(() => businessExpenseRecurringSeries.id, { onDelete: "restrict" }),
+  recurringVersionId: integer("recurring_version_id")
+    .references(() => businessExpenseRecurringVersions.id, { onDelete: "restrict" }),
+  scheduledDate: date("scheduled_date"),
+  isOccurrenceOverride: boolean("is_occurrence_override").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  recurringOccurrenceUnique: uniqueIndex("business_expenses_recurring_occurrence_uidx")
+    .on(table.recurringSeriesId, table.scheduledDate)
+    .where(sql`${table.recurringSeriesId} IS NOT NULL`),
+  recurringOccurrenceCheck: check("business_expenses_recurring_occurrence_check", sql`
+    (((${table.recurringSeriesId} IS NULL AND ${table.recurringVersionId} IS NULL AND ${table.scheduledDate} IS NULL
+        AND ${table.isOccurrenceOverride} = false)
+      OR (${table.recurringSeriesId} IS NOT NULL AND ${table.recurringVersionId} IS NOT NULL AND ${table.scheduledDate} IS NOT NULL
+        AND ${table.recurrence} IN ('weekly', 'monthly')))) IS TRUE
+  `),
+}));
 
 export const whatsappMessages = appPgTable("whatsapp_messages", {
   id: idColumn("whatsapp_messages_id_seq"),
@@ -998,6 +1082,15 @@ export const insertBarberCompensationRuleSchema = createInsertSchema(barberCompe
   id: true,
   createdAt: true,
 });
+export const insertBusinessExpenseRecurringSeriesSchema = createInsertSchema(businessExpenseRecurringSeries).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertBusinessExpenseRecurringVersionSchema = createInsertSchema(businessExpenseRecurringVersions).omit({
+  id: true,
+  createdAt: true,
+});
 export const insertBusinessExpenseSchema = createInsertSchema(businessExpenses).omit({
   id: true,
   createdAt: true,
@@ -1054,6 +1147,9 @@ export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type BarberCompensationRule = typeof barberCompensationRules.$inferSelect;
+export type BusinessExpenseRecurringSeries = typeof businessExpenseRecurringSeries.$inferSelect;
+export type BusinessExpenseRecurringVersion = typeof businessExpenseRecurringVersions.$inferSelect;
+export type BusinessExpenseRecurringPause = typeof businessExpenseRecurringPauses.$inferSelect;
 export type BusinessExpense = typeof businessExpenses.$inferSelect;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type AppointmentNotificationEvent = typeof appointmentNotificationEvents.$inferSelect;
@@ -1062,6 +1158,7 @@ export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
 export type BusinessExpenseCategory = typeof businessExpenseCategories[number];
 export type BusinessExpenseRecurrence = typeof businessExpenseRecurrences[number];
+export type BusinessExpenseRecurringStatus = typeof businessExpenseRecurringStatuses[number];
 export type WhatsappMessageStatus = typeof whatsappMessageStatuses[number];
 export type WhatsappMessageType = typeof whatsappMessageTypes[number];
 
