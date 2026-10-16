@@ -80,6 +80,7 @@ import {
   createAppointmentCompensationSnapshot,
   getCompensationRuleForDate,
 } from "./appointment-finance";
+import { getCalendarDateBounds } from "./calendar-timezone";
 
 export type AppointmentNotificationEventType =
   | "appointment_confirmation"
@@ -650,6 +651,7 @@ export interface IStorage {
     endDate?: string;
     category?: string;
     locationId?: number;
+    timeZone?: string;
   }): Promise<BusinessExpense[]>;
   createBusinessExpense(expense: CreateBusinessExpenseRequest): Promise<BusinessExpense>;
   updateBusinessExpense(id: number, expense: Partial<CreateBusinessExpenseRequest>): Promise<BusinessExpense | undefined>;
@@ -2062,17 +2064,22 @@ export class DatabaseStorage implements IStorage {
     endDate?: string;
     category?: string;
     locationId?: number;
+    timeZone?: string;
   } = {}): Promise<BusinessExpense[]> {
     const conditions: SQL[] = [];
     if (filters.locationId !== undefined) conditions.push(eq(businessExpenses.locationId, filters.locationId));
 
     if (filters.startDate) {
-      const { start } = getShopDateBounds(filters.startDate);
+      const { start } = filters.timeZone
+        ? getCalendarDateBounds(filters.startDate, filters.timeZone)
+        : getShopDateBounds(filters.startDate);
       conditions.push(gte(businessExpenses.expenseDate, start));
     }
 
     if (filters.endDate) {
-      const { endExclusive } = getShopDateBounds(filters.endDate);
+      const { endExclusive } = filters.timeZone
+        ? getCalendarDateBounds(filters.endDate, filters.timeZone)
+        : getShopDateBounds(filters.endDate);
       conditions.push(lt(businessExpenses.expenseDate, endExclusive));
     }
 
@@ -3591,9 +3598,14 @@ export class MemoryStorage implements IStorage {
     endDate?: string;
     category?: string;
     locationId?: number;
+    timeZone?: string;
   } = {}): Promise<BusinessExpense[]> {
-    const start = filters.startDate ? getShopDateBounds(filters.startDate).start : undefined;
-    const endExclusive = filters.endDate ? getShopDateBounds(filters.endDate).endExclusive : undefined;
+    const start = filters.startDate
+      ? (filters.timeZone ? getCalendarDateBounds(filters.startDate, filters.timeZone) : getShopDateBounds(filters.startDate)).start
+      : undefined;
+    const endExclusive = filters.endDate
+      ? (filters.timeZone ? getCalendarDateBounds(filters.endDate, filters.timeZone) : getShopDateBounds(filters.endDate)).endExclusive
+      : undefined;
 
     return this.businessExpenses
       .filter((expense) => {
@@ -3620,6 +3632,10 @@ export class MemoryStorage implements IStorage {
       expenseDate: expense.expenseDate,
       recurrence: expense.recurrence ?? "once",
       notes: expense.notes ?? null,
+      recurringSeriesId: expense.recurringSeriesId ?? null,
+      recurringVersionId: expense.recurringVersionId ?? null,
+      scheduledDate: expense.scheduledDate ?? null,
+      isOccurrenceOverride: expense.isOccurrenceOverride ?? false,
       createdAt: now,
       updatedAt: now,
     };
