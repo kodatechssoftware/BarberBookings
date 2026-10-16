@@ -28,6 +28,7 @@ test("Production-equivalent runtime remains single-location and keeps external f
     enabled: false,
     maxLocations: 1,
     bookingSlotIntervalMinutes: Number(process.env.BOOKING_SLOT_INTERVAL_MINUTES || 30),
+    recurringExpensesEnabled: false,
   });
   const locations = await request.get("/api/locations");
   expect((await locations.json())).toHaveLength(1);
@@ -47,6 +48,7 @@ test("Production-equivalent runtime remains single-location and keeps external f
   });
   for (const endpoint of [
     "/api/admin/locations",
+    "/api/admin/expense-series",
     "/api/admin/dev/whatsapp/meta/test/1",
     "/api/webhooks/whatsapp/meta",
   ]) {
