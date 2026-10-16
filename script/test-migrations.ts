@@ -33,6 +33,7 @@ const preServiceTermsMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "ba
 const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-extras-"));
 const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
 const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-voucher-payment-"));
+const recurringOnlyMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-recurring-only-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -87,6 +88,10 @@ for (const file of [
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preVoucherPaymentMigrationsDirectory, file));
 }
+await copyFile(
+  path.join(migrationsDirectory, "0018_recurring_expense_management.sql"),
+  path.join(recurringOnlyMigrationsDirectory, "0018_recurring_expense_management.sql"),
+);
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
   onLog: () => undefined, onError: () => undefined });
@@ -206,8 +211,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 10,
-    "a fresh empty application schema must apply migrations 0001 through 0009 plus 0011 without requiring 0010");
+  assert.equal(freshRun.applied.length, 11,
+    "a fresh empty application schema must apply migrations 0001 through 0009, 0011 and 0018 without requiring 0010 or 0012 through 0017");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -224,7 +229,34 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 10);
+  assert.equal(secondFreshRun.alreadyApplied, 11);
+
+  const recurringRollbackSchema = "recurring_expense_rollback_fixture";
+  await pool.query(`
+    CREATE SCHEMA "${recurringRollbackSchema}";
+    CREATE TABLE "${recurringRollbackSchema}".locations (id integer PRIMARY KEY);
+    CREATE TABLE "${recurringRollbackSchema}".business_expense_recurring_series (id integer PRIMARY KEY);
+  `);
+  await assert.rejects(
+    runSchemaMigrations(pool, {
+      schemaName: recurringRollbackSchema,
+      environment,
+      migrationsDirectory: recurringOnlyMigrationsDirectory,
+    }),
+    /location_id/,
+    "migration 0018 must fail transactionally when the target schema has an incompatible partial table",
+  );
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM "${recurringRollbackSchema}".schema_migrations
+    WHERE name = '0018_recurring_expense_management.sql'
+  `)).rows[0].count), 0, "a failed 0018 migration must not be recorded");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM information_schema.tables
+    WHERE table_schema = $1 AND table_name = 'business_expense_recurring_versions'
+  `, [recurringRollbackSchema])).rows[0].count), 0,
+  "a failed 0018 migration must roll back every object created after the incompatible table");
 
   const foundationRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -312,6 +344,18 @@ try {
       name,
       (await pool!.query(sql)).rows,
     ]))) as Record<keyof typeof releaseDataQueries, Record<string, unknown>[]>;
+  }
+  function withoutRecurringExpenseColumns(data: Awaited<ReturnType<typeof captureReleaseData>>) {
+    return {
+      ...data,
+      businessExpenses: data.businessExpenses.map(({
+        recurring_series_id: _seriesId,
+        recurring_version_id: _versionId,
+        scheduled_date: _scheduledDate,
+        is_occurrence_override: _isOverride,
+        ...expense
+      }) => expense),
+    };
   }
   const releaseDataBeforeCategoryMigration = await captureReleaseData();
   const rollbackSchema = pgSchema(schema);
@@ -698,12 +742,16 @@ try {
 
   const releaseDataBeforeVoucherMigration = await captureReleaseData();
   const voucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
-  assert.deepEqual(voucherMigrationRun.applied, ["0011_appointment_voucher_payment.sql"]);
+  assert.deepEqual(voucherMigrationRun.applied, [
+    "0011_appointment_voucher_payment.sql",
+    "0018_recurring_expense_management.sql",
+  ]);
   assert.equal(voucherMigrationRun.alreadyApplied, 9);
+  const releaseDataAfterReleaseMigrations = await captureReleaseData();
   assert.deepEqual(
-    await captureReleaseData(),
-    releaseDataBeforeVoucherMigration,
-    "migration 0011 must preserve every legacy operational value",
+    withoutRecurringExpenseColumns(releaseDataAfterReleaseMigrations),
+    withoutRecurringExpenseColumns(releaseDataBeforeVoucherMigration),
+    "migrations 0011 and 0018 must preserve every legacy operational value",
   );
   const paymentConstraintDefinition = String((await pool.query(`
     SELECT pg_get_constraintdef(oid) AS definition
@@ -720,7 +768,7 @@ try {
   await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'pending' WHERE id = 1`);
   const secondVoucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
   assert.equal(secondVoucherMigrationRun.applied.length, 0);
-  assert.equal(secondVoucherMigrationRun.alreadyApplied, 10);
+  assert.equal(secondVoucherMigrationRun.alreadyApplied, 11);
 
   process.env.DATABASE_URL = databaseUrl;
   process.env.DATABASE_SCHEMA = schema;
@@ -749,7 +797,7 @@ try {
   ]);
   assert.deepEqual(
     await captureReleaseData(),
-    releaseDataAfterCustomerNoteIdentityMigration,
+    releaseDataAfterReleaseMigrations,
     "startup database guards and representative application reads must not mutate operational data",
   );
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
@@ -1363,7 +1411,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0011 without 0010, voucher payments, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0011/0018 without 0010 or 0012-0017, recurring-expense schema, voucher payments, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1375,4 +1423,5 @@ try {
   await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });
   await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
   await rm(preVoucherPaymentMigrationsDirectory, { recursive: true, force: true });
+  await rm(recurringOnlyMigrationsDirectory, { recursive: true, force: true });
 }
