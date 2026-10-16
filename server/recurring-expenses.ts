@@ -143,10 +143,13 @@ async function locationTimeZone(tx: ExpenseTransaction, locationId: number) {
   return location.timezone;
 }
 
-async function occurrenceCount(tx: ExpenseTransaction, seriesId: number) {
+async function occurrenceCount(tx: ExpenseTransaction, seriesId: number, throughDate: string) {
   const [row] = await tx.select({ count: sql<number>`count(*)::integer` })
     .from(businessExpenses)
-    .where(eq(businessExpenses.recurringSeriesId, seriesId));
+    .where(and(
+      eq(businessExpenses.recurringSeriesId, seriesId),
+      lte(businessExpenses.scheduledDate, throughDate),
+    ));
   return Number(row?.count ?? 0);
 }
 
@@ -229,8 +232,8 @@ export async function listRecurringExpenseSeries(locationId: number): Promise<Re
       status,
       anchorDate: series.anchorDate,
       endedOn: series.endedOn,
-      occurrenceCount: allOccurrences.length,
-      hasOccurrences: allOccurrences.length > 0,
+      occurrenceCount: occurrences.length,
+      hasOccurrences: occurrences.length > 0,
       locationToday: today,
       minimumFutureEffectiveFrom: followingDate(today),
       nextOccurrenceDate: nextSeriesOccurrenceDate({
@@ -303,8 +306,9 @@ export async function updateRecurringExpenseSeries(input: {
     await lockExpenseLocation(tx, input.locationId);
     const series = await lockSeries(tx, input.seriesId);
     if (!series || series.locationId !== input.locationId) return null;
-    if (await occurrenceCount(tx, series.id) > 0) throw new Error("SERIES_HAS_OCCURRENCES");
-    await locationTimeZone(tx, input.locationId);
+    const timeZone = await locationTimeZone(tx, input.locationId);
+    const today = getCalendarDateInTimeZone(new Date(), timeZone);
+    if (await occurrenceCount(tx, series.id, today) > 0) throw new Error("SERIES_HAS_OCCURRENCES");
 
     await tx.delete(businessExpenseRecurringPauses)
       .where(eq(businessExpenseRecurringPauses.seriesId, series.id));
@@ -331,7 +335,9 @@ export async function deleteRecurringExpenseSeries(input: { seriesId: number; lo
     await lockExpenseLocation(tx, input.locationId);
     const series = await lockSeries(tx, input.seriesId);
     if (!series || series.locationId !== input.locationId) return null;
-    if (await occurrenceCount(tx, series.id) > 0) throw new Error("SERIES_HAS_OCCURRENCES");
+    const timeZone = await locationTimeZone(tx, input.locationId);
+    const today = getCalendarDateInTimeZone(new Date(), timeZone);
+    if (await occurrenceCount(tx, series.id, today) > 0) throw new Error("SERIES_HAS_OCCURRENCES");
     await tx.delete(businessExpenseRecurringSeries)
       .where(eq(businessExpenseRecurringSeries.id, series.id));
     return series;
@@ -351,7 +357,7 @@ export async function createRecurringExpenseVersion(input: {
     const timeZone = await locationTimeZone(tx, input.locationId);
     const today = getCalendarDateInTimeZone(new Date(), timeZone);
     if (series.endedOn && series.endedOn <= today) throw new Error("SERIES_ENDED");
-    if (await occurrenceCount(tx, series.id) === 0) throw new Error("SERIES_WITHOUT_HISTORY_EDIT_INSTEAD");
+    if (await occurrenceCount(tx, series.id, today) === 0) throw new Error("SERIES_WITHOUT_HISTORY_EDIT_INSTEAD");
     if (input.effectiveFrom <= today) throw new Error("FUTURE_EFFECTIVE_DATE_REQUIRED");
     if (series.endedOn && input.effectiveFrom >= series.endedOn) throw new Error("EFFECTIVE_DATE_AFTER_END");
     const [previousVersion] = await tx.select().from(businessExpenseRecurringVersions)
@@ -401,7 +407,7 @@ export async function setRecurringExpenseSeriesState(input: {
     if (!series || series.locationId !== input.locationId) return null;
     const timeZone = await locationTimeZone(tx, input.locationId);
     const today = getCalendarDateInTimeZone(new Date(), timeZone);
-    const count = await occurrenceCount(tx, series.id);
+    const count = await occurrenceCount(tx, series.id, today);
     if (count === 0) throw new Error("SERIES_WITHOUT_HISTORY_DELETE_INSTEAD");
     if (series.endedOn && series.endedOn <= today) throw new Error("SERIES_ENDED");
     if (input.effectiveFrom < today) throw new Error("PAST_EFFECTIVE_DATE");
@@ -464,9 +470,19 @@ export async function setRecurringExpenseSeriesState(input: {
         .set({ status: "ended", endedOn: input.effectiveFrom, updatedAt: new Date() })
         .where(eq(businessExpenseRecurringSeries.id, series.id));
     }
+    const [futureOverride] = await tx.select({ id: businessExpenses.id })
+      .from(businessExpenses)
+      .where(and(
+        eq(businessExpenses.recurringSeriesId, series.id),
+        gte(businessExpenses.scheduledDate, input.effectiveFrom),
+        eq(businessExpenses.isOccurrenceOverride, true),
+      ))
+      .limit(1);
+    if (futureOverride) throw new Error("FUTURE_OCCURRENCE_OVERRIDE_REQUIRES_REVIEW");
     await tx.delete(businessExpenses).where(and(
       eq(businessExpenses.recurringSeriesId, series.id),
       gte(businessExpenses.scheduledDate, input.effectiveFrom),
+      eq(businessExpenses.isOccurrenceOverride, false),
     ));
     return {
       ...series,
@@ -498,17 +514,102 @@ export async function updateRecurringExpenseOccurrence(input: {
   });
 }
 
-export async function materializeRecurringExpenseOccurrences(input: {
+export type RecurringExpenseProjection = {
+  seriesId: number;
   locationId: number;
+  versionId: number;
+  scheduledDate: string;
+  category: BusinessExpenseCategory;
+  description: string;
+  amountCents: number;
+  recurrence: RecurringExpenseFrequency;
+  notes: string | null;
+};
+
+export function projectRecurringExpenseOccurrences(input: {
+  series: Pick<typeof businessExpenseRecurringSeries.$inferSelect,
+    "id" | "locationId" | "anchorDate" | "endedOn">;
+  versions: Array<Pick<typeof businessExpenseRecurringVersions.$inferSelect,
+    "id" | "effectiveFrom" | "category" | "description" | "amountCents"
+    | "recurrence" | "weekday" | "monthDay" | "notes">>;
+  pauses: Array<Pick<typeof businessExpenseRecurringPauses.$inferSelect, "pausedFrom" | "resumedOn">>;
   startDate: string;
   endDate: string;
-}) {
-  if (process.env.USE_MEMORY_STORAGE === "true") return;
-  await db.transaction(async (tx) => {
+}): RecurringExpenseProjection[] {
+  const projected: RecurringExpenseProjection[] = [];
+  for (let index = 0; index < input.versions.length; index += 1) {
+    const version = input.versions[index];
+    const nextVersion = input.versions[index + 1];
+    const from = [input.startDate, input.series.anchorDate, version.effectiveFrom].sort().at(-1)!;
+    const through = nextVersion
+      ? [input.endDate, previousDate(nextVersion.effectiveFrom)].sort().at(0)!
+      : input.endDate;
+    if (from > through) continue;
+    const dates = recurringExpenseDates({
+      anchorDate: input.series.anchorDate,
+      from,
+      through,
+      endedOn: input.series.endedOn,
+      schedule: {
+        recurrence: version.recurrence as RecurringExpenseFrequency,
+        weekday: version.weekday,
+        monthDay: version.monthDay,
+      },
+      pauses: input.pauses.map((pause) => ({
+        pausedFrom: pause.pausedFrom,
+        resumedOn: pause.resumedOn,
+      })),
+    });
+    projected.push(...dates.map((scheduledDate) => ({
+      seriesId: input.series.id,
+      locationId: input.series.locationId,
+      versionId: version.id,
+      scheduledDate,
+      category: version.category,
+      description: version.description,
+      amountCents: version.amountCents,
+      recurrence: version.recurrence as RecurringExpenseFrequency,
+      notes: version.notes,
+    })));
+  }
+  return projected;
+}
+
+export type DueRecurringExpenseMaterializationResult = {
+  locationId: number;
+  businessToday: string;
+  effectiveEndDate: string;
+  inserted: number;
+};
+
+export async function materializeDueRecurringExpenseOccurrences(input: {
+  locationId: number;
+  startDate?: string;
+  endDate?: string;
+  now?: Date;
+}): Promise<DueRecurringExpenseMaterializationResult> {
+  if (process.env.USE_MEMORY_STORAGE === "true") {
+    const businessToday = formatCalendarDate(input.now ?? new Date());
+    return {
+      locationId: input.locationId,
+      businessToday,
+      effectiveEndDate: input.endDate && input.endDate < businessToday ? input.endDate : businessToday,
+      inserted: 0,
+    };
+  }
+  return db.transaction(async (tx) => {
     await lockExpenseLocation(tx, input.locationId);
     const timeZone = await locationTimeZone(tx, input.locationId);
+    const businessToday = getCalendarDateInTimeZone(input.now ?? new Date(), timeZone);
+    const effectiveEndDate = input.endDate && input.endDate < businessToday
+      ? input.endDate
+      : businessToday;
+    if (input.startDate && input.startDate > effectiveEndDate) {
+      return { locationId: input.locationId, businessToday, effectiveEndDate, inserted: 0 };
+    }
     const seriesRows = await tx.select().from(businessExpenseRecurringSeries)
       .where(eq(businessExpenseRecurringSeries.locationId, input.locationId));
+    let inserted = 0;
     for (const series of seriesRows) {
       const [versions, pauses] = await Promise.all([
         tx.select().from(businessExpenseRecurringVersions)
@@ -518,41 +619,81 @@ export async function materializeRecurringExpenseOccurrences(input: {
           .where(eq(businessExpenseRecurringPauses.seriesId, series.id))
           .orderBy(asc(businessExpenseRecurringPauses.pausedFrom)),
       ]);
-      for (let index = 0; index < versions.length; index += 1) {
-        const version = versions[index];
-        const nextVersion = versions[index + 1];
-        const from = [input.startDate, series.anchorDate, version.effectiveFrom].sort().at(-1)!;
-        const through = nextVersion
-          ? [input.endDate, previousDate(nextVersion.effectiveFrom)].sort().at(0)!
-          : input.endDate;
-        if (from > through) continue;
-        const dates = recurringExpenseDates({
-          anchorDate: series.anchorDate,
-          from,
-          through,
-          endedOn: series.endedOn,
-          schedule: {
-            recurrence: version.recurrence as RecurringExpenseFrequency,
-            weekday: version.weekday,
-            monthDay: version.monthDay,
-          },
-          pauses: pauses.map((pause) => ({ pausedFrom: pause.pausedFrom, resumedOn: pause.resumedOn })),
-        });
-        if (dates.length === 0) continue;
-        await tx.insert(businessExpenses).values(dates.map((scheduledDate) => ({
-          locationId: series.locationId,
-          category: version.category,
-          description: version.description,
-          amountCents: version.amountCents,
-          expenseDate: getCalendarDateBounds(scheduledDate, timeZone).start,
-          recurrence: version.recurrence as BusinessExpenseRecurrence,
-          notes: version.notes,
-          recurringSeriesId: series.id,
-          recurringVersionId: version.id,
-          scheduledDate,
+      const projected = projectRecurringExpenseOccurrences({
+        series,
+        versions,
+        pauses,
+        startDate: input.startDate ?? series.anchorDate,
+        endDate: effectiveEndDate,
+      });
+      if (projected.length === 0) continue;
+      const created = await tx.insert(businessExpenses).values(projected.map((occurrence) => ({
+          locationId: occurrence.locationId,
+          category: occurrence.category,
+          description: occurrence.description,
+          amountCents: occurrence.amountCents,
+          expenseDate: getCalendarDateBounds(occurrence.scheduledDate, timeZone).start,
+          recurrence: occurrence.recurrence as BusinessExpenseRecurrence,
+          notes: occurrence.notes,
+          recurringSeriesId: occurrence.seriesId,
+          recurringVersionId: occurrence.versionId,
+          scheduledDate: occurrence.scheduledDate,
           isOccurrenceOverride: false,
-        }))).onConflictDoNothing();
-      }
+        })))
+        .onConflictDoNothing()
+        .returning({ id: businessExpenses.id });
+      inserted += created.length;
     }
+    return { locationId: input.locationId, businessToday, effectiveEndDate, inserted };
   });
+}
+
+export async function materializeAllDueRecurringExpenseOccurrences(now = new Date()) {
+  if (process.env.USE_MEMORY_STORAGE === "true") return [];
+  const locationRows = await db.selectDistinct({ locationId: businessExpenseRecurringSeries.locationId })
+    .from(businessExpenseRecurringSeries)
+    .orderBy(asc(businessExpenseRecurringSeries.locationId));
+  const results: DueRecurringExpenseMaterializationResult[] = [];
+  for (const { locationId } of locationRows) {
+    results.push(await materializeDueRecurringExpenseOccurrences({ locationId, now }));
+  }
+  return results;
+}
+
+export type RecurringExpenseMaterializationWorkerDependencies = {
+  materialize: (now?: Date) => Promise<DueRecurringExpenseMaterializationResult[]>;
+  now: () => Date;
+  reportError: (error: unknown) => void;
+};
+
+const defaultWorkerDependencies: RecurringExpenseMaterializationWorkerDependencies = {
+  materialize: materializeAllDueRecurringExpenseOccurrences,
+  now: () => new Date(),
+  reportError: (error) => console.error(
+    "Recurring expense materialization tick failed:",
+    error instanceof Error ? error.name : "UnknownError",
+  ),
+};
+
+export function startRecurringExpenseMaterializationWorker(
+  intervalMs = 15 * 60 * 1000,
+  dependencies = defaultWorkerDependencies,
+  runImmediately = true,
+) {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await dependencies.materialize(dependencies.now());
+    } catch (error) {
+      dependencies.reportError(error);
+    } finally {
+      running = false;
+    }
+  };
+  if (runImmediately) void tick();
+  const timer = setInterval(() => void tick(), intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
 }

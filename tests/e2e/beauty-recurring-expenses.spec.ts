@@ -27,11 +27,12 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
   const mutationBodies: Array<{ method: string; url: string; body: any }> = [];
   const locationDate = new Date();
   const locationToday = locationDate.toISOString().slice(0, 10);
+  const scheduledDate = locationToday;
   locationDate.setUTCDate(locationDate.getUTCDate() + 1);
   const minimumFutureEffectiveFrom = locationDate.toISOString().slice(0, 10);
   const futureDate = new Date();
   futureDate.setDate(futureDate.getDate() + 28);
-  const scheduledDate = futureDate.toISOString().slice(0, 10);
+  const futureEffectiveDate = futureDate.toISOString().slice(0, 10);
 
   await page.route("**/api/admin/expenses?**", (route) => route.fulfill({
     json: [{
@@ -51,6 +52,14 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
       updatedAt: "2026-10-01T00:00:00.000Z",
     }],
   }));
+  await page.route("**/api/admin/expenses/*/occurrence", async (route) => {
+    mutationBodies.push({
+      method: route.request().method(),
+      url: route.request().url(),
+      body: route.request().postDataJSON(),
+    });
+    await route.fulfill({ status: 200, json: { ok: true } });
+  });
   await page.route("**/api/admin/expense-series**", async (route) => {
     const request = route.request();
     if (request.method() !== "GET") {
@@ -71,7 +80,7 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
       hasOccurrences: true,
       locationToday,
       minimumFutureEffectiveFrom,
-      nextOccurrenceDate: scheduledDate,
+      nextOccurrenceDate: futureEffectiveDate,
       currentVersion: { id: 12, effectiveFrom: "2026-10-01", category: "rent", description: "Renda do espaço", amountCents: 45000, recurrence: "monthly", weekday: null, monthDay: 1, notes: "Contrato principal", createdAt: "2026-10-01T09:00:00.000Z" },
       versions: [{ id: 12, effectiveFrom: "2026-10-01", category: "rent", description: "Renda do espaço", amountCents: 45000, recurrence: "monthly", weekday: null, monthDay: 1, notes: "Contrato principal", createdAt: "2026-10-01T09:00:00.000Z" }],
       pauses: [],
@@ -80,15 +89,15 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
       id: 10,
       locationId: 1,
       status: "active",
-      anchorDate: scheduledDate,
+      anchorDate: futureEffectiveDate,
       endedOn: null,
       occurrenceCount: 0,
       hasOccurrences: false,
       locationToday,
       minimumFutureEffectiveFrom,
-      nextOccurrenceDate: scheduledDate,
-      currentVersion: { id: 13, effectiveFrom: scheduledDate, category: "internet", description: "Subscrição futura", amountCents: 2990, recurrence: "monthly", weekday: null, monthDay: 1, notes: null, createdAt: "2026-10-01T09:00:00.000Z" },
-      versions: [{ id: 13, effectiveFrom: scheduledDate, category: "internet", description: "Subscrição futura", amountCents: 2990, recurrence: "monthly", weekday: null, monthDay: 1, notes: null, createdAt: "2026-10-01T09:00:00.000Z" }],
+      nextOccurrenceDate: futureEffectiveDate,
+      currentVersion: { id: 13, effectiveFrom: futureEffectiveDate, category: "internet", description: "Subscrição futura", amountCents: 2990, recurrence: "monthly", weekday: null, monthDay: 1, notes: null, createdAt: "2026-10-01T09:00:00.000Z" },
+      versions: [{ id: 13, effectiveFrom: futureEffectiveDate, category: "internet", description: "Subscrição futura", amountCents: 2990, recurrence: "monthly", weekday: null, monthDay: 1, notes: null, createdAt: "2026-10-01T09:00:00.000Z" }],
       pauses: [],
       occurrences: [],
     }] : [])] });
@@ -113,10 +122,20 @@ test("Beauty manages recurring series and scoped occurrence edits on mobile and 
   const dialog = page.getByRole("dialog", { name: "Editar despesa recorrente" });
   await expect(dialog.getByLabel("Âmbito da alteração")).toContainText("Apenas esta ocorrência");
   await dialog.getByLabel("Âmbito da alteração").click();
-  await page.getByRole("option", { name: "Esta e as seguintes" }).click();
+  await expect(page.getByRole("option", { name: "Esta e as seguintes" })).toHaveAttribute("data-disabled");
+  await page.keyboard.press("Escape");
   await dialog.getByLabel("Valor da ocorrência").fill("475,00");
   await dialog.getByRole("button", { name: "Guardar" }).click();
-  await expect.poll(() => mutationBodies.some((entry) => entry.url.endsWith("/api/admin/expense-series/9/versions") && entry.body.amountCents === 47500)).toBe(true);
+  await expect.poll(() => mutationBodies.some((entry) => entry.url.endsWith("/api/admin/expenses/71/occurrence") && entry.body.amountCents === 47500)).toBe(true);
+
+  await page.getByTestId("recurring-expense-series-9").getByRole("button", { name: "Editar futuro" }).click();
+  const futureDialog = page.getByRole("dialog", { name: "Alterar esta e as ocorrências seguintes" });
+  await futureDialog.getByLabel("Data de efeito da série").fill(futureEffectiveDate);
+  await futureDialog.getByLabel("Valor da série").fill("500,00");
+  await futureDialog.getByRole("button", { name: "Guardar alteração futura" }).click();
+  await expect.poll(() => mutationBodies.some((entry) => entry.url.endsWith("/api/admin/expense-series/9/versions")
+    && entry.body.effectiveFrom === futureEffectiveDate
+    && entry.body.amountCents === 50000)).toBe(true);
 
   const draftCard = page.getByTestId("recurring-expense-series-10");
   await expect(draftCard.getByRole("button", { name: "Editar", exact: true })).toBeVisible();

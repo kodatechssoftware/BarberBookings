@@ -5,9 +5,14 @@ import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import {
   appointmentNotificationWorkerEnabled,
+  resolvedBusinessConfig,
   validateRuntimeConfiguration,
 } from "./runtime-environment";
 import { startAppointmentNotificationWorker } from "./appointment-notifications";
+import {
+  materializeAllDueRecurringExpenseOccurrences,
+  startRecurringExpenseMaterializationWorker,
+} from "./recurring-expenses";
 import {
   ensureAppointmentOverlapProtection,
   ensureAppointmentPaymentMethodColumn,
@@ -202,10 +207,18 @@ finishHttpConfiguration();
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
   }
   const server = await startupTimings.measure("registerRoutes", () => registerRoutes(app, httpServer));
-  if (appointmentNotificationWorkerEnabled) {
+  const recurringExpenseWorkerEnabled = resolvedBusinessConfig.features.recurringExpenses
+    && process.env.USE_MEMORY_STORAGE !== "true";
+  if (recurringExpenseWorkerEnabled) {
+    await materializeAllDueRecurringExpenseOccurrences();
+  }
+  if (appointmentNotificationWorkerEnabled || recurringExpenseWorkerEnabled) {
     // Measure scheduling, not the unawaited first tick or later interval work.
     const finishWorkers = startupTimings.start("workers");
-    startAppointmentNotificationWorker();
+    if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
+    if (recurringExpenseWorkerEnabled) {
+      startRecurringExpenseMaterializationWorker(undefined, undefined, false);
+    }
     finishWorkers();
   } else startupTimings.mark("workers", "skipped");
 

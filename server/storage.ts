@@ -84,7 +84,6 @@ import {
   appointmentOccupancyOverlaps,
   getOperationalAppointmentBounds,
 } from "@shared/appointment-occupancy";
-import { materializeRecurringExpenseOccurrences } from "./recurring-expenses";
 import { getCalendarDateBounds } from "./calendar-timezone";
 
 export type AppointmentNotificationEventType =
@@ -2079,13 +2078,6 @@ export class DatabaseStorage implements IStorage {
     locationId?: number;
     timeZone?: string;
   } = {}): Promise<BusinessExpense[]> {
-    if (filters.locationId !== undefined && filters.startDate && filters.endDate) {
-      await materializeRecurringExpenseOccurrences({
-        locationId: filters.locationId,
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-      });
-    }
     const conditions: SQL[] = [];
     if (filters.locationId !== undefined) conditions.push(eq(businessExpenses.locationId, filters.locationId));
 

@@ -36,10 +36,13 @@ npm run db:bootstrap
 ```
 
 Beauty installations with recurring expense management use migration `0018`.
-Series are generated idempotently into the existing expense ledger only for a
-requested reporting interval, so Dashboard/Excel totals include each
-occurrence exactly once. Future changes create an effective-dated version;
-past materialized occurrences keep their original values.
+Due occurrences are normalized idempotently into the existing expense ledger
+at startup and by a periodic worker, always capped at the current calendar date
+of each location. Report and Excel reads never materialize occurrences, and
+normal exports therefore include realized expenses only. Future projections
+remain pure calculations until their business date arrives. Future changes
+create an effective-dated version; past materialized occurrences keep their
+original values.
 
 4. Arrancar a aplicacao:
 

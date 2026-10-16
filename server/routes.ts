@@ -2974,6 +2974,7 @@ export async function registerRoutes(
       FUTURE_EFFECTIVE_DATE_REQUIRED: "Escolha uma data futura para não alterar despesas anteriores.",
       EFFECTIVE_DATE_AFTER_END: "A data tem de ser anterior ao término da série.",
       END_DATE_BEFORE_HISTORY: "A data de término não pode eliminar ocorrências já registadas.",
+      FUTURE_OCCURRENCE_OVERRIDE_REQUIRES_REVIEW: "Existe uma correção futura nesta série que exige revisão antes de alterar o estado.",
       PAUSE_RANGE_INVALID: "A data de retoma tem de ser posterior ao início da pausa.",
       PAUSE_OVERLAP: "Já existe uma pausa da série nesse período.",
     };
