@@ -38,10 +38,12 @@ test("Production runtime starts fail-closed without Meta credentials", () => {
     production:m.isProductionDeployment, development:m.isDevelopmentDeployment,
     events:m.appointmentNotificationEventsEnabled, worker:m.appointmentNotificationWorkerEnabled,
     recurring:m.recurringWhatsappNotificationsEnabled,
+    recurringExpenses:m.recurringExpensesEnabled,
     bookingSlotInterval:m.bookingSlotIntervalMinutes
   }))`);
   assert.deepEqual(JSON.parse(output), {
     production: true, development: false, events: false, worker: false, recurring: false,
+    recurringExpenses: false,
     bookingSlotInterval: 30,
   });
 });
@@ -73,6 +75,20 @@ test("Production notification capabilities also default to off when activation f
     recurring:m.recurringWhatsappNotificationsEnabled
   }))`);
   assert.deepEqual(JSON.parse(output), { events: false, worker: false, recurring: false });
+});
+
+test("recurring expenses are disabled by default and require an explicit valid opt-in", () => {
+  const withoutFlag = { ...baseEnvironment };
+  delete withoutFlag.RECURRING_EXPENSES_ENABLED;
+  assert.equal(evaluate(withoutFlag, "console.log(m.recurringExpensesEnabled)"), "false");
+  assert.equal(evaluate(
+    { ...baseEnvironment, RECURRING_EXPENSES_ENABLED: "true" },
+    "console.log(m.recurringExpensesEnabled)",
+  ), "true");
+  assert.throws(() => evaluate(
+    { ...baseEnvironment, RECURRING_EXPENSES_ENABLED: "yes" },
+    "m.validateRuntimeConfiguration()",
+  ));
 });
 
 test("Production rejects ambiguous APP_ENV, localhost URL and weak session secret", () => {

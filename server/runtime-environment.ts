@@ -27,6 +27,11 @@ export const appointmentNotificationWorkerEnabled =
 export const recurringWhatsappNotificationsEnabled =
   explicitBoolean("META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED") ?? false;
 
+// Recurring expense management is shipped disabled for existing Barber
+// installations and must be enabled explicitly after migration validation.
+export const recurringExpensesEnabled =
+  explicitBoolean("RECURRING_EXPENSES_ENABLED") ?? false;
+
 export const bookingSlotIntervalMinutes = parseBookingSlotIntervalMinutes(
   process.env.BOOKING_SLOT_INTERVAL_MINUTES,
 );

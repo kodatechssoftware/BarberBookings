@@ -35,6 +35,16 @@ npm install
 npm run db:push
 ```
 
+Recurring expense management uses migration `0018` and remains disabled until
+`RECURRING_EXPENSES_ENABLED=true` is configured after migration validation.
+Due occurrences are normalized idempotently into the existing expense ledger
+at startup and by a periodic worker, always capped at the current calendar date
+of each location. Report and Excel reads never materialize occurrences, and
+normal exports therefore include realized expenses only. Future projections
+remain pure calculations until their business date arrives. Future changes
+create an effective-dated version; past materialized occurrences keep their
+original values.
+
 4. Arrancar a aplicacao:
 
 ```powershell

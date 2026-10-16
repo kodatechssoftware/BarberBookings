@@ -5,9 +5,14 @@ import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import {
   appointmentNotificationWorkerEnabled,
+  recurringExpensesEnabled,
   validateRuntimeConfiguration,
 } from "./runtime-environment";
 import { startAppointmentNotificationWorker } from "./appointment-notifications";
+import {
+  materializeAllDueRecurringExpenseOccurrences,
+  startRecurringExpenseMaterializationWorker,
+} from "./recurring-expenses";
 import {
   ensureAppointmentOverlapProtection,
   ensureAppointmentPaymentMethodColumn,
@@ -191,7 +196,15 @@ app.use((req, res, next) => {
     log(`repaired ${repairedEncodingRows} text value(s) with legacy encoding artifacts`);
   }
   const server = await registerRoutes(app, httpServer);
+  const recurringExpenseWorkerEnabled = recurringExpensesEnabled
+    && process.env.USE_MEMORY_STORAGE !== "true";
+  if (recurringExpenseWorkerEnabled) {
+    await materializeAllDueRecurringExpenseOccurrences();
+  }
   if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
+  if (recurringExpenseWorkerEnabled) {
+    startRecurringExpenseMaterializationWorker(undefined, undefined, false);
+  }
 
   app.use("/api", (_req, res) => {
     res.status(404).json({ message: "Endpoint não encontrado." });

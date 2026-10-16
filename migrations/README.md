@@ -38,6 +38,14 @@ legacy appointments or introduce split payments; a voucher settles the full
 nominal appointment value while remaining distinct from cash/card receipts and
 from a gifted service.
 
+Migration `0018_recurring_expense_management.sql` adds location-scoped expense
+series, effective-dated commercial versions, pause intervals, and immutable
+occurrence references. `business_expenses` remains the occurrence ledger used
+by financial summaries and Excel exports. Existing `once`, `weekly`, and
+`monthly` rows are preserved byte-for-byte as legacy historical entries and
+are never promoted automatically to active series because the previous model
+did not store sufficient schedule intent.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification
