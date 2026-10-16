@@ -179,6 +179,51 @@ try {
     environment,
   });
   assert.equal(secondCleanup.state, "already-clean");
+
+  const preexistingLocationHours = [
+    [0, "09:00", "13:00", false],
+    [1, "14:00", "20:00", true],
+    ...[2, 3, 4, 5].flatMap((day) => [
+      [day, "09:00", "13:00", true],
+      [day, "14:00", "20:00", true],
+    ]),
+    [6, "09:00", "13:00", true],
+    [6, "14:00", "19:00", true],
+  ] as const;
+  for (const [day, start, end, isOpen] of preexistingLocationHours) {
+    await pool.query(`
+      INSERT INTO shop_availability (location_id, day_of_week, start_time, end_time, is_open)
+      VALUES (1, $1, $2, $3, $4)
+    `, [day, start, end, isOpen]);
+  }
+  const reusedHoursBefore = await pool.query(`
+    SELECT id, day_of_week, start_time, end_time, is_open
+    FROM shop_availability ORDER BY id
+  `);
+  const reusedDryRun = await runBeautyDemoSeed(pool, { mode: "dry-run", referenceDate, environment });
+  assert.equal(reusedDryRun.state, "planned");
+  const reusedApply = await runBeautyDemoSeed(pool, {
+    mode: "apply",
+    referenceDate,
+    confirmation: BEAUTY_DEMO_CONFIRMATION,
+    environment,
+  });
+  assert.equal(reusedApply.state, "applied");
+  assert.equal(await count(pool, "shop_availability"), preexistingLocationHours.length);
+  assert.equal(await count(pool, "audit_logs", "WHERE action = 'beauty_demo_seed.manifest'"), 1);
+  const reusedCleanup = await runBeautyDemoSeed(pool, {
+    mode: "cleanup",
+    referenceDate,
+    confirmation: BEAUTY_DEMO_CONFIRMATION,
+    environment,
+  });
+  assert.equal(reusedCleanup.state, "cleaned");
+  const reusedHoursAfter = await pool.query(`
+    SELECT id, day_of_week, start_time, end_time, is_open
+    FROM shop_availability ORDER BY id
+  `);
+  assert.deepEqual(reusedHoursAfter.rows, reusedHoursBefore.rows, "cleanup must preserve reused location hours");
+  assert.equal(await count(pool, "audit_logs", "WHERE action = 'beauty_demo_seed.manifest'"), 0);
   console.log("Beauty demo seed tests passed.");
 } finally {
   await pool?.end().catch(() => undefined);

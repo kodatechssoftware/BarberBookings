@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from "pg";
 export const BEAUTY_DEMO_SEED_KEY = "beauty-demo:ana-isabel:v1";
 export const BEAUTY_DEMO_CONFIRMATION = "beauty-dev";
 export const BEAUTY_DEMO_PROFESSIONAL_EMAIL = "ana.isabel.demo@beauty-demo.invalid";
+const BEAUTY_DEMO_MANIFEST_ACTION = "beauty_demo_seed.manifest";
 
 const requiredMigrations = [
   "0017_service_buffers.sql",
@@ -75,7 +76,7 @@ const appointmentDefinitions: readonly AppointmentDefinition[] = [
   { offset: -13, time: "09:30", service: "aplicacao_gel", customer: "joana", status: "completed", payment: "card", extras: [{ key: "nail_art_elaborada" }] },
   { offset: -13, time: "14:30", service: "verniz_remocao", customer: "rita", status: "completed", payment: "cash", extras: [{ key: "francesa" }] },
   { offset: -12, time: "09:30", service: "manicure", customer: "joana", status: "completed", payment: "cash", extras: [{ key: "nail_art_simples" }] },
-  { offset: -10, time: "09:30", service: "extensao", customer: "catarina", status: "completed", payment: "card", extras: [{ key: "baby_boomer" }] },
+  { offset: -10, time: "16:30", service: "extensao", customer: "catarina", status: "completed", payment: "card", extras: [{ key: "baby_boomer" }] },
   { offset: -10, time: "14:30", service: "verniz", customer: "marta", status: "completed", payment: "cash", extras: [{ key: "nail_art_elaborada" }] },
   { offset: -9, time: "10:00", service: "verniz_remocao", customer: "rita", status: "completed", payment: "card" },
   { offset: -8, time: "10:00", service: "manutencao_gel", customer: "sofia", status: "completed", payment: "card", extras: [{ key: "reparacao" }] },
@@ -86,10 +87,10 @@ const appointmentDefinitions: readonly AppointmentDefinition[] = [
   { offset: -6, time: "14:30", service: "manicure", customer: "sofia", status: "cancelled", payment: "pending" },
   { offset: -5, time: "09:15", service: "pedicure", customer: "leonor", status: "completed", payment: "cash", extras: [{ key: "nail_art_simples" }] },
   { offset: -5, time: "11:00", service: "verniz", customer: "ines", status: "no_show", payment: "pending" },
-  { offset: -5, time: "12:30", service: "manicure", customer: "beatriz", status: "late_cancelled", payment: "pending" },
-  { offset: -3, time: "09:30", service: "verniz", customer: "carolina", status: "completed", payment: "cash", extras: [{ key: "nail_art_simples" }] },
-  { offset: -3, time: "11:15", service: "manicure", customer: "leonor", status: "completed", payment: "card" },
-  { offset: -3, time: "14:30", service: "manutencao_gel", customer: "mariana", status: "completed", payment: "card" },
+  { offset: -5, time: "12:15", service: "manicure", customer: "beatriz", status: "late_cancelled", payment: "pending" },
+  { offset: -3, time: "14:15", service: "verniz", customer: "carolina", status: "completed", payment: "cash", extras: [{ key: "nail_art_simples" }] },
+  { offset: -3, time: "15:45", service: "manicure", customer: "leonor", status: "completed", payment: "card" },
+  { offset: -3, time: "17:00", service: "manutencao_gel", customer: "mariana", status: "completed", payment: "card" },
   { offset: -2, time: "09:15", service: "pedicure", customer: "joana", status: "completed", payment: "cash" },
   { offset: -2, time: "10:45", service: "verniz_remocao", customer: "rita", status: "completed", payment: "card", extras: [{ key: "francesa" }] },
   { offset: -2, time: "14:00", service: "extensao", customer: "catarina", status: "completed", payment: "card", extras: [{ key: "nail_art_elaborada" }] },
@@ -104,18 +105,31 @@ const appointmentDefinitions: readonly AppointmentDefinition[] = [
   { offset: 1, time: "14:00", service: "pedicure", customer: "rita", status: "booked", payment: "pending" },
   { offset: 2, time: "09:30", service: "extensao", customer: "catarina", status: "booked", payment: "pending", extras: [{ key: "baby_boomer" }] },
   { offset: 2, time: "12:00", service: "manicure", customer: "marta", status: "booked", payment: "pending", extras: [{ key: "decoracao_unha", amountCents: 200 }] },
-  { offset: 4, time: "10:00", service: "manutencao_gel", customer: "sofia", status: "booked", payment: "pending", rescheduleRevision: 1 },
-  { offset: 4, time: "14:00", service: "verniz", customer: "ines", status: "booked", payment: "pending", extras: [{ key: "nail_art_simples" }] },
+  { offset: 4, time: "14:30", service: "manutencao_gel", customer: "sofia", status: "booked", payment: "pending", rescheduleRevision: 1 },
+  { offset: 4, time: "16:30", service: "verniz", customer: "ines", status: "booked", payment: "pending", extras: [{ key: "nail_art_simples" }] },
   { offset: 5, time: "10:00", service: "aplicacao_gel", customer: "beatriz", status: "booked", payment: "pending" },
 ] as const;
 
 const weeklySchedule = [
-  ...[1, 2, 3, 4, 5].flatMap((dayOfWeek) => [
+  { dayOfWeek: 1, startTime: "14:00", endTime: "20:00" },
+  ...[2, 3, 4, 5].flatMap((dayOfWeek) => [
     { dayOfWeek, startTime: "09:00", endTime: "13:00" },
-    { dayOfWeek, startTime: "14:00", endTime: "19:00" },
+    { dayOfWeek, startTime: "14:00", endTime: "20:00" },
   ]),
-  { dayOfWeek: 6, startTime: "09:00", endTime: "14:00" },
+  { dayOfWeek: 6, startTime: "09:00", endTime: "13:00" },
+  { dayOfWeek: 6, startTime: "14:00", endTime: "19:00" },
 ] as const;
+
+type ScheduleEntry = { dayOfWeek: number; startTime: string; endTime: string };
+type BeautyDemoManifest = {
+  version: 1;
+  seedKey: typeof BEAUTY_DEMO_SEED_KEY;
+  referenceDate: string;
+  locationId: number;
+  professionalId: number;
+  createdShopAvailabilityIds: number[];
+  reusedShopAvailabilityIds: number[];
+};
 
 export type BeautyDemoSeedMode = "dry-run" | "apply" | "cleanup";
 
@@ -307,6 +321,83 @@ async function scalarCount(client: PoolClient, query: string, values: unknown[] 
   return Number(result.rows[0]?.count ?? 0);
 }
 
+function sortedSchedule(entries: readonly ScheduleEntry[]) {
+  return [...entries].sort((left, right) => (
+    left.dayOfWeek - right.dayOfWeek
+    || left.startTime.localeCompare(right.startTime)
+    || left.endTime.localeCompare(right.endTime)
+  ));
+}
+
+function scheduleMatches(entries: readonly ScheduleEntry[]) {
+  const actual = sortedSchedule(entries);
+  const expected = sortedSchedule(weeklySchedule);
+  return actual.length === expected.length && actual.every((entry, index) => (
+    entry.dayOfWeek === expected[index].dayOfWeek
+    && entry.startTime === expected[index].startTime
+    && entry.endTime === expected[index].endTime
+  ));
+}
+
+async function resolveLocationSchedule(client: PoolClient, schema: string, locationId: number) {
+  const result = await client.query<{
+    id: number; day_of_week: number; start_time: string; end_time: string; is_open: boolean;
+  }>(`
+    SELECT id, day_of_week, start_time, end_time, is_open
+    FROM ${schema}.shop_availability
+    WHERE location_id = $1
+    ORDER BY day_of_week, start_time, end_time, id
+  `, [locationId]);
+  if (result.rows.length === 0) {
+    return { shouldCreate: true, reusedIds: [] as number[] };
+  }
+  const openRows = result.rows.filter((row) => row.is_open);
+  if (!scheduleMatches(openRows.map((row) => ({
+    dayOfWeek: row.day_of_week,
+    startTime: row.start_time,
+    endTime: row.end_time,
+  })))) {
+    throw new BeautyDemoSeedError(
+      "Existing location hours do not match the approved Beauty demo schedule; refusing to overwrite them.",
+    );
+  }
+  return { shouldCreate: false, reusedIds: openRows.map((row) => row.id) };
+}
+
+function parseManifest(raw: string): BeautyDemoManifest {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    throw new BeautyDemoSeedError("Beauty demo ownership manifest is invalid JSON.");
+  }
+  const candidate = manifest as Partial<BeautyDemoManifest>;
+  if (candidate.version !== 1 || candidate.seedKey !== BEAUTY_DEMO_SEED_KEY
+    || typeof candidate.referenceDate !== "string" || !Number.isInteger(candidate.locationId)
+    || !Number.isInteger(candidate.professionalId)
+    || !Array.isArray(candidate.createdShopAvailabilityIds)
+    || !candidate.createdShopAvailabilityIds.every(Number.isInteger)
+    || !Array.isArray(candidate.reusedShopAvailabilityIds)
+    || !candidate.reusedShopAvailabilityIds.every(Number.isInteger)) {
+    throw new BeautyDemoSeedError("Beauty demo ownership manifest has an unsupported shape.");
+  }
+  return candidate as BeautyDemoManifest;
+}
+
+async function findManifest(client: PoolClient, schema: string, locationId: number) {
+  const result = await client.query<{ id: number; metadata: string | null }>(`
+    SELECT id, metadata
+    FROM ${schema}.audit_logs
+    WHERE action = $1 AND entity_type = 'beauty_demo_seed' AND location_id = $2
+    ORDER BY id
+  `, [BEAUTY_DEMO_MANIFEST_ACTION, locationId]);
+  if (result.rows.length > 1) throw new BeautyDemoSeedError("Duplicate Beauty demo ownership manifests found.");
+  const row = result.rows[0];
+  if (!row) return null;
+  if (!row.metadata) throw new BeautyDemoSeedError("Beauty demo ownership manifest has no metadata.");
+  return { id: row.id, manifest: parseManifest(row.metadata) };
+}
+
 async function assertDatabaseFoundation(client: PoolClient, schema: string) {
   const rows = await client.query<{ name: string }>(
     `SELECT name FROM ${schema}.schema_migrations WHERE name = ANY($1::text[]) ORDER BY name`,
@@ -343,11 +434,12 @@ async function assertNoCollisions(client: PoolClient, schema: string, locationId
     await scalarCount(client, `SELECT count(*) FROM ${schema}.appointments WHERE cancel_token LIKE $1`, [`${BEAUTY_DEMO_SEED_KEY}:appointment:%`]),
     await scalarCount(client, `SELECT count(*) FROM ${schema}.business_expense_recurring_series WHERE creation_key LIKE $1`, [`${BEAUTY_DEMO_SEED_KEY}:expense:%`]),
     await scalarCount(client, `SELECT count(*) FROM ${schema}.business_expenses WHERE notes = $1`, [BEAUTY_DEMO_SEED_KEY]),
-    await scalarCount(client, `SELECT count(*) FROM ${schema}.shop_availability WHERE location_id = $1`, [locationId]),
+    await scalarCount(client, `SELECT count(*) FROM ${schema}.audit_logs WHERE action = $1 AND entity_type = 'beauty_demo_seed' AND location_id = $2`, [BEAUTY_DEMO_MANIFEST_ACTION, locationId]),
   ];
   if (checks.some((count) => count !== 0)) {
-    throw new BeautyDemoSeedError("Seed-owned names/keys or location hours already exist without the seed identity; refusing a partial or ambiguous apply.");
+    throw new BeautyDemoSeedError("Seed-owned names, keys or ownership metadata already exist without the seed identity; refusing a partial or ambiguous apply.");
   }
+  await resolveLocationSchedule(client, schema, locationId);
 }
 
 async function protectedCounts(client: PoolClient, schema: string) {
@@ -364,6 +456,12 @@ function sameProtectedCounts(left: Awaited<ReturnType<typeof protectedCounts>>, 
 }
 
 async function validateAppliedState(client: PoolClient, schema: string, locationId: number, referenceDate: string, barberId: number) {
+  const ownership = await findManifest(client, schema, locationId);
+  if (!ownership || ownership.manifest.referenceDate !== referenceDate
+    || ownership.manifest.locationId !== locationId
+    || ownership.manifest.professionalId !== barberId) {
+    throw new BeautyDemoSeedError("Beauty demo ownership manifest is missing or does not match the dataset.");
+  }
   const identity = await client.query<{
     name: string; specialty: string; user_id: number | null; password: string | null; is_visible: boolean;
   }>(`SELECT name, specialty, user_id, password, is_visible FROM ${schema}.barbers WHERE id = $1`, [barberId]);
@@ -384,19 +482,27 @@ async function validateAppliedState(client: PoolClient, schema: string, location
     throw new BeautyDemoSeedError("Beauty demo catalogue, assignment or schedule is incomplete.");
   }
 
-  const shopHours = await client.query<{ day_of_week: number; start_time: string; end_time: string; is_open: boolean }>(`
-    SELECT day_of_week, start_time, end_time, is_open
+  const shopHours = await client.query<{ id: number; day_of_week: number; start_time: string; end_time: string; is_open: boolean }>(`
+    SELECT id, day_of_week, start_time, end_time, is_open
     FROM ${schema}.shop_availability
     WHERE location_id = $1
     ORDER BY day_of_week, start_time, end_time
   `, [locationId]);
-  const expectedHours = [...weeklySchedule].sort((left, right) => left.dayOfWeek - right.dayOfWeek || left.startTime.localeCompare(right.startTime));
-  if (shopHours.rowCount !== expectedHours.length || shopHours.rows.some((row, index) => (
-    row.day_of_week !== expectedHours[index].dayOfWeek
-    || row.start_time !== expectedHours[index].startTime
-    || row.end_time !== expectedHours[index].endTime
-    || !row.is_open
-  ))) throw new BeautyDemoSeedError("Location hours no longer match the Beauty demo seed manifest.");
+  const openHours = shopHours.rows.filter((row) => row.is_open);
+  if (!scheduleMatches(openHours.map((row) => ({
+    dayOfWeek: row.day_of_week,
+    startTime: row.start_time,
+    endTime: row.end_time,
+  })))) throw new BeautyDemoSeedError("Location hours no longer match the Beauty demo seed manifest.");
+  const manifestHourIds = [
+    ...ownership.manifest.createdShopAvailabilityIds,
+    ...ownership.manifest.reusedShopAvailabilityIds,
+  ].sort((left, right) => left - right);
+  const currentHourIds = openHours.map((row) => row.id).sort((left, right) => left - right);
+  if (new Set(manifestHourIds).size !== manifestHourIds.length
+    || JSON.stringify(manifestHourIds) !== JSON.stringify(currentHourIds)) {
+    throw new BeautyDemoSeedError("Location-hour ownership no longer matches the Beauty demo seed manifest.");
+  }
 
   const statusRows = await client.query<{ status: DemoStatus; count: string }>(`
     SELECT status, count(*)::text AS count
@@ -486,6 +592,7 @@ async function validateAppliedState(client: PoolClient, schema: string, location
 }
 
 async function insertDataset(client: PoolClient, schema: string, location: { id: number; timezone: string }, referenceDate: string) {
+  const locationSchedule = await resolveLocationSchedule(client, schema, location.id);
   const categoryIds = new Map<string, number>();
   for (const category of categoryDefinitions) {
     const result = await client.query<{ id: number }>(`
@@ -536,11 +643,16 @@ async function insertDataset(client: PoolClient, schema: string, location: { id:
     extraIds.set(extra.key, result.rows[0].id);
   }
 
+  const createdShopAvailabilityIds: number[] = [];
   for (const hours of weeklySchedule) {
-    await client.query(`
-      INSERT INTO ${schema}.shop_availability (location_id, day_of_week, start_time, end_time, is_open)
-      VALUES ($1, $2, $3, $4, true)
-    `, [location.id, hours.dayOfWeek, hours.startTime, hours.endTime]);
+    if (locationSchedule.shouldCreate) {
+      const insertedHours = await client.query<{ id: number }>(`
+        INSERT INTO ${schema}.shop_availability (location_id, day_of_week, start_time, end_time, is_open)
+        VALUES ($1, $2, $3, $4, true)
+        RETURNING id
+      `, [location.id, hours.dayOfWeek, hours.startTime, hours.endTime]);
+      createdShopAvailabilityIds.push(insertedHours.rows[0].id);
+    }
     await client.query(`
       INSERT INTO ${schema}.barber_availability (location_id, barber_id, day_of_week, start_time, end_time, is_working)
       VALUES ($1, $2, $3, $4, $5, true)
@@ -663,6 +775,29 @@ async function insertDataset(client: PoolClient, schema: string, location: { id:
     `, [location.id, expense.category, expense.description, expense.amount, localDateTimeToInstant(addDays(referenceDate, expense.offset), "12:00", location.timezone), BEAUTY_DEMO_SEED_KEY]);
   }
 
+  const manifest: BeautyDemoManifest = {
+    version: 1,
+    seedKey: BEAUTY_DEMO_SEED_KEY,
+    referenceDate,
+    locationId: location.id,
+    professionalId: barberId,
+    createdShopAvailabilityIds,
+    reusedShopAvailabilityIds: locationSchedule.reusedIds,
+  };
+  await client.query(`
+    INSERT INTO ${schema}.audit_logs (
+      actor_type, actor_id, actor_name, actor_user_id, actor_professional_id,
+      location_id, action, entity_type, entity_id, summary, metadata
+    ) VALUES ('system', NULL, 'Beauty demo seed', NULL, NULL, $1, $2,
+      'beauty_demo_seed', $3, $4, $5)
+  `, [
+    location.id,
+    BEAUTY_DEMO_MANIFEST_ACTION,
+    barberId,
+    `Ownership manifest for ${BEAUTY_DEMO_SEED_KEY}`,
+    JSON.stringify(manifest),
+  ]);
+
   return barberId;
 }
 
@@ -709,6 +844,8 @@ async function assertCleanupSafe(client: PoolClient, schema: string, locationId:
 async function cleanupDataset(client: PoolClient, schema: string, locationId: number, referenceDate: string, barberId: number) {
   await validateAppliedState(client, schema, locationId, referenceDate, barberId);
   await assertCleanupSafe(client, schema, locationId, barberId);
+  const ownership = await findManifest(client, schema, locationId);
+  if (!ownership) throw new BeautyDemoSeedError("Beauty demo ownership manifest is missing.");
   const serviceRows = await client.query<{ service_id: number }>(
     `SELECT service_id FROM ${schema}.barber_services WHERE barber_id = $1 AND location_id = $2 ORDER BY service_id`,
     [barberId, locationId],
@@ -735,14 +872,15 @@ async function cleanupDataset(client: PoolClient, schema: string, locationId: nu
   await client.query(`DELETE FROM ${schema}.services WHERE id = ANY($1::integer[])`, [serviceIds]);
   await client.query(`DELETE FROM ${schema}.service_categories WHERE id = ANY($1::integer[])`, [categoryIds]);
   await client.query(`DELETE FROM ${schema}.barber_availability WHERE barber_id = $1 AND location_id = $2`, [barberId, locationId]);
-  for (const hours of weeklySchedule) {
+  if (ownership.manifest.createdShopAvailabilityIds.length > 0) {
     await client.query(`
       DELETE FROM ${schema}.shop_availability
-      WHERE location_id = $1 AND day_of_week = $2 AND start_time = $3 AND end_time = $4 AND is_open = true
-    `, [locationId, hours.dayOfWeek, hours.startTime, hours.endTime]);
+      WHERE location_id = $1 AND id = ANY($2::integer[])
+    `, [locationId, ownership.manifest.createdShopAvailabilityIds]);
   }
   await client.query(`DELETE FROM ${schema}.barber_locations WHERE barber_id = $1 AND location_id = $2`, [barberId, locationId]);
   await client.query(`DELETE FROM ${schema}.barbers WHERE id = $1`, [barberId]);
+  await client.query(`DELETE FROM ${schema}.audit_logs WHERE id = $1`, [ownership.id]);
 }
 
 export async function runBeautyDemoSeed(pool: Pool, options: BeautyDemoSeedOptions): Promise<BeautyDemoSeedSummary> {
