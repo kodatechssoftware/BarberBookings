@@ -5,6 +5,7 @@ import {
   sendBookingConfirmation,
   sendBookingRescheduled,
   sendBookingUpdated,
+  sendAppointmentReminder,
   sendRecurringBookingConfirmation,
   type EmailDeliveryResult,
 } from "./email";
@@ -12,9 +13,11 @@ import { getLocation } from "./location-store";
 import { reconcileMetaStatusReceipts } from "./meta-webhook";
 import {
   appointmentNotificationWorkerEnabled,
+  appointmentRemindersEnabled,
   isDevelopmentDeployment,
   recurringWhatsappNotificationsEnabled,
 } from "./runtime-environment";
+import { isAppointmentReminderDeliveryWindow } from "./appointment-reminders";
 import { storage, type IStorage } from "./storage";
 import {
   areWhatsappNotificationsEnabled,
@@ -44,11 +47,14 @@ export type AppointmentNotificationDependencies = {
   sendRescheduleEmail: typeof sendBookingRescheduled;
   sendUpdatedEmail: typeof sendBookingUpdated;
   sendCancellationEmail: typeof sendBookingCancellationConfirmation;
+  sendReminderEmail: typeof sendAppointmentReminder;
   sendRecurringConfirmationEmail: typeof sendRecurringBookingConfirmation;
   processingEnabled: boolean;
   whatsappEnabled: boolean;
   recurringWhatsappEnabled?: boolean;
+  remindersEnabled?: boolean;
   deferWhatsappWhenDisabled?: boolean;
+  now?: () => Date;
 };
 
 export const defaultDependencies: AppointmentNotificationDependencies = {
@@ -59,15 +65,18 @@ export const defaultDependencies: AppointmentNotificationDependencies = {
   sendRescheduleEmail: sendBookingRescheduled,
   sendUpdatedEmail: sendBookingUpdated,
   sendCancellationEmail: sendBookingCancellationConfirmation,
+  sendReminderEmail: sendAppointmentReminder,
   sendRecurringConfirmationEmail: sendRecurringBookingConfirmation,
   processingEnabled: appointmentNotificationWorkerEnabled,
   whatsappEnabled: areWhatsappNotificationsEnabled(),
   recurringWhatsappEnabled: recurringWhatsappNotificationsEnabled,
+  remindersEnabled: appointmentRemindersEnabled,
   deferWhatsappWhenDisabled: isDevelopmentDeployment,
+  now: () => new Date(),
 };
 
 function eventType(value: string): EventType | null {
-  return ["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_cancelled"].includes(value)
+  return ["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_cancelled", "appointment_reminder_day_before"].includes(value)
     ? value as EventType : null;
 }
 
@@ -129,6 +138,22 @@ async function emailFallback(
     await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
     return "none";
   }
+  if (event.eventType === "appointment_reminder_day_before") {
+    const reminderError = !deps.remindersEnabled
+      ? "REMINDERS_DISABLED"
+      : !isAppointmentReminderDeliveryWindow(
+          new Date(event.appointmentStartTime),
+          new Date(event.availableAt),
+          details.locationTimeZone,
+          deps.now?.() ?? new Date(),
+        )
+        ? "REMINDER_WINDOW_EXPIRED"
+        : null;
+    if (reminderError) {
+      await updateEvent(deps, event.id, { emailStatus: "skipped", emailErrorCode: reminderError });
+      return "none";
+    }
+  }
 
   await updateEvent(deps, event.id, { emailStatus: "sending", emailAttemptedAt: new Date() });
   const common = {
@@ -152,6 +177,9 @@ async function emailFallback(
         durationMinutes: appointment.durationMinutes, locationAddress: details.locationAddress });
     } else if (event.eventType === "appointment_updated") {
       result = await deps.sendUpdatedEmail({ ...common, cancelToken: appointment.cancelToken,
+        durationMinutes: appointment.durationMinutes, locationAddress: details.locationAddress });
+    } else if (event.eventType === "appointment_reminder_day_before") {
+      result = await deps.sendReminderEmail({ ...common, cancelToken: appointment.cancelToken,
         durationMinutes: appointment.durationMinutes, locationAddress: details.locationAddress });
     } else {
       result = await deps.sendCancellationEmail({ ...common, lateCancellation: appointment.status === "late_cancelled",
@@ -342,10 +370,6 @@ async function processClaimedCore(
       emailStatus: "skipped", emailErrorCode: "STALE_EVENT" });
     return "none";
   }
-  if (appointment!.whatsappOptIn && !deps.whatsappEnabled && !event.whatsappAttemptedAt
-    && deps.deferWhatsappWhenDisabled !== false) {
-    return "deferred";
-  }
   const [barber, service, location] = await Promise.all([
     deps.storage.getBarber(appointment!.barberId),
     appointment!.serviceId ? deps.storage.getService(appointment!.serviceId) : Promise.resolve(undefined),
@@ -361,6 +385,25 @@ async function processClaimedCore(
     locationAddress: location?.address || process.env.SHOP_ADDRESS || "",
     locationTimeZone: location?.timezone || process.env.SHOP_TIME_ZONE || "Europe/Lisbon",
   };
+
+  if (type === "appointment_reminder_day_before") {
+    const now = deps.now?.() ?? new Date();
+    if (!deps.remindersEnabled || !isAppointmentReminderDeliveryWindow(
+      new Date(event.appointmentStartTime),
+      new Date(event.availableAt),
+      details.locationTimeZone,
+      now,
+    )) {
+      const reason = deps.remindersEnabled ? "REMINDER_WINDOW_EXPIRED" : "REMINDERS_DISABLED";
+      await updateEvent(deps, event.id, { whatsappStatus: "skipped", errorCode: reason,
+        emailStatus: "skipped", emailErrorCode: reason });
+      return "none";
+    }
+  }
+  if (appointment!.whatsappOptIn && !deps.whatsappEnabled && !event.whatsappAttemptedAt
+    && deps.deferWhatsappWhenDisabled !== false) {
+    return "deferred";
+  }
 
   // A reclaimed event with an external attempt has an ambiguous outcome. Never repeat WhatsApp.
   if (["accepted", "sent", "delivered", "read"].includes(event.whatsappStatus)) return "whatsapp";
@@ -439,7 +482,11 @@ function templateName(type: MetaAppointmentTemplateParams["eventType"]) {
 
 export async function processAppointmentNotification(id: number, deps = defaultDependencies): Promise<Channel> {
   if (!deps.processingEnabled) return "none";
-  const event = await deps.storage.claimAppointmentNotificationEvent(id);
+  const event = await deps.storage.claimAppointmentNotificationEvent(
+    id,
+    deps.now?.() ?? new Date(),
+    deps.remindersEnabled === true,
+  );
   return event ? processClaimedAppointmentNotification(event, deps) : "none";
 }
 
@@ -447,9 +494,12 @@ export async function processPendingAppointmentNotifications(deps = defaultDepen
   if (!deps.processingEnabled) return 0;
   let processed = 0;
   for (let count = 0; count < 25; count += 1) {
+    const now = deps.now?.() ?? new Date();
     const event = await deps.storage.claimNextAppointmentNotificationEvent(
-      new Date(Date.now() - leaseMs),
+      new Date(now.getTime() - leaseMs),
       deps.whatsappEnabled || deps.deferWhatsappWhenDisabled === false,
+      now,
+      deps.remindersEnabled === true,
     );
     if (!event) break;
     await processClaimedAppointmentNotification(event, deps);

@@ -58,6 +58,8 @@ interface SendRescheduleParams {
 
 export interface SendUpdatedParams extends SendRescheduleParams {}
 
+export interface SendReminderParams extends SendRescheduleParams {}
+
 export interface SendRecurringConfirmationParams {
   customerName: string;
   customerEmail: string;
@@ -183,6 +185,67 @@ export function buildAppointmentManagementLinks(cancelToken: string) {
     rescheduleUrl: `${publicUrl}/reschedule/${cancelToken}`,
     cancelUrl: `${publicUrl}/cancel/${cancelToken}`,
   };
+}
+
+export function buildAppointmentReminderEmail({
+  customerName,
+  barberName,
+  serviceName,
+  startTime,
+  cancelToken,
+  locationName = shopName,
+  locationAddress = shopAddress,
+  locationTimeZone = shopTimeZone,
+}: Omit<SendReminderParams, "customerEmail" | "idempotencyKey">) {
+  const { date, time } = formatAppointmentForEmail(startTime, locationTimeZone);
+  const { cancelUrl, rescheduleUrl } = buildAppointmentManagementLinks(cancelToken);
+  return {
+    subject: `Lembrete de marcação - ${locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #d4af37; text-align: center; margin-top: 0;">${escapeHtml(locationName)}</h2>
+        <p>Olá <strong>${escapeHtml(customerName)}</strong>,</p>
+        <p>Lembramos que tem uma marcação amanhã.</p>
+        <div style="background-color: #f9f9f9; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>Serviço:</strong> ${escapeHtml(serviceName)}</p>
+          <p style="margin: 6px 0;"><strong>Barbeiro:</strong> ${escapeHtml(barberName)}</p>
+          <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(date)}</p>
+          <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(time)}</p>
+          <p style="margin: 6px 0;"><strong>Morada:</strong> ${escapeHtml(locationAddress)}</p>
+        </div>
+        <p>Caso não consiga comparecer, pode reagendar ou cancelar a sua marcação.</p>
+        <p style="text-align: center; margin-top: 20px;">
+          <a href="${rescheduleUrl}" style="background-color: #d4af37; color: #111; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Reagendar</a>
+          <a href="${cancelUrl}" style="background-color: #ef4444; color: white; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 4px;">Cancelar</a>
+        </p>
+      </div>
+    `,
+  };
+}
+
+export async function sendAppointmentReminder(params: SendReminderParams): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; appointment reminder email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+  const content = buildAppointmentReminderEmail(params);
+  try {
+    const response = await resend.emails.send({
+      from: emailFrom,
+      to: params.customerEmail,
+      subject: content.subject,
+      html: content.html,
+    }, params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined);
+    if (response.error) {
+      console.error("Resend error while sending appointment reminder:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
+    }
+    if (!isProduction) console.log("Appointment reminder email sent.");
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
+  } catch (error) {
+    console.error("Error sending appointment reminder email:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
+  }
 }
 
 export function buildGoogleCalendarUrl({

@@ -45,6 +45,13 @@ remain pure calculations until their business date arrives. Future changes
 create an effective-dated version; past materialized occurrences keep their
 original values.
 
+Appointment day-before reminders use migration `0019` and the existing
+transactional notification outbox. They remain fail-closed until
+`APPOINTMENT_REMINDERS_ENABLED=true` is configured after the migration and the
+`appointment_reminder_day_before` Meta template have been validated. Scheduling
+uses the location timezone and never sends a retroactive reminder for a booking
+created after its intended previous-day delivery time.
+
 4. Arrancar a aplicacao:
 
 ```powershell

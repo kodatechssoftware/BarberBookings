@@ -67,7 +67,7 @@ import {
   insertExtraDefinitionSchema,
   updateExtraDefinitionSchema,
 } from "@shared/schema";
-import { eq, and, or, inArray, gte, gt, lt, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
+import { eq, and, or, inArray, gte, gt, lt, lte, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
 import { barberAvatarReference, INLINE_BARBER_AVATAR_PATTERN } from "./barber-avatars";
 import { normalizeEmail } from "@shared/customer-validation";
 import { supportedPhonesMatch } from "@shared/phone-countries";
@@ -78,7 +78,8 @@ export type AppointmentNotificationEventType =
   | "appointment_rescheduled"
   | "appointment_updated"
   | "appointment_cancelled"
-  | "appointment_recurring_confirmation";
+  | "appointment_recurring_confirmation"
+  | "appointment_reminder_day_before";
 
 export type AppointmentExtraInput = {
   extraId: number;
@@ -117,6 +118,14 @@ function normalizeCustomerNoteIdentity(identity: CustomerNoteIdentityInput) {
   };
 }
 
+// The application stores PostgreSQL `timestamp without time zone` values as
+// UTC-naive timestamps. Raw node-postgres Date parameters otherwise inherit
+// the database session timezone, which can move a due/lease boundary around
+// DST. Drizzle comparisons use the column encoder; raw SQL must be explicit.
+function utcTimestampParameter(value: Date) {
+  return value.toISOString().replace("T", " ").replace("Z", "");
+}
+
 function customerNoteIdentityWhere(identity: CustomerNoteIdentityInput) {
   const normalized = normalizeCustomerNoteIdentity(identity);
   const contacts: SQL[] = [];
@@ -149,6 +158,7 @@ export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "wh
   depositReason?: string | null;
   whatsappOptInAt?: Date | null;
   notificationEventType?: "appointment_confirmation";
+  reminderAvailableAt?: Date | null;
   seriesId?: string | null;
   seriesOccurrenceIndex?: number | null;
   extras?: AppointmentExtraInput[];
@@ -571,11 +581,13 @@ export interface IStorage {
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
+    reminderAvailableAt?: Date | null,
   ): Promise<UpdateAppointmentWithNotificationResult | undefined>;
   rescheduleAppointment(
     id: number,
     expectedRevision: number,
     startTime: Date,
+    reminderAvailableAt?: Date | null,
   ): Promise<RescheduleAppointmentResult | undefined>;
   cancelAppointment(
     id: number,
@@ -661,8 +673,13 @@ export interface IStorage {
   getAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
   getAppointmentNotificationEvents(appointmentId: number): Promise<AppointmentNotificationEvent[]>;
   getAppointmentNotificationEventByProviderId(providerMessageId: string): Promise<AppointmentNotificationEvent | undefined>;
-  claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined>;
-  claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn?: boolean): Promise<AppointmentNotificationEvent | undefined>;
+  claimAppointmentNotificationEvent(id: number, availableBefore?: Date, includeReminders?: boolean): Promise<AppointmentNotificationEvent | undefined>;
+  claimNextAppointmentNotificationEvent(
+    leaseBefore: Date,
+    includeUnattemptedWhatsappOptIn?: boolean,
+    availableBefore?: Date,
+    includeReminders?: boolean,
+  ): Promise<AppointmentNotificationEvent | undefined>;
   claimAppointmentNotificationWhatsappAttempt(id: number): Promise<AppointmentNotificationEvent | undefined>;
   claimAppointmentNotificationWebhookFallback(id: number): Promise<AppointmentNotificationEvent | undefined>;
   updateAppointmentNotificationEvent(
@@ -1231,8 +1248,8 @@ export class DatabaseStorage implements IStorage {
             appointment.extras ?? [],
           );
           await this.assertNoAppointmentConflict(tx, appointment);
-          const { notificationEventType, extras: _extras, ...appointmentValues } = appointment;
-          const notificationRevision = notificationEventType ? 1 : 0;
+          const { notificationEventType, reminderAvailableAt, extras: _extras, ...appointmentValues } = appointment;
+          const notificationRevision = notificationEventType || reminderAvailableAt ? 1 : 0;
           const [newAppointment] = await tx.insert(appointments).values({
             ...appointmentValues,
             notificationRevision,
@@ -1254,6 +1271,16 @@ export class DatabaseStorage implements IStorage {
               eventKey: `appointment:${newAppointment.id}:confirmation:${notificationRevision}`,
               appointmentStartTime: toAppointmentDate(newAppointment.startTime),
               newStartTime: toAppointmentDate(newAppointment.startTime),
+            });
+          }
+          if (reminderAvailableAt) {
+            await tx.insert(appointmentNotificationEvents).values({
+              appointmentId: newAppointment.id,
+              eventType: "appointment_reminder_day_before",
+              eventRevision: notificationRevision,
+              eventKey: `appointment:${newAppointment.id}:reminder_day_before:${notificationRevision}`,
+              availableAt: reminderAvailableAt,
+              appointmentStartTime: toAppointmentDate(newAppointment.startTime),
             });
           }
           createdAppointments.push(newAppointment);
@@ -1331,6 +1358,7 @@ export class DatabaseStorage implements IStorage {
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
+    reminderAvailableAt?: Date | null,
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1412,29 +1440,39 @@ export class DatabaseStorage implements IStorage {
           }).where(eq(appointmentSeries.id, current.seriesId));
         }
 
-        if (!createNotificationEvent || !changes.notificationEventType) {
-          return { appointment: updated, notificationEvent: null };
-        }
-        const eventLabel = changes.notificationEventType === "appointment_rescheduled"
-          ? "rescheduled"
-          : changes.notificationEventType === "appointment_updated"
-            ? "updated"
-            : "cancelled";
         const eventStartTime = toAppointmentDate(updated.startTime);
-        const [notificationEvent] = await tx.insert(appointmentNotificationEvents).values({
-          appointmentId: id,
-          eventType: changes.notificationEventType,
-          eventRevision: nextRevision,
-          eventKey: `appointment:${id}:${eventLabel}:${nextRevision}`,
-          appointmentStartTime: eventStartTime,
-          previousStartTime: changes.notificationEventType === "appointment_rescheduled"
-            || changes.notificationEventType === "appointment_cancelled"
-            ? toAppointmentDate(current.startTime)
-            : null,
-          newStartTime: changes.notificationEventType === "appointment_rescheduled"
-            ? eventStartTime
-            : null,
-        }).returning();
+        let notificationEvent: AppointmentNotificationEvent | null = null;
+        if (createNotificationEvent && changes.notificationEventType) {
+          const eventLabel = changes.notificationEventType === "appointment_rescheduled"
+            ? "rescheduled"
+            : changes.notificationEventType === "appointment_updated"
+              ? "updated"
+              : "cancelled";
+          [notificationEvent] = await tx.insert(appointmentNotificationEvents).values({
+            appointmentId: id,
+            eventType: changes.notificationEventType,
+            eventRevision: nextRevision,
+            eventKey: `appointment:${id}:${eventLabel}:${nextRevision}`,
+            appointmentStartTime: eventStartTime,
+            previousStartTime: changes.notificationEventType === "appointment_rescheduled"
+              || changes.notificationEventType === "appointment_cancelled"
+              ? toAppointmentDate(current.startTime)
+              : null,
+            newStartTime: changes.notificationEventType === "appointment_rescheduled"
+              ? eventStartTime
+              : null,
+          }).returning();
+        }
+        if (notificationContextChanged && reminderAvailableAt && updated.status === "booked") {
+          await tx.insert(appointmentNotificationEvents).values({
+            appointmentId: id,
+            eventType: "appointment_reminder_day_before",
+            eventRevision: nextRevision,
+            eventKey: `appointment:${id}:reminder_day_before:${nextRevision}`,
+            availableAt: reminderAvailableAt,
+            appointmentStartTime: eventStartTime,
+          });
+        }
         return { appointment: updated, notificationEvent };
       });
     } catch (error) {
@@ -1523,6 +1561,7 @@ export class DatabaseStorage implements IStorage {
     id: number,
     expectedRevision: number,
     startTime: Date,
+    reminderAvailableAt?: Date | null,
   ): Promise<RescheduleAppointmentResult | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1577,6 +1616,17 @@ export class DatabaseStorage implements IStorage {
           })
           .returning();
 
+        if (reminderAvailableAt) {
+          await tx.insert(appointmentNotificationEvents).values({
+            appointmentId: id,
+            eventType: "appointment_reminder_day_before",
+            eventRevision: nextRevision,
+            eventKey: `appointment:${id}:reminder_day_before:${nextRevision}`,
+            availableAt: reminderAvailableAt,
+            appointmentStartTime: startTime,
+          });
+        }
+
         return { appointment: updated, notificationEvent };
       });
     } catch (error) {
@@ -1611,15 +1661,25 @@ export class DatabaseStorage implements IStorage {
         for (let occurrenceIndex = 0; occurrenceIndex < request.appointments.length; occurrenceIndex += 1) {
           const appointment = request.appointments[occurrenceIndex];
           await this.assertNoAppointmentConflict(tx, appointment);
-          const { notificationEventType: _notificationEventType, ...values } = appointment;
+          const { notificationEventType: _notificationEventType, reminderAvailableAt, ...values } = appointment;
           const [created] = await tx.insert(appointments).values({
             ...values,
-            notificationRevision: 0,
+            notificationRevision: reminderAvailableAt ? 1 : 0,
             whatsappOptInAt: values.whatsappOptIn ? values.whatsappOptInAt ?? new Date() : null,
             seriesId: series.id,
             seriesOccurrenceIndex: occurrenceIndex,
           }).returning();
           createdAppointments.push(created);
+          if (reminderAvailableAt) {
+            await tx.insert(appointmentNotificationEvents).values({
+              appointmentId: created.id,
+              eventType: "appointment_reminder_day_before",
+              eventRevision: created.notificationRevision,
+              eventKey: `appointment:${created.id}:reminder_day_before:${created.notificationRevision}`,
+              availableAt: reminderAvailableAt,
+              appointmentStartTime: toAppointmentDate(created.startTime),
+            });
+          }
         }
         const payloadSnapshot = buildRecurringNotificationSnapshot(request, createdAppointments);
         const [notificationEvent] = await tx.insert(appointmentNotificationEvents).values({
@@ -2042,25 +2102,40 @@ export class DatabaseStorage implements IStorage {
     return event;
   }
 
-  async claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
+  async claimAppointmentNotificationEvent(
+    id: number,
+    availableBefore = new Date(),
+    includeReminders = true,
+  ): Promise<AppointmentNotificationEvent | undefined> {
     const [event] = await db
       .update(appointmentNotificationEvents)
       .set({ processingStartedAt: new Date(), updatedAt: new Date() })
       .where(and(
         eq(appointmentNotificationEvents.id, id),
         isNull(appointmentNotificationEvents.processingStartedAt),
+        lte(appointmentNotificationEvents.availableAt, availableBefore),
+        includeReminders
+          ? sql`true`
+          : sql`${appointmentNotificationEvents.eventType} <> 'appointment_reminder_day_before'`,
       ))
       .returning();
     return event;
   }
 
-  async claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn = true): Promise<AppointmentNotificationEvent | undefined> {
+  async claimNextAppointmentNotificationEvent(
+    leaseBefore: Date,
+    includeUnattemptedWhatsappOptIn = true,
+    availableBefore = new Date(),
+    includeReminders = true,
+  ): Promise<AppointmentNotificationEvent | undefined> {
     return db.transaction(async (tx) => {
       const candidates = await tx.execute(sql`
         SELECT ane.id FROM ${appointmentNotificationEvents} AS ane
         LEFT JOIN ${appointments} AS appt ON appt.id = ane.appointment_id
         WHERE ane.processing_completed_at IS NULL
-          AND (ane.processing_started_at IS NULL OR ane.processing_started_at < ${leaseBefore})
+          AND ane.available_at <= ${utcTimestampParameter(availableBefore)}::timestamp
+          AND (${includeReminders} OR ane.event_type <> 'appointment_reminder_day_before')
+          AND (ane.processing_started_at IS NULL OR ane.processing_started_at < ${utcTimestampParameter(leaseBefore)}::timestamp)
           AND (ane.series_id IS NOT NULL OR ${includeUnattemptedWhatsappOptIn} OR appt.whatsapp_opt_in = false OR ane.whatsapp_attempted_at IS NOT NULL)
         ORDER BY ane.id
         FOR UPDATE OF ane SKIP LOCKED
@@ -2737,7 +2812,7 @@ export class MemoryStorage implements IStorage {
           appointment.locationId,
           appointment.extras ?? [],
         );
-        const notificationRevision = appointment.notificationEventType ? 1 : 0;
+        const notificationRevision = appointment.notificationEventType || appointment.reminderAvailableAt ? 1 : 0;
         const newAppointment: Appointment = {
           id: this.nextIds.appointment++,
           locationId: appointment.locationId ?? 1,
@@ -2782,6 +2857,7 @@ export class MemoryStorage implements IStorage {
             eventType: appointment.notificationEventType,
             eventRevision: notificationRevision,
             eventKey: `appointment:${newAppointment.id}:confirmation:${notificationRevision}`,
+            availableAt: now,
             appointmentStartTime: toAppointmentDate(newAppointment.startTime),
             previousStartTime: null,
             newStartTime: toAppointmentDate(newAppointment.startTime),
@@ -2793,6 +2869,23 @@ export class MemoryStorage implements IStorage {
             payloadSnapshot: null,
             emailStatus: "not_needed", emailProviderMessageId: null, emailErrorCode: null,
             emailAttemptedAt: null, emailSentAt: null, createdAt: now, updatedAt: now,
+          });
+        }
+        if (appointment.reminderAvailableAt) {
+          const now = new Date();
+          this.appointmentNotificationEvents.push({
+            id: this.nextIds.appointmentNotificationEvent++, appointmentId: newAppointment.id, seriesId: null,
+            eventType: "appointment_reminder_day_before", eventRevision: notificationRevision,
+            eventKey: `appointment:${newAppointment.id}:reminder_day_before:${notificationRevision}`,
+            availableAt: appointment.reminderAvailableAt,
+            appointmentStartTime: toAppointmentDate(newAppointment.startTime),
+            previousStartTime: null, newStartTime: null, provider: null, templateName: null,
+            whatsappStatus: "pending", providerMessageId: null, providerStatus: null, responseStatus: null,
+            errorCode: null, processingStartedAt: null, processingCompletedAt: null,
+            whatsappAttemptedAt: null, whatsappAcceptedAt: null, sentAt: null, deliveredAt: null,
+            readAt: null, failedAt: null, lastProviderTimestamp: null, webhookFallbackClaimedAt: null,
+            payloadSnapshot: null, emailStatus: "not_needed", emailProviderMessageId: null,
+            emailErrorCode: null, emailAttemptedAt: null, emailSentAt: null, createdAt: now, updatedAt: now,
           });
         }
         createdAppointments.push(newAppointment);
@@ -2838,7 +2931,8 @@ export class MemoryStorage implements IStorage {
           manualOutsideHours: appointment.manualOutsideHours ?? false,
           paymentMethod: appointment.paymentMethod ?? "pending", cancelToken: appointment.cancelToken,
           cancelledAt: null, depositRequired: appointment.depositRequired ?? false,
-          depositReason: appointment.depositReason ?? null, rescheduleRevision: 0, notificationRevision: 0,
+          depositReason: appointment.depositReason ?? null, rescheduleRevision: 0,
+          notificationRevision: appointment.reminderAvailableAt ? 1 : 0,
           whatsappOptIn: appointment.whatsappOptIn ?? false,
           whatsappOptInAt: appointment.whatsappOptIn ? appointment.whatsappOptInAt ?? now : null,
           seriesId: series.id, seriesOccurrenceIndex: occurrenceIndex, createdAt: now,
@@ -2846,12 +2940,28 @@ export class MemoryStorage implements IStorage {
         this.assertNoAppointmentConflict(created);
         this.appointments.push(created);
         createdAppointments.push(created);
+        if (appointment.reminderAvailableAt) {
+          this.appointmentNotificationEvents.push({
+            id: this.nextIds.appointmentNotificationEvent++, appointmentId: created.id, seriesId: null,
+            eventType: "appointment_reminder_day_before", eventRevision: created.notificationRevision,
+            eventKey: `appointment:${created.id}:reminder_day_before:${created.notificationRevision}`,
+            availableAt: appointment.reminderAvailableAt, appointmentStartTime: toAppointmentDate(created.startTime),
+            previousStartTime: null, newStartTime: null, provider: null, templateName: null,
+            whatsappStatus: "pending", providerMessageId: null, providerStatus: null, responseStatus: null,
+            errorCode: null, processingStartedAt: null, processingCompletedAt: null,
+            whatsappAttemptedAt: null, whatsappAcceptedAt: null, sentAt: null, deliveredAt: null,
+            readAt: null, failedAt: null, lastProviderTimestamp: null, webhookFallbackClaimedAt: null,
+            payloadSnapshot: null, emailStatus: "not_needed", emailProviderMessageId: null,
+            emailErrorCode: null, emailAttemptedAt: null, emailSentAt: null, createdAt: now, updatedAt: now,
+          });
+        }
       }
       const payloadSnapshot = buildRecurringNotificationSnapshot(request, createdAppointments);
       const notificationEvent: AppointmentNotificationEvent = {
         id: this.nextIds.appointmentNotificationEvent++, appointmentId: null, seriesId: series.id,
         eventType: "appointment_recurring_confirmation", eventRevision: 1,
-        eventKey: `series:${series.id}:recurring_confirmation:1`, appointmentStartTime: request.series.firstStartTime,
+        eventKey: `series:${series.id}:recurring_confirmation:1`, availableAt: now,
+        appointmentStartTime: request.series.firstStartTime,
         previousStartTime: null, newStartTime: null, provider: null, templateName: null, whatsappStatus: "pending",
         providerMessageId: null, providerStatus: null, responseStatus: null, errorCode: null,
         processingStartedAt: null, processingCompletedAt: null, whatsappAttemptedAt: null, whatsappAcceptedAt: null,
@@ -2906,6 +3016,7 @@ export class MemoryStorage implements IStorage {
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
+    reminderAvailableAt?: Date | null,
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
@@ -2962,32 +3073,47 @@ export class MemoryStorage implements IStorage {
       const series = this.appointmentSeries.find((item) => item.id === current.seriesId);
       if (series) { series.notificationRevision += 1; series.updatedAt = new Date(); }
     }
-    if (!createNotificationEvent || !changes.notificationEventType) {
-      return { appointment: updated, notificationEvent: null };
-    }
     const now = new Date();
-    const eventLabel = changes.notificationEventType === "appointment_rescheduled"
-      ? "rescheduled"
-      : changes.notificationEventType === "appointment_updated" ? "updated" : "cancelled";
-    const notificationEvent: AppointmentNotificationEvent = {
-      id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
-      eventType: changes.notificationEventType, eventRevision: updated.notificationRevision,
-      eventKey: `appointment:${id}:${eventLabel}:${updated.notificationRevision}`,
-      appointmentStartTime: toAppointmentDate(updated.startTime),
-      previousStartTime: changes.notificationEventType === "appointment_rescheduled"
-        || changes.notificationEventType === "appointment_cancelled"
-        ? toAppointmentDate(current.startTime) : null,
-      newStartTime: changes.notificationEventType === "appointment_rescheduled"
-        ? toAppointmentDate(updated.startTime) : null,
-      provider: null, templateName: null, whatsappStatus: "pending", providerMessageId: null,
-      providerStatus: null, responseStatus: null, errorCode: null, processingStartedAt: null,
-      processingCompletedAt: null, whatsappAttemptedAt: null, whatsappAcceptedAt: null,
-      sentAt: null, deliveredAt: null, readAt: null, failedAt: null, lastProviderTimestamp: null,
-      webhookFallbackClaimedAt: null, payloadSnapshot: null, emailStatus: "not_needed",
-      emailProviderMessageId: null, emailErrorCode: null, emailAttemptedAt: null,
-      emailSentAt: null, createdAt: now, updatedAt: now,
-    };
-    this.appointmentNotificationEvents.push(notificationEvent);
+    let notificationEvent: AppointmentNotificationEvent | null = null;
+    if (createNotificationEvent && changes.notificationEventType) {
+      const eventLabel = changes.notificationEventType === "appointment_rescheduled"
+        ? "rescheduled"
+        : changes.notificationEventType === "appointment_updated" ? "updated" : "cancelled";
+      notificationEvent = {
+        id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
+        eventType: changes.notificationEventType, eventRevision: updated.notificationRevision,
+        eventKey: `appointment:${id}:${eventLabel}:${updated.notificationRevision}`, availableAt: now,
+        appointmentStartTime: toAppointmentDate(updated.startTime),
+        previousStartTime: changes.notificationEventType === "appointment_rescheduled"
+          || changes.notificationEventType === "appointment_cancelled"
+          ? toAppointmentDate(current.startTime) : null,
+        newStartTime: changes.notificationEventType === "appointment_rescheduled"
+          ? toAppointmentDate(updated.startTime) : null,
+        provider: null, templateName: null, whatsappStatus: "pending", providerMessageId: null,
+        providerStatus: null, responseStatus: null, errorCode: null, processingStartedAt: null,
+        processingCompletedAt: null, whatsappAttemptedAt: null, whatsappAcceptedAt: null,
+        sentAt: null, deliveredAt: null, readAt: null, failedAt: null, lastProviderTimestamp: null,
+        webhookFallbackClaimedAt: null, payloadSnapshot: null, emailStatus: "not_needed",
+        emailProviderMessageId: null, emailErrorCode: null, emailAttemptedAt: null,
+        emailSentAt: null, createdAt: now, updatedAt: now,
+      };
+      this.appointmentNotificationEvents.push(notificationEvent);
+    }
+    if (notificationContextChanged && reminderAvailableAt && updated.status === "booked") {
+      this.appointmentNotificationEvents.push({
+        id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
+        eventType: "appointment_reminder_day_before", eventRevision: updated.notificationRevision,
+        eventKey: `appointment:${id}:reminder_day_before:${updated.notificationRevision}`,
+        availableAt: reminderAvailableAt, appointmentStartTime: toAppointmentDate(updated.startTime),
+        previousStartTime: null, newStartTime: null, provider: null, templateName: null,
+        whatsappStatus: "pending", providerMessageId: null, providerStatus: null, responseStatus: null,
+        errorCode: null, processingStartedAt: null, processingCompletedAt: null,
+        whatsappAttemptedAt: null, whatsappAcceptedAt: null, sentAt: null, deliveredAt: null,
+        readAt: null, failedAt: null, lastProviderTimestamp: null, webhookFallbackClaimedAt: null,
+        payloadSnapshot: null, emailStatus: "not_needed", emailProviderMessageId: null,
+        emailErrorCode: null, emailAttemptedAt: null, emailSentAt: null, createdAt: now, updatedAt: now,
+      });
+    }
     return { appointment: updated, notificationEvent };
   }
 
@@ -2995,6 +3121,7 @@ export class MemoryStorage implements IStorage {
     id: number,
     expectedRevision: number,
     startTime: Date,
+    reminderAvailableAt?: Date | null,
   ): Promise<RescheduleAppointmentResult | undefined> {
     const index = this.appointments.findIndex((appointment) => appointment.id === id);
     if (index === -1) return undefined;
@@ -3022,6 +3149,7 @@ export class MemoryStorage implements IStorage {
       eventType: "appointment_rescheduled",
       eventRevision: updated.notificationRevision,
       eventKey: `appointment:${id}:rescheduled:${updated.notificationRevision}`,
+      availableAt: now,
       appointmentStartTime: startTime,
       previousStartTime: toAppointmentDate(current.startTime),
       newStartTime: startTime,
@@ -3052,6 +3180,17 @@ export class MemoryStorage implements IStorage {
       updatedAt: now,
     };
     this.appointmentNotificationEvents.push(notificationEvent);
+    if (reminderAvailableAt) {
+      this.appointmentNotificationEvents.push({
+        ...notificationEvent,
+        id: this.nextIds.appointmentNotificationEvent++,
+        eventType: "appointment_reminder_day_before",
+        eventKey: `appointment:${id}:reminder_day_before:${updated.notificationRevision}`,
+        availableAt: reminderAvailableAt,
+        previousStartTime: null,
+        newStartTime: null,
+      });
+    }
     return { appointment: updated, notificationEvent };
   }
 
@@ -3077,6 +3216,7 @@ export class MemoryStorage implements IStorage {
       id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
       eventType: "appointment_cancelled", eventRevision: revision,
       eventKey: `appointment:${id}:cancelled:${revision}`,
+      availableAt: now,
       appointmentStartTime: toAppointmentDate(current.startTime),
       previousStartTime: toAppointmentDate(current.startTime), newStartTime: null,
       provider: null, templateName: null, whatsappStatus: "pending",
@@ -3510,8 +3650,14 @@ export class MemoryStorage implements IStorage {
     return this.appointmentNotificationEvents.find((event) => event.providerMessageId === providerMessageId);
   }
 
-  async claimAppointmentNotificationEvent(id: number): Promise<AppointmentNotificationEvent | undefined> {
-    const index = this.appointmentNotificationEvents.findIndex((event) => event.id === id);
+  async claimAppointmentNotificationEvent(
+    id: number,
+    availableBefore = new Date(),
+    includeReminders = true,
+  ): Promise<AppointmentNotificationEvent | undefined> {
+    const index = this.appointmentNotificationEvents.findIndex((event) => event.id === id
+      && event.availableAt <= availableBefore
+      && (includeReminders || event.eventType !== "appointment_reminder_day_before"));
     if (index === -1 || this.appointmentNotificationEvents[index].processingStartedAt) return undefined;
     const now = new Date();
     this.appointmentNotificationEvents[index] = {
@@ -3522,9 +3668,16 @@ export class MemoryStorage implements IStorage {
     return this.appointmentNotificationEvents[index];
   }
 
-  async claimNextAppointmentNotificationEvent(leaseBefore: Date, includeUnattemptedWhatsappOptIn = true): Promise<AppointmentNotificationEvent | undefined> {
+  async claimNextAppointmentNotificationEvent(
+    leaseBefore: Date,
+    includeUnattemptedWhatsappOptIn = true,
+    availableBefore = new Date(),
+    includeReminders = true,
+  ): Promise<AppointmentNotificationEvent | undefined> {
     const event = this.appointmentNotificationEvents.find((candidate) =>
       !candidate.processingCompletedAt
+      && candidate.availableAt <= availableBefore
+      && (includeReminders || candidate.eventType !== "appointment_reminder_day_before")
       && (!candidate.processingStartedAt || candidate.processingStartedAt < leaseBefore)
       && (candidate.seriesId !== null || includeUnattemptedWhatsappOptIn
         || !this.appointments.find((appointment) => appointment.id === candidate.appointmentId)?.whatsappOptIn

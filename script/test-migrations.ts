@@ -34,6 +34,7 @@ const preExtrasMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbo
 const preCustomerNoteIdentityMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-customer-note-identity-"));
 const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-voucher-payment-"));
 const recurringOnlyMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-recurring-only-"));
+const reminderOnlyMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-reminder-only-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 for (const file of [
   "0001_multi_location_foundation.sql",
@@ -91,6 +92,10 @@ for (const file of [
 await copyFile(
   path.join(migrationsDirectory, "0018_recurring_expense_management.sql"),
   path.join(recurringOnlyMigrationsDirectory, "0018_recurring_expense_management.sql"),
+);
+await copyFile(
+  path.join(migrationsDirectory, "0019_appointment_reminder_schedule.sql"),
+  path.join(reminderOnlyMigrationsDirectory, "0019_appointment_reminder_schedule.sql"),
 );
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -211,8 +216,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 11,
-    "a fresh empty application schema must apply migrations 0001 through 0009, 0011 and 0018 without requiring 0010 or 0012 through 0017");
+  assert.equal(freshRun.applied.length, 12,
+    "a fresh empty application schema must apply migrations 0001 through 0009, 0011, 0018 and 0019 without requiring 0010 or 0012 through 0017");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -223,13 +228,20 @@ try {
   `, [freshSchema])).rows;
   assert.ok(freshExtrasColumns.some((column) => column.column_name === "pricing_mode" && column.is_nullable === "NO"));
   assert.ok(freshExtrasColumns.some((column) => column.column_name === "amount_cents" && column.is_nullable === "YES"));
+  const freshReminderColumn = (await pool.query(`
+    SELECT is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'appointment_notification_events' AND column_name = 'available_at'
+  `, [freshSchema])).rows[0];
+  assert.equal(freshReminderColumn?.is_nullable, "NO");
+  assert.match(freshReminderColumn?.column_default || "", /now\(\)/);
   const secondFreshRun = await runSchemaMigrations(pool, {
     schemaName: freshSchema,
     environment,
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 11);
+  assert.equal(secondFreshRun.alreadyApplied, 12);
 
   const recurringRollbackSchema = "recurring_expense_rollback_fixture";
   await pool.query(`
@@ -251,6 +263,36 @@ try {
     FROM "${recurringRollbackSchema}".schema_migrations
     WHERE name = '0018_recurring_expense_management.sql'
   `)).rows[0].count), 0, "a failed 0018 migration must not be recorded");
+
+  const reminderRollbackSchema = "appointment_reminder_rollback_fixture";
+  await pool.query(`
+    CREATE SCHEMA "${reminderRollbackSchema}";
+    CREATE TABLE "${reminderRollbackSchema}".appointment_notification_events (
+      id integer PRIMARY KEY,
+      created_at timestamp,
+      processing_completed_at timestamp,
+      available_at integer
+    );
+  `);
+  await assert.rejects(
+    runSchemaMigrations(pool, {
+      schemaName: reminderRollbackSchema,
+      environment,
+      migrationsDirectory: reminderOnlyMigrationsDirectory,
+    }),
+    /available_at|COALESCE|timestamp/i,
+    "migration 0019 must fail transactionally when available_at has an incompatible legacy type",
+  );
+  assert.equal((await pool.query(`
+    SELECT data_type
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'appointment_notification_events' AND column_name = 'available_at'
+  `, [reminderRollbackSchema])).rows[0]?.data_type, "integer");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM "${reminderRollbackSchema}".schema_migrations
+    WHERE name = '0019_appointment_reminder_schedule.sql'
+  `)).rows[0].count), 0, "a failed 0019 migration must not be recorded");
   assert.equal(Number((await pool.query(`
     SELECT count(*) AS count
     FROM information_schema.tables
@@ -355,6 +397,15 @@ try {
         is_occurrence_override: _isOverride,
         ...expense
       }) => expense),
+    };
+  }
+  function withoutReminderScheduleColumn(data: Awaited<ReturnType<typeof captureReleaseData>>) {
+    return {
+      ...data,
+      notificationEvents: data.notificationEvents.map(({
+        available_at: _availableAt,
+        ...event
+      }) => event),
     };
   }
   const releaseDataBeforeCategoryMigration = await captureReleaseData();
@@ -745,14 +796,20 @@ try {
   assert.deepEqual(voucherMigrationRun.applied, [
     "0011_appointment_voucher_payment.sql",
     "0018_recurring_expense_management.sql",
+    "0019_appointment_reminder_schedule.sql",
   ]);
   assert.equal(voucherMigrationRun.alreadyApplied, 9);
   const releaseDataAfterReleaseMigrations = await captureReleaseData();
   assert.deepEqual(
-    withoutRecurringExpenseColumns(releaseDataAfterReleaseMigrations),
-    withoutRecurringExpenseColumns(releaseDataBeforeVoucherMigration),
-    "migrations 0011 and 0018 must preserve every legacy operational value",
+    withoutReminderScheduleColumn(withoutRecurringExpenseColumns(releaseDataAfterReleaseMigrations)),
+    withoutReminderScheduleColumn(withoutRecurringExpenseColumns(releaseDataBeforeVoucherMigration)),
+    "migrations 0011, 0018 and 0019 must preserve every legacy operational value",
   );
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM ${table("appointment_notification_events")}
+    WHERE available_at IS NULL OR available_at <> created_at
+  `)).rows[0].count), 0, "migration 0019 must backfill legacy events from created_at without creating events");
   const paymentConstraintDefinition = String((await pool.query(`
     SELECT pg_get_constraintdef(oid) AS definition
     FROM pg_constraint
@@ -768,7 +825,7 @@ try {
   await pool.query(`UPDATE ${table("appointments")} SET payment_method = 'pending' WHERE id = 1`);
   const secondVoucherMigrationRun = await runSchemaMigrations(pool, { schemaName: schema, environment, migrationsDirectory });
   assert.equal(secondVoucherMigrationRun.applied.length, 0);
-  assert.equal(secondVoucherMigrationRun.alreadyApplied, 11);
+  assert.equal(secondVoucherMigrationRun.alreadyApplied, 12);
 
   process.env.DATABASE_URL = databaseUrl;
   process.env.DATABASE_SCHEMA = schema;
@@ -800,11 +857,79 @@ try {
     releaseDataAfterReleaseMigrations,
     "startup database guards and representative application reads must not mutate operational data",
   );
+  const reminderDue = new Date("2034-05-09T10:00:00.000Z");
+  const reminderAppointment = await databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id),
+    barberId: 1,
+    serviceId: 1,
+    startTime: new Date("2034-05-10T10:00:00.000Z"),
+    customerName: "Reminder claim fixture",
+    customerEmail: "reminder@example.test",
+    customerPhone: "+351910000099",
+    whatsappOptIn: true,
+    cancelToken: "reminder-claim-fixture",
+    durationMinutes: 30,
+    reminderAvailableAt: reminderDue,
+  });
+  const reminderEventId = Number((await pool.query(`
+    SELECT id FROM ${table("appointment_notification_events")}
+    WHERE appointment_id = $1 AND event_type = 'appointment_reminder_day_before'
+  `, [reminderAppointment.id])).rows[0].id);
+  assert.equal(await databaseStorage.claimAppointmentNotificationEvent(
+    reminderEventId,
+    new Date(reminderDue.getTime() - 1),
+    true,
+  ), undefined, "a PostgreSQL reminder must not be claimable before available_at");
+  const concurrentReminderClaims = await Promise.all([
+    databaseStorage.claimAppointmentNotificationEvent(reminderEventId, reminderDue, true),
+    databaseStorage.claimAppointmentNotificationEvent(reminderEventId, reminderDue, true),
+  ]);
+  assert.equal(concurrentReminderClaims.filter(Boolean).length, 1,
+    "two PostgreSQL workers must have exactly one reminder claim winner");
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE id = $1`, [reminderAppointment.id]);
+  await pool.query(`
+    UPDATE ${table("appointment_notification_events")}
+    SET processing_completed_at = COALESCE(processing_completed_at, now())
+    WHERE processing_completed_at IS NULL
+  `);
+
+  const workerReminderAppointment = await databaseStorage.createAppointment({
+    locationId: Number(defaultLocation.id),
+    barberId: 1,
+    serviceId: 1,
+    startTime: new Date("2034-05-17T10:00:00.000Z"),
+    customerName: "Reminder worker fixture",
+    customerEmail: "reminder-worker@example.test",
+    customerPhone: "+351910000098",
+    whatsappOptIn: true,
+    cancelToken: "reminder-worker-fixture",
+    durationMinutes: 30,
+    reminderAvailableAt: new Date("2034-05-16T10:00:00.000Z"),
+  });
+  assert.equal(await databaseStorage.claimNextAppointmentNotificationEvent(
+    new Date("2034-05-01T00:00:00.000Z"),
+    true,
+    new Date("2034-05-16T10:00:00.000Z"),
+    false,
+  ), undefined, "a disabled reminder feature must leave scheduled reminder events unclaimed");
+  const concurrentWorkerClaims = await Promise.all([
+    databaseStorage.claimNextAppointmentNotificationEvent(
+      new Date("2034-05-01T00:00:00.000Z"), true, new Date("2034-05-16T10:00:00.000Z"), true,
+    ),
+    databaseStorage.claimNextAppointmentNotificationEvent(
+      new Date("2034-05-01T00:00:00.000Z"), true, new Date("2034-05-16T10:00:00.000Z"), true,
+    ),
+  ]);
+  assert.equal(concurrentWorkerClaims.filter(Boolean).length, 1,
+    "two PostgreSQL outbox workers must have exactly one scheduled reminder winner");
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE id = $1`, [workerReminderAppointment.id]);
+
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
     "locations_single_default_idx", "appointments_location_id_idx", "barber_locations_location_idx",
     "service_locations_location_idx", "whatsapp_messages_provider_message_id_idx",
     "appointment_notification_events_event_key_idx", "appointment_notification_events_pending_idx",
+    "appointment_notification_events_due_pending_idx",
     "meta_webhook_receipts_receipt_key_idx", "meta_webhook_receipts_provider_message_id_idx",
     "appointments_series_occurrence_idx", "appointment_notification_events_series_idx",
     "service_categories_name_ci_idx", "service_categories_active_order_idx", "services_category_id_idx",
@@ -1411,7 +1536,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0011/0018 without 0010 or 0012-0017, recurring-expense schema, voucher payments, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007/0008/0009/0011/0018/0019 without 0010 or 0012-0017, recurring-expense schema, scheduled notification outbox, voucher payments, customer-note identities, Extra constraints, snapshots, financial engine, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -1424,4 +1549,5 @@ try {
   await rm(preCustomerNoteIdentityMigrationsDirectory, { recursive: true, force: true });
   await rm(preVoucherPaymentMigrationsDirectory, { recursive: true, force: true });
   await rm(recurringOnlyMigrationsDirectory, { recursive: true, force: true });
+  await rm(reminderOnlyMigrationsDirectory, { recursive: true, force: true });
 }
