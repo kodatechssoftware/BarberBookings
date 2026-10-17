@@ -752,6 +752,7 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   eventType: text("event_type").notNull(),
   eventRevision: integer("event_revision").notNull(),
   eventKey: text("event_key").notNull(),
+  availableAt: timestamp("available_at").defaultNow().notNull(),
   appointmentStartTime: timestamp("appointment_start_time").notNull(),
   previousStartTime: timestamp("previous_start_time"),
   newStartTime: timestamp("new_start_time"),
@@ -783,6 +784,9 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
 }, (table) => ({
   eventKeyIdx: uniqueIndex("appointment_notification_events_event_key_idx").on(table.eventKey),
   providerMessageIdIdx: uniqueIndex("appointment_notification_events_provider_message_id_idx").on(table.providerMessageId),
+  duePendingIdx: index("appointment_notification_events_due_pending_idx")
+    .on(table.availableAt, table.id)
+    .where(sql`${table.processingCompletedAt} IS NULL`),
   subjectCheck: check("appointment_notification_events_subject_check", sql`num_nonnulls(${table.appointmentId}, ${table.seriesId}) = 1`),
 }));
 
