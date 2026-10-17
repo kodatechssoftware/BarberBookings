@@ -410,7 +410,7 @@ export async function sendMetaInboundAutoReply(recipient: string): Promise<MetaT
 
 export type MetaAppointmentTemplateParams = {
   recipient: string;
-  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_updated" | "appointment_cancelled" | "appointment_recurring_confirmation";
+  eventType: "appointment_confirmation" | "appointment_rescheduled" | "appointment_updated" | "appointment_cancelled" | "appointment_recurring_confirmation" | "appointment_reminder_day_before";
   customerName: string;
   locationName: string;
   serviceName: string;
@@ -450,6 +450,11 @@ const metaTemplateConfig = {
     languageEnv: "META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE_LANGUAGE",
     defaultName: "appointment_recurring_confirmation_v1",
   },
+  appointment_reminder_day_before: {
+    nameEnv: "META_WHATSAPP_REMINDER_DAY_BEFORE_TEMPLATE",
+    languageEnv: "META_WHATSAPP_REMINDER_DAY_BEFORE_TEMPLATE_LANGUAGE",
+    defaultName: "appointment_reminder_day_before",
+  },
 } as const;
 
 export function getMetaAppointmentTemplateName(
@@ -484,7 +489,7 @@ export function buildMetaAppointmentTemplateComponents(params: MetaAppointmentTe
         date, time, params.address || ""];
   return [
     { type: "body", parameters: bodyValues.map((text) => ({ type: "text", text })) },
-    ...(["appointment_confirmation", "appointment_rescheduled", "appointment_updated"].includes(params.eventType) ? [{
+    ...(["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_reminder_day_before"].includes(params.eventType) ? [{
       type: "button", sub_type: "url", index: "0",
       parameters: [{ type: "text", text: params.managementToken || "" }],
     }, {

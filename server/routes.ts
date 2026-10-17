@@ -33,10 +33,12 @@ import {
 import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
 import {
   appointmentNotificationEventsEnabled,
+  appointmentRemindersEnabled,
   bookingSlotIntervalMinutes,
   isDevelopmentDeployment,
   recurringExpensesEnabled,
 } from "./runtime-environment";
+import { getAppointmentReminderAvailableAt } from "./appointment-reminders";
 import {
   calculateAppointmentsFinancials,
   createDefaultCompensationRule as defaultCompensationRule,
@@ -3807,6 +3809,9 @@ export async function registerRoutes(
         depositRequired: false,
         depositReason: null,
         notificationEventType: appointmentNotificationEventsEnabled ? "appointment_confirmation" : undefined,
+        reminderAvailableAt: appointmentRemindersEnabled
+          ? getAppointmentReminderAvailableAt(input.startTime, requestLocationTimeZone(res))
+          : null,
       });
       await recordAuditLog(req, {
         actorType: "client",
@@ -4240,6 +4245,9 @@ export async function registerRoutes(
           notificationEventType: appointmentNotificationEventsEnabled && isManualBooking && !hasEndedManualBooking && (!isRecurring || occurrences === 1)
             ? "appointment_confirmation"
             : undefined,
+          reminderAvailableAt: appointmentRemindersEnabled && isManualBooking && !hasEndedManualBooking
+            ? getAppointmentReminderAvailableAt(currentStart, requestLocationTimeZone(res))
+            : null,
           extras: isManualBooking && !isRecurring ? requestedExtras : undefined,
         });
       }
@@ -4700,6 +4708,12 @@ export async function registerRoutes(
         appointmentNotificationEventsEnabled,
         undefined,
         hasExtrasPatch ? extras : undefined,
+        appointmentRemindersEnabled && (updateData.status ?? currentApp.status) === "booked"
+          ? getAppointmentReminderAvailableAt(
+              new Date(updateData.startTime ?? currentApp.startTime),
+              requestLocationTimeZone(res),
+            )
+          : null,
       );
       const updated = updateResult?.appointment;
       if (updated) {
@@ -4956,7 +4970,14 @@ export async function registerRoutes(
       }
 
       const result = appointmentNotificationEventsEnabled
-        ? await storage.rescheduleAppointment(appointment.id, appointment.rescheduleRevision, startTime)
+        ? await storage.rescheduleAppointment(
+            appointment.id,
+            appointment.rescheduleRevision,
+            startTime,
+            appointmentRemindersEnabled
+              ? getAppointmentReminderAvailableAt(startTime, location.timezone || SHOP_TIME_ZONE)
+              : null,
+          )
         : null;
       const updated = appointmentNotificationEventsEnabled
         ? result?.appointment

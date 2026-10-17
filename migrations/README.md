@@ -46,6 +46,13 @@ by financial summaries and Excel exports. Existing `once`, `weekly`, and
 are never promoted automatically to active series because the previous model
 did not store sufficient schedule intent.
 
+Migration `0019_appointment_reminder_schedule.sql` adds the due timestamp used
+by the existing transactional appointment-notification outbox. Existing events
+are backfilled from their creation timestamp and remain immediately eligible;
+no appointment or notification is created by the migration. Day-before
+reminders remain disabled until `APPOINTMENT_REMINDERS_ENABLED=true` and the
+approved Meta template are configured for the environment.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification
