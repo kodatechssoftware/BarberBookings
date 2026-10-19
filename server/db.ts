@@ -238,10 +238,63 @@ export async function ensureAppointmentOverlapProtection() {
 
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
   const tableName = "appointments";
+  const occupancyPeriodsTableName = "appointment_occupancy_periods";
   const constraintName = "appointments_no_booked_overlap";
   const qualifiedTableName = `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`;
 
   await pool.query("CREATE EXTENSION IF NOT EXISTS btree_gist");
+
+  const occupancyPeriodsTable = await pool.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_class table_info
+        JOIN pg_namespace namespace_info ON namespace_info.oid = table_info.relnamespace
+        WHERE namespace_info.nspname = $1
+          AND table_info.relname = $2
+          AND table_info.relkind IN ('r', 'p')
+      ) AS exists
+    `,
+    [schemaName, occupancyPeriodsTableName],
+  );
+
+  if (occupancyPeriodsTable.rows[0]?.exists) {
+    const occupancyConstraint = await pool.query<{
+      definition: string;
+      constraintType: string;
+      deferrable: boolean;
+      initiallyDeferred: boolean;
+    }>(
+      `
+        SELECT pg_get_constraintdef(constraint_info.oid) AS definition,
+               constraint_info.contype AS "constraintType",
+               constraint_info.condeferrable AS deferrable,
+               constraint_info.condeferred AS "initiallyDeferred"
+        FROM pg_constraint constraint_info
+        JOIN pg_class table_info ON table_info.oid = constraint_info.conrelid
+        JOIN pg_namespace namespace_info ON namespace_info.oid = table_info.relnamespace
+        WHERE constraint_info.conname = $1
+          AND namespace_info.nspname = $2
+          AND table_info.relname = $3
+        LIMIT 1
+      `,
+      [constraintName, schemaName, occupancyPeriodsTableName],
+    );
+    const current = occupancyConstraint.rows[0];
+    const definition = current?.definition ?? "";
+    const validCurrentProtection = current?.constraintType === "x"
+      && current.deferrable
+      && current.initiallyDeferred
+      && definition.includes("barber_id WITH =")
+      && definition.includes("tsrange(start_time, end_time")
+      && definition.includes("WITH &&");
+    if (!validCurrentProtection) {
+      throw new Error(
+        `${schemaName}.${occupancyPeriodsTableName} exists without a valid ${constraintName} exclusion constraint.`,
+      );
+    }
+    return;
+  }
 
   const existingConstraint = await pool.query<{ definition: string }>(
     `
