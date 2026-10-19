@@ -24,6 +24,7 @@ export type AppointmentBlockData = {
   existingServicePrice: string;
   customServicePrice: string;
   extras: Array<{ extraId: number; amountEuros: string; quantity: number }>;
+  availabilityWindows: Array<{ startTime: string; endTime: string }>;
   times: string[];
   name: string;
   phone: string;

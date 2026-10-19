@@ -38,6 +38,13 @@ import {
 import type { ExtraDefinitionWithServices } from "@shared/schema";
 import type { ShopLocation } from "@shared/locations";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import { useBusinessConfig } from "@/business/use-business-config";
+
+function addClockMinutes(time: string, minutes: number) {
+  const [hours, minute] = time.split(":").map(Number);
+  const total = Math.max(0, Math.min(24 * 60 - 1, hours * 60 + minute + minutes));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
 
 type AppointmentBlockBarberOption = {
   id: number;
@@ -101,6 +108,7 @@ export function AppointmentBlockDialog({
   hasLocationDataError = false,
 }: AppointmentBlockDialogProps) {
   const agendaCopy = useBusinessCopy().agenda;
+  const businessConfig = useBusinessConfig();
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
   const isSingleTimeMode = blockData.isManualBooking;
@@ -164,6 +172,11 @@ export function AppointmentBlockDialog({
   const extrasHeading = selectedExtrasCount === 0
     ? "Extras (opcional)"
     : `Extras (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
+  const availabilityWindowsEnabled = businessConfig.features.appointmentAvailabilityWindows
+    && blockData.isManualBooking && !blockData.isRecurring && !blockData.isAlreadyCompleted;
+  const selectedDuration = blockData.serviceMode === "custom"
+    ? Number(blockData.customDurationMinutes) || 30
+    : selectedService?.duration ?? 30;
 
   useEffect(() => {
     if (!open) {
@@ -756,6 +769,92 @@ export function AppointmentBlockDialog({
                       />
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {availabilityWindowsEnabled && (
+              <div className="space-y-3 rounded-xl border border-white/10 bg-background/30 p-4" data-testid="manual-booking-availability-windows">
+                <div className="flex min-h-10 items-center justify-between gap-3">
+                  <span>
+                    <span className="block text-sm font-bold text-white">Abrir disponibilidade durante o serviço</span>
+                    <span className="mt-1 block text-xs text-gray-400">
+                      Permite receber outra marcação apenas dentro das janelas indicadas.
+                    </span>
+                  </span>
+                  <Switch
+                    checked={blockData.availabilityWindows.length > 0}
+                    onCheckedChange={(checked) => onBlockDataChange({
+                      ...blockData,
+                      availabilityWindows: checked
+                        ? [{
+                            startTime: addClockMinutes(blockData.times[0] ?? "09:00", Math.max(1, Math.floor(selectedDuration / 3))),
+                            endTime: addClockMinutes(blockData.times[0] ?? "09:00", Math.max(2, Math.floor(selectedDuration * 2 / 3))),
+                          }]
+                        : [],
+                    })}
+                    aria-label="Abrir disponibilidade durante o serviço"
+                  />
+                </div>
+                {blockData.availabilityWindows.map((window, index) => (
+                  <div key={index} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`availability-window-start-${index}`} className="text-xs text-gray-300">Início</Label>
+                      <Input
+                        id={`availability-window-start-${index}`}
+                        type="time"
+                        value={window.startTime}
+                        onChange={(event) => onBlockDataChange((current) => ({
+                          ...current,
+                          availabilityWindows: current.availabilityWindows.map((value, position) => position === index
+                            ? { ...value, startTime: event.target.value }
+                            : value),
+                        }))}
+                        className="h-11 border-white/10 bg-background/50 text-white"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`availability-window-end-${index}`} className="text-xs text-gray-300">Fim</Label>
+                      <Input
+                        id={`availability-window-end-${index}`}
+                        type="time"
+                        value={window.endTime}
+                        onChange={(event) => onBlockDataChange((current) => ({
+                          ...current,
+                          availabilityWindows: current.availabilityWindows.map((value, position) => position === index
+                            ? { ...value, endTime: event.target.value }
+                            : value),
+                        }))}
+                        className="h-11 border-white/10 bg-background/50 text-white"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => onBlockDataChange((current) => ({
+                        ...current,
+                        availabilityWindows: current.availabilityWindows.filter((_, position) => position !== index),
+                      }))}
+                      aria-label={`Remover janela ${index + 1}`}
+                    >
+                      Remover
+                    </Button>
+                  </div>
+                ))}
+                {blockData.availabilityWindows.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onBlockDataChange((current) => ({
+                      ...current,
+                      availabilityWindows: [...current.availabilityWindows, {
+                        startTime: addClockMinutes(current.times[0] ?? "09:00", Math.max(1, Math.floor(selectedDuration / 2))),
+                        endTime: addClockMinutes(current.times[0] ?? "09:00", Math.max(2, Math.floor(selectedDuration * 3 / 4))),
+                      }],
+                    }))}
+                  >
+                    Adicionar janela
+                  </Button>
                 )}
               </div>
             )}

@@ -153,6 +153,8 @@ type AdminAppointment = {
     quantity: number;
     position: number;
   }>;
+  availabilityWindows?: Array<{ startTime: string; endTime: string }>;
+  seriesId?: string | null;
   notificationRevision?: number;
   status: AppointmentStatus;
   customerName: string;
@@ -1970,6 +1972,7 @@ export default function Admin() {
     existingServicePrice: "",
     customServicePrice: "",
     extras: [],
+    availabilityWindows: [],
     times: [],
     name: "",
     phone: "900000000",
@@ -2141,6 +2144,7 @@ export default function Admin() {
       existingServicePrice: "",
       customServicePrice: "",
       extras: [],
+      availabilityWindows: [],
       times: [],
       hasSpecialTerms: false,
       isAlreadyCompleted: false,
@@ -2532,6 +2536,7 @@ export default function Admin() {
       existingServicePrice: "",
       customServicePrice: "",
       extras: [],
+      availabilityWindows: [],
       times: initialTimes,
       name: "",
       phone: mode === "manual" ? "" : "900000000",
@@ -2592,6 +2597,7 @@ export default function Admin() {
       existingServicePrice: "",
       customServicePrice: "",
       extras: [],
+      availabilityWindows: [],
       times: [],
       allowOutsideHours: false,
       hasSpecialTerms: false,
@@ -3470,6 +3476,30 @@ export default function Admin() {
       toast({ title: "Erro", description: "Escolha apenas uma hora de início para a marcação.", variant: "destructive" });
       return;
     }
+    if (blockData.isManualBooking && blockData.availabilityWindows.length > 0) {
+      const appointmentStart = createBlockStartTime(blockData.date, blockData.times[0]);
+      const appointmentEnd = new Date(appointmentStart.getTime() + selectedBlockDuration * 60_000);
+      const windows = blockData.availabilityWindows
+        .map((window) => ({
+          start: createBlockStartTime(blockData.date, window.startTime),
+          end: createBlockStartTime(blockData.date, window.endTime),
+        }))
+        .sort((left, right) => left.start.getTime() - right.start.getTime());
+      const invalidWindow = windows.some((window, index) => (
+        window.start >= window.end
+        || window.start < appointmentStart
+        || window.end > appointmentEnd
+        || (index > 0 && window.start < windows[index - 1].end)
+      ));
+      if (invalidWindow) {
+        toast({
+          title: "Janela de disponibilidade inválida",
+          description: "As janelas devem ficar dentro do serviço e não podem sobrepor-se.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     if (blockData.isManualBooking && !isValidOptionalEmail(blockData.email)) {
       toast({ title: "Email inválido", description: emailValidationMessage, variant: "destructive" });
       return;
@@ -3614,6 +3644,13 @@ export default function Admin() {
             paymentMethod: blockData.isAlreadyCompleted ? blockData.paymentMethod : "pending",
           } : {}),
           ...(blockData.isManualBooking ? { extras: appointmentExtraInputs } : {}),
+          ...(blockData.isManualBooking && !blockData.isAlreadyCompleted
+            && businessConfig.features.appointmentAvailabilityWindows ? {
+            availabilityWindows: blockData.availabilityWindows.map((window) => ({
+              startTime: createBlockStartTime(blockData.date, window.startTime),
+              endTime: createBlockStartTime(blockData.date, window.endTime),
+            })),
+          } : {}),
         }, { headers: locationHeaders(blockLocationId) });
       }
       
@@ -3632,6 +3669,7 @@ export default function Admin() {
         existingServicePrice: "",
         customServicePrice: "",
         extras: [],
+        availabilityWindows: [],
         isMultiDay: false,
         isManualBooking: false,
         allowOutsideHours: false,
@@ -4272,6 +4310,7 @@ export default function Admin() {
                 existingServicePrice: "",
                 customServicePrice: "",
                 extras: [],
+                availabilityWindows: [],
                 hasSpecialTerms: false,
                 isAlreadyCompleted: false,
                 paymentMethod: "pending",

@@ -111,6 +111,34 @@ test("uses the shared interval rule for every occupied block and only blocking a
   }), false);
 });
 
+test("public availability exposes only configured gaps and includes nested appointment buffers", () => {
+  const day = date(2026, 10, 8);
+  const parentStart = calendarTimeInTimeZone(day, "09:00", timeZone);
+  const windowStart = calendarTimeInTimeZone(day, "10:00", timeZone);
+  const windowEnd = calendarTimeInTimeZone(day, "11:00", timeZone);
+  const appointments = [{
+    barberId: 7,
+    startTime: parentStart.toISOString(),
+    durationMinutes: 180,
+    status: "booked",
+    availabilityWindows: [{ startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() }],
+  }];
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments, barberId: 7, startTime: windowStart, durationMinutes: 60,
+  }), false);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments, barberId: 7, startTime: windowStart, durationMinutes: 60, bufferAfterMinutes: 1,
+  }), true);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments, barberId: 7,
+    startTime: calendarTimeInTimeZone(day, "10:30", timeZone), durationMinutes: 30,
+  }), false);
+  assert.equal(hasAppointmentIntervalConflict({
+    appointments, barberId: 7,
+    startTime: calendarTimeInTimeZone(day, "10:45", timeZone), durationMinutes: 30,
+  }), true);
+});
+
 test("accepts the public duration contract and blocks appointments without an exposed status", () => {
   const occupiedStart = calendarTimeInTimeZone(date(2026, 3, 30), "09:00", timeZone);
   assert.equal(hasAppointmentIntervalConflict({

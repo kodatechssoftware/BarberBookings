@@ -42,6 +42,7 @@ export type AppointmentRecord = {
   manualOutsideHours: boolean;
   extras?: AppointmentExtraSnapshot[];
   internalCosts?: AppointmentInternalCostSnapshot[];
+  availabilityWindows?: Array<{ startTime: string; endTime: string }>;
   status: AppointmentStatus;
   paymentMethod: AppointmentPaymentMethod;
   cancelToken: string;
@@ -69,6 +70,7 @@ export type PublicAppointment = {
   duration: number;
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
+  availabilityWindows?: Array<{ startTime: string; endTime: string }>;
 };
 
 export type AppointmentByToken = {

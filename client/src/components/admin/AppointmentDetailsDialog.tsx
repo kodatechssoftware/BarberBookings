@@ -59,6 +59,7 @@ import {
 } from "@shared/booking-slot-interval";
 import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import { useBusinessConfig } from "@/business/use-business-config";
 
 type AdminAppointment = {
   id: number;
@@ -82,7 +83,9 @@ type AdminAppointment = {
   canManage?: boolean;
   extras?: AppointmentExtraSnapshot[];
   internalCosts?: AppointmentInternalCostSnapshot[];
+  availabilityWindows?: Array<{ startTime: string; endTime: string }>;
   notificationRevision?: number;
+  seriesId?: string | null;
 };
 
 export type AppointmentMutationPendingAction = {
@@ -112,6 +115,12 @@ function parseAppointmentExtraPriceInput(value: string) {
 
 function formatAppointmentPrice(amountCents: number) {
   return `${centsToMoneyInput(amountCents)} €`;
+}
+
+function addAppointmentClockMinutes(time: string, minutes: number) {
+  const [hours, minute] = time.split(":").map(Number);
+  const total = Math.max(0, Math.min(24 * 60 - 1, hours * 60 + minute + minutes));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 type AppointmentExtraSelection = {
@@ -170,6 +179,7 @@ function EditAppointmentDialog({
   locationLogoUrl?: string | null;
 }) {
   const agendaCopy = useBusinessCopy().agenda;
+  const businessConfig = useBusinessConfig();
   const isCustomAppointment = appointment.serviceId === null
     && appointment.serviceNameSnapshot != null
     && appointment.servicePriceCentsSnapshot != null;
@@ -190,6 +200,12 @@ function EditAppointmentDialog({
   );
   const [selectedInternalCosts, setSelectedInternalCosts] = useState<AppointmentInternalCostSelection[]>(
     () => appointmentInternalCostSelections(appointment),
+  );
+  const [selectedAvailabilityWindows, setSelectedAvailabilityWindows] = useState(
+    () => (appointment.availabilityWindows ?? []).map((window) => ({
+      startTime: format(parseISO(window.startTime), "HH:mm"),
+      endTime: format(parseISO(window.endTime), "HH:mm"),
+    })),
   );
   const [isExtrasOpen, setIsExtrasOpen] = useState(() => (appointment.extras ?? []).length > 0);
   const [areInternalCostsOpen, setAreInternalCostsOpen] = useState(() => (appointment.internalCosts ?? []).length > 0);
@@ -234,6 +250,10 @@ function EditAppointmentDialog({
       ? appointment.bufferAfterMinutesSnapshot ?? 0
       : selectedService?.bufferAfterMinutes ?? 0;
   const requestedStartTime = useMemo(() => new Date(`${dateValue}T${timeValue}`), [dateValue, timeValue]);
+  const requestedAvailabilityWindows = useMemo(() => selectedAvailabilityWindows.map((window) => ({
+    startTime: new Date(`${dateValue}T${window.startTime}`),
+    endTime: new Date(`${dateValue}T${window.endTime}`),
+  })), [dateValue, selectedAvailabilityWindows]);
   const availableBarbers = useMemo(() => {
     if (Number.isNaN(requestedStartTime.getTime())) return [];
 
@@ -259,6 +279,7 @@ function EditAppointmentDialog({
         durationMinutes: selectedDuration,
         bufferBeforeMinutes: selectedBufferBefore,
         bufferAfterMinutes: selectedBufferAfter,
+        availabilityWindows: requestedAvailabilityWindows,
       });
     });
   }, [
@@ -268,6 +289,7 @@ function EditAppointmentDialog({
     appointments,
     availabilityRows,
     requestedStartTime,
+    requestedAvailabilityWindows,
     selectedDuration,
     selectedBufferAfter,
     selectedBufferBefore,
@@ -411,6 +433,10 @@ function EditAppointmentDialog({
     setPriceValue(centsToMoneyInput(appointment.servicePriceCentsSnapshot ?? 0));
     setSelectedExtras(appointmentExtraSelections(appointment));
     setSelectedInternalCosts(appointmentInternalCostSelections(appointment));
+    setSelectedAvailabilityWindows((appointment.availabilityWindows ?? []).map((window) => ({
+      startTime: format(parseISO(window.startTime), "HH:mm"),
+      endTime: format(parseISO(window.endTime), "HH:mm"),
+    })));
     setIsExtrasOpen((appointment.extras ?? []).length > 0);
     setAreInternalCostsOpen((appointment.internalCosts ?? []).length > 0);
     setAllowOutsideHours(Boolean(appointment.manualOutsideHours));
@@ -465,6 +491,26 @@ function EditAppointmentDialog({
       toast({ title: "Preço inválido", description: "Indique o preço final desta marcação.", variant: "destructive" });
       return;
     }
+    if (businessConfig.features.appointmentAvailabilityWindows && selectedAvailabilityWindows.length > 0) {
+      const commercialEnd = new Date(newStartTime.getTime() + selectedDuration * 60_000);
+      const windows = [...requestedAvailabilityWindows]
+        .sort((left, right) => left.startTime.getTime() - right.startTime.getTime());
+      const invalidWindow = windows.some((window, index) => (
+        Number.isNaN(window.startTime.getTime()) || Number.isNaN(window.endTime.getTime())
+        || window.startTime >= window.endTime
+        || window.startTime < newStartTime
+        || window.endTime > commercialEnd
+        || (index > 0 && window.startTime < windows[index - 1].endTime)
+      ));
+      if (invalidWindow) {
+        toast({
+          title: "Janela de disponibilidade inválida",
+          description: "As janelas devem ficar dentro do serviço e não podem sobrepor-se.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     const extrasPayload = selectedExtras.map((selection) => {
       const definition = extraDefinitionsById.get(selection.extraId);
       const existing = existingExtrasByDefinitionId.get(selection.extraId);
@@ -510,6 +556,9 @@ function EditAppointmentDialog({
         allowOutsideHours: allowOutsideHours && selectedIsOutsideHours,
         extras: extrasPayload,
         internalCosts: internalCostsPayload,
+        ...(businessConfig.features.appointmentAvailabilityWindows ? {
+          availabilityWindows: requestedAvailabilityWindows,
+        } : {}),
         ...(serviceId === "custom" ? {
           customServiceName: customServiceName.trim(),
           customDurationMinutes: parsedCustomDuration,
@@ -686,6 +735,70 @@ function EditAppointmentDialog({
                   />
                 </div>
               </div>
+            </div>
+          )}
+          {businessConfig.features.appointmentAvailabilityWindows && !appointment.seriesId && (
+            <div className="space-y-3 rounded-xl border border-white/10 bg-background/30 p-3" data-testid="appointment-availability-windows-editor">
+              <div className="flex min-h-10 items-center justify-between gap-3">
+                <span>
+                  <span className="block text-sm font-semibold text-white">Disponibilidade durante o serviço</span>
+                  <span className="mt-1 block text-xs text-gray-400">Só estas janelas ficam livres para outra marcação.</span>
+                </span>
+                <Switch
+                  checked={selectedAvailabilityWindows.length > 0}
+                  onCheckedChange={(checked) => setSelectedAvailabilityWindows(checked ? [{
+                    startTime: addAppointmentClockMinutes(timeValue, Math.max(1, Math.floor(selectedDuration / 3))),
+                    endTime: addAppointmentClockMinutes(timeValue, Math.max(2, Math.floor(selectedDuration * 2 / 3))),
+                  }] : [])}
+                  aria-label="Disponibilidade durante o serviço"
+                />
+              </div>
+              {selectedAvailabilityWindows.map((window, index) => (
+                <div key={index} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`edit-availability-start-${index}`} className="text-xs">Início</Label>
+                    <Input
+                      id={`edit-availability-start-${index}`}
+                      type="time"
+                      value={window.startTime}
+                      onChange={(event) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
+                        ? { ...value, startTime: event.target.value }
+                        : value))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`edit-availability-end-${index}`} className="text-xs">Fim</Label>
+                    <Input
+                      id={`edit-availability-end-${index}`}
+                      type="time"
+                      value={window.endTime}
+                      onChange={(event) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
+                        ? { ...value, endTime: event.target.value }
+                        : value))}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setSelectedAvailabilityWindows((current) => current.filter((_, position) => position !== index))}
+                    aria-label={`Remover janela ${index + 1}`}
+                  >
+                    Remover
+                  </Button>
+                </div>
+              ))}
+              {selectedAvailabilityWindows.length > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setSelectedAvailabilityWindows((current) => [...current, {
+                    startTime: addAppointmentClockMinutes(timeValue, Math.max(1, Math.floor(selectedDuration / 2))),
+                    endTime: addAppointmentClockMinutes(timeValue, Math.max(2, Math.floor(selectedDuration * 3 / 4))),
+                  }])}
+                >
+                  Adicionar janela
+                </Button>
+              )}
             </div>
           )}
           <Collapsible
@@ -1231,6 +1344,29 @@ export function AppointmentDetailsDialog({
                 </div>
               )}
             </div>
+            {(appointment.availabilityWindows?.length ?? 0) > 0 && (
+              <div
+                className="mt-3 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3 text-sm"
+                data-testid="appointment-availability-window-history"
+              >
+                <p className="text-xs uppercase tracking-widest text-primary">Disponibilidade durante o serviço</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Períodos em que foi possível encaixar outra marcação. Permanecem no histórico após o fecho.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {[...(appointment.availabilityWindows ?? [])]
+                    .sort((left, right) => left.startTime.localeCompare(right.startTime))
+                    .map((window, index) => (
+                      <span
+                        key={`${window.startTime}-${window.endTime}-${index}`}
+                        className="rounded-full border border-primary/25 bg-background/50 px-2.5 py-1 font-semibold text-white"
+                      >
+                        {format(parseISO(window.startTime), "HH:mm")}–{format(parseISO(window.endTime), "HH:mm")}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
             <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-card px-3 py-3 text-sm" data-testid="appointment-price-breakdown">
               <div className="flex items-start justify-between gap-4">
                 <span className="min-w-0 break-words text-gray-300">Serviço</span>

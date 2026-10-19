@@ -280,8 +280,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 19,
-    "an empty legacy baseline must apply every migration through 0020 (0019 is intentionally reserved elsewhere)");
+  assert.equal(freshRun.applied.length, 20,
+    "an empty legacy baseline must apply every migration through 0021 (0019 is intentionally reserved elsewhere)");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -342,7 +342,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 19);
+  assert.equal(secondFreshRun.alreadyApplied, 20);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1071,6 +1071,7 @@ try {
     "0017_service_buffers.sql",
     "0018_recurring_expense_management.sql",
     "0020_commercial_extras_internal_costs.sql",
+    "0021_appointment_availability_windows.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
   assert.deepEqual((await pool.query(`
@@ -1103,9 +1104,113 @@ try {
     FROM pg_constraint
     WHERE conrelid = $1::regclass
       AND conname = 'appointments_no_booked_overlap'
-  `, [`${schema}.appointments`])).rows[0]?.definition ?? "");
-  assert.match(bookedOverlapDefinition, /buffer_before_minutes_snapshot/);
-  assert.match(bookedOverlapDefinition, /buffer_after_minutes_snapshot/);
+  `, [`${schema}.appointment_occupancy_periods`])).rows[0]?.definition ?? "");
+  assert.match(bookedOverlapDefinition, /barber_id/);
+  assert.match(bookedOverlapDefinition, /tsrange\(start_time, end_time/);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointment_occupancy_periods")}
+  `)).rows[0].count), 2, "legacy booked appointments must retain continuous occupancy after 0021");
+
+  const windowParent = (await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      location_id, barber_id, start_time, customer_name, customer_phone,
+      duration_minutes, buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
+      status, cancel_token
+    ) VALUES ($1, 1, '2038-06-15 10:00:00', 'QA parent window', '910000021',
+      180, 10, 15, 'booked', 'qa-window-parent')
+    RETURNING id
+  `, [defaultLocation.id])).rows[0];
+  await pool.query(`
+    INSERT INTO ${table("appointment_availability_windows")} (appointment_id, start_time, end_time)
+    VALUES
+      ($1, '2038-06-15 11:00:00', '2038-06-15 11:30:00'),
+      ($1, '2038-06-15 11:30:00', '2038-06-15 12:00:00')
+  `, [windowParent.id]);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointment_occupancy_periods")} WHERE appointment_id = $1
+  `, [windowParent.id])).rows[0].count), 2,
+  "adjacent availability windows must form one effective gap while exterior buffers remain occupied");
+  const nestedAppointment = (await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      location_id, barber_id, start_time, customer_name, customer_phone,
+      duration_minutes, status, cancel_token
+    ) VALUES ($1, 1, '2038-06-15 11:00:00', 'QA nested', '910000022', 60, 'booked', 'qa-window-nested')
+    RETURNING id
+  `, [defaultLocation.id])).rows[0];
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointments")} (
+      location_id, barber_id, start_time, customer_name, customer_phone,
+      duration_minutes, buffer_before_minutes_snapshot, status, cancel_token
+    ) VALUES ($1, 1, '2038-06-15 11:00:00', 'QA nested buffer leak', '910000023',
+      60, 1, 'booked', 'qa-window-buffer-leak')
+  `, [defaultLocation.id]), (error: any) => error?.code === "23P01",
+  "a nested appointment including its buffer must fit fully inside the availability window");
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("appointment_availability_windows")} (appointment_id, start_time, end_time)
+    VALUES ($1, '2038-06-15 09:59:00', '2038-06-15 10:30:00')
+  `, [windowParent.id]), (error: any) => error?.code === "23514",
+  "a window outside the commercial interval must fail closed");
+  await assert.rejects(pool.query(`
+    DELETE FROM ${table("appointment_availability_windows")} WHERE appointment_id = $1
+  `, [windowParent.id]), (error: any) => error?.code === "23P01",
+  "removing a window must not silently create an overlap with its nested appointment");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointment_availability_windows")} WHERE appointment_id = $1
+  `, [windowParent.id])).rows[0].count), 2, "a rejected window edit must roll back atomically");
+  await pool.query(`UPDATE ${table("appointments")} SET status = 'cancelled' WHERE id = $1`, [windowParent.id]);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointment_occupancy_periods")} WHERE appointment_id = $1
+  `, [windowParent.id])).rows[0].count), 0, "cancellation must free occupancy without deleting window history");
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE id IN ($1, $2)`, [nestedAppointment.id, windowParent.id]);
+
+  const concurrentWindowParent = (await pool.query(`
+    INSERT INTO ${table("appointments")} (
+      location_id, barber_id, start_time, customer_name, customer_phone,
+      duration_minutes, status, cancel_token
+    ) VALUES ($1, 1, '2038-06-16 10:00:00', 'QA concurrent parent', '910000024',
+      180, 'booked', 'qa-window-concurrent-parent')
+    RETURNING id
+  `, [defaultLocation.id])).rows[0];
+  await pool.query(`
+    INSERT INTO ${table("appointment_availability_windows")} (appointment_id, start_time, end_time)
+    VALUES ($1, '2038-06-16 11:00:00', '2038-06-16 12:00:00')
+  `, [concurrentWindowParent.id]);
+  const concurrentNestedResults = await Promise.allSettled([
+    pool.query(`
+      INSERT INTO ${table("appointments")} (
+        location_id, barber_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES ($1, 1, '2038-06-16 11:00:00', 'QA concurrent nested A', '910000025',
+        60, 'booked', 'qa-window-concurrent-nested-a')
+      RETURNING id
+    `, [defaultLocation.id]),
+    pool.query(`
+      INSERT INTO ${table("appointments")} (
+        location_id, barber_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES ($1, 1, '2038-06-16 11:00:00', 'QA concurrent nested B', '910000026',
+        60, 'booked', 'qa-window-concurrent-nested-b')
+      RETURNING id
+    `, [defaultLocation.id]),
+  ]);
+  assert.equal(concurrentNestedResults.filter((result) => result.status === "fulfilled").length, 1,
+    "concurrent booking attempts inside the same released window must have exactly one winner");
+  const rejectedConcurrentNested = concurrentNestedResults.find((result) => result.status === "rejected");
+  assert.equal(rejectedConcurrentNested?.status, "rejected");
+  assert.equal((rejectedConcurrentNested as PromiseRejectedResult).reason?.code, "23P01",
+    "the PostgreSQL exclusion constraint must reject the concurrent loser");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointments")}
+    WHERE cancel_token IN ('qa-window-concurrent-nested-a', 'qa-window-concurrent-nested-b')
+  `)).rows[0].count), 1, "concurrent attempts must persist only one nested appointment");
+  await pool.query(`
+    DELETE FROM ${table("appointments")}
+    WHERE cancel_token IN (
+      'qa-window-concurrent-nested-a',
+      'qa-window-concurrent-nested-b',
+      'qa-window-concurrent-parent'
+    )
+  `);
   await assert.rejects(pool.query(`
     UPDATE ${table("service_locations")}
     SET buffer_before_minutes = -1
@@ -1280,7 +1385,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 19);
+  assert.equal(secondCompensationRun.alreadyApplied, 20);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1971,7 +2076,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0020, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0021, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

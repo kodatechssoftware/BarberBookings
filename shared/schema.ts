@@ -14,6 +14,7 @@ export const barbersIdSeq = appPgSchema?.sequence("barbers_id_seq");
 export const servicesIdSeq = appPgSchema?.sequence("services_id_seq");
 export const serviceCategoriesIdSeq = appPgSchema?.sequence("service_categories_id_seq");
 export const appointmentsIdSeq = appPgSchema?.sequence("appointments_id_seq");
+export const appointmentAvailabilityWindowsIdSeq = appPgSchema?.sequence("appointment_availability_windows_id_seq");
 export const adminsIdSeq = appPgSchema?.sequence("admins_id_seq");
 export const blacklistIdSeq = appPgSchema?.sequence("blacklist_id_seq");
 export const verificationCodesIdSeq = appPgSchema?.sequence("verification_codes_id_seq");
@@ -335,6 +336,36 @@ export const appointments = appPgTable("appointments", {
       AND ${table.chairRentPeriodSnapshot} IN ('day', 'week', 'month'))
     ) IS TRUE
   `),
+}));
+
+export const appointmentAvailabilityWindows = appPgTable("appointment_availability_windows", {
+  id: idColumn("appointment_availability_windows_id_seq"),
+  appointmentId: integer("appointment_id")
+    .references(() => appointments.id, { onDelete: "cascade" }).notNull(),
+  startTime: timestamp("start_time").notNull(),
+  endTime: timestamp("end_time").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  appointmentOrderIdx: index("appointment_availability_windows_appointment_order_idx")
+    .on(table.appointmentId, table.startTime, table.endTime),
+  rangeCheck: check("appointment_availability_windows_range_check", sql`${table.startTime} < ${table.endTime}`),
+}));
+
+// Internal projection maintained by database triggers. Public/application APIs
+// expose availability windows, never these implementation-level periods.
+export const appointmentOccupancyPeriods = appPgTable("appointment_occupancy_periods", {
+  appointmentId: integer("appointment_id")
+    .references(() => appointments.id, { onDelete: "cascade" }).notNull(),
+  position: integer("position").notNull(),
+  barberId: integer("barber_id").references(() => barbers.id, { onDelete: "restrict" }).notNull(),
+  startTime: timestamp("start_time").notNull(),
+  endTime: timestamp("end_time").notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.appointmentId, table.position] }),
+  barberRangeIdx: index("appointment_occupancy_periods_barber_range_idx")
+    .on(table.barberId, table.startTime, table.endTime),
+  rangeCheck: check("appointment_occupancy_periods_range_check", sql`${table.startTime} < ${table.endTime}`),
 }));
 
 export const extraDefinitions = appPgTable("extra_definitions", {
@@ -907,6 +938,26 @@ export const appointmentsRelations = relations(appointments, ({ one, many }) => 
   }),
   extras: many(appointmentExtras),
   internalCosts: many(appointmentInternalCosts),
+  availabilityWindows: many(appointmentAvailabilityWindows),
+  occupancyPeriods: many(appointmentOccupancyPeriods),
+}));
+
+export const appointmentAvailabilityWindowsRelations = relations(appointmentAvailabilityWindows, ({ one }) => ({
+  appointment: one(appointments, {
+    fields: [appointmentAvailabilityWindows.appointmentId],
+    references: [appointments.id],
+  }),
+}));
+
+export const appointmentOccupancyPeriodsRelations = relations(appointmentOccupancyPeriods, ({ one }) => ({
+  appointment: one(appointments, {
+    fields: [appointmentOccupancyPeriods.appointmentId],
+    references: [appointments.id],
+  }),
+  barber: one(barbers, {
+    fields: [appointmentOccupancyPeriods.barberId],
+    references: [barbers.id],
+  }),
 }));
 
 export const extraDefinitionsRelations = relations(extraDefinitions, ({ one, many }) => ({
@@ -1260,6 +1311,8 @@ export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
   baseIsVisible?: boolean | null;
 };
 export type Appointment = typeof appointments.$inferSelect;
+export type AppointmentAvailabilityWindow = typeof appointmentAvailabilityWindows.$inferSelect;
+export type AppointmentOccupancyPeriod = typeof appointmentOccupancyPeriods.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
 export type ExtraDefinition = typeof extraDefinitions.$inferSelect;
 export type AppointmentExtra = typeof appointmentExtras.$inferSelect;

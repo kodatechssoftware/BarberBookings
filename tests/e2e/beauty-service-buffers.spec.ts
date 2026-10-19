@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 const adminPassword = "Playwright-Test-Admin-2026!";
 
@@ -7,6 +7,14 @@ async function loginAdmin(request: APIRequestContext) {
     data: { username: "admin", password: adminPassword },
   });
   expect(response.status(), await response.text()).toBe(200);
+}
+
+async function loginAdminPage(page: Page) {
+  await page.goto("/admin");
+  await page.getByPlaceholder("Introduza o email ou nome de utilizador").fill("admin");
+  await page.locator('input[type="password"]').fill(adminPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page.getByRole("heading", { name: "Painel Administrativo" })).toBeVisible();
 }
 
 function futureStart(daysAhead: number, hour: number, minute = 0) {
@@ -255,6 +263,147 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
     expect(recurringAppointments.every((appointment: any) =>
       appointment.bufferBeforeMinutesSnapshot === 20
       && appointment.bufferAfterMinutesSnapshot === 25)).toBe(true);
+  });
+
+  test("opens concrete availability windows for public/manual booking and preserves them safely", async ({ request }) => {
+    await loginAdmin(request);
+    expect((await request.patch("/api/shop/availability", { data: openEveryDay })).ok()).toBe(true);
+    const suffix = Date.now();
+    const nestedServiceResponse = await request.post("/api/services", { data: {
+      name: `Serviço encaixado ${suffix}`,
+      description: "Serviço de teste dentro de uma janela",
+      price: 2000,
+      duration: 60,
+      bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0,
+      isVisible: true,
+    } });
+    expect(nestedServiceResponse.status(), await nestedServiceResponse.text()).toBe(201);
+    const nestedService = await nestedServiceResponse.json();
+    const professionalResponse = await request.post("/api/barbers", { data: {
+      name: `Profissional janelas ${suffix}`,
+      specialty: "Serviços longos",
+      color: "#B76E79",
+      isVisible: true,
+      serviceIds: [nestedService.id],
+    } });
+    expect(professionalResponse.status(), await professionalResponse.text()).toBe(201);
+    const professional = await professionalResponse.json();
+    expect((await request.patch(`/api/barbers/${professional.id}/availability`, { data: workingEveryDay })).ok()).toBe(true);
+
+    const parentStart = futureStart(90, 10);
+    const windowStart = new Date(parentStart.getTime() + 60 * 60_000);
+    const windowEnd = new Date(parentStart.getTime() + 120 * 60_000);
+    const parentResponse = await request.post("/api/appointments/block", { data: {
+      barberId: professional.id,
+      serviceId: null,
+      serviceMode: "custom",
+      customServiceName: "Coloração longa com pausa",
+      customDurationMinutes: 180,
+      servicePriceCents: 8000,
+      hasSpecialTerms: true,
+      startTime: parentStart.toISOString(),
+      name: "Cliente janela principal",
+      phone: "+351912650001",
+      customerEmail: "",
+      isManualBooking: true,
+      isRecurring: false,
+      allowOutsideHours: true,
+      availabilityWindows: [{ startTime: windowStart.toISOString(), endTime: windowEnd.toISOString() }],
+    } });
+    expect(parentResponse.status(), await parentResponse.text()).toBe(201);
+    const parent = (await parentResponse.json()).appointments[0];
+    expect(parent.availabilityWindows).toEqual([{
+      startTime: windowStart.toISOString(),
+      endTime: windowEnd.toISOString(),
+    }]);
+
+    const publicAppointments = await (await request.get(`/api/appointments/public?barberId=${professional.id}`)).json();
+    expect(publicAppointments.find((appointment: any) => appointment.id === parent.id)?.availabilityWindows).toEqual([{
+      startTime: windowStart.toISOString(),
+      endTime: windowEnd.toISOString(),
+    }]);
+
+    const nestedResponse = await request.post("/api/appointments", { data: {
+      barberId: professional.id,
+      serviceId: nestedService.id,
+      startTime: windowStart.toISOString(),
+      customerName: "Cliente encaixada",
+      customerPhone: "+351912650002",
+    } });
+    expect(nestedResponse.status(), await nestedResponse.text()).toBe(201);
+    const nested = await nestedResponse.json();
+
+    const removeUnsafeWindow = await request.patch(`/api/appointments/${parent.id}`, { data: {
+      availabilityWindows: [],
+    } });
+    expect(removeUnsafeWindow.status()).toBe(409);
+
+    expect((await request.patch(`/api/appointments/${nested.id}`, { data: { status: "cancelled" } })).ok()).toBe(true);
+    const editedStart = new Date(parentStart.getTime() + 24 * 60 * 60_000);
+    const shiftedByEdit = await request.patch(`/api/appointments/${parent.id}`, { data: {
+      startTime: editedStart.toISOString(),
+    } });
+    expect(shiftedByEdit.status(), await shiftedByEdit.text()).toBe(200);
+    expect((await shiftedByEdit.json()).availabilityWindows).toEqual([{
+      startTime: new Date(windowStart.getTime() + 24 * 60 * 60_000).toISOString(),
+      endTime: new Date(windowEnd.getTime() + 24 * 60 * 60_000).toISOString(),
+    }]);
+
+    const rescheduledStart = new Date(editedStart.getTime() + 24 * 60 * 60_000);
+    const rescheduled = await request.post(`/api/appointments/reschedule/${parent.cancelToken}`, { data: {
+      startTime: rescheduledStart.toISOString(),
+    } });
+    expect(rescheduled.status(), await rescheduled.text()).toBe(200);
+    expect((await rescheduled.json()).availabilityWindows).toEqual([{
+      startTime: new Date(windowStart.getTime() + 48 * 60 * 60_000).toISOString(),
+      endTime: new Date(windowEnd.getTime() + 48 * 60 * 60_000).toISOString(),
+    }]);
+
+    const recurringWithWindow = await request.post("/api/appointments/block", { data: {
+      barberId: professional.id,
+      serviceId: nestedService.id,
+      serviceMode: "existing",
+      startTime: futureStart(100, 10).toISOString(),
+      name: "Recorrência com janela inválida",
+      phone: "+351912650003",
+      customerEmail: "",
+      isManualBooking: true,
+      isRecurring: true,
+      recurringWeeks: 1,
+      recurringMonths: 1,
+      allowOutsideHours: true,
+      availabilityWindows: [{
+        startTime: futureStart(100, 10, 15).toISOString(),
+        endTime: futureStart(100, 10, 30).toISOString(),
+      }],
+    } });
+    expect(recurringWithWindow.status()).toBe(400);
+  });
+
+  test("keeps availability-window controls usable on mobile and desktop", async ({ page }) => {
+    await loginAdminPage(page);
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 1440, height: 1000 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.getByRole("tab", { name: "Agenda" }).click();
+      await page.getByRole("button", { name: "Marcação manual" }).click();
+      const dialog = page.getByRole("dialog", { name: "Marcação manual" });
+      const section = dialog.getByTestId("manual-booking-availability-windows");
+      await expect(section).toBeVisible();
+      await section.getByRole("switch", { name: "Abrir disponibilidade durante o serviço" }).click();
+      await expect(section.locator('input[type="time"]')).toHaveCount(2);
+      await section.getByRole("button", { name: "Adicionar janela" }).click();
+      await expect(section.locator('input[type="time"]')).toHaveCount(4);
+      await expect(section.getByRole("button", { name: "Remover janela 1" })).toBeVisible();
+      expect(await dialog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
+        Math.ceil(await dialog.evaluate((element) => element.clientWidth)) + 1,
+      );
+      await page.keyboard.press("Escape");
+      await expect(dialog).not.toBeVisible();
+    }
   });
 
   test("renders service-first responsively and filters incompatible professionals", async ({ page }) => {
