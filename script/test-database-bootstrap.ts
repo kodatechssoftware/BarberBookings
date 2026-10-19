@@ -67,10 +67,12 @@ assert.doesNotMatch(baselineSql, /\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/i, "base
 const databaseDir = await mkdtemp(path.join(tmpdir(), "barberbookings-db-bootstrap-pg-"));
 const through0007 = await mkdtemp(path.join(tmpdir(), "barberbookings-db-bootstrap-0007-"));
 const through0016 = await mkdtemp(path.join(tmpdir(), "barberbookings-db-bootstrap-0016-"));
+const through0021 = await mkdtemp(path.join(tmpdir(), "barberbookings-db-bootstrap-0021-"));
 const modifiedMigrations = await mkdtemp(path.join(tmpdir(), "barberbookings-db-bootstrap-modified-"));
 const modifiedBaselineDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-db-bootstrap-baseline-"));
 await copyMigrationsThrough(sourceMigrations, through0007, "0007_appointment_service_snapshots.sql");
 await copyMigrationsThrough(sourceMigrations, through0016, "0016_blacklist_location_scope.sql");
+await copyMigrationsThrough(sourceMigrations, through0021, "0021_appointment_availability_windows.sql");
 await copyMigrationsThrough(sourceMigrations, modifiedMigrations, "0018_recurring_expense_management.sql");
 const modified0017 = path.join(modifiedMigrations, "0017_service_buffers.sql");
 await writeFile(modified0017, `${await readFile(modified0017, "utf8")}\n-- forbidden checksum change\n`, "utf8");
@@ -110,17 +112,17 @@ try {
   const emptyResult = await runDatabaseBootstrap(pool, { schemaName: emptySchema, environment });
   assert.equal(emptyResult.initialState, "empty");
   assert.equal(emptyResult.baselineInstalled, true);
-  assert.equal(emptyResult.applied.length, 20);
+  assert.equal(emptyResult.applied.length, 21);
   assert.equal(await count(pool, emptySchema, "users"), 0);
   assert.equal(await count(pool, emptySchema, "barbers"), 0);
   assert.equal(await count(pool, emptySchema, "admins"), 0);
   assert.equal(await count(pool, emptySchema, "locations"), 1);
-  assert.equal(await count(pool, emptySchema, "schema_migrations"), 21);
+  assert.equal(await count(pool, emptySchema, "schema_migrations"), 22);
   const rerun = await runDatabaseBootstrap(pool, { schemaName: emptySchema, environment });
   assert.equal(rerun.initialState, "versioned");
   assert.equal(rerun.baselineInstalled, false);
   assert.deepEqual(rerun.applied, []);
-  assert.equal(rerun.alreadyApplied, 20);
+  assert.equal(rerun.alreadyApplied, 21);
 
   // Recover the exact harmless footprint left by the previously failing db:migrate.
   const emptyLedgerSchema = "bootstrap_empty_ledger";
@@ -131,7 +133,7 @@ try {
   const emptyLedgerResult = await runDatabaseBootstrap(pool, { schemaName: emptyLedgerSchema, environment });
   assert.equal(emptyLedgerResult.initialState, "empty-ledger");
   assert.equal(emptyLedgerResult.baselineInstalled, true);
-  assert.equal(emptyLedgerResult.applied.length, 20);
+  assert.equal(emptyLedgerResult.applied.length, 21);
 
   // 3: an exact legacy baseline plus an empty ledger is adopted, not recreated.
   const legacyLedgerSchema = "bootstrap_legacy_ledger";
@@ -141,7 +143,7 @@ try {
   assert.equal(legacyLedgerResult.initialState, "legacy-baseline");
   assert.equal(legacyLedgerResult.baselineInstalled, false);
   assert.equal(legacyLedgerResult.baselineRecorded, true);
-  assert.equal(legacyLedgerResult.applied.length, 20);
+  assert.equal(legacyLedgerResult.applied.length, 21);
 
   // 4: a versioned partial installation resumes at the next missing migration.
   const partialSchema = "bootstrap_partial";
@@ -154,11 +156,11 @@ try {
   assert.equal(partialFirst.applied.length, 7);
   const partialResume = await runDatabaseBootstrap(pool, { schemaName: partialSchema, environment });
   assert.equal(partialResume.initialState, "versioned");
-  assert.equal(partialResume.applied.length, 13);
+  assert.equal(partialResume.applied.length, 14);
   assert.equal(partialResume.applied[0], "0008_appointment_extras.sql");
-  assert.equal(partialResume.applied.at(-1), "0021_appointment_availability_windows.sql");
+  assert.equal(partialResume.applied.at(-1), "0022_appointment_reminder_schedule.sql");
 
-  // 5, 6: an installation through 0016 receives 0017, 0018, 0020 and 0021, then becomes a no-op.
+  // 5, 6: an installation through 0016 receives the remaining Beauty migrations through 0022, then becomes a no-op.
   const through0016Schema = "bootstrap_through_0016";
   await pool.query(`CREATE SCHEMA ${quoteIdentifier(through0016Schema)}`);
   const first0016 = await runDatabaseBootstrap(pool, {
@@ -173,9 +175,42 @@ try {
     "0018_recurring_expense_management.sql",
     "0020_commercial_extras_internal_costs.sql",
     "0021_appointment_availability_windows.sql",
+    "0022_appointment_reminder_schedule.sql",
   ]);
   const afterLatest = await runDatabaseBootstrap(pool, { schemaName: through0016Schema, environment });
   assert.deepEqual(afterLatest.applied, []);
+
+  // A deployed Beauty schema at 0021 receives only the reminder schedule migration.
+  const through0021Schema = "bootstrap_through_0021";
+  await pool.query(`CREATE SCHEMA ${quoteIdentifier(through0021Schema)}`);
+  const first0021 = await runDatabaseBootstrap(pool, {
+    schemaName: through0021Schema,
+    environment,
+    migrationsDirectory: through0021,
+  });
+  assert.equal(first0021.applied.length, 20);
+  assert.equal(first0021.applied.at(-1), "0021_appointment_availability_windows.sql");
+  assert.equal((await pool.query(`
+    SELECT count(*)::int AS count
+    FROM information_schema.columns
+    WHERE table_schema = $1
+      AND table_name = 'appointment_notification_events'
+      AND column_name = 'available_at'
+  `, [through0021Schema])).rows[0].count, 0);
+  const apply0022 = await runDatabaseBootstrap(pool, { schemaName: through0021Schema, environment });
+  assert.deepEqual(apply0022.applied, ["0022_appointment_reminder_schedule.sql"]);
+  assert.equal((await pool.query(`
+    SELECT count(*)::int AS count
+    FROM information_schema.columns
+    WHERE table_schema = $1
+      AND table_name = 'appointment_notification_events'
+      AND column_name = 'available_at'
+      AND is_nullable = 'NO'
+  `, [through0021Schema])).rows[0].count, 1);
+  assert.deepEqual(
+    await runDatabaseBootstrap(pool, { schemaName: through0021Schema, environment }).then((result) => result.applied),
+    [],
+  );
 
   // 9, 10: /setup creates only one canonical Administrator; restart remains seed-free.
   const bootstrapToken = "database-bootstrap-test-token-at-least-32-characters";
@@ -233,8 +268,8 @@ try {
     runDatabaseBootstrap(pool, { schemaName: concurrentSchema, environment }),
   ]);
   assert.equal(concurrent.filter((result) => result.baselineInstalled).length, 1);
-  assert.equal(concurrent.reduce((sum, result) => sum + result.applied.length, 0), 20);
-  assert.equal(await count(pool, concurrentSchema, "schema_migrations"), 21);
+  assert.equal(concurrent.reduce((sum, result) => sum + result.applied.length, 0), 21);
+  assert.equal(await count(pool, concurrentSchema, "schema_migrations"), 22);
 
   // 12: an unknown/mixed schema fails before creating a ledger or other table.
   const mixedSchema = "bootstrap_mixed";
@@ -278,8 +313,8 @@ try {
     schemaName: migrateRegressionSchema,
     environment,
   });
-  assert.equal(migrateRegression.applied.length, 20);
-  assert.equal(await count(pool, migrateRegressionSchema, "schema_migrations"), 20);
+  assert.equal(migrateRegression.applied.length, 21);
+  assert.equal(await count(pool, migrateRegressionSchema, "schema_migrations"), 21);
   assert.equal(await count(pool, migrateRegressionSchema, "users"), 0);
 
   const expectedBaselineChecksum = migrationChecksum(baselineSql);
@@ -288,13 +323,14 @@ try {
   `, [DATABASE_BASELINE_NAME])).rows[0];
   assert.equal(recordedBaseline.checksum, expectedBaselineChecksum);
 
-  console.log("Database bootstrap tests passed: empty/rerun/legacy/partial/0016/0017/0018/0020/0021/canonical/legacy/concurrent/fail-closed/checksums/db:migrate.");
+  console.log("Database bootstrap tests passed: empty/rerun/legacy/partial/0016/0017/0018/0020/0021/0022/canonical/legacy/concurrent/fail-closed/checksums/db:migrate.");
 } finally {
   if (pool) await pool.end().catch(() => undefined);
   await postgres.stop().catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
   await rm(through0007, { recursive: true, force: true });
   await rm(through0016, { recursive: true, force: true });
+  await rm(through0021, { recursive: true, force: true });
   await rm(modifiedMigrations, { recursive: true, force: true });
   await rm(modifiedBaselineDirectory, { recursive: true, force: true });
 }

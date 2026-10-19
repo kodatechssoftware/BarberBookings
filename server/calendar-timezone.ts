@@ -17,26 +17,59 @@ function formatter(timeZone: string) {
   return created;
 }
 
-function calendarDateToInstant(year: number, month: number, day: number, timeZone: string) {
-  const targetTimestamp = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+export type CalendarDateTimeParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+export function getCalendarDateTimeParts(date: Date, timeZone: string): CalendarDateTimeParts {
+  const parts = Object.fromEntries(
+    formatter(timeZone).formatToParts(date).map((part) => [part.type, part.value]),
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+export function calendarDateTimeToInstant(parts: CalendarDateTimeParts, timeZone: string) {
+  const targetTimestamp = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    0,
+  );
   let candidateTimestamp = targetTimestamp;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const parts = Object.fromEntries(
-      formatter(timeZone).formatToParts(new Date(candidateTimestamp)).map((part) => [part.type, part.value]),
-    );
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const represented = getCalendarDateTimeParts(new Date(candidateTimestamp), timeZone);
     const representedTimestamp = Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second),
+      represented.year,
+      represented.month - 1,
+      represented.day,
+      represented.hour,
+      represented.minute,
+      represented.second,
     );
     const difference = representedTimestamp - targetTimestamp;
     if (difference === 0) break;
     candidateTimestamp -= difference;
   }
   return new Date(candidateTimestamp);
+}
+
+function calendarDateToInstant(year: number, month: number, day: number, timeZone: string) {
+  return calendarDateTimeToInstant({ year, month, day, hour: 0, minute: 0, second: 0 }, timeZone);
 }
 
 export function getCalendarDateBounds(dateKey: string, timeZone: string) {
@@ -54,8 +87,6 @@ export function getCalendarDateBounds(dateKey: string, timeZone: string) {
 }
 
 export function getCalendarDateInTimeZone(now: Date, timeZone: string) {
-  const parts = Object.fromEntries(
-    formatter(timeZone).formatToParts(now).map((part) => [part.type, part.value]),
-  );
-  return `${parts.year}-${parts.month}-${parts.day}`;
+  const parts = getCalendarDateTimeParts(now, timeZone);
+  return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 }
