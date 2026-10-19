@@ -4,7 +4,7 @@ import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments,
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -45,6 +45,7 @@ import { AssociateServiceDialog } from "@/components/admin/AssociateServiceDialo
 import { BarberLocationScheduleDialog } from "@/components/admin/BarberLocationScheduleDialog";
 import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesManager";
 import { ExtrasManager } from "@/components/admin/ExtrasManager";
+import { InternalCostsManager } from "@/components/admin/InternalCostsManager";
 import { UserAccessManager } from "@/components/admin/UserAccessManager";
 import {
   RecurringExpenseOccurrenceDialog,
@@ -139,9 +140,20 @@ type AdminAppointment = {
     extraDefinitionId: number;
     nameSnapshot: string;
     amountCentsSnapshot: number;
+    quantity: number;
     financialRuleSnapshot?: "follow_compensation" | "barber" | "establishment";
     position: number;
   }>;
+  internalCosts?: Array<{
+    id: number;
+    internalCostDefinitionId: number;
+    nameSnapshot: string;
+    unitCostCentsSnapshot: number;
+    unitLabelSnapshot: string;
+    quantity: number;
+    position: number;
+  }>;
+  notificationRevision?: number;
   status: AppointmentStatus;
   customerName: string;
   customerPhone: string;
@@ -3480,7 +3492,7 @@ export default function Admin() {
       return;
     }
 
-    const appointmentExtraInputs: Array<{ extraId: number; amountCents?: number }> = [];
+    const appointmentExtraInputs: Array<{ extraId: number; amountCents?: number; quantity?: number }> = [];
     if (blockData.isManualBooking && !blockData.isRecurring) {
       for (const selection of blockData.extras) {
         const definition = activeManualBookingExtras.find((extra) => extra.id === selection.extraId);
@@ -3492,7 +3504,7 @@ export default function Admin() {
           });
           return;
         }
-        if (definition.pricingMode === "variable") {
+        {
           const amountCents = moneyInputToCents(selection.amountEuros, {
             minCents: 1,
             maxCents: 1_000_000,
@@ -3505,9 +3517,7 @@ export default function Admin() {
             });
             return;
           }
-          appointmentExtraInputs.push({ extraId: definition.id, amountCents });
-        } else {
-          appointmentExtraInputs.push({ extraId: definition.id });
+          appointmentExtraInputs.push({ extraId: definition.id, amountCents, quantity: selection.quantity });
         }
       }
     }
@@ -3897,8 +3907,8 @@ export default function Admin() {
                         </div>
                         {(appointment.extras || []).map((extra: any) => (
                           <div key={`${extra.extraDefinitionId}-${extra.position}`} className="flex items-start justify-between gap-4 text-gray-300">
-                            <span className="min-w-0 break-words">{extra.nameSnapshot}</span>
-                            <span className="shrink-0">{formatCents(extra.amountCentsSnapshot)}</span>
+                            <span className="min-w-0 break-words">{extra.nameSnapshot}{(extra.quantity ?? 1) > 1 ? ` × ${extra.quantity}` : ""}</span>
+                            <span className="shrink-0">{formatCents(extra.amountCentsSnapshot * (extra.quantity ?? 1))}</span>
                           </div>
                         ))}
                         <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-2 font-semibold text-white">
@@ -4298,6 +4308,7 @@ export default function Admin() {
             {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> {adminCopy.team.tabLabel}</TabsTrigger>}
             {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
+            {canManageExpenses && <TabsTrigger value="internal-costs" className={adminTabTriggerClass}><Boxes className="w-4 h-4" /> Custos / Consumos</TabsTrigger>}
             {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> {adminCopy.schedules.tabLabel}</TabsTrigger>}
             {canManageLocations && multiLocationConfig?.enabled && (
               <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
@@ -5463,6 +5474,12 @@ export default function Admin() {
           {canManageExtras && (
             <TabsContent value="extras" className="outline-none">
               <ExtrasManager enabled={activeTab === "extras"} />
+            </TabsContent>
+          )}
+
+          {canManageExpenses && (
+            <TabsContent value="internal-costs" className="outline-none">
+              <InternalCostsManager enabled={activeTab === "internal-costs"} />
             </TabsContent>
           )}
 

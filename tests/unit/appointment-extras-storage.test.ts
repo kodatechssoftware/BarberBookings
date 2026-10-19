@@ -112,7 +112,11 @@ test("memory storage preserves Extra snapshots and enforces transactional select
     cancelToken: "extra-memory-fixed-authoritative",
     extras: [{ extraId: product.id, amountCents: 9999 }],
   }));
-  assert.equal((await storage.getAppointmentExtras([fixedOverride.id]))[0].amountCentsSnapshot, 750);
+  assert.equal(
+    (await storage.getAppointmentExtras([fixedOverride.id]))[0].amountCentsSnapshot,
+    9999,
+    "an authorized per-appointment override becomes the unit-price snapshot",
+  );
 
   await storage.updateExtraDefinition(product.id, 1, { isActive: false });
   await storage.updateAppointmentWithNotification(

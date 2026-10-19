@@ -280,7 +280,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 18, "an empty legacy baseline must apply migrations 0001 through 0018");
+  assert.equal(freshRun.applied.length, 19,
+    "an empty legacy baseline must apply every migration through 0020 (0019 is intentionally reserved elsewhere)");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -291,6 +292,18 @@ try {
   `, [freshSchema])).rows;
   assert.ok(freshExtrasColumns.some((column) => column.column_name === "pricing_mode" && column.is_nullable === "NO"));
   assert.ok(freshExtrasColumns.some((column) => column.column_name === "amount_cents" && column.is_nullable === "YES"));
+  assert.ok(freshExtrasColumns.some((column) => column.column_name === "description" && column.is_nullable === "YES"));
+  assert.ok(freshExtrasColumns.some((column) => column.column_name === "is_publicly_bookable" && column.is_nullable === "NO"));
+  const freshAppointmentExtraQuantity = (await pool.query(`
+    SELECT is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = $1 AND table_name = 'appointment_extras' AND column_name = 'quantity'
+  `, [freshSchema])).rows[0];
+  assert.deepEqual(freshAppointmentExtraQuantity, { is_nullable: "NO", column_default: "1" });
+  for (const name of ["extra_definition_services", "internal_cost_definitions", "appointment_internal_costs"]) {
+    assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable(name)}`)).rows[0].count), 0,
+      `${name} must be created empty on a fresh install`);
+  }
   const freshLocationColumns = (await pool.query(`
     SELECT column_name, is_nullable
     FROM information_schema.columns
@@ -329,7 +342,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 18);
+  assert.equal(secondFreshRun.alreadyApplied, 19);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1034,6 +1047,18 @@ try {
       (1, 'commission', 50, '2030-01-01 00:00:00'),
       ($1, 'none', NULL, '2029-01-01 00:00:00')
   `, [universalBarberId]);
+  const legacyExtraBeforeCommercialCosts = (await pool.query(`
+    INSERT INTO ${table("extra_definitions")} (
+      location_id, name, pricing_mode, amount_cents, financial_rule
+    ) VALUES ($1, 'Extra legacy antes da 0020', 'fixed', 250, 'establishment')
+    RETURNING id
+  `, [defaultLocation.id])).rows[0];
+  await pool.query(`
+    INSERT INTO ${table("appointment_extras")} (
+      appointment_id, extra_definition_id, name_snapshot, amount_cents_snapshot,
+      financial_rule_snapshot, position
+    ) VALUES (2, $1, 'Extra legacy antes da 0020', 250, 'establishment', 0)
+  `, [legacyExtraBeforeCommercialCosts.id]);
   const compensationMigrationRun = await runSchemaMigrations(pool, {
     schemaName: schema,
     environment,
@@ -1045,8 +1070,26 @@ try {
     "0016_blacklist_location_scope.sql",
     "0017_service_buffers.sql",
     "0018_recurring_expense_management.sql",
+    "0020_commercial_extras_internal_costs.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
+  assert.deepEqual((await pool.query(`
+    SELECT quantity FROM ${table("appointment_extras")}
+    WHERE appointment_id = 2 AND extra_definition_id = $1
+  `, [legacyExtraBeforeCommercialCosts.id])).rows[0], { quantity: 1 },
+  "the 0020 upgrade must preserve historical Extra snapshots with quantity one");
+  assert.deepEqual((await pool.query(`
+    SELECT description, is_publicly_bookable FROM ${table("extra_definitions")} WHERE id = $1
+  `, [legacyExtraBeforeCommercialCosts.id])).rows[0], { description: null, is_publicly_bookable: false },
+  "the 0020 upgrade must add neutral commercial metadata without reclassifying legacy Extras");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("extra_definition_services")}`)).rows[0].count), 0,
+    "an empty applicability set must preserve the all-services legacy meaning");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("internal_cost_definitions")}`)).rows[0].count), 0);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_internal_costs")}`)).rows[0].count), 0,
+    "the migration must never infer internal costs from historical commercial data");
+  await pool.query(`DELETE FROM ${table("appointment_extras")} WHERE appointment_id = 2 AND extra_definition_id = $1`,
+    [legacyExtraBeforeCommercialCosts.id]);
+  await pool.query(`DELETE FROM ${table("extra_definitions")} WHERE id = $1`, [legacyExtraBeforeCommercialCosts.id]);
   assert.equal(Number((await pool.query(`
     SELECT count(*) AS count FROM ${table("service_locations")}
     WHERE buffer_before_minutes <> 0 OR buffer_after_minutes <> 0
@@ -1237,7 +1280,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 18);
+  assert.equal(secondCompensationRun.alreadyApplied, 19);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1252,6 +1295,10 @@ try {
     "extra_definitions_location_name_ci_idx", "extra_definitions_location_active_order_idx",
     "appointment_extras_pkey", "appointment_extras_appointment_position_unique",
     "appointment_extras_extra_definition_id_idx",
+    "extra_definition_services_pkey", "extra_definition_services_service_idx",
+    "internal_cost_definitions_location_name_ci_idx", "internal_cost_definitions_location_active_order_idx",
+    "appointment_internal_costs_pkey", "appointment_internal_costs_definition_unique",
+    "appointment_internal_costs_position_unique", "appointment_internal_costs_definition_idx",
     "blacklist_location_phone_idx", "blacklist_location_created_at_idx",
     "barber_services_location_barber_idx", "barber_services_location_service_idx",
     "barber_compensation_rules_barber_location_effective_idx",
@@ -1500,6 +1547,14 @@ try {
     amountCents: 500,
     financialRule: "follow_compensation",
   });
+  const productMaterialCost = await databaseStorage.createInternalCostDefinition({
+    locationId: Number(defaultLocation.id),
+    name: "Produto consumido storage",
+    description: "Custo interno separado do preço ao cliente",
+    defaultUnitCostCents: 125,
+    unitLabel: "ml",
+    isActive: true,
+  });
   assert.equal(travelExtra.amountCents, null);
   const productAsVariable = await databaseStorage.updateExtraDefinition(
     productExtra.id,
@@ -1629,15 +1684,15 @@ try {
   });
   assert.equal(
     (await databaseStorage.getAppointmentExtras([fixedAuthoritativeAppointment.id]))[0].amountCentsSnapshot,
-    750,
-    "fixed Extra input must never override the authoritative catalogue amount",
+    9999,
+    "a fixed commercial Extra may snapshot an explicitly authorized per-appointment unit price",
   );
   const extrasOnlyUpdate = await databaseStorage.updateAppointmentWithNotification(
     appointmentWithExtra.id,
     {},
     true,
     "booked",
-    [{ extraId: travelExtra.id }, { extraId: productExtra.id }],
+    [{ extraId: travelExtra.id }, { extraId: productExtra.id, quantity: 2 }],
   );
   assert.equal(extrasOnlyUpdate?.appointment.notificationRevision, appointmentWithExtra.notificationRevision,
     "Extra-only changes must not create customer notification revisions in V1");
@@ -1646,12 +1701,13 @@ try {
       definitionId: extra.extraDefinitionId,
       name: extra.nameSnapshot,
       amount: extra.amountCentsSnapshot,
+      quantity: extra.quantity,
       rule: extra.financialRuleSnapshot,
       position: extra.position,
     })),
     [
-      { definitionId: travelExtra.id, name: "Deslocação storage", amount: 1000, rule: "barber", position: 0 },
-      { definitionId: productExtra.id, name: "Produto storage", amount: 750, rule: "establishment", position: 1 },
+      { definitionId: travelExtra.id, name: "Deslocação storage", amount: 1000, quantity: 1, rule: "barber", position: 0 },
+      { definitionId: productExtra.id, name: "Produto storage", amount: 750, quantity: 2, rule: "establishment", position: 1 },
     ],
     "existing snapshots must be preserved while newly selected Extras are frozen",
   );
@@ -1697,7 +1753,10 @@ try {
   }
   await databaseStorage.updateExtraDefinition(productExtra.id, Number(defaultLocation.id), { isActive: false });
   await databaseStorage.updateAppointmentWithNotification(
-    appointmentWithExtra.id, {}, false, "booked", [{ extraId: travelExtra.id }, { extraId: productExtra.id }],
+    appointmentWithExtra.id, {}, false, "booked", [
+      { extraId: travelExtra.id },
+      { extraId: productExtra.id, quantity: 2 },
+    ],
   );
   assert.equal((await databaseStorage.getAppointmentExtras([appointmentWithExtra.id])).length, 2,
     "an inactive Extra already attached to an appointment must remain readable");
@@ -1731,7 +1790,22 @@ try {
       { extraId: travelExtra.id, amountCents: 1000 },
     ],
   }), (error: any) => error?.code === "APPOINTMENT_EXTRA_IDS_INVALID");
-  await databaseStorage.updateAppointmentStatus(appointmentWithExtra.id, "completed", "cash");
+  const completeRequest = {
+    appointmentId: appointmentWithExtra.id,
+    expectedRevision: appointmentWithExtra.notificationRevision,
+    paymentMethod: "cash" as const,
+    extras: [
+      { extraId: travelExtra.id, amountCents: 1000, quantity: 1 },
+      { extraId: productExtra.id, amountCents: 750, quantity: 2 },
+    ],
+    internalCosts: [{ internalCostId: productMaterialCost.id, unitCostCents: 125, quantity: 3 }],
+  };
+  const concurrentCompletions = await Promise.all([
+    databaseStorage.completeAppointment(completeRequest),
+    databaseStorage.completeAppointment(completeRequest),
+  ]);
+  assert.equal(concurrentCompletions.filter(Boolean).length, 1,
+    "the PostgreSQL advisory/row/CAS guards must allow only one concurrent completion");
   const completedAppointmentWithExtra = await databaseStorage.getAppointment(appointmentWithExtra.id);
   assert.ok(completedAppointmentWithExtra);
   assert.deepEqual({
@@ -1748,6 +1822,7 @@ try {
   const postgresFinancials = calculateAppointmentsFinancials({
     appointments: [completedAppointmentWithExtra],
     appointmentExtras: await databaseStorage.getAppointmentExtras([completedAppointmentWithExtra.id]),
+    appointmentInternalCosts: await databaseStorage.getAppointmentInternalCosts([completedAppointmentWithExtra.id]),
     servicePrices: new Map([[1, 1500]]),
     compensationRules: [],
   });
@@ -1756,16 +1831,20 @@ try {
     extras: postgresFinancials.extrasAmountCents,
     total: postgresFinancials.totalAmountCents,
     realized: postgresFinancials.realizedAmountCents,
+    directCosts: postgresFinancials.directCostAmountCents,
+    margin: postgresFinancials.grossMarginCents,
     barber: postgresFinancials.barberAmountCents,
     establishment: postgresFinancials.establishmentAmountCents,
   }, {
     service: 1500,
-    extras: 1750,
-    total: 3250,
-    realized: 3250,
+    extras: 2500,
+    total: 4000,
+    realized: 4000,
+    directCosts: 375,
+    margin: 3625,
     barber: 1750,
-    establishment: 1500,
-  }, "PostgreSQL must feed the same snapshot-only financial engine as MemoryStorage");
+    establishment: 2250,
+  }, "PostgreSQL must keep revenue allocation and direct costs separate in the snapshot-only financial engine");
   await assert.rejects(
     databaseStorage.updateAppointmentWithNotification(
       appointmentWithExtra.id, {}, false, "completed", [{ extraId: travelExtra.id }],
@@ -1892,7 +1971,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0018, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, barber permissions and compensation, voucher payments, customer-note identities, Extra constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0020, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

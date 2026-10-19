@@ -4,10 +4,12 @@ import { pt } from "date-fns/locale";
 import { AlertTriangle, CheckCircle, ChevronDown, Pencil, Phone, User, XCircle } from "lucide-react";
 import {
   type AppointmentExtraSnapshot,
+  type AppointmentInternalCostSnapshot,
   type AppointmentPaymentMethod,
   type AppointmentStatus,
 } from "@/hooks/use-appointments";
 import { useExtras } from "@/hooks/use-extras";
+import { useInternalCosts } from "@/hooks/use-internal-costs";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button-custom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -79,6 +81,8 @@ type AdminAppointment = {
   depositReason?: string | null;
   canManage?: boolean;
   extras?: AppointmentExtraSnapshot[];
+  internalCosts?: AppointmentInternalCostSnapshot[];
+  notificationRevision?: number;
 };
 
 export type AppointmentMutationPendingAction = {
@@ -113,6 +117,13 @@ function formatAppointmentPrice(amountCents: number) {
 type AppointmentExtraSelection = {
   extraId: number;
   amountEuros: string;
+  quantity: number;
+};
+
+type AppointmentInternalCostSelection = {
+  internalCostId: number;
+  amountEuros: string;
+  quantity: number;
 };
 
 function appointmentExtraSelections(appointment: AdminAppointment): AppointmentExtraSelection[] {
@@ -121,6 +132,17 @@ function appointmentExtraSelections(appointment: AdminAppointment): AppointmentE
     .map((extra) => ({
       extraId: extra.extraDefinitionId,
       amountEuros: centsToMoneyInput(extra.amountCentsSnapshot),
+      quantity: extra.quantity,
+    }));
+}
+
+function appointmentInternalCostSelections(appointment: AdminAppointment): AppointmentInternalCostSelection[] {
+  return [...(appointment.internalCosts ?? [])]
+    .sort((left, right) => left.position - right.position)
+    .map((cost) => ({
+      internalCostId: cost.internalCostDefinitionId,
+      amountEuros: centsToMoneyInput(cost.unitCostCentsSnapshot),
+      quantity: cost.quantity,
     }));
 }
 
@@ -166,11 +188,19 @@ function EditAppointmentDialog({
   const [selectedExtras, setSelectedExtras] = useState<AppointmentExtraSelection[]>(
     () => appointmentExtraSelections(appointment),
   );
+  const [selectedInternalCosts, setSelectedInternalCosts] = useState<AppointmentInternalCostSelection[]>(
+    () => appointmentInternalCostSelections(appointment),
+  );
   const [isExtrasOpen, setIsExtrasOpen] = useState(() => (appointment.extras ?? []).length > 0);
+  const [areInternalCostsOpen, setAreInternalCostsOpen] = useState(() => (appointment.internalCosts ?? []).length > 0);
   const [allowOutsideHours, setAllowOutsideHours] = useState(Boolean(appointment.manualOutsideHours));
   const [isSaving, setIsSaving] = useState(false);
   const isSavingRef = useRef(false);
   const { data: extraDefinitions = [], isLoading: isLoadingExtras } = useExtras({
+    enabled: open,
+    locationId: appointment.locationId,
+  });
+  const { data: internalCostDefinitions = [], isLoading: isLoadingInternalCosts } = useInternalCosts({
     enabled: open,
     locationId: appointment.locationId,
   });
@@ -281,12 +311,15 @@ function EditAppointmentDialog({
     [extraDefinitions],
   );
   const visibleExtraDefinitions = useMemo(() => {
-    const activeDefinitions = extraDefinitions.filter((extra) => extra.isActive);
+    const applicableServiceId = serviceId === "custom" || serviceId === "none" ? null : Number(serviceId);
+    const activeDefinitions = extraDefinitions.filter((extra) => extra.isActive
+      && (extra.serviceIds.length === 0
+        || (applicableServiceId !== null && extra.serviceIds.includes(applicableServiceId))));
     const inactiveSelectedDefinitions = extraDefinitions.filter((extra) =>
       !extra.isActive && selectedExtras.some((selection) => selection.extraId === extra.id));
     return [...activeDefinitions, ...inactiveSelectedDefinitions]
       .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id);
-  }, [extraDefinitions, selectedExtras]);
+  }, [extraDefinitions, selectedExtras, serviceId]);
   const missingSelectedExtras = useMemo(() => selectedExtras
     .filter((selection) => !extraDefinitionsById.has(selection.extraId))
     .map((selection) => existingExtrasByDefinitionId.get(selection.extraId))
@@ -301,20 +334,39 @@ function EditAppointmentDialog({
   const proposedExtrasTotalCents = selectedExtras.reduce((total, selection) => {
     const definition = extraDefinitionsById.get(selection.extraId);
     const existing = existingExtrasByDefinitionId.get(selection.extraId);
-    const amount = definition?.pricingMode === "fixed"
-      ? existing?.amountCentsSnapshot ?? definition.amountCents
-      : parseAppointmentExtraPriceInput(selection.amountEuros);
-    return total + (amount ?? existing?.amountCentsSnapshot ?? 0);
+    const amount = parseAppointmentExtraPriceInput(selection.amountEuros)
+      ?? existing?.amountCentsSnapshot
+      ?? definition?.amountCents;
+    return total + (amount ?? 0) * selection.quantity;
   }, 0);
   const incompleteVariableExtra = selectedExtras.find((selection) => {
     const definition = extraDefinitionsById.get(selection.extraId);
-    return definition?.isActive && definition.pricingMode === "variable"
-      && parseAppointmentExtraPriceInput(selection.amountEuros) === null;
+    return definition?.isActive && parseAppointmentExtraPriceInput(selection.amountEuros) === null;
   });
   const selectedExtrasCount = selectedExtras.length;
   const extrasHeading = selectedExtrasCount === 0
     ? "Extras (opcional)"
     : `Extras (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
+  const existingInternalCostsByDefinitionId = useMemo(
+    () => new Map((appointment.internalCosts ?? []).map((cost) => [cost.internalCostDefinitionId, cost])),
+    [appointment.internalCosts],
+  );
+  const visibleInternalCostDefinitions = useMemo(() => {
+    const active = internalCostDefinitions.filter((cost) => cost.isActive);
+    const selectedInactive = internalCostDefinitions.filter((cost) => !cost.isActive
+      && selectedInternalCosts.some((selected) => selected.internalCostId === cost.id));
+    return [...active, ...selectedInactive]
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id);
+  }, [internalCostDefinitions, selectedInternalCosts]);
+  const internalCostsTotalCents = selectedInternalCosts.reduce((total, selection) => {
+    const existing = existingInternalCostsByDefinitionId.get(selection.internalCostId);
+    const definition = internalCostDefinitions.find((cost) => cost.id === selection.internalCostId);
+    const unitCost = moneyInputToCents(selection.amountEuros, { minCents: 0, maxCents: 1_000_000 })
+      ?? existing?.unitCostCentsSnapshot
+      ?? definition?.defaultUnitCostCents
+      ?? 0;
+    return total + unitCost * selection.quantity;
+  }, 0);
 
   useEffect(() => {
     if (!open) return;
@@ -335,6 +387,20 @@ function EditAppointmentDialog({
     }
   }, [availableBarbers, barberId, canUseNoService, compatibleServices, open, serviceId]);
 
+  useEffect(() => {
+    if (!open || extraDefinitions.length === 0) return;
+    const applicableServiceId = serviceId === "custom" || serviceId === "none" ? null : Number(serviceId);
+    setSelectedExtras((current) => {
+      const next = current.filter((selection) => {
+        const definition = extraDefinitionsById.get(selection.extraId);
+        if (!definition) return true;
+        return definition.serviceIds.length === 0
+          || (applicableServiceId !== null && definition.serviceIds.includes(applicableServiceId));
+      });
+      return next.length === current.length ? current : next;
+    });
+  }, [extraDefinitions.length, extraDefinitionsById, open, serviceId]);
+
   const resetForm = () => {
     setDateValue(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
     setTimeValue(format(parseISO(appointment.startTime), "HH:mm"));
@@ -344,7 +410,9 @@ function EditAppointmentDialog({
     setCustomDuration(String(appointment.durationMinutes || 30));
     setPriceValue(centsToMoneyInput(appointment.servicePriceCentsSnapshot ?? 0));
     setSelectedExtras(appointmentExtraSelections(appointment));
+    setSelectedInternalCosts(appointmentInternalCostSelections(appointment));
     setIsExtrasOpen((appointment.extras ?? []).length > 0);
+    setAreInternalCostsOpen((appointment.internalCosts ?? []).length > 0);
     setAllowOutsideHours(Boolean(appointment.manualOutsideHours));
   };
 
@@ -401,14 +469,23 @@ function EditAppointmentDialog({
       const definition = extraDefinitionsById.get(selection.extraId);
       const existing = existingExtrasByDefinitionId.get(selection.extraId);
       if (!definition || !definition.isActive) {
-        return { extraId: selection.extraId, amountCents: existing?.amountCentsSnapshot };
+        return {
+          extraId: selection.extraId,
+          amountCents: existing?.amountCentsSnapshot,
+          quantity: selection.quantity,
+        };
       }
-      if (definition.pricingMode === "fixed") return { extraId: selection.extraId };
       return {
         extraId: selection.extraId,
         amountCents: parseAppointmentExtraPriceInput(selection.amountEuros) ?? undefined,
+        quantity: selection.quantity,
       };
     });
+    const internalCostsPayload = selectedInternalCosts.map((selection) => ({
+      internalCostId: selection.internalCostId,
+      unitCostCents: moneyInputToCents(selection.amountEuros, { minCents: 0, maxCents: 1_000_000 }) ?? undefined,
+      quantity: selection.quantity,
+    }));
     if (incompleteVariableExtra) {
       setIsExtrasOpen(true);
       window.setTimeout(() => {
@@ -432,6 +509,7 @@ function EditAppointmentDialog({
         serviceMode: serviceId === "custom" ? "custom" : "existing",
         allowOutsideHours: allowOutsideHours && selectedIsOutsideHours,
         extras: extrasPayload,
+        internalCosts: internalCostsPayload,
         ...(serviceId === "custom" ? {
           customServiceName: customServiceName.trim(),
           customDurationMinutes: parsedCustomDuration,
@@ -659,7 +737,11 @@ function EditAppointmentDialog({
                           onCheckedChange={(checked) => setSelectedExtras((current) => checked
                             ? current.some((candidate) => candidate.extraId === extra.id)
                               ? current
-                              : [...current, { extraId: extra.id, amountEuros: "" }]
+                              : [...current, {
+                                  extraId: extra.id,
+                                  amountEuros: centsToMoneyInput(extra.amountCents),
+                                  quantity: 1,
+                                }]
                             : current.filter((candidate) => candidate.extraId !== extra.id))}
                           aria-label={`Selecionar Extra ${extra.name}`}
                         />
@@ -675,8 +757,9 @@ function EditAppointmentDialog({
                             : "Variável"}
                         </span>
                       </label>
-                      {selected && extra.pricingMode === "variable" && (
-                        <div className="space-y-1.5 pl-7">
+                      {selected && (
+                        <div className="grid gap-2 pl-7 sm:grid-cols-2">
+                          <div className="space-y-1.5">
                           <Label htmlFor={`edit-appointment-extra-amount-${extra.id}`} className="text-xs text-gray-300">
                             Valor (€)
                           </Label>
@@ -705,6 +788,25 @@ function EditAppointmentDialog({
                             aria-label={`Valor do Extra ${extra.name}`}
                             className="h-10 border-white/10 bg-background text-white"
                           />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor={`edit-appointment-extra-quantity-${extra.id}`} className="text-xs text-gray-300">Quantidade</Label>
+                            <Input
+                              id={`edit-appointment-extra-quantity-${extra.id}`}
+                              type="number"
+                              min={1}
+                              max={99}
+                              step={1}
+                              value={selection?.quantity ?? 1}
+                              disabled={!extra.isActive}
+                              onChange={(event) => setSelectedExtras((current) => current.map((candidate) =>
+                                candidate.extraId === extra.id
+                                  ? { ...candidate, quantity: Math.max(1, Math.min(99, Number(event.target.value) || 1)) }
+                                  : candidate))}
+                              aria-label={`Quantidade do Extra ${extra.name}`}
+                              className="h-10 border-white/10 bg-background text-white"
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -731,6 +833,69 @@ function EditAppointmentDialog({
                 ))}
                 </div>
               )}
+            </CollapsibleContent>
+          </Collapsible>
+          <Collapsible
+            open={areInternalCostsOpen}
+            onOpenChange={setAreInternalCostsOpen}
+            className="overflow-hidden rounded-xl border border-white/10 bg-background/30"
+            data-testid="appointment-internal-costs-editor"
+          >
+            <CollapsibleTrigger asChild>
+              <button type="button" className="flex min-h-14 w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-white/5">
+                <span>
+                  <span className="block font-semibold text-white">Custos / Consumos internos</span>
+                  <span className="mt-1 block text-xs text-gray-400">Não alteram o total cobrado à cliente.</span>
+                </span>
+                <ChevronDown className={cn("h-5 w-5 text-gray-400 transition-transform", areInternalCostsOpen && "rotate-180")} />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-2 border-t border-white/10 p-3">
+              {isLoadingInternalCosts ? <p className="text-xs text-gray-500">A carregar custos e consumos...</p>
+                : visibleInternalCostDefinitions.length === 0 ? <p className="text-xs text-gray-500">Não existem custos ou consumos ativos nesta localização.</p>
+                : visibleInternalCostDefinitions.map((cost) => {
+                  const selected = selectedInternalCosts.find((item) => item.internalCostId === cost.id);
+                  const existing = existingInternalCostsByDefinitionId.get(cost.id);
+                  return <div key={cost.id} className="space-y-2 rounded-lg border border-white/10 bg-card/60 p-3">
+                    <label className="flex items-start gap-3">
+                      <Checkbox
+                        checked={Boolean(selected)}
+                        aria-label={`Selecionar custo interno ${cost.name}`}
+                        onCheckedChange={(checked) => setSelectedInternalCosts((current) => checked
+                          ? current.some((item) => item.internalCostId === cost.id) ? current : [...current, {
+                              internalCostId: cost.id,
+                              amountEuros: centsToMoneyInput(cost.defaultUnitCostCents),
+                              quantity: 1,
+                            }]
+                          : current.filter((item) => item.internalCostId !== cost.id))}
+                      />
+                      <span className="min-w-0 flex-1 text-sm text-gray-200">{existing?.nameSnapshot ?? cost.name}{!cost.isActive && <span className="block text-[11px] text-amber-300">Inativo · apenas pode remover</span>}</span>
+                      <span className="shrink-0 text-xs text-gray-400">/{existing?.unitLabelSnapshot ?? cost.unitLabel}</span>
+                    </label>
+                    {selected && <div className="grid gap-2 pl-7 sm:grid-cols-2">
+                      <div className="space-y-1"><Label className="text-xs">Custo unitário (€)</Label><Input
+                        inputMode="decimal"
+                        value={selected.amountEuros}
+                        disabled={!cost.isActive}
+                        onChange={(event) => setSelectedInternalCosts((current) => current.map((item) => item.internalCostId === cost.id
+                          ? { ...item, amountEuros: normalizeMoneyInput(event.target.value, item.amountEuros) }
+                          : item))}
+                        onBlur={() => setSelectedInternalCosts((current) => current.map((item) => item.internalCostId === cost.id
+                          ? { ...item, amountEuros: formatMoneyInputOnBlur(item.amountEuros, { minCents: 0, maxCents: 1_000_000 }) }
+                          : item))}
+                      /></div>
+                      <div className="space-y-1"><Label className="text-xs">Quantidade</Label><Input
+                        type="number" min={1} max={9999} step={1}
+                        value={selected.quantity}
+                        disabled={!cost.isActive}
+                        onChange={(event) => setSelectedInternalCosts((current) => current.map((item) => item.internalCostId === cost.id
+                          ? { ...item, quantity: Math.max(1, Math.min(9999, Number(event.target.value) || 1)) }
+                          : item))}
+                      /></div>
+                    </div>}
+                  </div>;
+                })}
+              {selectedInternalCosts.length > 0 && <div className="flex justify-between border-t border-white/10 pt-2 text-sm"><span className="text-gray-400">Custo direto estimado</span><strong className="text-white">{formatAppointmentPrice(internalCostsTotalCents)}</strong></div>}
             </CollapsibleContent>
           </Collapsible>
           {proposedServicePriceCents !== null && (
@@ -966,8 +1131,14 @@ export function AppointmentDetailsDialog({
     ?? 0;
   const appointmentExtras = [...(appointment.extras ?? [])]
     .sort((left, right) => left.position - right.position);
+  const appointmentInternalCosts = [...(appointment.internalCosts ?? [])]
+    .sort((left, right) => left.position - right.position);
   const appointmentTotal = finalPrice + appointmentExtras.reduce(
-    (total, extra) => total + extra.amountCentsSnapshot,
+    (total, extra) => total + extra.amountCentsSnapshot * (extra.quantity ?? 1),
+    0,
+  );
+  const directCostsTotal = appointmentInternalCosts.reduce(
+    (total, cost) => total + cost.unitCostCentsSnapshot * cost.quantity,
     0,
   );
   const completeDisabledMessage = getStatusTimingMessage(appointment, "completed");
@@ -1070,8 +1241,8 @@ export function AppointmentDetailsDialog({
                   <p className="pt-1 text-xs uppercase tracking-widest text-gray-500">Extras</p>
                   {appointmentExtras.map((extra) => (
                     <div key={`${extra.extraDefinitionId}-${extra.position}`} className="flex items-start justify-between gap-4">
-                      <span className="min-w-0 break-words text-gray-300">{extra.nameSnapshot}</span>
-                      <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(extra.amountCentsSnapshot)}</span>
+                      <span className="min-w-0 break-words text-gray-300">{extra.nameSnapshot}{extra.quantity > 1 ? ` × ${extra.quantity}` : ""}</span>
+                      <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(extra.amountCentsSnapshot * (extra.quantity ?? 1))}</span>
                     </div>
                   ))}
                 </>
@@ -1081,6 +1252,17 @@ export function AppointmentDetailsDialog({
                 <span className="shrink-0 text-primary">{formatAppointmentPrice(appointmentTotal)}</span>
               </div>
             </div>
+            {appointmentInternalCosts.length > 0 && (
+              <div className="mt-3 space-y-2 rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-3 text-sm" data-testid="appointment-internal-costs-breakdown">
+                <p className="text-xs uppercase tracking-widest text-amber-200">Custos / Consumos internos</p>
+                {appointmentInternalCosts.map((cost) => <div key={cost.id} className="flex justify-between gap-4">
+                  <span className="min-w-0 text-gray-300">{cost.nameSnapshot}{cost.quantity > 1 ? ` × ${cost.quantity}` : ""}</span>
+                  <span className="shrink-0 text-white">{formatAppointmentPrice(cost.unitCostCentsSnapshot * cost.quantity)}</span>
+                </div>)}
+                <div className="flex justify-between border-t border-white/10 pt-2"><span className="text-gray-300">Custo direto</span><strong>{formatAppointmentPrice(directCostsTotal)}</strong></div>
+                <div className="flex justify-between"><span className="text-gray-300">Margem bruta</span><strong className="text-primary">{formatAppointmentPrice(appointmentTotal - directCostsTotal)}</strong></div>
+              </div>
+            )}
           </div>
 
           {canViewCustomer ? (

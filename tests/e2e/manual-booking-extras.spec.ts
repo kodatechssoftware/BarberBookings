@@ -288,7 +288,7 @@ test.describe.serial("manual booking Extras", () => {
     });
     expect(custom.body.appointments[0].extras[0]).toMatchObject({
       extraDefinitionId: specialExtra.id,
-      amountCentsSnapshot: 500,
+      amountCentsSnapshot: 9999,
     });
 
     const outsideStart = futureThursdayIso(245, 18);
@@ -594,6 +594,7 @@ test.describe.serial("manual booking Extras", () => {
     expect(tokenBody.extras).toEqual(historyAppointment.extras.map((extra: any) => ({
       nameSnapshot: extra.nameSnapshot,
       amountCentsSnapshot: extra.amountCentsSnapshot,
+      quantity: extra.quantity,
       position: extra.position,
     })));
     expect(JSON.stringify(tokenBody)).not.toContain("financialRuleSnapshot");
@@ -652,6 +653,86 @@ test.describe.serial("manual booking Extras", () => {
       expect(editHistorical.status(), `${status}: ${await editHistorical.text()}`).toBe(409);
       expect((await findAppointments(request, `Estado Extra ${status} ${suffix}`, stateStart))[0].extras).toHaveLength(1);
     }
+  });
+
+  test("keeps appointment internal costs separate, private and frozen by atomic completion", async ({ request, page }) => {
+    const suffix = Date.now();
+    const definitionResponse = await request.post("/api/admin/internal-costs", { data: {
+      name: `Consumível interno QA ${suffix}`,
+      description: "Nunca apresentado ao cliente",
+      defaultUnitCostCents: 125,
+      unitLabel: "ml",
+      isActive: true,
+    } });
+    expect(definitionResponse.status(), await definitionResponse.text()).toBe(201);
+    const definition = await definitionResponse.json();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdminPage(page);
+    await page.getByRole("tab", { name: "Custos / Consumos" }).click();
+    const manager = page.getByTestId("internal-costs-manager");
+    await expect(manager).toContainText(definition.name);
+    await expect(manager).toContainText("Nunca altera o preço cobrado");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(manager).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+    const startTime = futureThursdayIso(-10, 10);
+    const created = await createManual(request, `Custos internos QA ${suffix}`, startTime, {
+      allowOutsideHours: true,
+    });
+    expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+    const appointment = created.body.appointments[0];
+
+    const editedResponse = await request.patch(`/api/appointments/${appointment.id}`, { data: {
+      internalCosts: [{ internalCostId: definition.id, unitCostCents: 150, quantity: 2 }],
+    } });
+    expect(editedResponse.status(), await editedResponse.text()).toBe(200);
+    const edited = await editedResponse.json();
+    expect(edited.internalCosts).toEqual([
+      expect.objectContaining({
+        internalCostDefinitionId: definition.id,
+        nameSnapshot: definition.name,
+        unitCostCentsSnapshot: 150,
+        unitLabelSnapshot: "ml",
+        quantity: 2,
+      }),
+    ]);
+
+    const tokenResponse = await request.get(`/api/appointments/token/${appointment.cancelToken}`);
+    expect(tokenResponse.status(), await tokenResponse.text()).toBe(200);
+    const tokenBody = await tokenResponse.json();
+    expect(tokenBody.totalPrice).toBe(service.price);
+    expect(JSON.stringify(tokenBody)).not.toContain("internalCost");
+    expect(JSON.stringify(tokenBody)).not.toContain(definition.name);
+
+    const completeResponse = await request.post(`/api/appointments/${appointment.id}/complete`, { data: {
+      expectedRevision: edited.notificationRevision,
+      paymentMethod: "cash",
+      extras: [],
+      internalCosts: [{ internalCostId: definition.id, unitCostCents: 175, quantity: 3 }],
+    } });
+    expect(completeResponse.status(), await completeResponse.text()).toBe(200);
+    const completed = await completeResponse.json();
+    expect(completed).toMatchObject({ status: "completed", paymentMethod: "cash" });
+    expect(completed.internalCosts).toEqual([
+      expect.objectContaining({
+        internalCostDefinitionId: definition.id,
+        unitCostCentsSnapshot: 175,
+        quantity: 3,
+      }),
+    ]);
+
+    const duplicateCompletion = await request.post(`/api/appointments/${appointment.id}/complete`, { data: {
+      expectedRevision: edited.notificationRevision,
+      paymentMethod: "cash",
+      extras: [],
+      internalCosts: [],
+    } });
+    expect(duplicateCompletion.status()).toBe(409);
+    const lockedEdit = await request.patch(`/api/appointments/${appointment.id}`, { data: { internalCosts: [] } });
+    expect(lockedEdit.status()).toBe(409);
+    expect((await request.patch(`/api/admin/internal-costs/${definition.id}`, { data: { isActive: false } })).ok()).toBe(true);
   });
 
   test("renders and edits snapshot Extras coherently on desktop, mobile, history and customer token", async ({ page, request }) => {
@@ -715,7 +796,8 @@ test.describe.serial("manual booking Extras", () => {
     await expect(extrasEditor.getByLabel(`Selecionar Extra ${variable.name}`)).toBeChecked();
     await expect(extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`)).toBeChecked();
     await expect(extrasEditor.getByText("Inativo · pode remover, mas não voltar a adicionar")).toBeVisible();
-    await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toHaveCount(0);
+    await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toHaveValue("5,00");
+    await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toBeDisabled();
     await extrasEditorTrigger.click();
     await expect(extrasEditorTrigger).toHaveAttribute("aria-expanded", "false");
     await expect(extrasEditorTrigger).toContainText("Extras (2 selecionados)");
@@ -791,7 +873,7 @@ test.describe.serial("manual booking Extras", () => {
     await extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`).fill("10,00");
     await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
     await expect(extrasTrigger).not.toContainText("Valor por completar");
-    await expect(extrasSection.getByLabel(`Valor do Extra ${specialExtra.name}`)).toHaveCount(0);
+    await expect(extrasSection.getByLabel(`Valor do Extra ${specialExtra.name}`)).toHaveValue("5,00");
     await extrasTrigger.click();
     await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
     await expect(extrasTrigger).toContainText("Extras (2 selecionados)");

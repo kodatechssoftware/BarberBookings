@@ -3,6 +3,7 @@ import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import {
   AppointmentExtrasError,
+  AppointmentInternalCostsError,
   CustomerNoteIdentityConflictError,
   customerNoteIdentityConflictCode,
   appointmentBarberLocationUnavailableCode,
@@ -16,6 +17,7 @@ import {
   isAppointmentLocationIntegrityError,
   storage,
   type AppointmentExtraInput,
+  type AppointmentInternalCostInput,
 } from "./storage";
 import { barberAvatarVersion, decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
 import {
@@ -85,12 +87,15 @@ import {
   businessExpenseCategories,
   businessExpenseRecurrences,
   insertExtraDefinitionSchema,
+  insertInternalCostDefinitionSchema,
   insertServiceSchema,
   updateExtraDefinitionSchema,
+  updateInternalCostDefinitionSchema,
   type ExtraDefinition,
   type ServiceCatalogueItem,
   type Appointment,
   type AppointmentExtra,
+  type AppointmentInternalCost,
   type AppointmentPaymentMethod,
   type BarberCompensationRule,
   type BarberCompensationModel,
@@ -1168,6 +1173,7 @@ function isLocationSensitiveMutation(req: Request) {
 
   return [
     /^\/admin\/extras(?:\/\d+)?$/,
+    /^\/admin\/internal-costs(?:\/\d+)?$/,
     /^\/admin\/expenses(?:\/\d+)?$/,
     /^\/admin\/expense-series(?:\/\d+(?:\/(?:versions|state))?)?$/,
     /^\/admin\/expenses\/\d+\/occurrence$/,
@@ -1179,7 +1185,7 @@ function isLocationSensitiveMutation(req: Request) {
     /^\/shop\/availability$/,
     /^\/appointments$/,
     /^\/appointments\/block$/,
-    /^\/appointments\/\d+(?:\/status)?$/,
+    /^\/appointments\/\d+(?:\/(?:status|complete))?$/,
     /^\/admin\/customers\/notes$/,
     /^\/admin\/customers\/[^/]+\/notes$/,
   ].some((pattern) => pattern.test(req.path));
@@ -1207,12 +1213,24 @@ function sendAppointmentExtrasError(res: Response, error: unknown) {
   return true;
 }
 
+function sendAppointmentInternalCostsError(res: Response, error: unknown) {
+  if (!(error instanceof AppointmentInternalCostsError)) return false;
+  res.status(error.code === "APPOINTMENT_INTERNAL_COST_INVALID" ? 400 : error.status)
+    .json({ code: error.code, message: error.message });
+  return true;
+}
+
 async function attachAppointmentExtras<T extends Appointment>(appointments: T[]) {
-  const extras = await storage.getAppointmentExtras(appointments.map((appointment) => appointment.id));
+  const appointmentIds = appointments.map((appointment) => appointment.id);
+  const [extras, internalCosts] = await Promise.all([
+    storage.getAppointmentExtras(appointmentIds),
+    storage.getAppointmentInternalCosts(appointmentIds),
+  ]);
   const extrasByAppointment = new Map<number, Array<{
     extraDefinitionId: number;
     nameSnapshot: string;
     amountCentsSnapshot: number;
+    quantity: number;
     financialRuleSnapshot: string;
     position: number;
   }>>();
@@ -1222,14 +1240,22 @@ async function attachAppointmentExtras<T extends Appointment>(appointments: T[])
       extraDefinitionId: extra.extraDefinitionId,
       nameSnapshot: extra.nameSnapshot,
       amountCentsSnapshot: extra.amountCentsSnapshot,
+      quantity: extra.quantity,
       financialRuleSnapshot: extra.financialRuleSnapshot,
       position: extra.position,
     });
     extrasByAppointment.set(extra.appointmentId, appointmentExtras);
   }
+  const costsByAppointment = new Map<number, AppointmentInternalCost[]>();
+  for (const cost of internalCosts) {
+    const values = costsByAppointment.get(cost.appointmentId) ?? [];
+    values.push(cost);
+    costsByAppointment.set(cost.appointmentId, values);
+  }
   return appointments.map((appointment) => ({
     ...appointment,
     extras: extrasByAppointment.get(appointment.id) ?? [],
+    internalCosts: costsByAppointment.get(appointment.id) ?? [],
   }));
 }
 
@@ -1238,12 +1264,13 @@ function commercialAppointmentExtra(extra: AppointmentExtra) {
     extraDefinitionId: extra.extraDefinitionId,
     nameSnapshot: extra.nameSnapshot,
     amountCentsSnapshot: extra.amountCentsSnapshot,
+    quantity: extra.quantity,
     position: extra.position,
   };
 }
 
-function sumAppointmentExtras(extras: Array<Pick<AppointmentExtra, "amountCentsSnapshot">>) {
-  return extras.reduce((total, extra) => total + extra.amountCentsSnapshot, 0);
+function sumAppointmentExtras(extras: Array<Pick<AppointmentExtra, "amountCentsSnapshot" | "quantity">>) {
+  return extras.reduce((total, extra) => total + extra.amountCentsSnapshot * (extra.quantity ?? 1), 0);
 }
 
 async function attachCommercialAppointmentExtras<T extends Appointment>(appointments: T[]) {
@@ -2350,6 +2377,11 @@ export async function registerRoutes(
   const requireAuditView = requireCapabilityAtLocation("audit.view", requireAdmin);
   const requireExtrasManage = requireCapabilityAtLocation("extras.manage", requireAdmin);
   const requireExpensesManage = requireCapabilityAtLocation("finance.manage_expenses", requireAdmin);
+  const requireInternalCostsRead = requireAnyCapabilityAtLocation(
+    ["appointments.create_manual", "appointments.manage_own", "appointments.manage_team", "finance.manage_expenses"],
+    requireAdmin,
+  );
+  const requireInternalCostsManage = requireExpensesManage;
   const requireTeamLocationAssignment = requireCapabilityAtLocation("team.assign_location", requireAdmin);
   const requireCatalogLocationManage = requireCapabilityAtLocation("catalog.manage_location", requireAdmin);
   const requireCatalogGlobalManage = requireGlobalCapability("catalog.manage_global", requireAdmin);
@@ -2846,6 +2878,12 @@ export async function registerRoutes(
         ...req.body,
         locationId,
       });
+      const allowedServiceIds = new Set(
+        (await loadLocationServiceCatalogue(locationId, true)).map((service) => service.id),
+      );
+      if ((input.serviceIds ?? []).some((serviceId) => !allowedServiceIds.has(serviceId))) {
+        return res.status(400).json({ message: "Um dos serviços selecionados não está disponível nesta localização." });
+      }
       const extra = await storage.createExtraDefinition(input);
       recordAuditLog(req, {
         action: "extra.created",
@@ -2897,6 +2935,12 @@ export async function registerRoutes(
         ...patch,
         locationId,
       });
+      const allowedServiceIds = new Set(
+        (await loadLocationServiceCatalogue(locationId, true)).map((service) => service.id),
+      );
+      if ((input.serviceIds ?? []).some((serviceId) => !allowedServiceIds.has(serviceId))) {
+        return res.status(400).json({ message: "Um dos serviços selecionados não está disponível nesta localização." });
+      }
       const updated = await storage.updateExtraDefinition(extraId, locationId, input);
       if (!updated) return res.status(404).json({ message: "Extra não encontrado." });
 
@@ -2948,6 +2992,78 @@ export async function registerRoutes(
       }
       console.error("Update Extra error:", error);
       res.status(500).json({ message: "Erro ao atualizar Extra" });
+    }
+  });
+
+  // === INTERNAL COSTS / CONSUMPTIONS (never exposed by public routes) ===
+  app.get("/api/admin/internal-costs", requireInternalCostsRead, async (_req, res) => {
+    const canonicalContext = getCanonicalRequestAuthContext(_req);
+    const includeInactive = authRuntimeMode !== "canonical"
+      || Boolean(canonicalContext && hasCanonicalCapability(
+        canonicalContext,
+        "finance.manage_expenses",
+        Number(res.locals.locationId),
+      ));
+    res.json(await storage.getInternalCostDefinitions(Number(res.locals.locationId), { includeInactive }));
+  });
+
+  app.post("/api/admin/internal-costs", requireInternalCostsManage, async (req, res) => {
+    try {
+      const input = insertInternalCostDefinitionSchema.parse({
+        ...req.body,
+        locationId: Number(res.locals.locationId),
+      });
+      const created = await storage.createInternalCostDefinition(input);
+      recordAuditLog(req, {
+        action: "internal_cost.created",
+        entityType: "internal_cost_definition",
+        entityId: created.id,
+        summary: `Custo/consumo criado: ${created.name}`,
+        metadata: { internalCostDefinitionId: created.id, locationId: created.locationId },
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe um custo ou consumo com este nome nesta localização." });
+      }
+      console.error("Create internal cost error:", error);
+      res.status(500).json({ message: "Erro ao criar custo ou consumo" });
+    }
+  });
+
+  app.patch("/api/admin/internal-costs/:id", requireInternalCostsManage, async (req, res) => {
+    try {
+      const id = parsePositiveInteger(req.params.id);
+      if (id === null) return res.status(400).json({ message: "Custo ou consumo inválido." });
+      const locationId = Number(res.locals.locationId);
+      const existing = await storage.getInternalCostDefinition(id, locationId);
+      if (!existing) return res.status(404).json({ message: "Custo ou consumo não encontrado." });
+      const patch = updateInternalCostDefinitionSchema.parse(req.body);
+      if (Object.keys(patch).length === 0) return res.status(400).json({ message: "Indique uma alteração." });
+      const updated = await storage.updateInternalCostDefinition(id, locationId, patch);
+      if (!updated) return res.status(404).json({ message: "Custo ou consumo não encontrado." });
+      recordAuditLog(req, {
+        action: existing.isActive !== updated.isActive
+          ? updated.isActive ? "internal_cost.activated" : "internal_cost.deactivated"
+          : "internal_cost.updated",
+        entityType: "internal_cost_definition",
+        entityId: updated.id,
+        summary: `Custo/consumo atualizado: ${updated.name}`,
+        metadata: { internalCostDefinitionId: updated.id, locationId },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (hasDatabaseErrorCode(error, "23505")) {
+        return res.status(409).json({ message: "Já existe um custo ou consumo com este nome nesta localização." });
+      }
+      console.error("Update internal cost error:", error);
+      res.status(500).json({ message: "Erro ao atualizar custo ou consumo" });
     }
   });
 
@@ -5036,6 +5152,7 @@ export async function registerRoutes(
         isAlreadyCompleted,
         paymentMethod: requestedPaymentMethod,
         extras,
+        internalCosts,
         isRecurring,
         recurringWeeks,
         recurringMonths,
@@ -5614,6 +5731,7 @@ export async function registerRoutes(
         allowOutsideHours,
         paymentMethod: requestedPaymentMethod,
         extras,
+        internalCosts,
       } = req.body;
       const hasStartTimePatch = Object.prototype.hasOwnProperty.call(req.body, "startTime");
       const hasBarberPatch = Object.prototype.hasOwnProperty.call(req.body, "barberId");
@@ -5626,11 +5744,13 @@ export async function registerRoutes(
       const hasAllowOutsideHoursPatch = Object.prototype.hasOwnProperty.call(req.body, "allowOutsideHours");
       const hasPaymentMethodPatch = Object.prototype.hasOwnProperty.call(req.body, "paymentMethod");
       const hasExtrasPatch = Object.prototype.hasOwnProperty.call(req.body, "extras");
+      const hasInternalCostsPatch = Object.prototype.hasOwnProperty.call(req.body, "internalCosts");
       if (
         (hasServiceModePatch && serviceMode !== "existing" && serviceMode !== "custom")
         || (hasAllowOutsideHoursPatch && typeof allowOutsideHours !== "boolean")
         || (hasPaymentMethodPatch && !isKnownAppointmentPaymentMethod(requestedPaymentMethod))
         || (hasExtrasPatch && !Array.isArray(extras))
+        || (hasInternalCostsPatch && !Array.isArray(internalCosts))
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
@@ -5643,9 +5763,12 @@ export async function registerRoutes(
       if (hasExtrasPatch && (currentApp.status !== "booked" || currentApp.seriesId)) {
         throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
       }
+      if (hasInternalCostsPatch && (currentApp.status !== "booked" || currentApp.seriesId)) {
+        throw new AppointmentInternalCostsError("APPOINTMENT_INTERNAL_COSTS_NOT_EDITABLE");
+      }
       const hasAppointmentDetailsPatch = hasStartTimePatch || hasBarberPatch || hasServicePatch
         || hasServiceModePatch || hasCustomNamePatch || hasCustomDurationPatch
-        || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch;
+        || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch || hasInternalCostsPatch;
       if (authRuntimeMode === "canonical") {
         if ((hasAppointmentDetailsPatch || !hasStatusPatch) && !enforceCanonicalOwnOrTeamCapability(req, res, {
           ownCapability: "appointments.manage_own",
@@ -5680,6 +5803,9 @@ export async function registerRoutes(
       }
       const previousExtras = hasExtrasPatch
         ? await storage.getAppointmentExtras([appointmentId])
+        : [];
+      const previousInternalCosts = hasInternalCostsPatch
+        ? await storage.getAppointmentInternalCosts([appointmentId])
         : [];
 
       const newStartTime = hasStartTimePatch ? new Date(startTime) : new Date(currentApp.startTime);
@@ -5928,12 +6054,72 @@ export async function registerRoutes(
           message: "O meio de pagamento só pode ser indicado ao concluir a marcação.",
         });
       }
+      if (status === "completed") {
+        if (hasScheduleOrTermsPatch) {
+          return res.status(400).json({
+            message: "Guarde primeiro as alterações de horário ou serviço e conclua depois a marcação.",
+          });
+        }
+        const [currentExtras, currentInternalCosts, actor] = await Promise.all([
+          hasExtrasPatch ? Promise.resolve(previousExtras) : storage.getAppointmentExtras([appointmentId]),
+          hasInternalCostsPatch
+            ? Promise.resolve(previousInternalCosts)
+            : storage.getAppointmentInternalCosts([appointmentId]),
+          getAuditActor(req),
+        ]);
+        const finalExtras = hasExtrasPatch ? extras : currentExtras.map((extra) => ({
+          extraId: extra.extraDefinitionId,
+          amountCents: extra.amountCentsSnapshot,
+          quantity: extra.quantity,
+        }));
+        const finalInternalCosts = hasInternalCostsPatch ? internalCosts : currentInternalCosts.map((cost) => ({
+          internalCostId: cost.internalCostDefinitionId,
+          unitCostCents: cost.unitCostCentsSnapshot,
+          quantity: cost.quantity,
+        }));
+        const completed = await storage.completeAppointment({
+          appointmentId,
+          expectedRevision: currentApp.notificationRevision,
+          paymentMethod: requestedPaymentMethod,
+          extras: finalExtras,
+          internalCosts: finalInternalCosts,
+          auditLog: {
+            ...actor,
+            locationId,
+            action: "appointment.status_changed",
+            entityType: "appointment",
+            entityId: appointmentId,
+            summary: `Estado da marcação alterado: ${currentApp.customerName}`,
+            metadata: serializeSafeAuditMetadata({
+              previousStatus: currentApp.status,
+              newStatus: "completed",
+              previousPaymentMethod: currentApp.paymentMethod,
+              newPaymentMethod: requestedPaymentMethod,
+              commercialExtraCount: finalExtras.length,
+              internalCostCount: finalInternalCosts.length,
+            }),
+          },
+        });
+        if (!completed) {
+          const latestAppointment = await storage.getAppointment(appointmentId);
+          return res.status(409).json({
+            message: "A marcação foi alterada entretanto. Atualize a agenda e tente novamente.",
+            status: latestAppointment?.status,
+          });
+        }
+        return res.json({
+          ...completed.appointment,
+          extras: completed.extras,
+          internalCosts: completed.internalCosts,
+        });
+      }
       const updateResult = await storage.updateAppointmentWithNotification(
         appointmentId,
         updateData,
         appointmentNotificationEventsEnabled,
         undefined,
         hasExtrasPatch ? extras : undefined,
+        hasInternalCostsPatch ? internalCosts : undefined,
       );
       const updated = updateResult?.appointment;
       if (updated) {
@@ -5948,6 +6134,18 @@ export async function registerRoutes(
           newTotalCents: resolveAppointmentPriceCents(updated, servicePrices)
             + sumAppointmentExtras(updatedExtras),
         } : {};
+        const internalCostsAuditMetadata = hasInternalCostsPatch ? {
+          previousInternalCosts: previousInternalCosts.map((cost) => ({
+            internalCostDefinitionId: cost.internalCostDefinitionId,
+            unitCostCentsSnapshot: cost.unitCostCentsSnapshot,
+            quantity: cost.quantity,
+          })),
+          newInternalCosts: (await storage.getAppointmentInternalCosts([appointmentId])).map((cost) => ({
+            internalCostDefinitionId: cost.internalCostDefinitionId,
+            unitCostCentsSnapshot: cost.unitCostCentsSnapshot,
+            quantity: cost.quantity,
+          })),
+        } : {};
         await recordAuditLog(req, {
           action: status ? "appointment.status_changed" : "appointment.updated",
           entityType: "appointment",
@@ -5956,7 +6154,11 @@ export async function registerRoutes(
             ? `Estado da marcação alterado: ${currentApp.customerName}`
             : `Marcação atualizada: ${currentApp.customerName}`,
           metadata: {
-            fields: [...Object.keys(updateData), ...(hasExtrasPatch ? ["extras"] : [])],
+            fields: [
+              ...Object.keys(updateData),
+              ...(hasExtrasPatch ? ["extras"] : []),
+              ...(hasInternalCostsPatch ? ["internalCosts"] : []),
+            ],
             previousStartTime: currentApp.startTime,
             newStartTime: updated.startTime,
             previousBarberId: currentApp.barberId,
@@ -5966,6 +6168,7 @@ export async function registerRoutes(
             previousStatus: currentApp.status,
             newStatus: updated.status,
             ...extrasAuditMetadata,
+            ...internalCostsAuditMetadata,
           },
         });
       }
@@ -5979,9 +6182,97 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
       }
       if (sendAppointmentExtrasError(res, error)) return;
+      if (sendAppointmentInternalCostsError(res, error)) return;
       if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Update appointment error:", error);
       res.status(500).json({ message: "Erro ao atualizar marcação" });
+    }
+  });
+
+  app.post("/api/appointments/:id/complete", requireAuth, async (req, res) => {
+    try {
+      const appointmentId = parsePositiveInteger(req.params.id);
+      if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
+      const parsed = z.object({
+        expectedRevision: z.number().int().min(0),
+        paymentMethod: z.enum(appointmentPaymentMethods).refine((value) => value !== "pending", {
+          message: "Selecione o meio de pagamento.",
+        }),
+        extras: z.array(z.object({
+          extraId: z.number().int().positive(),
+          amountCents: z.number().int().positive().max(1_000_000).optional(),
+          quantity: z.number().int().min(1).max(99).optional(),
+        })),
+        internalCosts: z.array(z.object({
+          internalCostId: z.number().int().positive(),
+          unitCostCents: z.number().int().min(0).max(1_000_000).optional(),
+          quantity: z.number().int().min(1).max(9999).optional(),
+        })),
+      }).parse(req.body);
+      const current = await storage.getAppointment(appointmentId);
+      const locationId = Number(res.locals.locationId);
+      if (!current || current.locationId !== locationId) {
+        return res.status(404).json({ message: "Marcação não encontrada." });
+      }
+      if (!enforceCanonicalAnyOwnOrTeamCapability(req, res, [{
+        ownCapability: "appointments.change_status_own",
+        teamCapability: "appointments.change_status_team",
+        ownerProfessionalId: current.barberId,
+        locationId,
+      }])) return;
+      const appSession = getAppSession(req);
+      if (authRuntimeMode !== "canonical" && appSession.role === "barber"
+        && current.barberId !== Number(appSession.barberId)) {
+        return res.status(403).json({ message: "Não autorizado" });
+      }
+      const serviceDurations = new Map(
+        (await loadLocationServiceCatalogue(locationId, true)).map((service) => [service.id, service.duration]),
+      );
+      const timingError = getAppointmentStatusTimingError(current, "completed", serviceDurations);
+      if (timingError) return res.status(400).json({ message: timingError });
+      const actor = await getAuditActor(req);
+      const result = await storage.completeAppointment({
+        appointmentId,
+        expectedRevision: parsed.expectedRevision,
+        paymentMethod: parsed.paymentMethod,
+        extras: parsed.extras,
+        internalCosts: parsed.internalCosts,
+        auditLog: {
+          ...actor,
+          locationId,
+          action: "appointment.completed",
+          entityType: "appointment",
+          entityId: appointmentId,
+          summary: `Marcação concluída: ${current.customerName}`,
+          metadata: serializeSafeAuditMetadata({
+            previousStatus: current.status,
+            newStatus: "completed",
+            paymentMethod: parsed.paymentMethod,
+            commercialExtraCount: parsed.extras.length,
+            internalCostCount: parsed.internalCosts.length,
+          }),
+        },
+      });
+      if (!result) {
+        const latest = await storage.getAppointment(appointmentId);
+        return res.status(409).json({
+          message: "A marcação foi alterada entretanto. Atualize a agenda e tente novamente.",
+          status: latest?.status,
+          notificationRevision: latest?.notificationRevision,
+        });
+      }
+      res.json({
+        ...result.appointment,
+        extras: result.extras,
+        internalCosts: result.internalCosts,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+      }
+      if (sendAppointmentExtrasError(res, error)) return;
+      if (sendAppointmentInternalCostsError(res, error)) return;
+      throw error;
     }
   });
 
@@ -6044,6 +6335,57 @@ export async function registerRoutes(
         && appSession.role === "barber"
         && currentApp.barberId !== Number(appSession.barberId)) {
         return res.status(403).json({ message: "Não autorizado" });
+      }
+
+      if (status === "completed") {
+        const [existingExtras, existingInternalCosts, actor] = await Promise.all([
+          storage.getAppointmentExtras([appointmentId]),
+          storage.getAppointmentInternalCosts([appointmentId]),
+          getAuditActor(req),
+        ]);
+        const completed = await storage.completeAppointment({
+          appointmentId,
+          expectedRevision: currentApp.notificationRevision,
+          paymentMethod,
+          extras: existingExtras.map((extra) => ({
+            extraId: extra.extraDefinitionId,
+            amountCents: extra.amountCentsSnapshot,
+            quantity: extra.quantity,
+          })),
+          internalCosts: existingInternalCosts.map((cost) => ({
+            internalCostId: cost.internalCostDefinitionId,
+            unitCostCents: cost.unitCostCentsSnapshot,
+            quantity: cost.quantity,
+          })),
+          auditLog: {
+            ...actor,
+            locationId,
+            action: "appointment.status_changed",
+            entityType: "appointment",
+            entityId: appointmentId,
+            summary: `Marcação concluída: ${currentApp.customerName}`,
+            metadata: serializeSafeAuditMetadata({
+              previousStatus: currentApp.status,
+              newStatus: status,
+              previousPaymentMethod: currentApp.paymentMethod,
+              newPaymentMethod: paymentMethod,
+              commercialExtraCount: existingExtras.length,
+              internalCostCount: existingInternalCosts.length,
+            }),
+          },
+        });
+        if (!completed) {
+          const latestAppointment = await storage.getAppointment(appointmentId);
+          return res.status(409).json({
+            message: "A marcação foi alterada entretanto. Atualize a agenda e tente novamente.",
+            status: latestAppointment?.status,
+          });
+        }
+        return res.json({
+          ...completed.appointment,
+          extras: completed.extras,
+          internalCosts: completed.internalCosts,
+        });
       }
 
       const isCancellation = status === "cancelled" || status === "late_cancelled";
@@ -6134,6 +6476,7 @@ export async function registerRoutes(
       extras: appointmentExtras.map((extra) => ({
         nameSnapshot: extra.nameSnapshot,
         amountCentsSnapshot: extra.amountCentsSnapshot,
+        quantity: extra.quantity,
         position: extra.position,
       })),
       totalPrice: price + sumAppointmentExtras(appointmentExtras),

@@ -6,6 +6,9 @@ import {
   appointments,
   extraDefinitions,
   appointmentExtras,
+  extraDefinitionServices,
+  internalCostDefinitions,
+  appointmentInternalCosts,
   appointmentSeries,
   admins,
   blacklist,
@@ -31,7 +34,10 @@ import {
   type Appointment,
   type AppointmentSeries,
   type ExtraDefinition,
+  type ExtraDefinitionWithServices,
   type AppointmentExtra,
+  type InternalCostDefinition,
+  type AppointmentInternalCost,
   type RecurringNotificationSnapshot,
   type AppointmentPaymentMethod,
   type AppointmentStatus,
@@ -54,6 +60,8 @@ import {
   type CreateServiceCategoryRequest,
   type CreateExtraDefinitionRequest,
   type UpdateExtraDefinitionRequest,
+  type CreateInternalCostDefinitionRequest,
+  type UpdateInternalCostDefinitionRequest,
   type CreateAppointmentRequest,
   type CreateAdminRequest,
   type InsertBlacklist,
@@ -67,6 +75,8 @@ import {
   type CreateWhatsappMessageRequest,
   insertExtraDefinitionSchema,
   updateExtraDefinitionSchema,
+  insertInternalCostDefinitionSchema,
+  updateInternalCostDefinitionSchema,
 } from "@shared/schema";
 import { eq, and, or, inArray, gte, gt, lt, isNull, sql, desc, getTableColumns, type SQL } from "drizzle-orm";
 import { barberAvatarReference, INLINE_BARBER_AVATAR_PATTERN } from "./barber-avatars";
@@ -96,6 +106,13 @@ export type AppointmentNotificationEventType =
 export type AppointmentExtraInput = {
   extraId: number;
   amountCents?: number;
+  quantity?: number;
+};
+
+export type AppointmentInternalCostInput = {
+  internalCostId: number;
+  unitCostCents?: number;
+  quantity?: number;
 };
 
 export type CustomerNoteIdentityInput = {
@@ -170,6 +187,22 @@ export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "wh
 };
 
 type AppointmentExtraSnapshotInput = Omit<AppointmentExtra, "appointmentId">;
+type AppointmentInternalCostSnapshotInput = Omit<AppointmentInternalCost, "id" | "appointmentId">;
+
+export type CompleteAppointmentRequest = {
+  appointmentId: number;
+  expectedRevision: number;
+  paymentMethod: AppointmentPaymentMethod;
+  extras: AppointmentExtraInput[];
+  internalCosts: AppointmentInternalCostInput[];
+  auditLog?: CreateAuditLogRequest;
+};
+
+export type CompleteAppointmentResult = {
+  appointment: Appointment;
+  extras: AppointmentExtra[];
+  internalCosts: AppointmentInternalCost[];
+};
 
 export type CreateRecurringAppointmentSeriesRequest = {
   series: {
@@ -359,6 +392,9 @@ export const appointmentExtraAmountInvalidCode = "APPOINTMENT_EXTRA_AMOUNT_INVAL
 export const appointmentExtraUnavailableCode = "APPOINTMENT_EXTRA_UNAVAILABLE";
 export const appointmentExtrasNotEditableCode = "APPOINTMENT_EXTRAS_NOT_EDITABLE";
 export const appointmentExtrasNotAllowedForRecurringCode = "APPOINTMENT_EXTRAS_NOT_ALLOWED_FOR_RECURRING";
+export const appointmentInternalCostInvalidCode = "APPOINTMENT_INTERNAL_COST_INVALID";
+export const appointmentInternalCostUnavailableCode = "APPOINTMENT_INTERNAL_COST_UNAVAILABLE";
+export const appointmentInternalCostsNotEditableCode = "APPOINTMENT_INTERNAL_COSTS_NOT_EDITABLE";
 
 type AppointmentExtrasErrorCode =
   | typeof appointmentExtraIdsInvalidCode
@@ -394,7 +430,40 @@ function validateAppointmentExtraInputs(extras: AppointmentExtraInput[]) {
     && (!Number.isInteger(extra.amountCents) || extra.amountCents <= 0 || extra.amountCents > 1_000_000))) {
     throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
   }
+  if (extras.some((extra) => extra.quantity !== undefined
+    && (!Number.isInteger(extra.quantity) || extra.quantity < 1 || extra.quantity > 99))) {
+    throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
+  }
   return extras;
+}
+
+export class AppointmentInternalCostsError extends Error {
+  status = 409;
+
+  constructor(public code:
+    | typeof appointmentInternalCostInvalidCode
+    | typeof appointmentInternalCostUnavailableCode
+    | typeof appointmentInternalCostsNotEditableCode) {
+    super(code === appointmentInternalCostInvalidCode
+      ? "A seleção de custos ou consumos é inválida."
+      : code === appointmentInternalCostUnavailableCode
+        ? "Um dos custos ou consumos selecionados já não está disponível nesta localização."
+        : "Os custos ou consumos desta marcação já não podem ser alterados.");
+    this.name = "AppointmentInternalCostsError";
+  }
+}
+
+function validateAppointmentInternalCostInputs(costs: AppointmentInternalCostInput[]) {
+  if (costs.some((cost) => !cost || typeof cost !== "object"
+      || !Number.isInteger(cost.internalCostId) || cost.internalCostId <= 0)
+    || new Set(costs.map((cost) => cost.internalCostId)).size !== costs.length
+    || costs.some((cost) => cost.unitCostCents !== undefined
+      && (!Number.isInteger(cost.unitCostCents) || cost.unitCostCents < 0 || cost.unitCostCents > 1_000_000))
+    || costs.some((cost) => cost.quantity !== undefined
+      && (!Number.isInteger(cost.quantity) || cost.quantity < 1 || cost.quantity > 9999))) {
+    throw new AppointmentInternalCostsError(appointmentInternalCostInvalidCode);
+  }
+  return costs;
 }
 
 function appointmentExtrasSelectionChanged(
@@ -406,7 +475,22 @@ function appointmentExtrasSelectionChanged(
       const currentExtra = currentExtras[index];
       return selectedExtra.extraId !== currentExtra?.extraDefinitionId
         || (selectedExtra.amountCents !== undefined
-          && selectedExtra.amountCents !== currentExtra.amountCentsSnapshot);
+          && selectedExtra.amountCents !== currentExtra.amountCentsSnapshot)
+        || (selectedExtra.quantity ?? 1) !== currentExtra.quantity;
+    });
+}
+
+function appointmentInternalCostsSelectionChanged(
+  requestedCosts: AppointmentInternalCostInput[],
+  currentCosts: AppointmentInternalCost[],
+) {
+  return requestedCosts.length !== currentCosts.length
+    || requestedCosts.some((selectedCost, index) => {
+      const currentCost = currentCosts[index];
+      return selectedCost.internalCostId !== currentCost?.internalCostDefinitionId
+        || (selectedCost.unitCostCents !== undefined
+          && selectedCost.unitCostCents !== currentCost.unitCostCentsSnapshot)
+        || (selectedCost.quantity ?? 1) !== currentCost.quantity;
     });
 }
 
@@ -554,10 +638,16 @@ export interface IStorage {
   reorderServiceCategories(categoryIds: number[]): Promise<ServiceCategory[]>;
 
   // Extras
-  getExtraDefinitions(locationId: number, options?: { includeInactive?: boolean }): Promise<ExtraDefinition[]>;
-  getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinition | undefined>;
-  createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinition>;
-  updateExtraDefinition(id: number, locationId: number, extra: UpdateExtraDefinitionRequest): Promise<ExtraDefinition | undefined>;
+  getExtraDefinitions(locationId: number, options?: { includeInactive?: boolean }): Promise<ExtraDefinitionWithServices[]>;
+  getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinitionWithServices | undefined>;
+  createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinitionWithServices>;
+  updateExtraDefinition(id: number, locationId: number, extra: UpdateExtraDefinitionRequest): Promise<ExtraDefinitionWithServices | undefined>;
+
+  // Internal costs / consumptions
+  getInternalCostDefinitions(locationId: number, options?: { includeInactive?: boolean }): Promise<InternalCostDefinition[]>;
+  getInternalCostDefinition(id: number, locationId: number): Promise<InternalCostDefinition | undefined>;
+  createInternalCostDefinition(cost: CreateInternalCostDefinitionRequest): Promise<InternalCostDefinition>;
+  updateInternalCostDefinition(id: number, locationId: number, cost: UpdateInternalCostDefinitionRequest): Promise<InternalCostDefinition | undefined>;
 
   // Appointments
   getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]>;
@@ -565,6 +655,7 @@ export interface IStorage {
   getAppointment(id: number): Promise<Appointment | undefined>;
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]>;
+  getAppointmentInternalCosts(appointmentIds: number[]): Promise<AppointmentInternalCost[]>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
   createAppointments(appointments: CreateAppointmentStorageRequest[]): Promise<Appointment[]>;
   createRecurringAppointmentSeries(request: CreateRecurringAppointmentSeriesRequest): Promise<CreateRecurringAppointmentSeriesResult>;
@@ -581,7 +672,9 @@ export interface IStorage {
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
+    internalCosts?: AppointmentInternalCostInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined>;
+  completeAppointment(request: CompleteAppointmentRequest): Promise<CompleteAppointmentResult | undefined>;
   rescheduleAppointment(
     id: number,
     expectedRevision: number,
@@ -698,6 +791,7 @@ export class DatabaseStorage implements IStorage {
   private async resolveAppointmentExtraSnapshots(
     tx: Pick<typeof db, "select">,
     locationId: number | undefined,
+    serviceId: number | null | undefined,
     rawExtras: AppointmentExtraInput[],
     existingExtras: AppointmentExtra[] = [],
   ): Promise<AppointmentExtraSnapshotInput[]> {
@@ -726,21 +820,35 @@ export class DatabaseStorage implements IStorage {
       throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
     }
     const definitionsById = new Map(selectedDefinitions.map((definition) => [definition.id, definition]));
+    const assignments = await tx.select().from(extraDefinitionServices).where(
+      inArray(extraDefinitionServices.extraDefinitionId, selectedExtras.map((extra) => extra.extraId)),
+    );
+    const serviceIdsByDefinition = new Map<number, number[]>();
+    for (const assignment of assignments) {
+      const serviceIds = serviceIdsByDefinition.get(assignment.extraDefinitionId) ?? [];
+      serviceIds.push(assignment.serviceId);
+      serviceIdsByDefinition.set(assignment.extraDefinitionId, serviceIds);
+    }
+    if (selectedExtras.some((extra) => {
+      const applicableServices = serviceIdsByDefinition.get(extra.extraId) ?? [];
+      return applicableServices.length > 0 && (!serviceId || !applicableServices.includes(serviceId));
+    })) {
+      throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+    }
 
     return selectedExtras.map((selectedExtra, position) => {
       const extraDefinitionId = selectedExtra.extraId;
       const existing = existingByDefinitionId.get(extraDefinitionId);
       const shouldPreserveExisting = existing
         && (selectedExtra.amountCents === undefined
-          || selectedExtra.amountCents === existing.amountCentsSnapshot);
+          || selectedExtra.amountCents === existing.amountCentsSnapshot)
+        && (selectedExtra.quantity ?? 1) === existing.quantity;
       if (shouldPreserveExisting) {
         const { appointmentId: _appointmentId, ...snapshot } = existing;
         return { ...snapshot, position };
       }
       const definition = definitionsById.get(extraDefinitionId)!;
-      const amountCentsSnapshot = definition.pricingMode === "fixed"
-        ? definition.amountCents
-        : selectedExtra.amountCents;
+      const amountCentsSnapshot = selectedExtra.amountCents ?? definition.amountCents;
       if (!amountCentsSnapshot) {
         throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
       }
@@ -748,9 +856,60 @@ export class DatabaseStorage implements IStorage {
         extraDefinitionId,
         nameSnapshot: definition.name,
         amountCentsSnapshot,
+        quantity: selectedExtra.quantity ?? 1,
         financialRuleSnapshot: definition.financialRule,
         position,
         createdAt: new Date(),
+      };
+    });
+  }
+
+  private async resolveAppointmentInternalCostSnapshots(
+    tx: Pick<typeof db, "select">,
+    locationId: number,
+    rawCosts: AppointmentInternalCostInput[],
+    existingCosts: AppointmentInternalCost[] = [],
+  ): Promise<AppointmentInternalCostSnapshotInput[]> {
+    const selectedCosts = validateAppointmentInternalCostInputs(rawCosts);
+    if (selectedCosts.length === 0) return [];
+    const existingByDefinitionId = new Map(
+      existingCosts.map((cost) => [cost.internalCostDefinitionId, cost]),
+    );
+    const idsToResolve = selectedCosts.filter((selected) => {
+      const existing = existingByDefinitionId.get(selected.internalCostId);
+      return !existing
+        || (selected.unitCostCents !== undefined && selected.unitCostCents !== existing.unitCostCentsSnapshot)
+        || (selected.quantity ?? 1) !== existing.quantity;
+    }).map((selected) => selected.internalCostId);
+    const definitions = idsToResolve.length === 0 ? [] : await tx.select()
+      .from(internalCostDefinitions)
+      .where(and(
+        inArray(internalCostDefinitions.id, idsToResolve),
+        eq(internalCostDefinitions.locationId, locationId),
+        eq(internalCostDefinitions.isActive, true),
+      )).orderBy(internalCostDefinitions.id).for("share");
+    if (definitions.length !== idsToResolve.length) {
+      throw new AppointmentInternalCostsError(appointmentInternalCostUnavailableCode);
+    }
+    const definitionsById = new Map(definitions.map((definition) => [definition.id, definition]));
+    return selectedCosts.map((selected, position) => {
+      const existing = existingByDefinitionId.get(selected.internalCostId);
+      if (existing
+        && (selected.unitCostCents === undefined || selected.unitCostCents === existing.unitCostCentsSnapshot)
+        && (selected.quantity ?? 1) === existing.quantity) {
+        const { id: _id, appointmentId: _appointmentId, ...snapshot } = existing;
+        return { ...snapshot, position, updatedAt: new Date() };
+      }
+      const definition = definitionsById.get(selected.internalCostId)!;
+      return {
+        internalCostDefinitionId: definition.id,
+        nameSnapshot: definition.name,
+        unitCostCentsSnapshot: selected.unitCostCents ?? definition.defaultUnitCostCents,
+        unitLabelSnapshot: definition.unitLabel,
+        quantity: selected.quantity ?? 1,
+        position,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       };
     });
   }
@@ -1117,38 +1276,55 @@ export class DatabaseStorage implements IStorage {
   async getExtraDefinitions(
     locationId: number,
     options?: { includeInactive?: boolean },
-  ): Promise<ExtraDefinition[]> {
+  ): Promise<ExtraDefinitionWithServices[]> {
     const conditions = [eq(extraDefinitions.locationId, locationId)];
     if (!options?.includeInactive) conditions.push(eq(extraDefinitions.isActive, true));
-    return await db.select().from(extraDefinitions)
+    const definitions = await db.select().from(extraDefinitions)
       .where(and(...conditions))
       .orderBy(extraDefinitions.sortOrder, extraDefinitions.id);
+    if (definitions.length === 0) return [];
+    const assignments = await db.select().from(extraDefinitionServices).where(
+      inArray(extraDefinitionServices.extraDefinitionId, definitions.map((definition) => definition.id)),
+    );
+    const servicesByDefinition = new Map<number, number[]>();
+    for (const assignment of assignments) {
+      const serviceIds = servicesByDefinition.get(assignment.extraDefinitionId) ?? [];
+      serviceIds.push(assignment.serviceId);
+      servicesByDefinition.set(assignment.extraDefinitionId, serviceIds);
+    }
+    return definitions.map((definition) => ({
+      ...definition,
+      serviceIds: (servicesByDefinition.get(definition.id) ?? []).sort((left, right) => left - right),
+    }));
   }
 
-  async getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinition | undefined> {
-    const [definition] = await db.select().from(extraDefinitions).where(and(
-      eq(extraDefinitions.id, id),
-      eq(extraDefinitions.locationId, locationId),
-    ));
-    return definition;
+  async getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinitionWithServices | undefined> {
+    return (await this.getExtraDefinitions(locationId, { includeInactive: true }))
+      .find((definition) => definition.id === id);
   }
 
-  async createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinition> {
+  async createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinitionWithServices> {
     const parsed = insertExtraDefinitionSchema.parse(extra);
     return await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(424242, 1401)`);
+      const { serviceIds = [], ...definitionValues } = parsed;
       const [lastDefinition] = await tx.select({ sortOrder: extraDefinitions.sortOrder })
         .from(extraDefinitions)
         .where(eq(extraDefinitions.locationId, parsed.locationId))
         .orderBy(desc(extraDefinitions.sortOrder), desc(extraDefinitions.id))
         .limit(1);
       const [created] = await tx.insert(extraDefinitions).values({
-        ...parsed,
+        ...definitionValues,
         name: parsed.name.trim(),
         sortOrder: parsed.sortOrder ?? ((lastDefinition?.sortOrder ?? -1) + 1),
         isActive: parsed.isActive ?? true,
       }).returning();
-      return created;
+      if (serviceIds.length > 0) {
+        await tx.insert(extraDefinitionServices).values(
+          Array.from(new Set(serviceIds)).map((serviceId) => ({ extraDefinitionId: created.id, serviceId })),
+        );
+      }
+      return { ...created, serviceIds: Array.from(new Set(serviceIds)).sort((a, b) => a - b) };
     });
   }
 
@@ -1156,15 +1332,77 @@ export class DatabaseStorage implements IStorage {
     id: number,
     locationId: number,
     extra: UpdateExtraDefinitionRequest,
-  ): Promise<ExtraDefinition | undefined> {
+  ): Promise<ExtraDefinitionWithServices | undefined> {
     const existing = await this.getExtraDefinition(id, locationId);
     if (!existing) return undefined;
     const parsed = insertExtraDefinitionSchema.parse({ ...existing, ...updateExtraDefinitionSchema.parse(extra), locationId });
-    const [updated] = await db.update(extraDefinitions).set({
+    return await db.transaction(async (tx) => {
+      const { serviceIds = [], ...definitionValues } = parsed;
+      const [updated] = await tx.update(extraDefinitions).set({
+        ...definitionValues,
+        name: parsed.name.trim(),
+        updatedAt: new Date(),
+      }).where(and(eq(extraDefinitions.id, id), eq(extraDefinitions.locationId, locationId))).returning();
+      if (!updated) return undefined;
+      await tx.delete(extraDefinitionServices).where(eq(extraDefinitionServices.extraDefinitionId, id));
+      if (serviceIds.length > 0) {
+        await tx.insert(extraDefinitionServices).values(
+          Array.from(new Set(serviceIds)).map((serviceId) => ({ extraDefinitionId: id, serviceId })),
+        );
+      }
+      return { ...updated, serviceIds: Array.from(new Set(serviceIds)).sort((a, b) => a - b) };
+    });
+  }
+
+  async getInternalCostDefinitions(locationId: number, options?: { includeInactive?: boolean }) {
+    const conditions = [eq(internalCostDefinitions.locationId, locationId)];
+    if (!options?.includeInactive) conditions.push(eq(internalCostDefinitions.isActive, true));
+    return await db.select().from(internalCostDefinitions).where(and(...conditions))
+      .orderBy(internalCostDefinitions.sortOrder, internalCostDefinitions.id);
+  }
+
+  async getInternalCostDefinition(id: number, locationId: number) {
+    const [definition] = await db.select().from(internalCostDefinitions).where(and(
+      eq(internalCostDefinitions.id, id),
+      eq(internalCostDefinitions.locationId, locationId),
+    ));
+    return definition;
+  }
+
+  async createInternalCostDefinition(cost: CreateInternalCostDefinitionRequest) {
+    const parsed = insertInternalCostDefinitionSchema.parse(cost);
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(424242, 1402)`);
+      const [last] = await tx.select({ sortOrder: internalCostDefinitions.sortOrder })
+        .from(internalCostDefinitions).where(eq(internalCostDefinitions.locationId, parsed.locationId))
+        .orderBy(desc(internalCostDefinitions.sortOrder), desc(internalCostDefinitions.id)).limit(1);
+      const [created] = await tx.insert(internalCostDefinitions).values({
+        ...parsed,
+        name: parsed.name.trim(),
+        description: parsed.description?.trim() || null,
+        unitLabel: parsed.unitLabel.trim(),
+        isActive: parsed.isActive ?? true,
+        sortOrder: parsed.sortOrder ?? ((last?.sortOrder ?? -1) + 1),
+      }).returning();
+      return created;
+    });
+  }
+
+  async updateInternalCostDefinition(id: number, locationId: number, cost: UpdateInternalCostDefinitionRequest) {
+    const existing = await this.getInternalCostDefinition(id, locationId);
+    if (!existing) return undefined;
+    const parsed = insertInternalCostDefinitionSchema.parse({
+      ...existing,
+      ...updateInternalCostDefinitionSchema.parse(cost),
+      locationId,
+    });
+    const [updated] = await db.update(internalCostDefinitions).set({
       ...parsed,
       name: parsed.name.trim(),
+      description: parsed.description?.trim() || null,
+      unitLabel: parsed.unitLabel.trim(),
       updatedAt: new Date(),
-    }).where(and(eq(extraDefinitions.id, id), eq(extraDefinitions.locationId, locationId))).returning();
+    }).where(and(eq(internalCostDefinitions.id, id), eq(internalCostDefinitions.locationId, locationId))).returning();
     return updated;
   }
 
@@ -1237,6 +1475,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(appointmentExtras.appointmentId, appointmentExtras.position);
   }
 
+  async getAppointmentInternalCosts(appointmentIds: number[]): Promise<AppointmentInternalCost[]> {
+    const uniqueAppointmentIds = Array.from(new Set(appointmentIds));
+    if (uniqueAppointmentIds.length === 0) return [];
+    return await db.select().from(appointmentInternalCosts)
+      .where(inArray(appointmentInternalCosts.appointmentId, uniqueAppointmentIds))
+      .orderBy(appointmentInternalCosts.appointmentId, appointmentInternalCosts.position);
+  }
+
   private async resolveAppointmentCompensationSnapshot(
     tx: Pick<typeof db, "select">,
     appointment: Pick<Appointment, "barberId" | "locationId" | "startTime">,
@@ -1280,6 +1526,7 @@ export class DatabaseStorage implements IStorage {
           const extraSnapshots = await this.resolveAppointmentExtraSnapshots(
             tx,
             appointment.locationId,
+            appointment.serviceId,
             appointment.extras ?? [],
           );
           await this.assertNoAppointmentConflict(tx, appointment);
@@ -1396,6 +1643,7 @@ export class DatabaseStorage implements IStorage {
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
+    internalCosts?: AppointmentInternalCostInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1421,7 +1669,17 @@ export class DatabaseStorage implements IStorage {
           : validateAppointmentExtraInputs(extras);
         const extrasChanged = requestedExtras !== undefined
           && appointmentExtrasSelectionChanged(requestedExtras, currentExtras);
+        const currentInternalCosts = internalCosts === undefined ? [] : await tx.select()
+          .from(appointmentInternalCosts)
+          .where(eq(appointmentInternalCosts.appointmentId, id))
+          .orderBy(appointmentInternalCosts.position);
+        const requestedInternalCosts = internalCosts === undefined
+          ? undefined
+          : validateAppointmentInternalCostInputs(internalCosts);
+        const internalCostsChanged = requestedInternalCosts !== undefined
+          && appointmentInternalCostsSelectionChanged(requestedInternalCosts, currentInternalCosts);
         let replacementExtras: AppointmentExtraSnapshotInput[] = [];
+        let replacementInternalCosts: AppointmentInternalCostSnapshotInput[] = [];
         if (extrasChanged) {
           if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
             throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
@@ -1429,11 +1687,23 @@ export class DatabaseStorage implements IStorage {
           replacementExtras = await this.resolveAppointmentExtraSnapshots(
             tx,
             current.locationId,
+            changes.candidate.serviceId,
             requestedExtras,
             currentExtras,
           );
         }
-        if (changes.changedFields.length === 0 && !extrasChanged) {
+        if (internalCostsChanged) {
+          if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
+            throw new AppointmentInternalCostsError(appointmentInternalCostsNotEditableCode);
+          }
+          replacementInternalCosts = await this.resolveAppointmentInternalCostSnapshots(
+            tx,
+            current.locationId,
+            requestedInternalCosts!,
+            currentInternalCosts,
+          );
+        }
+        if (changes.changedFields.length === 0 && !extrasChanged && !internalCostsChanged) {
           return { appointment: current, notificationEvent: null };
         }
 
@@ -1468,6 +1738,15 @@ export class DatabaseStorage implements IStorage {
           await tx.delete(appointmentExtras).where(eq(appointmentExtras.appointmentId, id));
           if (replacementExtras.length > 0) {
             await tx.insert(appointmentExtras).values(replacementExtras.map((snapshot) => ({
+              ...snapshot,
+              appointmentId: id,
+            })));
+          }
+        }
+        if (internalCostsChanged) {
+          await tx.delete(appointmentInternalCosts).where(eq(appointmentInternalCosts.appointmentId, id));
+          if (replacementInternalCosts.length > 0) {
+            await tx.insert(appointmentInternalCosts).values(replacementInternalCosts.map((snapshot) => ({
               ...snapshot,
               appointmentId: id,
             })));
@@ -1510,6 +1789,92 @@ export class DatabaseStorage implements IStorage {
       if (isAppointmentConflictError(error)) throw new AppointmentConflictError();
       throw error;
     }
+  }
+
+  async completeAppointment(request: CompleteAppointmentRequest): Promise<CompleteAppointmentResult | undefined> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(-2, ${request.appointmentId})`);
+      const [current] = await tx.select().from(appointments).where(and(
+        eq(appointments.id, request.appointmentId),
+        eq(appointments.status, "booked"),
+      )).limit(1).for("update");
+      if (!current || current.notificationRevision !== request.expectedRevision) return undefined;
+      if (current.seriesId && (request.extras.length > 0 || request.internalCosts.length > 0)) {
+        throw new AppointmentExtrasError(appointmentExtrasNotAllowedForRecurringCode);
+      }
+      const [currentExtras, currentCosts] = await Promise.all([
+        tx.select().from(appointmentExtras)
+          .where(eq(appointmentExtras.appointmentId, current.id))
+          .orderBy(appointmentExtras.position),
+        tx.select().from(appointmentInternalCosts)
+          .where(eq(appointmentInternalCosts.appointmentId, current.id))
+          .orderBy(appointmentInternalCosts.position),
+      ]);
+      const extraSnapshots = await this.resolveAppointmentExtraSnapshots(
+        tx,
+        current.locationId,
+        current.serviceId,
+        request.extras,
+        currentExtras,
+      );
+      const costSnapshots = await this.resolveAppointmentInternalCostSnapshots(
+        tx,
+        current.locationId,
+        request.internalCosts,
+        currentCosts,
+      );
+      const compensationSnapshot = current.compensationModelSnapshot
+        ? {}
+        : await this.resolveAppointmentCompensationSnapshot(tx, current);
+
+      await tx.delete(appointmentExtras).where(eq(appointmentExtras.appointmentId, current.id));
+      if (extraSnapshots.length > 0) {
+        await tx.insert(appointmentExtras).values(extraSnapshots.map((snapshot) => ({
+          ...snapshot,
+          appointmentId: current.id,
+        })));
+      }
+      await tx.delete(appointmentInternalCosts).where(eq(appointmentInternalCosts.appointmentId, current.id));
+      if (costSnapshots.length > 0) {
+        await tx.insert(appointmentInternalCosts).values(costSnapshots.map((snapshot) => ({
+          ...snapshot,
+          appointmentId: current.id,
+        })));
+      }
+      const [appointment] = await tx.update(appointments).set({
+        status: "completed",
+        paymentMethod: request.paymentMethod,
+        cancelledAt: null,
+        ...compensationSnapshot,
+        notificationRevision: current.notificationRevision + 1,
+      }).where(and(
+        eq(appointments.id, current.id),
+        eq(appointments.status, "booked"),
+        eq(appointments.notificationRevision, request.expectedRevision),
+      )).returning();
+      if (!appointment) return undefined;
+      if (current.seriesId) {
+        await tx.update(appointmentSeries).set({
+          notificationRevision: sql`${appointmentSeries.notificationRevision} + 1`,
+          updatedAt: new Date(),
+        }).where(eq(appointmentSeries.id, current.seriesId));
+      }
+      if (request.auditLog) {
+        await tx.insert(auditLogs).values({
+          ...request.auditLog,
+          locationId: request.auditLog.locationId ?? current.locationId,
+          entityId: current.id,
+        });
+      }
+      const finalCosts = await tx.select().from(appointmentInternalCosts)
+        .where(eq(appointmentInternalCosts.appointmentId, current.id))
+        .orderBy(appointmentInternalCosts.position);
+      return {
+        appointment,
+        extras: extraSnapshots.map((snapshot) => ({ ...snapshot, appointmentId: current.id })),
+        internalCosts: finalCosts,
+      };
+    });
   }
 
   async updateAppointmentStatus(
@@ -2364,7 +2729,10 @@ export class MemoryStorage implements IStorage {
   private services: Service[] = [];
   private serviceCategories: ServiceCategory[] = [];
   private extraDefinitions: ExtraDefinition[] = [];
+  private extraDefinitionServices: Array<{ extraDefinitionId: number; serviceId: number }> = [];
   private appointmentExtras: AppointmentExtra[] = [];
+  private internalCostDefinitions: InternalCostDefinition[] = [];
+  private appointmentInternalCosts: AppointmentInternalCost[] = [];
   private appointments: Appointment[] = [];
   private appointmentSeries: AppointmentSeries[] = [];
   private admins: Admin[] = [];
@@ -2387,6 +2755,8 @@ export class MemoryStorage implements IStorage {
     service: 1,
     serviceCategory: 1,
     extraDefinition: 1,
+    internalCostDefinition: 1,
+    appointmentInternalCost: 1,
     appointment: 1,
     admin: 1,
     blacklist: 1,
@@ -2405,6 +2775,7 @@ export class MemoryStorage implements IStorage {
 
   private resolveAppointmentExtraSnapshots(
     locationId: number | undefined,
+    serviceId: number | null | undefined,
     rawExtras: AppointmentExtraInput[],
     existingExtras: AppointmentExtra[] = [],
   ): AppointmentExtraSnapshotInput[] {
@@ -2419,7 +2790,8 @@ export class MemoryStorage implements IStorage {
       const existing = existingByDefinitionId.get(extraDefinitionId);
       const shouldPreserveExisting = existing
         && (selectedExtra.amountCents === undefined
-          || selectedExtra.amountCents === existing.amountCentsSnapshot);
+          || selectedExtra.amountCents === existing.amountCentsSnapshot)
+        && (selectedExtra.quantity ?? 1) === existing.quantity;
       if (shouldPreserveExisting) {
         const { appointmentId: _appointmentId, ...snapshot } = existing;
         return { ...snapshot, position };
@@ -2429,9 +2801,13 @@ export class MemoryStorage implements IStorage {
         && candidate.locationId === locationId
         && candidate.isActive);
       if (!definition) throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
-      const amountCentsSnapshot = definition.pricingMode === "fixed"
-        ? definition.amountCents
-        : selectedExtra.amountCents;
+      const serviceIds = this.extraDefinitionServices
+        .filter((assignment) => assignment.extraDefinitionId === extraDefinitionId)
+        .map((assignment) => assignment.serviceId);
+      if (serviceIds.length > 0 && (!serviceId || !serviceIds.includes(serviceId))) {
+        throw new AppointmentExtrasError(appointmentExtraUnavailableCode);
+      }
+      const amountCentsSnapshot = selectedExtra.amountCents ?? definition.amountCents;
       if (!amountCentsSnapshot) {
         throw new AppointmentExtrasError(appointmentExtraAmountInvalidCode);
       }
@@ -2439,9 +2815,42 @@ export class MemoryStorage implements IStorage {
         extraDefinitionId,
         nameSnapshot: definition.name,
         amountCentsSnapshot,
+        quantity: selectedExtra.quantity ?? 1,
         financialRuleSnapshot: definition.financialRule,
         position,
         createdAt: new Date(),
+      };
+    });
+  }
+
+  private resolveAppointmentInternalCostSnapshots(
+    locationId: number,
+    rawCosts: AppointmentInternalCostInput[],
+    existingCosts: AppointmentInternalCost[] = [],
+  ): AppointmentInternalCostSnapshotInput[] {
+    const selectedCosts = validateAppointmentInternalCostInputs(rawCosts);
+    const existingByDefinitionId = new Map(existingCosts.map((cost) => [cost.internalCostDefinitionId, cost]));
+    return selectedCosts.map((selected, position) => {
+      const existing = existingByDefinitionId.get(selected.internalCostId);
+      if (existing
+        && (selected.unitCostCents === undefined || selected.unitCostCents === existing.unitCostCentsSnapshot)
+        && (selected.quantity ?? 1) === existing.quantity) {
+        const { id: _id, appointmentId: _appointmentId, ...snapshot } = existing;
+        return { ...snapshot, position, updatedAt: new Date() };
+      }
+      const definition = this.internalCostDefinitions.find((candidate) =>
+        candidate.id === selected.internalCostId && candidate.locationId === locationId && candidate.isActive);
+      if (!definition) throw new AppointmentInternalCostsError(appointmentInternalCostUnavailableCode);
+      const now = new Date();
+      return {
+        internalCostDefinitionId: definition.id,
+        nameSnapshot: definition.name,
+        unitCostCentsSnapshot: selected.unitCostCents ?? definition.defaultUnitCostCents,
+        unitLabelSnapshot: definition.unitLabel,
+        quantity: selected.quantity ?? 1,
+        position,
+        createdAt: now,
+        updatedAt: now,
       };
     });
   }
@@ -2721,20 +3130,26 @@ export class MemoryStorage implements IStorage {
   async getExtraDefinitions(
     locationId: number,
     options?: { includeInactive?: boolean },
-  ): Promise<ExtraDefinition[]> {
+  ): Promise<ExtraDefinitionWithServices[]> {
     return this.extraDefinitions
       .filter((definition) => definition.locationId === locationId)
       .filter((definition) => options?.includeInactive || definition.isActive)
       .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id)
-      .map((definition) => ({ ...definition }));
+      .map((definition) => ({
+        ...definition,
+        serviceIds: this.extraDefinitionServices
+          .filter((assignment) => assignment.extraDefinitionId === definition.id)
+          .map((assignment) => assignment.serviceId)
+          .sort((left, right) => left - right),
+      }));
   }
 
-  async getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinition | undefined> {
-    const definition = this.extraDefinitions.find((item) => item.id === id && item.locationId === locationId);
-    return definition ? { ...definition } : undefined;
+  async getExtraDefinition(id: number, locationId: number): Promise<ExtraDefinitionWithServices | undefined> {
+    return (await this.getExtraDefinitions(locationId, { includeInactive: true }))
+      .find((definition) => definition.id === id);
   }
 
-  async createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinition> {
+  async createExtraDefinition(extra: CreateExtraDefinitionRequest): Promise<ExtraDefinitionWithServices> {
     const parsed = insertExtraDefinitionSchema.parse(extra);
     const name = parsed.name.trim();
     if (this.extraDefinitions.some((definition) =>
@@ -2749,9 +3164,11 @@ export class MemoryStorage implements IStorage {
       id: this.nextIds.extraDefinition++,
       locationId: parsed.locationId,
       name,
+      description: parsed.description?.trim() || null,
       pricingMode: parsed.pricingMode,
       amountCents: parsed.amountCents,
       financialRule: parsed.financialRule,
+      isPubliclyBookable: parsed.isPubliclyBookable ?? false,
       isActive: parsed.isActive ?? true,
       sortOrder: parsed.sortOrder ?? (this.extraDefinitions
         .filter((definition) => definition.locationId === parsed.locationId)
@@ -2760,14 +3177,19 @@ export class MemoryStorage implements IStorage {
       updatedAt: now,
     };
     this.extraDefinitions.push(created);
-    return { ...created };
+    const serviceIds = Array.from(new Set(parsed.serviceIds ?? [])).sort((a, b) => a - b);
+    this.extraDefinitionServices.push(...serviceIds.map((serviceId) => ({
+      extraDefinitionId: created.id,
+      serviceId,
+    })));
+    return { ...created, serviceIds };
   }
 
   async updateExtraDefinition(
     id: number,
     locationId: number,
     extra: UpdateExtraDefinitionRequest,
-  ): Promise<ExtraDefinition | undefined> {
+  ): Promise<ExtraDefinitionWithServices | undefined> {
     const index = this.extraDefinitions.findIndex((definition) =>
       definition.id === id && definition.locationId === locationId);
     if (index === -1) return undefined;
@@ -2787,11 +3209,73 @@ export class MemoryStorage implements IStorage {
     }
     this.extraDefinitions[index] = {
       ...this.extraDefinitions[index],
-      ...parsed,
+      ...(() => {
+        const { serviceIds: _serviceIds, ...definition } = parsed;
+        return definition;
+      })(),
       name,
       updatedAt: new Date(),
     };
-    return { ...this.extraDefinitions[index] };
+    const serviceIds = Array.from(new Set(parsed.serviceIds ?? [])).sort((a, b) => a - b);
+    this.extraDefinitionServices = this.extraDefinitionServices
+      .filter((assignment) => assignment.extraDefinitionId !== id);
+    this.extraDefinitionServices.push(...serviceIds.map((serviceId) => ({ extraDefinitionId: id, serviceId })));
+    return { ...this.extraDefinitions[index], serviceIds };
+  }
+
+  async getInternalCostDefinitions(locationId: number, options?: { includeInactive?: boolean }) {
+    return this.internalCostDefinitions
+      .filter((definition) => definition.locationId === locationId)
+      .filter((definition) => options?.includeInactive || definition.isActive)
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id)
+      .map((definition) => ({ ...definition }));
+  }
+
+  async getInternalCostDefinition(id: number, locationId: number) {
+    const definition = this.internalCostDefinitions.find((candidate) =>
+      candidate.id === id && candidate.locationId === locationId);
+    return definition ? { ...definition } : undefined;
+  }
+
+  async createInternalCostDefinition(cost: CreateInternalCostDefinitionRequest) {
+    const parsed = insertInternalCostDefinitionSchema.parse(cost);
+    const now = new Date();
+    const created: InternalCostDefinition = {
+      id: this.nextIds.internalCostDefinition++,
+      locationId: parsed.locationId,
+      name: parsed.name.trim(),
+      description: parsed.description?.trim() || null,
+      defaultUnitCostCents: parsed.defaultUnitCostCents,
+      unitLabel: parsed.unitLabel.trim(),
+      isActive: parsed.isActive ?? true,
+      sortOrder: parsed.sortOrder ?? (this.internalCostDefinitions
+        .filter((definition) => definition.locationId === parsed.locationId)
+        .reduce((maximum, definition) => Math.max(maximum, definition.sortOrder), -1) + 1),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.internalCostDefinitions.push(created);
+    return { ...created };
+  }
+
+  async updateInternalCostDefinition(id: number, locationId: number, cost: UpdateInternalCostDefinitionRequest) {
+    const index = this.internalCostDefinitions.findIndex((candidate) =>
+      candidate.id === id && candidate.locationId === locationId);
+    if (index === -1) return undefined;
+    const parsed = insertInternalCostDefinitionSchema.parse({
+      ...this.internalCostDefinitions[index],
+      ...updateInternalCostDefinitionSchema.parse(cost),
+      locationId,
+    });
+    this.internalCostDefinitions[index] = {
+      ...this.internalCostDefinitions[index],
+      ...parsed,
+      name: parsed.name.trim(),
+      description: parsed.description?.trim() || null,
+      unitLabel: parsed.unitLabel.trim(),
+      updatedAt: new Date(),
+    };
+    return { ...this.internalCostDefinitions[index] };
   }
 
   async getAppointments(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]> {
@@ -2834,6 +3318,14 @@ export class MemoryStorage implements IStorage {
       .map((extra) => ({ ...extra }));
   }
 
+  async getAppointmentInternalCosts(appointmentIds: number[]): Promise<AppointmentInternalCost[]> {
+    const selectedIds = new Set(appointmentIds);
+    return this.appointmentInternalCosts
+      .filter((cost) => selectedIds.has(cost.appointmentId))
+      .sort((left, right) => left.appointmentId - right.appointmentId || left.position - right.position)
+      .map((cost) => ({ ...cost }));
+  }
+
   async getAppointmentByToken(token: string): Promise<Appointment | undefined> {
     return this.appointments.find((appointment) => appointment.cancelToken === token);
   }
@@ -2871,6 +3363,7 @@ export class MemoryStorage implements IStorage {
         }
         const extraSnapshots = this.resolveAppointmentExtraSnapshots(
           appointment.locationId,
+          appointment.serviceId,
           appointment.extras ?? [],
         );
         const notificationRevision = appointment.notificationEventType ? 1 : 0;
@@ -3070,6 +3563,7 @@ export class MemoryStorage implements IStorage {
     createNotificationEvent: boolean,
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
+    internalCosts?: AppointmentInternalCostInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
@@ -3090,18 +3584,38 @@ export class MemoryStorage implements IStorage {
       : validateAppointmentExtraInputs(extras);
     const extrasChanged = requestedExtras !== undefined
       && appointmentExtrasSelectionChanged(requestedExtras, currentExtras);
+    const currentInternalCosts = internalCosts === undefined ? [] : this.appointmentInternalCosts
+      .filter((cost) => cost.appointmentId === id)
+      .sort((left, right) => left.position - right.position);
+    const requestedInternalCosts = internalCosts === undefined
+      ? undefined
+      : validateAppointmentInternalCostInputs(internalCosts);
+    const internalCostsChanged = requestedInternalCosts !== undefined
+      && appointmentInternalCostsSelectionChanged(requestedInternalCosts, currentInternalCosts);
     let replacementExtras: AppointmentExtraSnapshotInput[] = [];
+    let replacementInternalCosts: AppointmentInternalCostSnapshotInput[] = [];
     if (extrasChanged) {
       if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
         throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
       }
       replacementExtras = this.resolveAppointmentExtraSnapshots(
         current.locationId,
+        changes.candidate.serviceId,
         requestedExtras,
         currentExtras,
       );
     }
-    if (changes.changedFields.length === 0 && !extrasChanged) {
+    if (internalCostsChanged) {
+      if (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId) {
+        throw new AppointmentInternalCostsError(appointmentInternalCostsNotEditableCode);
+      }
+      replacementInternalCosts = this.resolveAppointmentInternalCostSnapshots(
+        current.locationId,
+        requestedInternalCosts!,
+        currentInternalCosts,
+      );
+    }
+    if (changes.changedFields.length === 0 && !extrasChanged && !internalCostsChanged) {
       return { appointment: current, notificationEvent: null };
     }
     if (changes.changedFields.length > 0) this.assertNoAppointmentConflict(changes.candidate, id);
@@ -3123,6 +3637,14 @@ export class MemoryStorage implements IStorage {
       this.appointmentExtras = this.appointmentExtras.filter((extra) => extra.appointmentId !== id);
       this.appointmentExtras.push(...replacementExtras.map((snapshot) => ({
         ...snapshot,
+        appointmentId: id,
+      })));
+    }
+    if (internalCostsChanged) {
+      this.appointmentInternalCosts = this.appointmentInternalCosts.filter((cost) => cost.appointmentId !== id);
+      this.appointmentInternalCosts.push(...replacementInternalCosts.map((snapshot) => ({
+        ...snapshot,
+        id: this.nextIds.appointmentInternalCost++,
         appointmentId: id,
       })));
     }
@@ -3157,6 +3679,75 @@ export class MemoryStorage implements IStorage {
     };
     this.appointmentNotificationEvents.push(notificationEvent);
     return { appointment: updated, notificationEvent };
+  }
+
+  async completeAppointment(request: CompleteAppointmentRequest): Promise<CompleteAppointmentResult | undefined> {
+    const index = this.appointments.findIndex((appointment) => appointment.id === request.appointmentId);
+    if (index === -1) return undefined;
+    const current = this.appointments[index];
+    if (current.status !== "booked" || current.notificationRevision !== request.expectedRevision) return undefined;
+    if (current.seriesId && (request.extras.length > 0 || request.internalCosts.length > 0)) {
+      throw new AppointmentExtrasError(appointmentExtrasNotAllowedForRecurringCode);
+    }
+    const currentExtras = await this.getAppointmentExtras([current.id]);
+    const currentCosts = await this.getAppointmentInternalCosts([current.id]);
+    const extraSnapshots = this.resolveAppointmentExtraSnapshots(
+      current.locationId,
+      current.serviceId,
+      request.extras,
+      currentExtras,
+    );
+    const costSnapshots = this.resolveAppointmentInternalCostSnapshots(
+      current.locationId,
+      request.internalCosts,
+      currentCosts,
+    );
+    // The in-memory implementation is used by API/unit tests where concurrent
+    // completions can interleave at the awaits above. Re-check the compare-and-
+    // set preconditions immediately before mutating, mirroring the guarded
+    // UPDATE performed by PostgreSQL.
+    const latest = this.appointments[index];
+    if (latest.status !== "booked" || latest.notificationRevision !== request.expectedRevision) {
+      return undefined;
+    }
+    const appointment: Appointment = {
+      ...latest,
+      ...(!latest.compensationModelSnapshot ? this.resolveAppointmentCompensationSnapshot(latest) : {}),
+      status: "completed",
+      paymentMethod: request.paymentMethod,
+      cancelledAt: null,
+      notificationRevision: latest.notificationRevision + 1,
+    };
+    this.appointments[index] = appointment;
+    this.appointmentExtras = this.appointmentExtras.filter((extra) => extra.appointmentId !== current.id);
+    this.appointmentExtras.push(...extraSnapshots.map((snapshot) => ({ ...snapshot, appointmentId: current.id })));
+    this.appointmentInternalCosts = this.appointmentInternalCosts.filter((cost) => cost.appointmentId !== current.id);
+    const internalCosts = costSnapshots.map((snapshot) => ({
+      ...snapshot,
+      id: this.nextIds.appointmentInternalCost++,
+      appointmentId: current.id,
+    }));
+    this.appointmentInternalCosts.push(...internalCosts);
+    if (request.auditLog) {
+      const now = new Date();
+      this.auditLogs.push({
+        ...request.auditLog,
+        id: this.nextIds.auditLog++,
+        entityId: current.id,
+        locationId: request.auditLog.locationId ?? current.locationId,
+        actorId: request.auditLog.actorId ?? null,
+        actorName: request.auditLog.actorName ?? null,
+        actorUserId: request.auditLog.actorUserId ?? null,
+        actorProfessionalId: request.auditLog.actorProfessionalId ?? null,
+        metadata: request.auditLog.metadata ?? null,
+        createdAt: now,
+      });
+    }
+    return {
+      appointment,
+      extras: extraSnapshots.map((snapshot) => ({ ...snapshot, appointmentId: current.id })),
+      internalCosts,
+    };
   }
 
   async rescheduleAppointment(

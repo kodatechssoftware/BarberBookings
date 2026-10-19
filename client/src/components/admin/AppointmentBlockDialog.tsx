@@ -35,7 +35,7 @@ import {
   toStoredPhone,
   type PhoneCountryCode,
 } from "@shared/phone-countries";
-import type { ExtraDefinition } from "@shared/schema";
+import type { ExtraDefinitionWithServices } from "@shared/schema";
 import type { ShopLocation } from "@shared/locations";
 import { useBusinessCopy } from "@/business/use-business-copy";
 
@@ -56,7 +56,7 @@ type AppointmentBlockDialogProps = {
   onOpenChange: (open: boolean) => void;
   barbers?: AppointmentBlockBarberOption[];
   manualBookingServices: AppointmentBlockServiceOption[];
-  extras: ExtraDefinition[];
+  extras: ExtraDefinitionWithServices[];
   isLoadingExtras?: boolean;
   blockData: AppointmentBlockData;
   onBlockDataChange: Dispatch<SetStateAction<AppointmentBlockData>>;
@@ -133,7 +133,9 @@ export function AppointmentBlockDialog({
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
   const selectedService = manualBookingServices.find((service) => String(service.id) === blockData.serviceId);
   const showSpecialTerms = blockData.isManualBooking && blockData.hasSpecialTerms && !blockData.isRecurring;
-  const selectedExtras = extras.filter((extra) => blockData.extras.some((selection) => selection.extraId === extra.id));
+  const applicableExtras = extras.filter((extra) => extra.serviceIds.length === 0
+    || (blockData.serviceMode === "existing" && extra.serviceIds.includes(Number(blockData.serviceId))));
+  const selectedExtras = applicableExtras.filter((extra) => blockData.extras.some((selection) => selection.extraId === extra.id));
 
   const formatPrice = (priceCents: number) => `${centsToMoneyInput(priceCents)} €`;
   const activeServicePrice = blockData.serviceMode === "custom"
@@ -149,17 +151,15 @@ export function AppointmentBlockDialog({
     const selection = blockData.extras.find((candidate) => candidate.extraId === extra.id);
     return {
       ...extra,
-      effectiveAmountCents: extra.pricingMode === "fixed"
-        ? extra.amountCents
-        : moneyInputToCents(selection?.amountEuros ?? "", { minCents: 1, maxCents: 1_000_000 }),
+      effectiveAmountCents: moneyInputToCents(selection?.amountEuros ?? "", { minCents: 1, maxCents: 1_000_000 }),
+      quantity: selection?.quantity ?? 1,
     };
   });
   const extrasTotalCents = selectedExtraRows.reduce(
-    (total, extra) => total + (extra.effectiveAmountCents ?? 0),
+    (total, extra) => total + (extra.effectiveAmountCents ?? 0) * extra.quantity,
     0,
   );
-  const incompleteVariableExtra = selectedExtraRows.find((extra) =>
-    extra.pricingMode === "variable" && extra.effectiveAmountCents === null);
+  const incompleteVariableExtra = selectedExtraRows.find((extra) => extra.effectiveAmountCents === null);
   const selectedExtrasCount = blockData.extras.length;
   const extrasHeading = selectedExtrasCount === 0
     ? "Extras (opcional)"
@@ -177,19 +177,13 @@ export function AppointmentBlockDialog({
   }, [blockData.isManualBooking, blockData.isRecurring]);
 
   useEffect(() => {
-    onBlockDataChange((current) => {
-      let changed = false;
-      const normalizedExtras = current.extras.map((selection) => {
-        const definition = extras.find((extra) => extra.id === selection.extraId);
-        if (definition?.pricingMode === "fixed" && selection.amountEuros) {
-          changed = true;
-          return { ...selection, amountEuros: "" };
-        }
-        return selection;
-      });
-      return changed ? { ...current, extras: normalizedExtras } : current;
-    });
-  }, [extras, onBlockDataChange]);
+    if (!blockData.isManualBooking || blockData.extras.length === 0) return;
+    const applicableExtraIds = new Set(applicableExtras.map((extra) => extra.id));
+    const filteredExtras = blockData.extras.filter((selection) => applicableExtraIds.has(selection.extraId));
+    if (filteredExtras.length !== blockData.extras.length) {
+      onBlockDataChange({ ...blockData, extras: filteredExtras });
+    }
+  }, [blockData.isManualBooking, blockData.serviceId, blockData.serviceMode, extras]);
 
   const setQuickBlockTimes = (times: string[]) => {
     const available = times.filter((time) => availableBlockTimes.includes(time));
@@ -800,7 +794,7 @@ export function AppointmentBlockDialog({
                     <p className="text-xs text-gray-500">A carregar Extras...</p>
                   ) : (
                     <div className="space-y-2">
-                    {extras.map((extra) => {
+                    {applicableExtras.map((extra) => {
                       const checkboxId = `manual-booking-extra-${extra.id}`;
                       const amountId = `manual-booking-extra-amount-${extra.id}`;
                       const selection = blockData.extras.find((candidate) => candidate.extraId === extra.id);
@@ -819,7 +813,11 @@ export function AppointmentBlockDialog({
                                 extras: checked
                                   ? current.extras.some((candidate) => candidate.extraId === extra.id)
                                     ? current.extras
-                                    : [...current.extras, { extraId: extra.id, amountEuros: "" }]
+                                    : [...current.extras, {
+                                        extraId: extra.id,
+                                        amountEuros: centsToMoneyInput(extra.amountCents),
+                                        quantity: 1,
+                                      }]
                                   : current.extras.filter((candidate) => candidate.extraId !== extra.id),
                               }))}
                               aria-label={`Selecionar Extra ${extra.name}`}
@@ -831,8 +829,9 @@ export function AppointmentBlockDialog({
                                 : "Valor variável"}
                             </span>
                           </label>
-                          {isSelected && extra.pricingMode === "variable" && (
-                            <div className="space-y-2 pl-7">
+                          {isSelected && (
+                            <div className="grid gap-2 pl-7 sm:grid-cols-2">
+                              <div className="space-y-2">
                               <Label htmlFor={amountId} className="text-xs text-gray-300">Valor (€)</Label>
                               <Input
                                 id={amountId}
@@ -863,6 +862,25 @@ export function AppointmentBlockDialog({
                                 aria-label={`Valor do Extra ${extra.name}`}
                                 className="h-11 border-white/10 bg-background text-white"
                               />
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs text-gray-300">Quantidade</Label>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={99}
+                                  step={1}
+                                  value={selection?.quantity ?? 1}
+                                  onChange={(event) => onBlockDataChange((current) => ({
+                                    ...current,
+                                    extras: current.extras.map((candidate) => candidate.extraId === extra.id
+                                      ? { ...candidate, quantity: Math.max(1, Math.min(99, Number(event.target.value) || 1)) }
+                                      : candidate),
+                                  }))}
+                                  aria-label={`Quantidade do Extra ${extra.name}`}
+                                  className="h-11 border-white/10 bg-background text-white"
+                                />
+                              </div>
                             </div>
                           )}
                         </div>
@@ -889,11 +907,11 @@ export function AppointmentBlockDialog({
                   </div>
                   {selectedExtraRows.map((extra) => (
                     <div key={extra.id} className="flex items-start justify-between gap-4">
-                      <span className="min-w-0 break-words text-gray-300">{extra.name}</span>
+                      <span className="min-w-0 break-words text-gray-300">{extra.name}{extra.quantity > 1 ? ` × ${extra.quantity}` : ""}</span>
                       <span className="shrink-0 font-medium text-white">
                         {extra.effectiveAmountCents === null
                           ? "Por definir"
-                          : formatPrice(extra.effectiveAmountCents)}
+                          : formatPrice(extra.effectiveAmountCents * extra.quantity)}
                       </span>
                     </div>
                   ))}

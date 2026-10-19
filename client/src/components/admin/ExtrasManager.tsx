@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Loader2, Pencil, Plus, Sparkles } from "lucide-react";
-import type { ExtraDefinition, ExtraFinancialRule, ExtraPricingMode } from "@shared/schema";
+import type { ExtraDefinitionWithServices, ExtraFinancialRule, ExtraPricingMode } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,11 +13,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useExtras } from "@/hooks/use-extras";
+import { useServices } from "@/hooks/use-services";
 import { useToast } from "@/hooks/use-toast";
 import {
   centsToMoneyInput,
@@ -30,18 +32,24 @@ import { useBusinessCopy } from "@/business/use-business-copy";
 
 type ExtraForm = {
   name: string;
+  description: string;
   pricingMode: ExtraPricingMode;
   amountEuros: string;
   financialRule: ExtraFinancialRule;
   sortOrder: string;
+  isPubliclyBookable: boolean;
+  serviceIds: number[];
 };
 
 const emptyForm: ExtraForm = {
   name: "",
+  description: "",
   pricingMode: "fixed",
   amountEuros: "",
   financialRule: "follow_compensation",
   sortOrder: "0",
+  isPubliclyBookable: false,
+  serviceIds: [],
 };
 
 const euroFormatter = new Intl.NumberFormat("pt-PT", {
@@ -58,8 +66,9 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
   };
   const { toast } = useToast();
   const { data: extras = [], isLoading, isError, refetch } = useExtras({ enabled });
+  const { data: services = [] } = useServices({ enabled, includeHidden: true });
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingExtra, setEditingExtra] = useState<ExtraDefinition | null>(null);
+  const [editingExtra, setEditingExtra] = useState<ExtraDefinitionWithServices | null>(null);
   const [form, setForm] = useState<ExtraForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -84,14 +93,17 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
     setDialogOpen(true);
   };
 
-  const openEditDialog = (extra: ExtraDefinition) => {
+  const openEditDialog = (extra: ExtraDefinitionWithServices) => {
     setEditingExtra(extra);
     setForm({
       name: extra.name,
+      description: extra.description ?? "",
       pricingMode: extra.pricingMode,
       amountEuros: centsToMoneyInput(extra.amountCents),
       financialRule: extra.financialRule,
       sortOrder: String(extra.sortOrder),
+      isPubliclyBookable: extra.isPubliclyBookable,
+      serviceIds: extra.serviceIds,
     });
     setFormError(null);
     setDialogOpen(true);
@@ -132,10 +144,13 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
       const path = editingExtra ? `/api/admin/extras/${editingExtra.id}` : "/api/admin/extras";
       await apiRequest(editingExtra ? "PATCH" : "POST", path, {
         name,
+        description: form.description.trim() || null,
         pricingMode: form.pricingMode,
         amountCents,
         financialRule: form.financialRule,
         sortOrder,
+        isPubliclyBookable: form.isPubliclyBookable,
+        serviceIds: form.serviceIds,
       });
       await refresh();
       closeDialog();
@@ -151,7 +166,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
     }
   };
 
-  const toggleExtra = async (extra: ExtraDefinition, isActive: boolean) => {
+  const toggleExtra = async (extra: ExtraDefinitionWithServices, isActive: boolean) => {
     if (pendingActionRef.current) return;
     const actionKey = `toggle-${extra.id}`;
     pendingActionRef.current = actionKey;
@@ -242,7 +257,9 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
                       {financialRuleLabels[extra.financialRule]}
                     </span>
                     <span className="text-gray-500">Ordem: {extra.sortOrder}</span>
+                    <span>{extra.serviceIds.length === 0 ? "Todos os serviços" : `${extra.serviceIds.length} serviço(s)`}</span>
                   </div>
+                  {extra.description && <p className="text-sm text-gray-400">{extra.description}</p>}
                 </div>
 
                 <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto sm:flex-nowrap sm:justify-end">
@@ -304,6 +321,17 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
                 maxLength={100}
                 required
                 autoFocus
+                className="border-white/10 bg-background text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="extra-description">Descrição (opcional)</Label>
+              <Textarea
+                id="extra-description"
+                value={form.description}
+                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                maxLength={500}
                 className="border-white/10 bg-background text-white"
               />
             </div>
@@ -392,6 +420,45 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="space-y-3 rounded-lg border border-white/10 p-3">
+              <div>
+                <Label>Serviços aplicáveis</Label>
+                <p className="mt-1 text-xs text-gray-400">Sem seleção, o Extra aplica-se a todos os serviços.</p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {services.map((service) => {
+                  const checked = form.serviceIds.includes(service.id);
+                  return (
+                    <label key={service.id} className="flex min-h-10 items-center gap-2 rounded-md border border-white/10 px-3 text-sm">
+                      <Switch
+                        checked={checked}
+                        aria-label={`Aplicar ${form.name || "Extra"} a ${service.name}`}
+                        onCheckedChange={(value) => setForm((current) => ({
+                          ...current,
+                          serviceIds: value
+                            ? [...current.serviceIds, service.id]
+                            : current.serviceIds.filter((id) => id !== service.id),
+                        }))}
+                      />
+                      {service.name}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <label className="flex items-start gap-3 rounded-lg border border-white/10 p-3 text-sm">
+              <Switch
+                checked={form.isPubliclyBookable}
+                aria-label="Marcar Extra como elegível para futura seleção online"
+                onCheckedChange={(isPubliclyBookable) => setForm((current) => ({ ...current, isPubliclyBookable }))}
+              />
+              <span>
+                <strong className="block text-white">Elegível para futura seleção online</strong>
+                <span className="text-gray-400">A marcação pública de Extras continua desativada nesta fase.</span>
+              </span>
+            </label>
 
             {formError && (
               <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
