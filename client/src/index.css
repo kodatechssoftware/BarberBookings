@@ -107,6 +107,12 @@
   --brand-gradient-to: 342 39% 62%;
   --brand-highlight: 42 47% 70%;
   --brand-red: 348 42% 58%;
+  --admin-form-foreground: 24 20% 22%;
+  --admin-form-label: 24 18% 25%;
+  --admin-form-helper: 24 10% 38%;
+  --admin-form-placeholder: 24 9% 45%;
+  --admin-form-disabled: 24 8% 40%;
+  --admin-form-disabled-background: 32 24% 93%;
   --radius: 1.125rem;
   --font-display: 'Playfair Display', serif;
   --font-body: 'DM Sans', sans-serif;
@@ -280,16 +286,42 @@
  * shared and translate those surfaces only while the Beauty Admin is mounted.
  */
 :root[data-brand-theme="beauty-clean"] .admin-shell {
-  color: hsl(24 18% 23%);
+  color: hsl(var(--admin-form-foreground));
   background:
     radial-gradient(circle at 8% 4%, hsl(348 44% 83% / 0.2), transparent 27rem),
     hsl(32 29% 94%);
 }
 
+/*
+ * Admin dialogs are portalled outside .admin-shell. Set the foreground on the
+ * portal root itself so unclassed labels and field titles do not inherit the
+ * legacy dark-theme text-white colour from DialogContent.
+ */
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] {
+  color: hsl(var(--admin-form-foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .admin-shell label,
+:root[data-brand-theme="beauty-clean"] .admin-shell legend,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] label,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] legend,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] label,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] legend {
+  color: hsl(var(--admin-form-label));
+}
+
 :root[data-brand-theme="beauty-clean"] .admin-shell [class~="text-white"],
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] [class~="text-white"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] [class~="text-white"],
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="listbox"][class~="text-white"] {
-  color: hsl(24 18% 23%);
+  color: hsl(var(--admin-form-foreground));
+}
+
+:root[data-brand-theme="beauty-clean"] .admin-shell .text-white\/80,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-white\/80,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-white\/80 {
+  color: hsl(var(--admin-form-helper));
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell .text-gray-100,
@@ -297,7 +329,10 @@
 :root[data-brand-theme="beauty-clean"] .admin-shell .text-gray-300,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-100,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-200,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-300 {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-gray-100,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-gray-200,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-gray-300 {
   color: hsl(24 14% 32%);
 }
 
@@ -306,8 +341,11 @@
 :root[data-brand-theme="beauty-clean"] .admin-shell .text-gray-600,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-400,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-500,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-600 {
-  color: hsl(24 10% 39%);
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-gray-600,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-gray-400,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-gray-500,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-gray-600 {
+  color: hsl(var(--admin-form-helper));
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell .text-green-200,
@@ -374,7 +412,8 @@
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell .shadcn-card,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] {
   border-color: hsl(27 22% 75% / 0.88);
   background-color: hsl(40 43% 99%);
   box-shadow:
@@ -413,21 +452,54 @@
 
 :root[data-brand-theme="beauty-clean"] .admin-shell input:not([type="checkbox"]):not([type="radio"]),
 :root[data-brand-theme="beauty-clean"] .admin-shell textarea,
+:root[data-brand-theme="beauty-clean"] .admin-shell select,
 :root[data-brand-theme="beauty-clean"] .admin-shell button[role="combobox"],
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]),
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] textarea,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] button[role="combobox"] {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] select,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] button[role="combobox"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] textarea,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] select,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] button[role="combobox"] {
   border-color: hsl(27 20% 68%);
   background-color: hsl(40 50% 99%);
-  color: hsl(24 18% 23%);
+  color: hsl(var(--admin-form-foreground));
   box-shadow: inset 0 1px 1px hsl(24 20% 30% / 0.035);
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell input::placeholder,
 :root[data-brand-theme="beauty-clean"] .admin-shell textarea::placeholder,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] input::placeholder,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] textarea::placeholder {
-  color: hsl(24 10% 46%);
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] textarea::placeholder,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] input::placeholder,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] textarea::placeholder {
+  color: hsl(var(--admin-form-placeholder));
+  opacity: 1;
+}
+
+:root[data-brand-theme="beauty-clean"] .admin-shell button[role="combobox"][data-placeholder],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] button[role="combobox"][data-placeholder],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] button[role="combobox"][data-placeholder] {
+  color: hsl(var(--admin-form-placeholder));
+}
+
+:root[data-brand-theme="beauty-clean"] .admin-shell input:disabled,
+:root[data-brand-theme="beauty-clean"] .admin-shell textarea:disabled,
+:root[data-brand-theme="beauty-clean"] .admin-shell select:disabled,
+:root[data-brand-theme="beauty-clean"] .admin-shell button[role="combobox"][data-disabled],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] input:disabled,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] textarea:disabled,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] select:disabled,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] button[role="combobox"][data-disabled],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] input:disabled,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] textarea:disabled,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] select:disabled,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] button[role="combobox"][data-disabled] {
+  border-color: hsl(27 16% 72%);
+  background-color: hsl(var(--admin-form-disabled-background));
+  color: hsl(var(--admin-form-disabled));
+  -webkit-text-fill-color: hsl(var(--admin-form-disabled));
   opacity: 1;
 }
 
@@ -436,7 +508,10 @@
 :root[data-brand-theme="beauty-clean"] .admin-shell button[role="combobox"]:focus-visible,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] input:focus-visible,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] textarea:focus-visible,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] button[role="combobox"]:focus-visible {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] button[role="combobox"]:focus-visible,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] input:focus-visible,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] textarea:focus-visible,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] button[role="combobox"]:focus-visible {
   border-color: hsl(var(--primary));
   box-shadow: 0 0 0 3px hsl(var(--primary) / 0.22);
 }
