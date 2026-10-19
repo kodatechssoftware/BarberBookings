@@ -38,6 +38,12 @@ export const appointmentNotificationWorkerEnabled =
 export const recurringWhatsappNotificationsEnabled =
   explicitBoolean("META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED") ?? false;
 
+// Reminders require the scheduled outbox column introduced by migration 0022.
+// Existing installations remain fail-closed until the migration and template
+// have been validated for that environment.
+export const appointmentRemindersEnabled =
+  explicitBoolean("APPOINTMENT_REMINDERS_ENABLED") ?? false;
+
 export const bookingSlotIntervalMinutes =
   resolvedBusinessConfig.runtime.bookingSlotIntervalMinutes;
 
@@ -79,6 +85,10 @@ export function validateRuntimeConfiguration() {
     throw new Error("NOTIFICATION_OUTBOX_WORKER_ENABLED requires APPOINTMENT_NOTIFICATION_EVENTS_ENABLED.");
   }
 
+  if (appointmentRemindersEnabled && (!appointmentNotificationEventsEnabled || !appointmentNotificationWorkerEnabled)) {
+    throw new Error("APPOINTMENT_REMINDERS_ENABLED requires notification events and the outbox worker.");
+  }
+
   const whatsappEnabled = ["true", "1"].includes(
     process.env.WHATSAPP_NOTIFICATIONS_ENABLED?.trim().toLowerCase() || "",
   );
@@ -102,6 +112,7 @@ export function validateRuntimeConfiguration() {
       "META_WHATSAPP_UPDATED_TEMPLATE",
       "META_WHATSAPP_CANCELLED_TEMPLATE",
       "META_WHATSAPP_RECURRING_CONFIRMATION_TEMPLATE",
+      ...(appointmentRemindersEnabled ? ["META_WHATSAPP_REMINDER_DAY_BEFORE_TEMPLATE"] : []),
     ];
     if (templateEnvironmentNames.some((name) => !process.env[name]?.trim())) {
       throw new Error("All Meta WhatsApp appointment templates must be explicitly configured when Production WhatsApp is enabled.");

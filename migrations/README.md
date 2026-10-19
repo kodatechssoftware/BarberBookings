@@ -113,8 +113,8 @@ service applicability and per-appointment quantities, and introduces a wholly
 separate internal cost/consumption catalogue with immutable appointment
 snapshots. Existing Extra snapshots keep quantity one, no internal cost is
 inferred from historical Extras or business expenses, and public-booking
-availability remains disabled by default. Number `0019` is deliberately not
-reused because it is reserved by the shared notification/reminder migration.
+availability remains disabled by default. Number `0019` remains unused in this
+line; migrations already deployed as `0020` and later are never renumbered.
 
 Migration `0021_appointment_availability_windows.sql` adds concrete availability
 windows to long, non-recurring appointments. It materializes each booked
@@ -123,6 +123,14 @@ with preparation/cleanup buffers kept occupied) so PostgreSQL can enforce the
 same global no-overlap rule under concurrency. Existing appointments are
 backfilled as one continuous occupied interval and retain their previous
 behaviour. The feature is enabled by default only for the Beauty vertical.
+
+Migration `0022_appointment_reminder_schedule.sql` adds the due timestamp used
+by the existing transactional appointment-notification outbox. It is ordered
+after the already deployed Beauty migrations `0020` and `0021`. Existing events
+are backfilled from their creation timestamp and remain immediately eligible;
+no appointment or notification is created by the migration. Day-before
+reminders remain disabled until `APPOINTMENT_REMINDERS_ENABLED=true` and the
+approved Meta template are configured for the environment.
 
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but

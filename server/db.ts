@@ -607,6 +607,7 @@ export async function ensureAppointmentNotificationFoundation() {
       event_type text NOT NULL,
       event_revision integer NOT NULL,
       event_key text NOT NULL,
+      available_at timestamp NOT NULL DEFAULT now(),
       appointment_start_time timestamp,
       previous_start_time timestamp,
       new_start_time timestamp,
@@ -640,6 +641,7 @@ export async function ensureAppointmentNotificationFoundation() {
 
   await pool.query(`
     ALTER TABLE ${qualifiedEventsTable}
+      ADD COLUMN IF NOT EXISTS available_at timestamp NOT NULL DEFAULT now(),
       ADD COLUMN IF NOT EXISTS appointment_start_time timestamp,
       ADD COLUMN IF NOT EXISTS series_id text REFERENCES ${qualifiedSeriesTable}(id) ON DELETE CASCADE,
       ADD COLUMN IF NOT EXISTS payload_snapshot jsonb,
@@ -680,6 +682,11 @@ export async function ensureAppointmentNotificationFoundation() {
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_event_key_idx
     ON ${qualifiedEventsTable} (event_key)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS appointment_notification_events_due_pending_idx
+    ON ${qualifiedEventsTable} (available_at, id)
+    WHERE processing_completed_at IS NULL
   `);
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS appointment_notification_events_provider_message_id_idx

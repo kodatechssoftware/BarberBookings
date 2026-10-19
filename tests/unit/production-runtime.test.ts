@@ -17,6 +17,7 @@ const baseEnvironment = {
   META_WHATSAPP_WEBHOOK_ENABLED: "false",
   META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "false",
   META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED: "false",
+  APPOINTMENT_REMINDERS_ENABLED: "false",
 };
 
 const productionTemplateEnvironment = {
@@ -39,11 +40,12 @@ test("Production runtime starts fail-closed without Meta credentials", () => {
     production:m.isProductionDeployment, development:m.isDevelopmentDeployment,
     events:m.appointmentNotificationEventsEnabled, worker:m.appointmentNotificationWorkerEnabled,
     recurring:m.recurringWhatsappNotificationsEnabled,
+    reminders:m.appointmentRemindersEnabled,
     authRuntimeMode:m.authRuntimeMode,
     bookingSlotInterval:m.bookingSlotIntervalMinutes
   }))`);
   assert.deepEqual(JSON.parse(output), {
-    production: true, development: false, events: false, worker: false, recurring: false,
+    production: true, development: false, events: false, worker: false, recurring: false, reminders: false,
     authRuntimeMode: "legacy",
     bookingSlotInterval: 30,
   });
@@ -95,11 +97,12 @@ test("Production notification capabilities also default to off when activation f
   delete environment.APPOINTMENT_NOTIFICATION_EVENTS_ENABLED;
   delete environment.NOTIFICATION_OUTBOX_WORKER_ENABLED;
   delete environment.META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED;
+  delete environment.APPOINTMENT_REMINDERS_ENABLED;
   const output = evaluate(environment, `console.log(JSON.stringify({
     events:m.appointmentNotificationEventsEnabled, worker:m.appointmentNotificationWorkerEnabled,
-    recurring:m.recurringWhatsappNotificationsEnabled
+    recurring:m.recurringWhatsappNotificationsEnabled, reminders:m.appointmentRemindersEnabled
   }))`);
-  assert.deepEqual(JSON.parse(output), { events: false, worker: false, recurring: false });
+  assert.deepEqual(JSON.parse(output), { events: false, worker: false, recurring: false, reminders: false });
 });
 
 test("Production rejects ambiguous APP_ENV, localhost URL and weak session secret", () => {
@@ -125,6 +128,7 @@ test("Production refuses partially activated outbox, Meta and webhook capabiliti
   }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_WEBHOOK_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
+  assert.throws(() => evaluate({ ...baseEnvironment, APPOINTMENT_REMINDERS_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
 });
 
 test("Production requires all five appointment template names before WhatsApp activation", () => {
@@ -146,6 +150,27 @@ test("Production requires all five appointment template names before WhatsApp ac
     delete incompleteEnvironment[name];
     assert.throws(() => evaluate(incompleteEnvironment, "m.validateRuntimeConfiguration()"));
   }
+});
+
+test("Production reminder activation requires its approved template and the complete outbox", () => {
+  const completeEnvironment = {
+    ...baseEnvironment,
+    ...productionTemplateEnvironment,
+    WHATSAPP_NOTIFICATIONS_ENABLED: "true",
+    MESSAGING_PROVIDER: "meta",
+    APPOINTMENT_NOTIFICATION_EVENTS_ENABLED: "true",
+    NOTIFICATION_OUTBOX_WORKER_ENABLED: "true",
+    APPOINTMENT_REMINDERS_ENABLED: "true",
+    META_WHATSAPP_GRAPH_API_VERSION: "v25.0",
+    META_WHATSAPP_PHONE_NUMBER_ID: "production-test-phone-id",
+    META_WHATSAPP_WABA_ID: "production-test-waba-id",
+    META_WHATSAPP_ACCESS_TOKEN: "production-test-token",
+    META_WHATSAPP_REMINDER_DAY_BEFORE_TEMPLATE: "appointment_reminder_day_before",
+  };
+  evaluate(completeEnvironment, "m.validateRuntimeConfiguration()");
+  const missingTemplate = { ...completeEnvironment };
+  delete missingTemplate.META_WHATSAPP_REMINDER_DAY_BEFORE_TEMPLATE;
+  assert.throws(() => evaluate(missingTemplate, "m.validateRuntimeConfiguration()"));
 });
 
 test("disabled multi-location ignores an invalid limit and remains single-location", async () => {
