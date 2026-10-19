@@ -6,6 +6,7 @@ import { getCalendarDateInTimeZone } from "@shared/public-booking-window";
 import type {
   Appointment,
   AppointmentExtra,
+  AppointmentInternalCost,
   BarberCompensationModel,
   BarberCompensationRule,
   ChairRentPeriod,
@@ -36,6 +37,8 @@ export type AppointmentFinancialResult = {
   chairRentPeriod: ChairRentPeriod | null;
   serviceAmountCents: number;
   extrasAmountCents: number;
+  directCostAmountCents: number;
+  grossMarginCents: number;
   totalAmountCents: number;
   receivedAmountCents: number;
   cashAmountCents: number;
@@ -57,6 +60,8 @@ export type AppointmentsFinancialResult = {
   byAppointmentId: ReadonlyMap<number, AppointmentFinancialResult>;
   serviceAmountCents: number;
   extrasAmountCents: number;
+  directCostAmountCents: number;
+  grossMarginCents: number;
   totalAmountCents: number;
   receivedAmountCents: number;
   cashAmountCents: number;
@@ -74,6 +79,7 @@ export type AppointmentsFinancialResult = {
 
 export type AppointmentFinanceDataSource = {
   getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]>;
+  getAppointmentInternalCosts?(appointmentIds: number[]): Promise<AppointmentInternalCost[]>;
   getBarberCompensationRules(barberId?: number, locationId?: number): Promise<BarberCompensationRule[]>;
   getAppointments?(barberId?: number, date?: string, locationId?: number): Promise<Appointment[]>;
 };
@@ -81,6 +87,7 @@ export type AppointmentFinanceDataSource = {
 type CalculateAppointmentsFinancialsInput = {
   appointments: readonly Appointment[];
   appointmentExtras: readonly AppointmentExtra[];
+  appointmentInternalCosts?: readonly AppointmentInternalCost[];
   servicePrices: ReadonlyMap<number, number>;
   compensationRules: readonly BarberCompensationRule[];
   chairRentAnchorAppointmentIds?: ReadonlySet<number>;
@@ -89,6 +96,7 @@ type CalculateAppointmentsFinancialsInput = {
 type CalculateAppointmentFinancialsInput = {
   appointment: Appointment;
   appointmentExtras?: readonly AppointmentExtra[];
+  appointmentInternalCosts?: readonly AppointmentInternalCost[];
   servicePrices: ReadonlyMap<number, number>;
   compensationRules?: readonly BarberCompensationRule[];
 };
@@ -283,6 +291,7 @@ export function getAppointmentPaymentAmounts(
 function calculateBaseAppointmentFinancials(
   appointment: Appointment,
   extras: readonly AppointmentExtra[],
+  internalCosts: readonly AppointmentInternalCost[],
   servicePrices: ReadonlyMap<number, number>,
   compensationRule: BarberCompensationRule,
 ): AppointmentFinancialResult {
@@ -307,11 +316,12 @@ function calculateBaseAppointmentFinancials(
       nameSnapshot: extra.nameSnapshot,
       position: extra.position + 1,
       financialRule: extra.financialRuleSnapshot,
-      amountCents: extra.amountCentsSnapshot,
+      amountCents: extra.amountCentsSnapshot * (extra.quantity ?? 1),
     }, isRealized, compensationRule)),
   ];
-  const extrasAmountCents = sum(orderedExtras, (extra) => extra.amountCentsSnapshot);
+  const extrasAmountCents = sum(orderedExtras, (extra) => extra.amountCentsSnapshot * (extra.quantity ?? 1));
   const totalAmountCents = serviceAmountCents + extrasAmountCents;
+  const directCostAmountCents = sum(internalCosts, (cost) => cost.unitCostCentsSnapshot * cost.quantity);
   const paymentAmounts = getAppointmentPaymentAmounts(appointment, totalAmountCents);
 
   return {
@@ -325,6 +335,8 @@ function calculateBaseAppointmentFinancials(
     chairRentPeriod: compensationRule.chairRentPeriod,
     serviceAmountCents,
     extrasAmountCents,
+    directCostAmountCents,
+    grossMarginCents: totalAmountCents - directCostAmountCents,
     totalAmountCents,
     ...paymentAmounts,
     projectedAmountCents: appointment.status === "booked" ? totalAmountCents : 0,
@@ -340,17 +352,25 @@ function calculateBaseAppointmentFinancials(
 export function calculateAppointmentsFinancials({
   appointments,
   appointmentExtras,
+  appointmentInternalCosts = [],
   servicePrices,
   compensationRules,
   chairRentAnchorAppointmentIds,
 }: CalculateAppointmentsFinancialsInput): AppointmentsFinancialResult {
   const appointmentIds = new Set(appointments.map((appointment) => appointment.id));
   const extrasByAppointment = new Map<number, AppointmentExtra[]>();
+  const costsByAppointment = new Map<number, AppointmentInternalCost[]>();
   for (const extra of appointmentExtras) {
     if (!appointmentIds.has(extra.appointmentId)) continue;
     const selected = extrasByAppointment.get(extra.appointmentId) ?? [];
     selected.push(extra);
     extrasByAppointment.set(extra.appointmentId, selected);
+  }
+  for (const cost of appointmentInternalCosts) {
+    if (!appointmentIds.has(cost.appointmentId)) continue;
+    const selected = costsByAppointment.get(cost.appointmentId) ?? [];
+    selected.push(cost);
+    costsByAppointment.set(cost.appointmentId, selected);
   }
 
   const rulesByAppointment = new Map<number, BarberCompensationRule>();
@@ -360,6 +380,7 @@ export function calculateAppointmentsFinancials({
     return calculateBaseAppointmentFinancials(
       appointment,
       extrasByAppointment.get(appointment.id) ?? [],
+      costsByAppointment.get(appointment.id) ?? [],
       servicePrices,
       rule,
     );
@@ -389,6 +410,8 @@ export function calculateAppointmentsFinancials({
     byAppointmentId: resultById,
     serviceAmountCents: sum(results, (result) => result.serviceAmountCents),
     extrasAmountCents: sum(results, (result) => result.extrasAmountCents),
+    directCostAmountCents: sum(results, (result) => result.directCostAmountCents),
+    grossMarginCents: sum(results, (result) => result.grossMarginCents),
     totalAmountCents: sum(results, (result) => result.totalAmountCents),
     receivedAmountCents: sum(results, (result) => result.receivedAmountCents),
     cashAmountCents: sum(results, (result) => result.cashAmountCents),
@@ -429,12 +452,14 @@ export function getChairRentAnchorAppointmentIds(
 export function calculateAppointmentFinancials({
   appointment,
   appointmentExtras = [],
+  appointmentInternalCosts = [],
   servicePrices,
   compensationRules = [],
 }: CalculateAppointmentFinancialsInput) {
   return calculateAppointmentsFinancials({
     appointments: [appointment],
     appointmentExtras,
+    appointmentInternalCosts,
     servicePrices,
     compensationRules,
   }).appointments[0];
@@ -449,13 +474,15 @@ export async function loadAppointmentsFinancials(
     return calculateAppointmentsFinancials({
       appointments,
       appointmentExtras: [],
+      appointmentInternalCosts: [],
       servicePrices,
       compensationRules: [],
     });
   }
   const appointmentIds = appointments.map((appointment) => appointment.id);
-  const [appointmentExtras, compensationRules] = await Promise.all([
+  const [appointmentExtras, appointmentInternalCosts, compensationRules] = await Promise.all([
     source.getAppointmentExtras(appointmentIds),
+    source.getAppointmentInternalCosts?.(appointmentIds) ?? Promise.resolve([]),
     source.getBarberCompensationRules(),
   ]);
   let chairRentAnchorAppointmentIds: ReadonlySet<number> | undefined;
@@ -470,6 +497,7 @@ export async function loadAppointmentsFinancials(
   return calculateAppointmentsFinancials({
     appointments,
     appointmentExtras,
+    appointmentInternalCosts,
     servicePrices,
     compensationRules,
     chairRentAnchorAppointmentIds,

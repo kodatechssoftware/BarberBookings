@@ -32,6 +32,8 @@ export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appoint
 export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 export const extraDefinitionsIdSeq = appPgSchema?.sequence("extra_definitions_id_seq");
+export const internalCostDefinitionsIdSeq = appPgSchema?.sequence("internal_cost_definitions_id_seq");
+export const appointmentInternalCostsIdSeq = appPgSchema?.sequence("appointment_internal_costs_id_seq");
 export const usersIdSeq = appPgSchema?.sequence("users_id_seq");
 export const userAccessScopesIdSeq = appPgSchema?.sequence("user_access_scopes_id_seq");
 export const userInvitesIdSeq = appPgSchema?.sequence("user_invites_id_seq");
@@ -339,9 +341,11 @@ export const extraDefinitions = appPgTable("extra_definitions", {
   id: idColumn("extra_definitions_id_seq"),
   locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
   name: text("name").notNull(),
+  description: text("description"),
   pricingMode: text("pricing_mode", { enum: extraPricingModes }).notNull(),
   amountCents: integer("amount_cents"),
   financialRule: text("financial_rule", { enum: extraFinancialRules }).notNull(),
+  isPubliclyBookable: boolean("is_publicly_bookable").notNull().default(false),
   isActive: boolean("is_active").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -353,6 +357,8 @@ export const extraDefinitions = appPgTable("extra_definitions", {
     .on(table.locationId, table.isActive, table.sortOrder, table.id),
   nameCheck: check("extra_definitions_name_check",
     sql`btrim(${table.name}) <> '' AND char_length(${table.name}) <= 100`),
+  descriptionCheck: check("extra_definitions_description_check",
+    sql`${table.description} IS NULL OR char_length(${table.description}) <= 500`),
   pricingModeCheck: check("extra_definitions_pricing_mode_check",
     sql`${table.pricingMode} IN ('fixed', 'variable')`),
   pricingAmountCheck: check("extra_definitions_pricing_amount_check", sql`
@@ -369,6 +375,7 @@ export const appointmentExtras = appPgTable("appointment_extras", {
   extraDefinitionId: integer("extra_definition_id").references(() => extraDefinitions.id, { onDelete: "restrict" }).notNull(),
   nameSnapshot: text("name_snapshot").notNull(),
   amountCentsSnapshot: integer("amount_cents_snapshot").notNull(),
+  quantity: integer("quantity").notNull().default(1),
   financialRuleSnapshot: text("financial_rule_snapshot", { enum: extraFinancialRules }).notNull(),
   position: integer("position").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -382,9 +389,78 @@ export const appointmentExtras = appPgTable("appointment_extras", {
     sql`btrim(${table.nameSnapshot}) <> '' AND char_length(${table.nameSnapshot}) <= 100`),
   amountCentsSnapshotCheck: check("appointment_extras_amount_cents_snapshot_check",
     sql`${table.amountCentsSnapshot} > 0 AND ${table.amountCentsSnapshot} <= 1000000`),
+  quantityCheck: check("appointment_extras_quantity_check",
+    sql`${table.quantity} BETWEEN 1 AND 99`),
   financialRuleSnapshotCheck: check("appointment_extras_financial_rule_snapshot_check",
     sql`${table.financialRuleSnapshot} IN ('follow_compensation', 'barber', 'establishment')`),
   positionCheck: check("appointment_extras_position_check", sql`${table.position} >= 0`),
+}));
+
+export const extraDefinitionServices = appPgTable("extra_definition_services", {
+  extraDefinitionId: integer("extra_definition_id")
+    .references(() => extraDefinitions.id, { onDelete: "cascade" }).notNull(),
+  serviceId: integer("service_id")
+    .references(() => services.id, { onDelete: "restrict" }).notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.extraDefinitionId, table.serviceId] }),
+  serviceIdx: index("extra_definition_services_service_idx")
+    .on(table.serviceId, table.extraDefinitionId),
+}));
+
+export const internalCostDefinitions = appPgTable("internal_cost_definitions", {
+  id: idColumn("internal_cost_definitions_id_seq"),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  defaultUnitCostCents: integer("default_unit_cost_cents").notNull(),
+  unitLabel: text("unit_label").notNull().default("unidade"),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  locationNameIdx: uniqueIndex("internal_cost_definitions_location_name_ci_idx")
+    .on(table.locationId, sql`lower(btrim(${table.name}))`),
+  locationActiveOrderIdx: index("internal_cost_definitions_location_active_order_idx")
+    .on(table.locationId, table.isActive, table.sortOrder, table.id),
+  nameCheck: check("internal_cost_definitions_name_check",
+    sql`btrim(${table.name}) <> '' AND char_length(${table.name}) <= 100`),
+  descriptionCheck: check("internal_cost_definitions_description_check",
+    sql`${table.description} IS NULL OR char_length(${table.description}) <= 500`),
+  unitCostCheck: check("internal_cost_definitions_unit_cost_check",
+    sql`${table.defaultUnitCostCents} BETWEEN 0 AND 1000000`),
+  unitLabelCheck: check("internal_cost_definitions_unit_label_check",
+    sql`btrim(${table.unitLabel}) <> '' AND char_length(${table.unitLabel}) <= 40`),
+  sortOrderCheck: check("internal_cost_definitions_sort_order_check", sql`${table.sortOrder} >= 0`),
+}));
+
+export const appointmentInternalCosts = appPgTable("appointment_internal_costs", {
+  id: idColumn("appointment_internal_costs_id_seq"),
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }).notNull(),
+  internalCostDefinitionId: integer("internal_cost_definition_id")
+    .references(() => internalCostDefinitions.id, { onDelete: "restrict" }).notNull(),
+  nameSnapshot: text("name_snapshot").notNull(),
+  unitCostCentsSnapshot: integer("unit_cost_cents_snapshot").notNull(),
+  unitLabelSnapshot: text("unit_label_snapshot").notNull(),
+  quantity: integer("quantity").notNull().default(1),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  definitionUnique: uniqueIndex("appointment_internal_costs_definition_unique")
+    .on(table.appointmentId, table.internalCostDefinitionId),
+  positionUnique: uniqueIndex("appointment_internal_costs_position_unique")
+    .on(table.appointmentId, table.position),
+  definitionIdx: index("appointment_internal_costs_definition_idx")
+    .on(table.internalCostDefinitionId, table.appointmentId),
+  nameSnapshotCheck: check("appointment_internal_costs_name_snapshot_check",
+    sql`btrim(${table.nameSnapshot}) <> '' AND char_length(${table.nameSnapshot}) <= 100`),
+  unitCostSnapshotCheck: check("appointment_internal_costs_unit_cost_snapshot_check",
+    sql`${table.unitCostCentsSnapshot} BETWEEN 0 AND 1000000`),
+  unitLabelSnapshotCheck: check("appointment_internal_costs_unit_label_snapshot_check",
+    sql`btrim(${table.unitLabelSnapshot}) <> '' AND char_length(${table.unitLabelSnapshot}) <= 40`),
+  quantityCheck: check("appointment_internal_costs_quantity_check", sql`${table.quantity} BETWEEN 1 AND 9999`),
+  positionCheck: check("appointment_internal_costs_position_check", sql`${table.position} >= 0`),
 }));
 
 export const admins = appPgTable("admins", {
@@ -830,6 +906,7 @@ export const appointmentsRelations = relations(appointments, ({ one, many }) => 
     references: [appointmentSeries.id],
   }),
   extras: many(appointmentExtras),
+  internalCosts: many(appointmentInternalCosts),
 }));
 
 export const extraDefinitionsRelations = relations(extraDefinitions, ({ one, many }) => ({
@@ -838,6 +915,7 @@ export const extraDefinitionsRelations = relations(extraDefinitions, ({ one, man
     references: [locations.id],
   }),
   appointmentExtras: many(appointmentExtras),
+  serviceAssignments: many(extraDefinitionServices),
 }));
 
 export const appointmentExtrasRelations = relations(appointmentExtras, ({ one }) => ({
@@ -848,6 +926,36 @@ export const appointmentExtrasRelations = relations(appointmentExtras, ({ one })
   definition: one(extraDefinitions, {
     fields: [appointmentExtras.extraDefinitionId],
     references: [extraDefinitions.id],
+  }),
+}));
+
+export const extraDefinitionServicesRelations = relations(extraDefinitionServices, ({ one }) => ({
+  definition: one(extraDefinitions, {
+    fields: [extraDefinitionServices.extraDefinitionId],
+    references: [extraDefinitions.id],
+  }),
+  service: one(services, {
+    fields: [extraDefinitionServices.serviceId],
+    references: [services.id],
+  }),
+}));
+
+export const internalCostDefinitionsRelations = relations(internalCostDefinitions, ({ one, many }) => ({
+  location: one(locations, {
+    fields: [internalCostDefinitions.locationId],
+    references: [locations.id],
+  }),
+  appointmentCosts: many(appointmentInternalCosts),
+}));
+
+export const appointmentInternalCostsRelations = relations(appointmentInternalCosts, ({ one }) => ({
+  appointment: one(appointments, {
+    fields: [appointmentInternalCosts.appointmentId],
+    references: [appointments.id],
+  }),
+  definition: one(internalCostDefinitions, {
+    fields: [appointmentInternalCosts.internalCostDefinitionId],
+    references: [internalCostDefinitions.id],
   }),
 }));
 
@@ -921,6 +1029,7 @@ export const servicesRelations = relations(services, ({ one, many }) => ({
   }),
   appointments: many(appointments),
   barberAssignments: many(barberServices),
+  extraAssignments: many(extraDefinitionServices),
 }));
 
 export const serviceCategoriesRelations = relations(serviceCategories, ({ many }) => ({
@@ -975,6 +1084,9 @@ export const insertServiceCategorySchema = createInsertSchema(serviceCategories)
 });
 const extraDefinitionInputFields = {
   locationId: z.number().int().positive(),
+  description: z.string().trim().max(500).optional().nullable(),
+  isPubliclyBookable: z.boolean().optional(),
+  serviceIds: z.array(z.number().int().positive()).max(500).optional(),
   name: z.string().trim().min(1, "Indique o nome do Extra.").max(100, "O nome não pode ter mais de 100 caracteres."),
   pricingMode: z.enum(extraPricingModes),
   amountCents: z.number().int("O valor deve ser indicado em cêntimos.").nullable().optional(),
@@ -1003,11 +1115,32 @@ export const insertExtraDefinitionSchema = z.object(extraDefinitionInputFields).
 }));
 export const updateExtraDefinitionSchema = z.object({
   name: extraDefinitionInputFields.name.optional(),
+  description: extraDefinitionInputFields.description,
   pricingMode: extraDefinitionInputFields.pricingMode.optional(),
   amountCents: extraDefinitionInputFields.amountCents,
   financialRule: extraDefinitionInputFields.financialRule.optional(),
+  isPubliclyBookable: extraDefinitionInputFields.isPubliclyBookable,
+  serviceIds: extraDefinitionInputFields.serviceIds,
   isActive: extraDefinitionInputFields.isActive,
   sortOrder: extraDefinitionInputFields.sortOrder,
+});
+const internalCostDefinitionInputFields = {
+  locationId: z.number().int().positive(),
+  name: z.string().trim().min(1, "Indique o nome do custo ou consumo.").max(100),
+  description: z.string().trim().max(500).optional().nullable(),
+  defaultUnitCostCents: z.number().int().min(0).max(1_000_000),
+  unitLabel: z.string().trim().min(1).max(40),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(2_147_483_647).optional(),
+};
+export const insertInternalCostDefinitionSchema = z.object(internalCostDefinitionInputFields);
+export const updateInternalCostDefinitionSchema = z.object({
+  name: internalCostDefinitionInputFields.name.optional(),
+  description: internalCostDefinitionInputFields.description,
+  defaultUnitCostCents: internalCostDefinitionInputFields.defaultUnitCostCents.optional(),
+  unitLabel: internalCostDefinitionInputFields.unitLabel.optional(),
+  isActive: internalCostDefinitionInputFields.isActive,
+  sortOrder: internalCostDefinitionInputFields.sortOrder,
 });
 const localPortugueseMobilePattern = /^9\d{8}$/;
 const internationalPhonePattern = /^\+\d{7,15}$/;
@@ -1130,6 +1263,10 @@ export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;
 export type ExtraDefinition = typeof extraDefinitions.$inferSelect;
 export type AppointmentExtra = typeof appointmentExtras.$inferSelect;
+export type ExtraDefinitionService = typeof extraDefinitionServices.$inferSelect;
+export type ExtraDefinitionWithServices = ExtraDefinition & { serviceIds: number[] };
+export type InternalCostDefinition = typeof internalCostDefinitions.$inferSelect;
+export type AppointmentInternalCost = typeof appointmentInternalCosts.$inferSelect;
 export type ExtraFinancialRule = typeof extraFinancialRules[number];
 export type ExtraPricingMode = typeof extraPricingModes[number];
 export type AppointmentStatus = typeof appointmentStatuses[number];
@@ -1177,6 +1314,8 @@ export type CreateServiceRequest = z.infer<typeof insertServiceSchema>;
 export type CreateServiceCategoryRequest = z.infer<typeof insertServiceCategorySchema>;
 export type CreateExtraDefinitionRequest = z.infer<typeof insertExtraDefinitionSchema>;
 export type UpdateExtraDefinitionRequest = z.infer<typeof updateExtraDefinitionSchema>;
+export type CreateInternalCostDefinitionRequest = z.infer<typeof insertInternalCostDefinitionSchema>;
+export type UpdateInternalCostDefinitionRequest = z.infer<typeof updateInternalCostDefinitionSchema>;
 export type CreateAppointmentRequest = z.infer<typeof insertAppointmentSchema>;
 export type CreateAdminRequest = z.infer<typeof insertAdminSchema>;
 export type InsertBlacklist = z.infer<typeof insertBlacklistSchema>;

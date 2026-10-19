@@ -107,6 +107,15 @@ by financial summaries and Excel exports. Existing `once`, `weekly`, and
 are never promoted automatically to active series because the previous model
 did not store sufficient schedule intent.
 
+Migration `0020_commercial_extras_internal_costs.sql` keeps the existing Extra
+catalogue as customer-facing commercial additions, adds optional descriptions,
+service applicability and per-appointment quantities, and introduces a wholly
+separate internal cost/consumption catalogue with immutable appointment
+snapshots. Existing Extra snapshots keep quantity one, no internal cost is
+inferred from historical Extras or business expenses, and public-booking
+availability remains disabled by default. Number `0019` is deliberately not
+reused because it is reserved by the shared notification/reminder migration.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification

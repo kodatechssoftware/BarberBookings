@@ -10,7 +10,18 @@ export type AppointmentExtraSnapshot = {
   extraDefinitionId: number;
   nameSnapshot: string;
   amountCentsSnapshot: number;
+  quantity: number;
   financialRuleSnapshot?: "follow_compensation" | "barber" | "establishment";
+  position: number;
+};
+
+export type AppointmentInternalCostSnapshot = {
+  id: number;
+  internalCostDefinitionId: number;
+  nameSnapshot: string;
+  unitCostCentsSnapshot: number;
+  unitLabelSnapshot: string;
+  quantity: number;
   position: number;
 };
 
@@ -30,6 +41,7 @@ export type AppointmentRecord = {
   servicePriceCentsSnapshot: number | null;
   manualOutsideHours: boolean;
   extras?: AppointmentExtraSnapshot[];
+  internalCosts?: AppointmentInternalCostSnapshot[];
   status: AppointmentStatus;
   paymentMethod: AppointmentPaymentMethod;
   cancelToken: string;
@@ -80,7 +92,7 @@ export type AppointmentByToken = {
   serviceName: string;
   duration: number;
   price: number;
-  extras: Array<Pick<AppointmentExtraSnapshot, "nameSnapshot" | "amountCentsSnapshot" | "position">>;
+  extras: Array<Pick<AppointmentExtraSnapshot, "nameSnapshot" | "amountCentsSnapshot" | "quantity" | "position">>;
   totalPrice: number;
   manualOutsideHours: boolean;
 };
@@ -224,12 +236,47 @@ export function useUpdateAppointmentStatus() {
               ...appointment,
               ...updatedAppointment,
               extras: updatedAppointment.extras ?? appointment.extras,
+              internalCosts: updatedAppointment.internalCosts ?? appointment.internalCosts,
             }
           : appointment),
       );
       // Keep the UI responsive after the PATCH succeeds. The cache already has
       // the returned status; the authoritative refresh can finish in background.
       void queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
+    },
+  });
+}
+
+export function useCompleteAppointment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      expectedRevision,
+      paymentMethod,
+      extras,
+      internalCosts,
+    }: {
+      id: number;
+      expectedRevision: number;
+      paymentMethod: Exclude<AppointmentPaymentMethod, "pending">;
+      extras: Array<{ extraId: number; amountCents?: number; quantity?: number }>;
+      internalCosts: Array<{ internalCostId: number; unitCostCents?: number; quantity?: number }>;
+    }) => {
+      const response = await apiFetch(`/api/appointments/${id}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedRevision, paymentMethod, extras, internalCosts }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.message || "Não foi possível concluir a marcação.");
+      }
+      return response.json() as Promise<AppointmentRecord>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: [api.appointments.list.path] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     },
   });
 }

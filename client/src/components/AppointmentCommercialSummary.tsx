@@ -21,6 +21,7 @@ export function AppointmentCommercialSummary({
   extras: Array<{
     nameSnapshot: string;
     amountCentsSnapshot: number;
+    quantity?: number;
     position: number;
   }>;
   totalPriceCents: number;
@@ -39,8 +40,8 @@ export function AppointmentCommercialSummary({
       </div>
       {[...extras].sort((left, right) => left.position - right.position).map((extra) => (
         <div key={`${extra.position}-${extra.nameSnapshot}`} className="flex items-start justify-between gap-4">
-          <span className="min-w-0 break-words text-gray-300">{extra.nameSnapshot}</span>
-          <span className="shrink-0 font-medium text-white">{formatCents(extra.amountCentsSnapshot)}</span>
+          <span className="min-w-0 break-words text-gray-300">{extra.nameSnapshot}{(extra.quantity ?? 1) > 1 ? ` × ${extra.quantity}` : ""}</span>
+          <span className="shrink-0 font-medium text-white">{formatCents(extra.amountCentsSnapshot * (extra.quantity ?? 1))}</span>
         </div>
       ))}
       <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-2 font-bold">
