@@ -655,6 +655,119 @@ test.describe.serial("manual booking Extras", () => {
     }
   });
 
+  test("completes Beauty appointments with optional last-minute Extras and a simple payment summary", async ({ request, page }) => {
+    test.setTimeout(120_000);
+    const suffix = Date.now();
+    const testDay = new Date();
+    testDay.setDate(testDay.getDate() - 1);
+    testDay.setHours(10, 0, 0, 0);
+    const scenarios = [
+      {
+        name: `Conclusão sem Extra ${suffix}`,
+        startTime: testDay.toISOString(),
+        paymentLabel: /^Dinheiro/,
+        paymentMethod: "cash",
+        extras: [] as Array<{ extra: any; amount?: string; quantity?: number }>,
+        totalCents: service.price,
+      },
+      {
+        name: `Conclusão um Extra ${suffix}`,
+        startTime: new Date(testDay.getTime() + 2 * 60 * 60_000).toISOString(),
+        paymentLabel: /^Multibanco/,
+        paymentMethod: "card",
+        extras: [{ extra: specialExtra }],
+        totalCents: service.price + specialExtra.amountCents,
+      },
+      {
+        name: `Conclusão vários Extras ${suffix}`,
+        startTime: new Date(testDay.getTime() + 4 * 60 * 60_000).toISOString(),
+        paymentLabel: /^Vale\/Cupão/,
+        paymentMethod: "voucher",
+        extras: [
+          { extra: specialExtra, quantity: 2 },
+          { extra: travelExtra, amount: "7,50" },
+        ],
+        totalCents: service.price + specialExtra.amountCents * 2 + 750,
+      },
+      {
+        name: `Conclusão oferta ${suffix}`,
+        startTime: new Date(testDay.getTime() + 6 * 60 * 60_000).toISOString(),
+        paymentLabel: /^Oferta/,
+        paymentMethod: "gift",
+        extras: [] as Array<{ extra: any; amount?: string; quantity?: number }>,
+        totalCents: service.price,
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const created = await createManual(request, scenario.name, scenario.startTime, { allowOutsideHours: true });
+      expect(created.response.status(), JSON.stringify(created.body)).toBe(201);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loginAdminPage(page);
+    const dayKey = dateKey(scenarios[0].startTime);
+    let dayButton = page.getByTestId(`weekly-agenda-day-${dayKey}`).filter({ visible: true }).first();
+    if (await dayButton.count() === 0) {
+      await page.getByRole("button", { name: "Semana anterior" }).click();
+      dayButton = page.getByTestId(`weekly-agenda-day-${dayKey}`).filter({ visible: true }).first();
+    }
+    await expect(dayButton).toBeVisible();
+    await dayButton.click();
+
+    for (const [index, scenario] of scenarios.entries()) {
+      if (index === scenarios.length - 1) {
+        await page.setViewportSize({ width: 390, height: 844 });
+      }
+      await page.getByRole("button", {
+        name: new RegExp(`Abrir detalhes da marca..o de ${scenario.name}`),
+      }).first().click();
+      const details = page.getByRole("dialog", { name: /Detalhes da marca/ });
+      await details.getByTestId("appointment-action-complete").click();
+      const completion = page.getByRole("alertdialog", { name: "Concluir marcação" });
+      await expect(completion).toBeVisible();
+      await expect(completion.getByText("Nenhum", { exact: true })).toBeVisible();
+      await expect(completion).not.toContainText("Custos / Consumos");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+      if (scenario.extras.length > 0) {
+        await completion.getByTestId("beauty-completion-add-extra").click();
+        for (const selected of scenario.extras) {
+          await completion.getByLabel(`Selecionar Extra ${selected.extra.name}`).click();
+          if (selected.amount) {
+            await completion.getByLabel(`Valor do Extra ${selected.extra.name}`).fill(selected.amount);
+          }
+          if (selected.quantity) {
+            await completion.getByLabel(`Quantidade do Extra ${selected.extra.name}`).fill(String(selected.quantity));
+          }
+        }
+      }
+
+      await expect(completion.getByTestId("beauty-completion-total"))
+        .toContainText(`${(scenario.totalCents / 100).toFixed(2).replace(".", ",")} €`);
+      await completion.getByRole("button", { name: scenario.paymentLabel }).click();
+      await completion.getByTestId("beauty-completion-confirm").click();
+      await expect(completion).not.toBeVisible();
+
+      const stored = (await findAppointments(request, scenario.name, scenario.startTime))[0];
+      expect(stored.status).toBe("completed");
+      expect(stored.paymentMethod).toBe(scenario.paymentMethod);
+      expect(stored.extras).toHaveLength(scenario.extras.length);
+      expect(stored.extras.reduce((total: number, extra: any) =>
+        total + extra.amountCentsSnapshot * extra.quantity, service.price)).toBe(scenario.totalCents);
+
+      const lockedEdit = await request.patch(`/api/appointments/${stored.id}`, { data: { extras: [] } });
+      expect(lockedEdit.status()).toBe(409);
+
+      if (index < scenarios.length - 1) {
+        await expect(page.getByRole("button", {
+          name: new RegExp(`Abrir detalhes da marca..o de ${scenarios[index + 1].name}`),
+        }).first()).toBeVisible();
+      }
+    }
+
+  });
+
   test("keeps appointment internal costs separate, private and frozen by atomic completion", async ({ request, page }) => {
     const suffix = Date.now();
     const definitionResponse = await request.post("/api/admin/internal-costs", { data: {

@@ -1,6 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
-import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
+import {
+  type AppointmentPaymentMethod,
+  type AppointmentStatus,
+  useAppointments,
+  useCompleteAppointment,
+  useUpdateAppointmentStatus,
+} from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -36,6 +42,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppointmentsTab, blockTimeOptions, type AppointmentBlockData, type AppointmentStatusFilter, type AppointmentViewMode } from "@/components/admin/AppointmentsTab";
 import { AppointmentBlockDialog } from "@/components/admin/AppointmentBlockDialog";
 import {
+  type AppointmentCompletionPayload,
   AppointmentDetailsDialog,
   type AppointmentMutationPendingAction,
 } from "@/components/admin/AppointmentDetailsDialog";
@@ -1954,6 +1961,7 @@ export default function Admin() {
     ? availableLocations.find((location) => location.id === selectedAppointmentDetails.locationId)?.logoUrl
     : null;
   const updateStatus = useUpdateAppointmentStatus();
+  const completeAppointment = useCompleteAppointment();
   const appointmentMutationRef = useRef<AppointmentMutationPendingAction | null>(null);
   const [pendingAppointmentAction, setPendingAppointmentAction] = useState<AppointmentMutationPendingAction | null>(null);
   const { toast } = useToast();
@@ -3003,6 +3011,43 @@ export default function Admin() {
         },
         onError: (error: any) => {
           toast({ title: "Erro", description: error.message || "Não foi possível atualizar a marcação.", variant: "destructive" });
+        },
+        onSettled: () => {
+          appointmentMutationRef.current = null;
+          setPendingAppointmentAction(null);
+        },
+      },
+    );
+  };
+
+  const handleCompleteAppointment = (
+    appointmentId: number,
+    payload: AppointmentCompletionPayload,
+    options?: { onSuccess?: () => void },
+  ) => {
+    if (appointmentMutationRef.current) return;
+
+    const pendingAction: AppointmentMutationPendingAction = {
+      appointmentId,
+      status: "completed",
+      paymentMethod: payload.paymentMethod,
+    };
+    appointmentMutationRef.current = pendingAction;
+    setPendingAppointmentAction(pendingAction);
+
+    completeAppointment.mutate(
+      { id: appointmentId, ...payload },
+      {
+        onSuccess: () => {
+          toast({ title: "Marcação concluída", description: "O pagamento e o total final ficaram registados." });
+          options?.onSuccess?.();
+        },
+        onError: (error: any) => {
+          toast({
+            title: "Não foi possível concluir",
+            description: error.message || "Atualize a agenda e tente novamente.",
+            variant: "destructive",
+          });
         },
         onSettled: () => {
           appointmentMutationRef.current = null;
@@ -4173,6 +4218,7 @@ export default function Admin() {
           getStatusClass={getStatusClass}
           onOpenHistory={openCustomerHistory}
           onStatusChange={handleStatusChange}
+          onComplete={handleCompleteAppointment}
           pendingAction={pendingAppointmentAction}
           locationLogoUrl={selectedAppointmentLocationLogoUrl}
           onBlockCustomer={handleBlockCustomerWithFutureCheck}

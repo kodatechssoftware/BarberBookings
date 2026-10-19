@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { AlertTriangle, CheckCircle, ChevronDown, Pencil, Phone, User, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown, Pencil, Phone, Plus, User, XCircle } from "lucide-react";
 import {
   type AppointmentExtraSnapshot,
   type AppointmentInternalCostSnapshot,
@@ -92,6 +92,13 @@ export type AppointmentMutationPendingAction = {
   appointmentId: number;
   status: AppointmentStatus;
   paymentMethod?: AppointmentPaymentMethod;
+};
+
+export type AppointmentCompletionPayload = {
+  expectedRevision: number;
+  paymentMethod: Exclude<AppointmentPaymentMethod, "pending">;
+  extras: Array<{ extraId: number; amountCents?: number; quantity?: number }>;
+  internalCosts: Array<{ internalCostId: number; unitCostCents?: number; quantity?: number }>;
 };
 
 type ServiceListItem = {
@@ -1118,6 +1125,7 @@ export function AppointmentDetailsDialog({
   getStatusClass,
   onOpenHistory,
   onStatusChange,
+  onComplete,
   onBlockCustomer,
   canManageSchedule,
   canEditAppointment = canManageSchedule,
@@ -1150,6 +1158,11 @@ export function AppointmentDetailsDialog({
     status: AppointmentStatus,
     options?: { onSuccess?: () => void; paymentMethod?: AppointmentPaymentMethod },
   ) => void;
+  onComplete: (
+    appointmentId: number,
+    payload: AppointmentCompletionPayload,
+    options?: { onSuccess?: () => void },
+  ) => void;
   onBlockCustomer: (appointment: AdminAppointment) => Promise<boolean | void>;
   canManageSchedule: boolean;
   canEditAppointment?: boolean;
@@ -1163,14 +1176,64 @@ export function AppointmentDetailsDialog({
   locationLogoUrl?: string | null;
 }) {
   const agendaCopy = useBusinessCopy().agenda;
+  const businessConfig = useBusinessConfig();
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
   const [isLoadingCustomerNotes, setIsLoadingCustomerNotes] = useState(false);
   const [isSavingCustomerNotes, setIsSavingCustomerNotes] = useState(false);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
+  const [completionPaymentMethod, setCompletionPaymentMethod] = useState<Exclude<AppointmentPaymentMethod, "pending"> | null>(null);
+  const [completionExtras, setCompletionExtras] = useState<AppointmentExtraSelection[]>([]);
+  const [isCompletionExtrasOpen, setIsCompletionExtrasOpen] = useState(false);
+  const isBeautyCompletion = businessConfig.vertical === "beauty";
+  const { data: completionExtraDefinitions = [], isLoading: isLoadingCompletionExtras } = useExtras({
+    enabled: Boolean(open && isPaymentDialogOpen && isBeautyCompletion),
+    locationId: appointment?.locationId,
+  });
   const isAppointmentMutationPending = Boolean(
     pendingAction && appointment && pendingAction.appointmentId === appointment.id,
   );
+
+  const completionExtraDefinitionsById = useMemo(
+    () => new Map(completionExtraDefinitions.map((extra) => [extra.id, extra])),
+    [completionExtraDefinitions],
+  );
+  const completionExistingExtrasById = useMemo(
+    () => new Map((appointment?.extras ?? []).map((extra) => [extra.extraDefinitionId, extra])),
+    [appointment?.extras],
+  );
+  const completionVisibleExtraDefinitions = useMemo(() => {
+    const serviceId = appointment?.serviceId ?? null;
+    const active = completionExtraDefinitions.filter((extra) => extra.isActive
+      && (extra.serviceIds.length === 0
+        || (serviceId !== null && extra.serviceIds.includes(serviceId))
+        || completionExtras.some((selection) => selection.extraId === extra.id)));
+    const selectedInactive = completionExtraDefinitions.filter((extra) => !extra.isActive
+      && completionExtras.some((selection) => selection.extraId === extra.id));
+    return [...active, ...selectedInactive]
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id - right.id);
+  }, [appointment?.serviceId, completionExtraDefinitions, completionExtras]);
+  const completionMissingExtras = useMemo(() => completionExtras
+    .filter((selection) => !completionExtraDefinitionsById.has(selection.extraId))
+    .map((selection) => completionExistingExtrasById.get(selection.extraId))
+    .filter((extra): extra is AppointmentExtraSnapshot => Boolean(extra)), [
+      completionExistingExtrasById,
+      completionExtraDefinitionsById,
+      completionExtras,
+    ]);
+  const completionExtrasTotalCents = completionExtras.reduce((total, selection) => {
+    const existing = completionExistingExtrasById.get(selection.extraId);
+    const definition = completionExtraDefinitionsById.get(selection.extraId);
+    const amount = parseAppointmentExtraPriceInput(selection.amountEuros)
+      ?? existing?.amountCentsSnapshot
+      ?? definition?.amountCents
+      ?? 0;
+    return total + amount * selection.quantity;
+  }, 0);
+  const incompleteCompletionExtra = completionExtras.find((selection) => {
+    const definition = completionExtraDefinitionsById.get(selection.extraId);
+    return definition?.isActive && parseAppointmentExtraPriceInput(selection.amountEuros) === null;
+  });
 
   useEffect(() => {
     if (!open || !canViewCustomer || (!appointment?.customerPhone && !appointment?.customerEmail)) {
@@ -1266,9 +1329,53 @@ export function AppointmentDetailsDialog({
     onStatusChange(appointment.id, status, { onSuccess: () => onOpenChange(false) });
   };
 
+  const handleOpenCompletion = () => {
+    setCompletionExtras(appointmentExtraSelections(appointment));
+    setCompletionPaymentMethod(null);
+    setIsCompletionExtrasOpen((appointment.extras ?? []).length > 0);
+    setIsPaymentDialogOpen(true);
+  };
+
   const handleCompleteWithPayment = (paymentMethod: AppointmentPaymentMethod) => {
     onStatusChange(appointment.id, "completed", {
       paymentMethod,
+      onSuccess: () => {
+        setIsPaymentDialogOpen(false);
+        onOpenChange(false);
+      },
+    });
+  };
+
+  const handleConfirmBeautyCompletion = () => {
+    if (!completionPaymentMethod || incompleteCompletionExtra) return;
+    const extras = completionExtras.map((selection) => {
+      const definition = completionExtraDefinitionsById.get(selection.extraId);
+      const existing = completionExistingExtrasById.get(selection.extraId);
+      if (!definition || !definition.isActive) {
+        return {
+          extraId: selection.extraId,
+          amountCents: existing?.amountCentsSnapshot,
+          quantity: selection.quantity,
+        };
+      }
+      return {
+        extraId: selection.extraId,
+        amountCents: parseAppointmentExtraPriceInput(selection.amountEuros) ?? undefined,
+        quantity: selection.quantity,
+      };
+    });
+    const internalCosts = (appointment.internalCosts ?? []).map((cost) => ({
+      internalCostId: cost.internalCostDefinitionId,
+      unitCostCents: cost.unitCostCentsSnapshot,
+      quantity: cost.quantity,
+    }));
+
+    onComplete(appointment.id, {
+      expectedRevision: appointment.notificationRevision ?? 0,
+      paymentMethod: completionPaymentMethod,
+      extras,
+      internalCosts,
+    }, {
       onSuccess: () => {
         setIsPaymentDialogOpen(false);
         onOpenChange(false);
@@ -1476,12 +1583,12 @@ export function AppointmentDetailsDialog({
                       data-testid="appointment-action-complete"
                       size="sm"
                       variant="ghost"
-                      onClick={() => setIsPaymentDialogOpen(true)}
+                      onClick={handleOpenCompletion}
                       disabled={Boolean(completeDisabledMessage) || isAppointmentMutationPending}
                       title={completeDisabledMessage || "Marcar como feita"}
                       className="h-9 text-xs text-green-300 hover:text-green-200 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <CheckCircle className="mr-1 h-3.5 w-3.5" /> Feita
+                      <CheckCircle className="mr-1 h-3.5 w-3.5" /> {isBeautyCompletion ? "Concluir marcação" : "Feita"}
                     </Button>
                     <Button
                       data-testid="appointment-action-no-show"
@@ -1551,27 +1658,238 @@ export function AppointmentDetailsDialog({
       >
         <AlertDialogContent
           aria-busy={isAppointmentMutationPending}
-          className="overflow-hidden border-white/10 bg-card text-white"
+          className={cn(
+            "border-white/10 bg-card text-white",
+            isBeautyCompletion ? "max-h-[calc(100dvh-1rem)] overflow-y-auto sm:max-w-lg" : "overflow-hidden",
+          )}
         >
-          <AlertDialogHeader>
-            <AlertDialogTitle>Como foi pago?</AlertDialogTitle>
-            <AlertDialogDescription className="text-gray-400">
-              Esta escolha fica registada no relatório Excel e permite distinguir os pagamentos em dinheiro, Multibanco, vale/cupão e oferta.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AppointmentPaymentOptions
-            onSelect={handleCompleteWithPayment}
-            disabled={isAppointmentMutationPending}
-            pendingValue={pendingAction?.status === "completed" ? pendingAction.paymentMethod : null}
-          />
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isAppointmentMutationPending} className="border-white/10 bg-background text-white hover:bg-white/10">
-              Voltar
-            </AlertDialogCancel>
-          </AlertDialogFooter>
+          {isBeautyCompletion ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Concluir marcação</AlertDialogTitle>
+                <AlertDialogDescription className="text-gray-400">
+                  Confirme o serviço, acrescente Extras pedidos durante o atendimento e escolha o pagamento.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+
+              <div className="space-y-4" data-testid="beauty-completion-summary">
+                <div className="rounded-xl border border-white/10 bg-background/60 p-3">
+                  <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Serviço</p>
+                  <div className="mt-2 flex items-start justify-between gap-4 text-sm">
+                    <span className="min-w-0 break-words font-medium text-white">{serviceName}</span>
+                    <span className="shrink-0 font-semibold text-white">{formatAppointmentPrice(finalPrice)}</span>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-background/60 p-3" data-testid="beauty-completion-extras">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Extras</p>
+                      {completionExtras.length === 0 && <p className="mt-1 text-sm text-gray-300">Nenhum</p>}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setIsCompletionExtrasOpen((current) => !current)}
+                      disabled={isAppointmentMutationPending}
+                      aria-expanded={isCompletionExtrasOpen}
+                      data-testid="beauty-completion-add-extra"
+                      className="shrink-0"
+                    >
+                      <Plus className="mr-1 h-4 w-4" /> Adicionar extra
+                    </Button>
+                  </div>
+
+                  {completionExtras.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {completionExtras.map((selection) => {
+                        const definition = completionExtraDefinitionsById.get(selection.extraId);
+                        const existing = completionExistingExtrasById.get(selection.extraId);
+                        const amount = parseAppointmentExtraPriceInput(selection.amountEuros)
+                          ?? existing?.amountCentsSnapshot
+                          ?? definition?.amountCents
+                          ?? 0;
+                        return (
+                          <div key={selection.extraId} className="flex items-start justify-between gap-4 text-sm">
+                            <span className="min-w-0 break-words text-gray-200">
+                              {existing?.nameSnapshot ?? definition?.name ?? "Extra indisponível"}
+                              {selection.quantity > 1 ? ` × ${selection.quantity}` : ""}
+                            </span>
+                            <span className="shrink-0 font-semibold text-primary">
+                              +{formatAppointmentPrice(amount * selection.quantity)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {isCompletionExtrasOpen && (
+                    <div className="mt-3 space-y-2 border-t border-white/10 pt-3" data-testid="beauty-completion-extra-catalogue">
+                      {isLoadingCompletionExtras ? (
+                        <p className="text-sm text-gray-400">A carregar Extras...</p>
+                      ) : completionVisibleExtraDefinitions.length === 0 && completionMissingExtras.length === 0 ? (
+                        <p className="text-sm text-gray-400">Não existem Extras disponíveis para este serviço.</p>
+                      ) : (
+                        <>
+                          {completionVisibleExtraDefinitions.map((extra) => {
+                            const selection = completionExtras.find((candidate) => candidate.extraId === extra.id);
+                            const existing = completionExistingExtrasById.get(extra.id);
+                            const selected = Boolean(selection);
+                            return (
+                              <div key={extra.id} className="space-y-2 rounded-lg border border-white/10 bg-card/70 p-3">
+                                <label htmlFor={`complete-appointment-extra-${extra.id}`} className="flex cursor-pointer items-start gap-3">
+                                  <Checkbox
+                                    id={`complete-appointment-extra-${extra.id}`}
+                                    checked={selected}
+                                    disabled={isAppointmentMutationPending}
+                                    onCheckedChange={(checked) => setCompletionExtras((current) => checked
+                                      ? current.some((candidate) => candidate.extraId === extra.id)
+                                        ? current
+                                        : [...current, {
+                                            extraId: extra.id,
+                                            amountEuros: centsToMoneyInput(extra.amountCents ?? 0),
+                                            quantity: 1,
+                                          }]
+                                      : current.filter((candidate) => candidate.extraId !== extra.id))}
+                                    aria-label={`Selecionar Extra ${extra.name}`}
+                                  />
+                                  <span className="min-w-0 flex-1 text-sm text-gray-200">
+                                    {existing?.nameSnapshot ?? extra.name}
+                                    {!extra.isActive && <span className="block text-[11px] text-amber-300">Inativo · apenas pode remover</span>}
+                                  </span>
+                                  <span className="shrink-0 text-sm font-semibold text-primary">
+                                    {extra.pricingMode === "fixed" && (existing?.amountCentsSnapshot ?? extra.amountCents)
+                                      ? formatAppointmentPrice(existing?.amountCentsSnapshot ?? extra.amountCents ?? 0)
+                                      : "Variável"}
+                                  </span>
+                                </label>
+                                {selected && (
+                                  <div className="grid gap-2 pl-7 sm:grid-cols-2">
+                                    <div className="space-y-1.5">
+                                      <Label htmlFor={`complete-appointment-extra-amount-${extra.id}`} className="text-xs">Valor (€)</Label>
+                                      <Input
+                                        id={`complete-appointment-extra-amount-${extra.id}`}
+                                        inputMode="decimal"
+                                        value={selection?.amountEuros ?? ""}
+                                        disabled={!extra.isActive || isAppointmentMutationPending}
+                                        onChange={(event) => setCompletionExtras((current) => current.map((candidate) => candidate.extraId === extra.id
+                                          ? { ...candidate, amountEuros: normalizeMoneyInput(event.target.value, candidate.amountEuros) }
+                                          : candidate))}
+                                        onBlur={() => setCompletionExtras((current) => current.map((candidate) => candidate.extraId === extra.id
+                                          ? {
+                                              ...candidate,
+                                              amountEuros: formatMoneyInputOnBlur(candidate.amountEuros, {
+                                                minCents: 1,
+                                                maxCents: 1_000_000,
+                                              }),
+                                            }
+                                          : candidate))}
+                                        aria-label={`Valor do Extra ${extra.name}`}
+                                      />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                      <Label htmlFor={`complete-appointment-extra-quantity-${extra.id}`} className="text-xs">Quantidade</Label>
+                                      <Input
+                                        id={`complete-appointment-extra-quantity-${extra.id}`}
+                                        type="number"
+                                        min={1}
+                                        max={99}
+                                        value={selection?.quantity ?? 1}
+                                        disabled={!extra.isActive || isAppointmentMutationPending}
+                                        onChange={(event) => setCompletionExtras((current) => current.map((candidate) => candidate.extraId === extra.id
+                                          ? { ...candidate, quantity: Math.max(1, Math.min(99, Number(event.target.value) || 1)) }
+                                          : candidate))}
+                                        aria-label={`Quantidade do Extra ${extra.name}`}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {completionMissingExtras.map((extra) => (
+                            <div key={extra.extraDefinitionId} className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
+                              <label className="flex cursor-pointer items-start gap-3">
+                                <Checkbox
+                                  checked
+                                  disabled={isAppointmentMutationPending}
+                                  onCheckedChange={(checked) => {
+                                    if (!checked) setCompletionExtras((current) => current.filter((candidate) => candidate.extraId !== extra.extraDefinitionId));
+                                  }}
+                                  aria-label={`Remover Extra ${extra.nameSnapshot}`}
+                                />
+                                <span className="min-w-0 flex-1 text-sm text-gray-200">{extra.nameSnapshot}</span>
+                                <span className="shrink-0 text-sm font-semibold text-primary">{formatAppointmentPrice(extra.amountCentsSnapshot)}</span>
+                              </label>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      {incompleteCompletionExtra && (
+                        <p className="flex items-center gap-1.5 text-xs font-medium text-amber-300" role="alert">
+                          <AlertTriangle className="h-3.5 w-3.5" /> Indique um valor superior a zero para cada Extra selecionado.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 p-3 text-base font-bold" data-testid="beauty-completion-total">
+                  <span>Total</span>
+                  <span className="text-primary">{formatAppointmentPrice(finalPrice + completionExtrasTotalCents)}</span>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Método de pagamento</p>
+                  <AppointmentPaymentOptions
+                    value={completionPaymentMethod ?? undefined}
+                    onSelect={setCompletionPaymentMethod}
+                    disabled={isAppointmentMutationPending}
+                    pendingValue={pendingAction?.status === "completed" ? pendingAction.paymentMethod : null}
+                  />
+                </div>
+              </div>
+
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={isAppointmentMutationPending} className="border-white/10 bg-background text-white hover:bg-white/10">
+                  Voltar
+                </AlertDialogCancel>
+                <Button
+                  type="button"
+                  variant="gold"
+                  onClick={handleConfirmBeautyCompletion}
+                  disabled={!completionPaymentMethod || Boolean(incompleteCompletionExtra) || isAppointmentMutationPending}
+                  data-testid="beauty-completion-confirm"
+                >
+                  Concluir marcação
+                </Button>
+              </AlertDialogFooter>
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Como foi pago?</AlertDialogTitle>
+                <AlertDialogDescription className="text-gray-400">
+                  Esta escolha fica registada no relatório Excel e permite distinguir os pagamentos em dinheiro, Multibanco, vale/cupão e oferta.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AppointmentPaymentOptions
+                onSelect={handleCompleteWithPayment}
+                disabled={isAppointmentMutationPending}
+                pendingValue={pendingAction?.status === "completed" ? pendingAction.paymentMethod : null}
+              />
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={isAppointmentMutationPending} className="border-white/10 bg-background text-white hover:bg-white/10">
+                  Voltar
+                </AlertDialogCancel>
+              </AlertDialogFooter>
+            </>
+          )}
           <MutationPendingOverlay
             active={isAppointmentMutationPending}
-            label="A processar pagamento..."
+            label={isBeautyCompletion ? "A concluir marcação..." : "A processar pagamento..."}
             logoUrl={locationLogoUrl}
           />
         </AlertDialogContent>
