@@ -20,6 +20,7 @@
     "test:availability": "cross-env TZ=UTC NODE_ENV=test tsx --test tests/unit/availability.test.ts",
     "test:slot-interval": "cross-env TZ=UTC NODE_ENV=test tsx --test tests/unit/booking-slot-interval.test.ts tests/unit/booking-slot-runtime-http.test.ts && playwright test --config=playwright.slot-interval.config.ts",
     "test:beauty-buffers": "playwright test --config=playwright.beauty-buffers.config.ts",
+    "test:appointment-windows": "cross-env NODE_ENV=test BUSINESS_VERTICAL=beauty USE_MEMORY_STORAGE=true tsx --test tests/unit/appointment-availability-windows.test.ts",
     "auth:preflight": "tsx script/auth-legacy-preflight.ts",
     "auth:backfill": "tsx script/auth-legacy-backfill.ts",
     "auth:cutover-check": "tsx script/auth-cutover-check.ts",

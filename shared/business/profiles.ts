@@ -21,6 +21,7 @@ const barberFeatureDefaults: BusinessFeatures = {
   consentForms: false,
   treatmentContraindications: false,
   preparationBuffers: false,
+  appointmentAvailabilityWindows: false,
   recurringExpenses: false,
   resources: false,
   deposits: false,
@@ -34,6 +35,7 @@ const barberFeatureDefaults: BusinessFeatures = {
 const beautyFeatureDefaults: BusinessFeatures = {
   ...barberFeatureDefaults,
   preparationBuffers: true,
+  appointmentAvailabilityWindows: true,
   recurringExpenses: true,
 };
 

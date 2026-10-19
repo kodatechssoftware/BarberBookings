@@ -3,6 +3,7 @@ import type { Server } from "http";
 import type { NextFunction, Request, Response } from "express";
 import {
   AppointmentExtrasError,
+  AppointmentAvailabilityWindowsError,
   AppointmentInternalCostsError,
   CustomerNoteIdentityConflictError,
   customerNoteIdentityConflictCode,
@@ -18,6 +19,7 @@ import {
   storage,
   type AppointmentExtraInput,
   type AppointmentInternalCostInput,
+  type AppointmentAvailabilityWindowInput,
 } from "./storage";
 import { barberAvatarVersion, decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
 import {
@@ -1220,11 +1222,44 @@ function sendAppointmentInternalCostsError(res: Response, error: unknown) {
   return true;
 }
 
+function sendAppointmentAvailabilityWindowsError(res: Response, error: unknown) {
+  if (!(error instanceof AppointmentAvailabilityWindowsError)) return false;
+  res.status(error.code === "APPOINTMENT_AVAILABILITY_WINDOWS_INVALID"
+    || error.code === "APPOINTMENT_AVAILABILITY_WINDOWS_RECURRING_UNSUPPORTED" ? 400 : error.status)
+    .json({ code: error.code, message: error.message });
+  return true;
+}
+
+async function attachAppointmentAvailabilityWindows<T extends Appointment>(
+  appointments: T[],
+): Promise<Array<T & { availabilityWindows?: Array<{ startTime: Date; endTime: Date }> }>> {
+  if (!resolvedBusinessConfig.features.appointmentAvailabilityWindows) return appointments;
+  const windows = await storage.getAppointmentAvailabilityWindows(
+    appointments.map((appointment) => appointment.id),
+  );
+  const byAppointment = new Map<number, typeof windows>();
+  for (const window of windows) {
+    const values = byAppointment.get(window.appointmentId) ?? [];
+    values.push(window);
+    byAppointment.set(window.appointmentId, values);
+  }
+  return appointments.map((appointment) => ({
+    ...appointment,
+    availabilityWindows: (byAppointment.get(appointment.id) ?? []).map((window) => ({
+      startTime: window.startTime,
+      endTime: window.endTime,
+    })),
+  }));
+}
+
 async function attachAppointmentExtras<T extends Appointment>(appointments: T[]) {
   const appointmentIds = appointments.map((appointment) => appointment.id);
-  const [extras, internalCosts] = await Promise.all([
+  const [extras, internalCosts, availabilityWindows] = await Promise.all([
     storage.getAppointmentExtras(appointmentIds),
     storage.getAppointmentInternalCosts(appointmentIds),
+    resolvedBusinessConfig.features.appointmentAvailabilityWindows
+      ? storage.getAppointmentAvailabilityWindows(appointmentIds)
+      : Promise.resolve([]),
   ]);
   const extrasByAppointment = new Map<number, Array<{
     extraDefinitionId: number;
@@ -1252,10 +1287,19 @@ async function attachAppointmentExtras<T extends Appointment>(appointments: T[])
     values.push(cost);
     costsByAppointment.set(cost.appointmentId, values);
   }
+  const windowsByAppointment = new Map<number, Array<{ startTime: Date; endTime: Date }>>();
+  for (const window of availabilityWindows) {
+    const values = windowsByAppointment.get(window.appointmentId) ?? [];
+    values.push({ startTime: window.startTime, endTime: window.endTime });
+    windowsByAppointment.set(window.appointmentId, values);
+  }
   return appointments.map((appointment) => ({
     ...appointment,
     extras: extrasByAppointment.get(appointment.id) ?? [],
     internalCosts: costsByAppointment.get(appointment.id) ?? [],
+    ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
+      ? { availabilityWindows: windowsByAppointment.get(appointment.id) ?? [] }
+      : {}),
   }));
 }
 
@@ -1775,6 +1819,7 @@ type AppointmentLike = AppointmentServiceTermsLike & {
   bufferBeforeMinutesSnapshot?: number;
   bufferAfterMinutesSnapshot?: number;
   status?: string;
+  availabilityWindows?: readonly AppointmentAvailabilityWindowInput[];
 };
 
 const activeAppointmentConflictStatuses: ReadonlySet<string> = new Set(["booked"]);
@@ -1840,6 +1885,7 @@ function hasAppointmentConflict(
   ignoreAppointmentId?: number,
   conflictStatuses: ReadonlySet<string> = activeAppointmentConflictStatuses,
   candidateBuffers: { before?: number | null; after?: number | null } = {},
+  candidateAvailabilityWindows?: readonly AppointmentAvailabilityWindowInput[],
 ) {
   const candidateDuration = Math.max(1, Math.round((endTime.getTime() - startTime.getTime()) / 60_000));
   return appointments.some((appointment) => {
@@ -1852,11 +1898,13 @@ function hasAppointmentConflict(
       durationMinutes: candidateDuration,
       bufferBeforeMinutes: candidateBuffers.before,
       bufferAfterMinutes: candidateBuffers.after,
+      availabilityWindows: candidateAvailabilityWindows,
     }, {
       startTime: appointment.startTime,
       durationMinutes: getEffectiveAppointmentDurationMinutes(appointment, serviceDurations),
       bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
       bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+      availabilityWindows: appointment.availabilityWindows,
     });
   });
 }
@@ -1872,13 +1920,13 @@ function isOperationalAppointment(appointment: Appointment) {
   ].some((marker) => name.includes(marker)) && !name.startsWith("RECORRENTE:");
 }
 
-function getOverlappingBookedAppointments(
-  appointments: Appointment[],
+function getOverlappingBookedAppointments<T extends AppointmentLike>(
+  appointments: T[],
   barberId: number,
   startTime: Date,
   endTime: Date,
   serviceDurations: Map<number, number>,
-) {
+): T[] {
   return appointments.filter((appointment) => {
     if (appointment.barberId !== barberId) return false;
     if (appointment.status !== "booked") return false;
@@ -1891,6 +1939,7 @@ function getOverlappingBookedAppointments(
       durationMinutes: getEffectiveAppointmentDurationMinutes(appointment, serviceDurations),
       bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
       bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+      availabilityWindows: appointment.availabilityWindows,
     });
   });
 }
@@ -4816,13 +4865,13 @@ export async function registerRoutes(
       if (!await isBarberAssignedToLocation(effectiveBarberId, locationId)) {
         return res.status(404).json({ message: "Barbeiro não encontrado." });
       }
-      const busyAppointments = date
+      const busyAppointments = await attachAppointmentAvailabilityWindows(date
         ? await storage.getAppointmentsRange(
             effectiveBarberId,
             shiftCalendarDateKey(date, -1),
             shiftCalendarDateKey(date, 1),
           )
-        : await storage.getAppointments(effectiveBarberId);
+        : await storage.getAppointments(effectiveBarberId));
       return res.json(busyAppointments
         .filter((appointment) => appointment.status === "booked")
         .map((appointment) => ({
@@ -4831,6 +4880,9 @@ export async function registerRoutes(
           durationMinutes: appointment.durationMinutes,
           bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot,
           bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot,
+          ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
+            ? { availabilityWindows: appointment.availabilityWindows ?? [] }
+            : {}),
           status: "booked" as const,
         })));
     }
@@ -4958,11 +5010,11 @@ export async function registerRoutes(
         const locationBarberIds = await getBarberIdsForLocation(locationId);
         const allowedBarberIds = locationBarberIds === undefined ? null : new Set(locationBarberIds);
         const barbers = (await storage.getBarbers()).filter((barber) => !allowedBarberIds || allowedBarberIds.has(barber.id));
-        const existingAppointments = await storage.getAppointmentsRange(
+        const existingAppointments = await attachAppointmentAvailabilityWindows(await storage.getAppointmentsRange(
           undefined,
           shiftCalendarDateKey(dateStr, -1),
           shiftCalendarDateKey(dateStr, 1),
-        );
+        ));
         
         const visibleBarbers = barbers.filter((barber) =>
           barber.isVisible && barberCanPerformService(barberServiceMap, barber.id, input.serviceId),
@@ -5029,11 +5081,11 @@ export async function registerRoutes(
           return res.status(400).json({ message: scheduleError });
         }
 
-        const existingAppointments = await storage.getAppointmentsRange(
+        const existingAppointments = await attachAppointmentAvailabilityWindows(await storage.getAppointmentsRange(
           finalBarberId,
           shiftCalendarDateKey(dateStr, -1),
           shiftCalendarDateKey(dateStr, 1),
-        );
+        ));
         if (
           hasAppointmentConflict(
             existingAppointments,
@@ -5153,6 +5205,7 @@ export async function registerRoutes(
         paymentMethod: requestedPaymentMethod,
         extras,
         internalCosts,
+        availabilityWindows,
         isRecurring,
         recurringWeeks,
         recurringMonths,
@@ -5178,6 +5231,7 @@ export async function registerRoutes(
         (hasSpecialTerms !== undefined && typeof hasSpecialTerms !== "boolean") ||
         (isAlreadyCompleted !== undefined && typeof isAlreadyCompleted !== "boolean") ||
         (extras !== undefined && !Array.isArray(extras)) ||
+        (availabilityWindows !== undefined && !Array.isArray(availabilityWindows)) ||
         Object.prototype.hasOwnProperty.call(req.body, "extraIds") ||
         (isRecurring !== undefined && typeof isRecurring !== "boolean") ||
         (startTimes !== undefined && (!Array.isArray(startTimes) || startTimes.length === 0 || startTimes.length > 500)) ||
@@ -5187,6 +5241,25 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
       const shouldCreateAsCompleted = isAlreadyCompleted === true;
+      const parsedAvailabilityWindows: AppointmentAvailabilityWindowInput[] = availabilityWindows === undefined
+        ? []
+        : availabilityWindows.map((window: unknown) => {
+            if (!window || typeof window !== "object" || Array.isArray(window)) {
+              throw new AppointmentAvailabilityWindowsError("APPOINTMENT_AVAILABILITY_WINDOWS_INVALID");
+            }
+            const value = window as { startTime?: unknown; endTime?: unknown };
+            return {
+              startTime: new Date(String(value.startTime ?? "")),
+              endTime: new Date(String(value.endTime ?? "")),
+            };
+          });
+      if (parsedAvailabilityWindows.length > 0
+        && (!resolvedBusinessConfig.features.appointmentAvailabilityWindows || !isManualBooking || shouldCreateAsCompleted)) {
+        return res.status(400).json({ message: "As janelas de disponibilidade não estão disponíveis neste fluxo." });
+      }
+      if (isRecurring && parsedAvailabilityWindows.length > 0) {
+        throw new AppointmentAvailabilityWindowsError("APPOINTMENT_AVAILABILITY_WINDOWS_RECURRING_UNSUPPORTED");
+      }
       if (requestedPaymentMethod !== undefined && !isKnownAppointmentPaymentMethod(requestedPaymentMethod)) {
         return res.status(400).json({ message: "Método de pagamento inválido." });
       }
@@ -5452,11 +5525,11 @@ export async function registerRoutes(
         }
         let existingAppointments = existingAppointmentsByDate.get(shopDateParts.dateKey);
         if (!existingAppointments) {
-          existingAppointments = await storage.getAppointmentsRange(
+          existingAppointments = await attachAppointmentAvailabilityWindows(await storage.getAppointmentsRange(
             barberIdNumber,
             shiftCalendarDateKey(shopDateParts.dateKey, -1),
             shiftCalendarDateKey(shopDateParts.dateKey, 1),
-          );
+          ));
           existingAppointmentsByDate.set(shopDateParts.dateKey, existingAppointments);
         }
 
@@ -5499,6 +5572,7 @@ export async function registerRoutes(
               ? historicalAppointmentConflictStatuses
               : activeAppointmentConflictStatuses,
             { before: bufferBeforeMinutesSnapshot, after: bufferAfterMinutesSnapshot },
+            parsedAvailabilityWindows,
           )
         ) {
           conflicts.push(formatShopDateTime(currentStart));
@@ -5530,6 +5604,7 @@ export async function registerRoutes(
             ? "appointment_confirmation"
             : undefined,
           extras: isManualBooking && !isRecurring ? requestedExtras : undefined,
+          availabilityWindows: isManualBooking && !isRecurring ? parsedAvailabilityWindows : undefined,
         });
       }
 
@@ -5656,6 +5731,7 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Horário indisponível para este barbeiro." });
       }
       if (sendAppointmentExtrasError(res, error)) return;
+      if (sendAppointmentAvailabilityWindowsError(res, error)) return;
       if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Block error:", error);
       res.status(500).json({ message: "Erro ao bloquear horário" });
@@ -5680,7 +5756,7 @@ export async function registerRoutes(
       }
     }
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
-    const appointments = date
+    const appointments = await attachAppointmentAvailabilityWindows(date
       ? await storage.getAppointmentsRange(
           effectiveBarberId,
           shiftCalendarDateKey(date, -1),
@@ -5690,7 +5766,7 @@ export async function registerRoutes(
           effectiveBarberId,
           startDate ? shiftCalendarDateKey(startDate, -1) : startDate,
           endDate ? shiftCalendarDateKey(endDate, 1) : endDate,
-        );
+        ));
     const locationBarberIds = await getBarberIdsForLocation(locationId);
     const allowedBarberIds = locationBarberIds === undefined ? null : new Set(locationBarberIds);
     const visibleBarberIds = new Set(
@@ -5711,6 +5787,9 @@ export async function registerRoutes(
         duration: getEffectiveAppointmentDurationMinutes(app, serviceDurations),
         bufferBeforeMinutes: app.bufferBeforeMinutesSnapshot,
         bufferAfterMinutes: app.bufferAfterMinutesSnapshot,
+        ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
+          ? { availabilityWindows: app.availabilityWindows ?? [] }
+          : {}),
       }));
     res.json(publicAppointments);
   });
@@ -5732,6 +5811,7 @@ export async function registerRoutes(
         paymentMethod: requestedPaymentMethod,
         extras,
         internalCosts,
+        availabilityWindows,
       } = req.body;
       const hasStartTimePatch = Object.prototype.hasOwnProperty.call(req.body, "startTime");
       const hasBarberPatch = Object.prototype.hasOwnProperty.call(req.body, "barberId");
@@ -5745,12 +5825,14 @@ export async function registerRoutes(
       const hasPaymentMethodPatch = Object.prototype.hasOwnProperty.call(req.body, "paymentMethod");
       const hasExtrasPatch = Object.prototype.hasOwnProperty.call(req.body, "extras");
       const hasInternalCostsPatch = Object.prototype.hasOwnProperty.call(req.body, "internalCosts");
+      const hasAvailabilityWindowsPatch = Object.prototype.hasOwnProperty.call(req.body, "availabilityWindows");
       if (
         (hasServiceModePatch && serviceMode !== "existing" && serviceMode !== "custom")
         || (hasAllowOutsideHoursPatch && typeof allowOutsideHours !== "boolean")
         || (hasPaymentMethodPatch && !isKnownAppointmentPaymentMethod(requestedPaymentMethod))
         || (hasExtrasPatch && !Array.isArray(extras))
         || (hasInternalCostsPatch && !Array.isArray(internalCosts))
+        || (hasAvailabilityWindowsPatch && !Array.isArray(availabilityWindows))
       ) {
         return res.status(400).json({ message: "Pedido de marcação inválido." });
       }
@@ -5766,9 +5848,27 @@ export async function registerRoutes(
       if (hasInternalCostsPatch && (currentApp.status !== "booked" || currentApp.seriesId)) {
         throw new AppointmentInternalCostsError("APPOINTMENT_INTERNAL_COSTS_NOT_EDITABLE");
       }
+      if (hasAvailabilityWindowsPatch
+        && (!resolvedBusinessConfig.features.appointmentAvailabilityWindows
+          || currentApp.status !== "booked" || currentApp.seriesId)) {
+        throw new AppointmentAvailabilityWindowsError("APPOINTMENT_AVAILABILITY_WINDOWS_NOT_EDITABLE");
+      }
+      const parsedAvailabilityWindows: AppointmentAvailabilityWindowInput[] | undefined = hasAvailabilityWindowsPatch
+        ? availabilityWindows.map((window: unknown) => {
+            if (!window || typeof window !== "object" || Array.isArray(window)) {
+              throw new AppointmentAvailabilityWindowsError("APPOINTMENT_AVAILABILITY_WINDOWS_INVALID");
+            }
+            const value = window as { startTime?: unknown; endTime?: unknown };
+            return {
+              startTime: new Date(String(value.startTime ?? "")),
+              endTime: new Date(String(value.endTime ?? "")),
+            };
+          })
+        : undefined;
       const hasAppointmentDetailsPatch = hasStartTimePatch || hasBarberPatch || hasServicePatch
         || hasServiceModePatch || hasCustomNamePatch || hasCustomDurationPatch
-        || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch || hasInternalCostsPatch;
+        || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch || hasInternalCostsPatch
+        || hasAvailabilityWindowsPatch;
       if (authRuntimeMode === "canonical") {
         if ((hasAppointmentDetailsPatch || !hasStatusPatch) && !enforceCanonicalOwnOrTeamCapability(req, res, {
           ownCapability: "appointments.manage_own",
@@ -5807,10 +5907,18 @@ export async function registerRoutes(
       const previousInternalCosts = hasInternalCostsPatch
         ? await storage.getAppointmentInternalCosts([appointmentId])
         : [];
+      const currentAvailabilityWindows = resolvedBusinessConfig.features.appointmentAvailabilityWindows
+        ? await storage.getAppointmentAvailabilityWindows([appointmentId])
+        : [];
 
       const newStartTime = hasStartTimePatch ? new Date(startTime) : new Date(currentApp.startTime);
       const startTimeChanged = hasStartTimePatch
         && newStartTime.getTime() !== new Date(currentApp.startTime).getTime();
+      const availabilityWindowShift = newStartTime.getTime() - new Date(currentApp.startTime).getTime();
+      const effectiveAvailabilityWindows = parsedAvailabilityWindows ?? currentAvailabilityWindows.map((window) => ({
+        startTime: new Date(new Date(window.startTime).getTime() + availabilityWindowShift),
+        endTime: new Date(new Date(window.endTime).getTime() + availabilityWindowShift),
+      }));
       const newBarberId = hasBarberPatch ? Number(barberId) : currentApp.barberId;
       if (authRuntimeMode === "canonical"
         && hasBarberPatch
@@ -6012,11 +6120,11 @@ export async function registerRoutes(
         }
 
         const dateStr = getShopDateParts(newStartTime).dateKey;
-        const existingAppointments = await storage.getAppointmentsRange(
+        const existingAppointments = await attachAppointmentAvailabilityWindows(await storage.getAppointmentsRange(
           newBarberId,
           shiftCalendarDateKey(dateStr, -1),
           shiftCalendarDateKey(dateStr, 1),
-        );
+        ));
         const newEndTime = new Date(newStartTime.getTime() + finalDuration * 60000);
         if (hasAppointmentConflict(
           existingAppointments,
@@ -6027,6 +6135,7 @@ export async function registerRoutes(
           appointmentId,
           activeAppointmentConflictStatuses,
           { before: finalBufferBefore, after: finalBufferAfter },
+          effectiveAvailabilityWindows,
         )) {
           return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
         }
@@ -6120,6 +6229,7 @@ export async function registerRoutes(
         undefined,
         hasExtrasPatch ? extras : undefined,
         hasInternalCostsPatch ? internalCosts : undefined,
+        parsedAvailabilityWindows,
       );
       const updated = updateResult?.appointment;
       if (updated) {
@@ -6158,6 +6268,7 @@ export async function registerRoutes(
               ...Object.keys(updateData),
               ...(hasExtrasPatch ? ["extras"] : []),
               ...(hasInternalCostsPatch ? ["internalCosts"] : []),
+              ...(hasAvailabilityWindowsPatch ? ["availabilityWindows"] : []),
             ],
             previousStartTime: currentApp.startTime,
             newStartTime: updated.startTime,
@@ -6183,6 +6294,7 @@ export async function registerRoutes(
       }
       if (sendAppointmentExtrasError(res, error)) return;
       if (sendAppointmentInternalCostsError(res, error)) return;
+      if (sendAppointmentAvailabilityWindowsError(res, error)) return;
       if (sendAppointmentLocationIntegrityError(res, error)) return;
       console.error("Update appointment error:", error);
       res.status(500).json({ message: "Erro ao atualizar marcação" });
@@ -6553,11 +6665,19 @@ export async function registerRoutes(
       }
 
       const dateStr = getShopDateParts(startTime).dateKey;
-      const existingAppointments = await storage.getAppointmentsRange(
+      const currentAvailabilityWindows = resolvedBusinessConfig.features.appointmentAvailabilityWindows
+        ? await storage.getAppointmentAvailabilityWindows([appointment.id])
+        : [];
+      const availabilityWindowShift = startTime.getTime() - new Date(appointment.startTime).getTime();
+      const shiftedAvailabilityWindows = currentAvailabilityWindows.map((window) => ({
+        startTime: new Date(new Date(window.startTime).getTime() + availabilityWindowShift),
+        endTime: new Date(new Date(window.endTime).getTime() + availabilityWindowShift),
+      }));
+      const existingAppointments = await attachAppointmentAvailabilityWindows(await storage.getAppointmentsRange(
         appointment.barberId,
         shiftCalendarDateKey(dateStr, -1),
         shiftCalendarDateKey(dateStr, 1),
-      );
+      ));
       const endTime = new Date(startTime.getTime() + duration * 60000);
       if (
         hasAppointmentConflict(
@@ -6572,6 +6692,7 @@ export async function registerRoutes(
             before: appointment.bufferBeforeMinutesSnapshot,
             after: appointment.bufferAfterMinutesSnapshot,
           },
+          shiftedAvailabilityWindows,
         )
       ) {
         return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.slotReserved });
@@ -6587,8 +6708,9 @@ export async function registerRoutes(
         return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
       }
 
+      const updatedWithWindows = (await attachAppointmentAvailabilityWindows([updated]))[0];
       res.json({
-        ...updated,
+        ...updatedWithWindows,
         ...(result ? { notificationEventId: result.notificationEvent.id } : {}),
       });
     } catch (error) {

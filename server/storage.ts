@@ -4,6 +4,8 @@ import {
   services,
   serviceCategories,
   appointments,
+  appointmentAvailabilityWindows,
+  appointmentOccupancyPeriods,
   extraDefinitions,
   appointmentExtras,
   extraDefinitionServices,
@@ -32,6 +34,7 @@ import {
   type ServiceCategory,
   type ServiceCatalogueItem,
   type Appointment,
+  type AppointmentAvailabilityWindow,
   type AppointmentSeries,
   type ExtraDefinition,
   type ExtraDefinitionWithServices,
@@ -92,7 +95,9 @@ import {
 } from "./appointment-finance";
 import {
   appointmentOccupancyOverlaps,
+  getAppointmentOccupancyPeriods,
   getOperationalAppointmentBounds,
+  validateAppointmentAvailabilityWindows,
 } from "@shared/appointment-occupancy";
 import { getCalendarDateBounds } from "./calendar-timezone";
 
@@ -113,6 +118,11 @@ export type AppointmentInternalCostInput = {
   internalCostId: number;
   unitCostCents?: number;
   quantity?: number;
+};
+
+export type AppointmentAvailabilityWindowInput = {
+  startTime: Date | string;
+  endTime: Date | string;
 };
 
 export type CustomerNoteIdentityInput = {
@@ -184,6 +194,7 @@ export type CreateAppointmentStorageRequest = Omit<CreateAppointmentRequest, "wh
   seriesId?: string | null;
   seriesOccurrenceIndex?: number | null;
   extras?: AppointmentExtraInput[];
+  availabilityWindows?: AppointmentAvailabilityWindowInput[];
 };
 
 type AppointmentExtraSnapshotInput = Omit<AppointmentExtra, "appointmentId">;
@@ -395,6 +406,71 @@ export const appointmentExtrasNotAllowedForRecurringCode = "APPOINTMENT_EXTRAS_N
 export const appointmentInternalCostInvalidCode = "APPOINTMENT_INTERNAL_COST_INVALID";
 export const appointmentInternalCostUnavailableCode = "APPOINTMENT_INTERNAL_COST_UNAVAILABLE";
 export const appointmentInternalCostsNotEditableCode = "APPOINTMENT_INTERNAL_COSTS_NOT_EDITABLE";
+export const appointmentAvailabilityWindowsInvalidCode = "APPOINTMENT_AVAILABILITY_WINDOWS_INVALID";
+export const appointmentAvailabilityWindowsRecurringCode = "APPOINTMENT_AVAILABILITY_WINDOWS_RECURRING_UNSUPPORTED";
+export const appointmentAvailabilityWindowsNotEditableCode = "APPOINTMENT_AVAILABILITY_WINDOWS_NOT_EDITABLE";
+
+export class AppointmentAvailabilityWindowsError extends Error {
+  status = 409;
+
+  constructor(public code:
+    | typeof appointmentAvailabilityWindowsInvalidCode
+    | typeof appointmentAvailabilityWindowsRecurringCode
+    | typeof appointmentAvailabilityWindowsNotEditableCode) {
+    super(code === appointmentAvailabilityWindowsRecurringCode
+      ? "As janelas de disponibilidade não são suportadas em marcações recorrentes."
+      : code === appointmentAvailabilityWindowsNotEditableCode
+        ? "As janelas desta marcação já não podem ser alteradas."
+        : "As janelas de disponibilidade são inválidas, sobrepõem-se ou ficam fora da marcação.");
+    this.name = "AppointmentAvailabilityWindowsError";
+  }
+}
+
+function normalizeAppointmentAvailabilityWindows(
+  appointment: {
+    startTime: Date | string;
+    durationMinutes?: number | null;
+    bufferBeforeMinutesSnapshot?: number | null;
+    bufferAfterMinutesSnapshot?: number | null;
+    seriesId?: string | null;
+  },
+  windows: readonly AppointmentAvailabilityWindowInput[] | null | undefined,
+) {
+  if (appointment.seriesId && (windows?.length ?? 0) > 0) {
+    throw new AppointmentAvailabilityWindowsError(appointmentAvailabilityWindowsRecurringCode);
+  }
+  const validation = validateAppointmentAvailabilityWindows({
+    startTime: appointment.startTime,
+    durationMinutes: appointment.durationMinutes,
+    bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+    bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+  }, windows);
+  if (!validation.valid) {
+    throw new AppointmentAvailabilityWindowsError(appointmentAvailabilityWindowsInvalidCode);
+  }
+  return validation.windows;
+}
+
+function shiftAppointmentAvailabilityWindows(
+  windows: readonly AppointmentAvailabilityWindowInput[],
+  milliseconds: number,
+) {
+  return windows.map((window) => ({
+    startTime: new Date(toAppointmentDate(window.startTime).getTime() + milliseconds),
+    endTime: new Date(toAppointmentDate(window.endTime).getTime() + milliseconds),
+  }));
+}
+
+function appointmentAvailabilityWindowsChanged(
+  requested: readonly AppointmentAvailabilityWindowInput[],
+  current: readonly AppointmentAvailabilityWindowInput[],
+) {
+  if (requested.length !== current.length) return true;
+  return requested.some((window, index) => (
+    toAppointmentDate(window.startTime).getTime() !== toAppointmentDate(current[index].startTime).getTime()
+    || toAppointmentDate(window.endTime).getTime() !== toAppointmentDate(current[index].endTime).getTime()
+  ));
+}
 
 type AppointmentExtrasErrorCode =
   | typeof appointmentExtraIdsInvalidCode
@@ -656,6 +732,7 @@ export interface IStorage {
   getAppointmentByToken(token: string): Promise<Appointment | undefined>;
   getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]>;
   getAppointmentInternalCosts(appointmentIds: number[]): Promise<AppointmentInternalCost[]>;
+  getAppointmentAvailabilityWindows(appointmentIds: number[]): Promise<AppointmentAvailabilityWindow[]>;
   createAppointment(appointment: CreateAppointmentStorageRequest): Promise<Appointment>;
   createAppointments(appointments: CreateAppointmentStorageRequest[]): Promise<Appointment[]>;
   createRecurringAppointmentSeries(request: CreateRecurringAppointmentSeriesRequest): Promise<CreateRecurringAppointmentSeriesResult>;
@@ -665,6 +742,7 @@ export interface IStorage {
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
     expectedStatus?: AppointmentStatus,
+    availabilityWindows?: AppointmentAvailabilityWindowInput[],
   ): Promise<Appointment | undefined>;
   updateAppointmentWithNotification(
     id: number,
@@ -673,6 +751,7 @@ export interface IStorage {
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
     internalCosts?: AppointmentInternalCostInput[],
+    availabilityWindows?: AppointmentAvailabilityWindowInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined>;
   completeAppointment(request: CompleteAppointmentRequest): Promise<CompleteAppointmentResult | undefined>;
   rescheduleAppointment(
@@ -998,31 +1077,35 @@ export class DatabaseStorage implements IStorage {
       bufferBeforeMinutesSnapshot?: number | null;
       bufferAfterMinutesSnapshot?: number | null;
       status?: string | null;
+      availabilityWindows?: readonly AppointmentAvailabilityWindowInput[] | null;
     },
     ignoreAppointmentId?: number,
   ) {
     if (!shouldProtectAppointment(candidate.status)) return;
 
-    const bounds = getOperationalAppointmentBounds({
+    const periods = getAppointmentOccupancyPeriods({
       startTime: candidate.startTime,
       durationMinutes: candidate.durationMinutes,
       bufferBeforeMinutes: candidate.bufferBeforeMinutesSnapshot,
       bufferAfterMinutes: candidate.bufferAfterMinutesSnapshot,
+      availabilityWindows: candidate.availabilityWindows,
     });
+    if (periods.length === 0) return;
     const conflictConditions: SQL[] = [
-      eq(appointments.barberId, candidate.barberId),
-      eq(appointments.status, "booked"),
-      sql`${appointments.startTime} - make_interval(mins => ${appointments.bufferBeforeMinutesSnapshot}) < ${bounds.operationalEnd}`,
-      sql`${appointments.startTime} + make_interval(mins => ${appointments.durationMinutes} + ${appointments.bufferAfterMinutesSnapshot}) > ${bounds.operationalStart}`,
+      eq(appointmentOccupancyPeriods.barberId, candidate.barberId),
+      or(...periods.map((period) => and(
+        lt(appointmentOccupancyPeriods.startTime, period.endTime),
+        gt(appointmentOccupancyPeriods.endTime, period.startTime),
+      )))!,
     ];
 
     if (ignoreAppointmentId !== undefined) {
-      conflictConditions.push(sql`${appointments.id} <> ${ignoreAppointmentId}`);
+      conflictConditions.push(sql`${appointmentOccupancyPeriods.appointmentId} <> ${ignoreAppointmentId}`);
     }
 
     const [conflictingAppointment] = await tx
-      .select({ id: appointments.id })
-      .from(appointments)
+      .select({ id: appointmentOccupancyPeriods.appointmentId })
+      .from(appointmentOccupancyPeriods)
       .where(and(...conflictConditions))
       .limit(1);
 
@@ -1483,6 +1566,33 @@ export class DatabaseStorage implements IStorage {
       .orderBy(appointmentInternalCosts.appointmentId, appointmentInternalCosts.position);
   }
 
+  async getAppointmentAvailabilityWindows(appointmentIds: number[]): Promise<AppointmentAvailabilityWindow[]> {
+    const uniqueAppointmentIds = Array.from(new Set(appointmentIds));
+    if (uniqueAppointmentIds.length === 0) return [];
+    return await db.select().from(appointmentAvailabilityWindows)
+      .where(inArray(appointmentAvailabilityWindows.appointmentId, uniqueAppointmentIds))
+      .orderBy(
+        appointmentAvailabilityWindows.appointmentId,
+        appointmentAvailabilityWindows.startTime,
+        appointmentAvailabilityWindows.endTime,
+      );
+  }
+
+  private async replaceAppointmentAvailabilityWindows(
+    tx: Pick<typeof db, "delete" | "insert">,
+    appointmentId: number,
+    windows: readonly AppointmentAvailabilityWindowInput[],
+  ) {
+    await tx.delete(appointmentAvailabilityWindows)
+      .where(eq(appointmentAvailabilityWindows.appointmentId, appointmentId));
+    if (windows.length === 0) return;
+    await tx.insert(appointmentAvailabilityWindows).values(windows.map((window) => ({
+      appointmentId,
+      startTime: toAppointmentDate(window.startTime),
+      endTime: toAppointmentDate(window.endTime),
+    })));
+  }
+
   private async resolveAppointmentCompensationSnapshot(
     tx: Pick<typeof db, "select">,
     appointment: Pick<Appointment, "barberId" | "locationId" | "startTime">,
@@ -1529,8 +1639,20 @@ export class DatabaseStorage implements IStorage {
             appointment.serviceId,
             appointment.extras ?? [],
           );
-          await this.assertNoAppointmentConflict(tx, appointment);
-          const { notificationEventType, extras: _extras, ...appointmentValues } = appointment;
+          const normalizedWindows = normalizeAppointmentAvailabilityWindows(
+            appointment,
+            appointment.availabilityWindows,
+          );
+          await this.assertNoAppointmentConflict(tx, {
+            ...appointment,
+            availabilityWindows: normalizedWindows,
+          });
+          const {
+            notificationEventType,
+            extras: _extras,
+            availabilityWindows: _availabilityWindows,
+            ...appointmentValues
+          } = appointment;
           const notificationRevision = notificationEventType ? 1 : 0;
           const locationId = appointment.locationId ?? 1;
           const compensationSnapshot = appointment.status === "completed"
@@ -1555,6 +1677,7 @@ export class DatabaseStorage implements IStorage {
               appointmentId: newAppointment.id,
             })));
           }
+          await this.replaceAppointmentAvailabilityWindows(tx, newAppointment.id, normalizedWindows);
           if (notificationEventType) {
             await tx.insert(appointmentNotificationEvents).values({
               appointmentId: newAppointment.id,
@@ -1582,6 +1705,7 @@ export class DatabaseStorage implements IStorage {
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
     expectedStatus?: AppointmentStatus,
+    availabilityWindows?: AppointmentAvailabilityWindowInput[],
   ): Promise<Appointment | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1601,6 +1725,21 @@ export class DatabaseStorage implements IStorage {
           ...current,
           ...appointment,
         };
+        const currentWindows = await tx.select().from(appointmentAvailabilityWindows)
+          .where(eq(appointmentAvailabilityWindows.appointmentId, id))
+          .orderBy(appointmentAvailabilityWindows.startTime, appointmentAvailabilityWindows.endTime);
+        const startDelta = toAppointmentDate(candidate.startTime).getTime()
+          - toAppointmentDate(current.startTime).getTime();
+        const requestedWindows = availabilityWindows !== undefined
+          ? availabilityWindows
+          : startDelta !== 0
+            ? shiftAppointmentAvailabilityWindows(currentWindows, startDelta)
+            : currentWindows;
+        const normalizedWindows = normalizeAppointmentAvailabilityWindows(candidate, requestedWindows);
+        const windowsChanged = appointmentAvailabilityWindowsChanged(normalizedWindows, currentWindows);
+        if (windowsChanged && (current.status !== "booked" || candidate.status !== "booked" || current.seriesId)) {
+          throw new AppointmentAvailabilityWindowsError(appointmentAvailabilityWindowsNotEditableCode);
+        }
         const compensationSnapshot = candidate.status === "completed" && !current.compensationModelSnapshot
           ? await this.resolveAppointmentCompensationSnapshot(tx, candidate)
           : {};
@@ -1613,7 +1752,7 @@ export class DatabaseStorage implements IStorage {
             await this.lockAndValidateAppointmentScopes(tx, [candidate]);
           }
           await this.lockAppointmentOccupancy(tx, candidate);
-          await this.assertNoAppointmentConflict(tx, candidate, id);
+          await this.assertNoAppointmentConflict(tx, { ...candidate, availabilityWindows: normalizedWindows }, id);
         }
 
         const [updated] = await tx
@@ -1621,6 +1760,9 @@ export class DatabaseStorage implements IStorage {
           .set({ ...appointment, ...compensationSnapshot })
           .where(and(...appointmentConditions))
           .returning();
+        if (updated && windowsChanged) {
+          await this.replaceAppointmentAvailabilityWindows(tx, id, normalizedWindows);
+        }
         if (updated && current.seriesId) {
           await tx.update(appointmentSeries).set({
             notificationRevision: sql`${appointmentSeries.notificationRevision} + 1`,
@@ -1644,6 +1786,7 @@ export class DatabaseStorage implements IStorage {
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
     internalCosts?: AppointmentInternalCostInput[],
+    availabilityWindows?: AppointmentAvailabilityWindowInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -1656,6 +1799,19 @@ export class DatabaseStorage implements IStorage {
 
         const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
         const changes = getAppointmentUpdateChanges(current, safePatch);
+        const currentWindows = await tx.select().from(appointmentAvailabilityWindows)
+          .where(eq(appointmentAvailabilityWindows.appointmentId, id))
+          .orderBy(appointmentAvailabilityWindows.startTime, appointmentAvailabilityWindows.endTime);
+        const requestedWindows = availabilityWindows !== undefined
+          ? availabilityWindows
+          : changes.startChanged
+            ? shiftAppointmentAvailabilityWindows(
+                currentWindows,
+                toAppointmentDate(changes.candidate.startTime).getTime() - toAppointmentDate(current.startTime).getTime(),
+              )
+            : currentWindows;
+        const normalizedWindows = normalizeAppointmentAvailabilityWindows(changes.candidate, requestedWindows);
+        const windowsChanged = appointmentAvailabilityWindowsChanged(normalizedWindows, currentWindows);
         const compensationSnapshot = changes.candidate.status === "completed" && !current.compensationModelSnapshot
           ? await this.resolveAppointmentCompensationSnapshot(tx, changes.candidate)
           : {};
@@ -1703,7 +1859,11 @@ export class DatabaseStorage implements IStorage {
             currentInternalCosts,
           );
         }
-        if (changes.changedFields.length === 0 && !extrasChanged && !internalCostsChanged) {
+        if (windowsChanged
+          && (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId)) {
+          throw new AppointmentAvailabilityWindowsError(appointmentAvailabilityWindowsNotEditableCode);
+        }
+        if (changes.changedFields.length === 0 && !extrasChanged && !internalCostsChanged && !windowsChanged) {
           return { appointment: current, notificationEvent: null };
         }
 
@@ -1714,7 +1874,11 @@ export class DatabaseStorage implements IStorage {
             await this.lockAndValidateAppointmentScopes(tx, [changes.candidate]);
           }
           await this.lockAppointmentOccupancy(tx, changes.candidate);
-          await this.assertNoAppointmentConflict(tx, changes.candidate, id);
+          await this.assertNoAppointmentConflict(
+            tx,
+            { ...changes.candidate, availabilityWindows: normalizedWindows },
+            id,
+          );
         }
 
         const notificationContextChanged = changes.startChanged || changes.barberChanged
@@ -1751,6 +1915,9 @@ export class DatabaseStorage implements IStorage {
               appointmentId: id,
             })));
           }
+        }
+        if (windowsChanged) {
+          await this.replaceAppointmentAvailabilityWindows(tx, id, normalizedWindows);
         }
 
         if (current.seriesId && notificationContextChanged) {
@@ -1927,9 +2094,16 @@ export class DatabaseStorage implements IStorage {
         ? await this.resolveAppointmentCompensationSnapshot(tx, current)
         : {};
       if (status === "booked" && current.status !== "booked") {
+        const currentWindows = await tx.select().from(appointmentAvailabilityWindows)
+          .where(eq(appointmentAvailabilityWindows.appointmentId, id))
+          .orderBy(appointmentAvailabilityWindows.startTime, appointmentAvailabilityWindows.endTime);
         await this.lockAndValidateAppointmentScopes(tx, [current]);
         await this.lockAppointmentOccupancy(tx, current);
-        await this.assertNoAppointmentConflict(tx, { ...current, status }, id);
+        await this.assertNoAppointmentConflict(tx, {
+          ...current,
+          status,
+          availabilityWindows: currentWindows,
+        }, id);
       }
       const [updated] = await tx
         .update(appointments)
@@ -1976,10 +2150,18 @@ export class DatabaseStorage implements IStorage {
           .limit(1);
         if (!current) return undefined;
 
+        const currentWindows = await tx.select().from(appointmentAvailabilityWindows)
+          .where(eq(appointmentAvailabilityWindows.appointmentId, id))
+          .orderBy(appointmentAvailabilityWindows.startTime, appointmentAvailabilityWindows.endTime);
+        const shiftedWindows = shiftAppointmentAvailabilityWindows(
+          currentWindows,
+          startTime.getTime() - toAppointmentDate(current.startTime).getTime(),
+        );
         const candidate = { ...current, startTime };
+        const normalizedWindows = normalizeAppointmentAvailabilityWindows(candidate, shiftedWindows);
         await this.lockAndValidateAppointmentScopes(tx, [candidate]);
         await this.lockAppointmentOccupancy(tx, candidate);
-        await this.assertNoAppointmentConflict(tx, candidate, id);
+        await this.assertNoAppointmentConflict(tx, { ...candidate, availabilityWindows: normalizedWindows }, id);
 
         const nextRescheduleRevision = current.rescheduleRevision + 1;
         const nextRevision = current.notificationRevision + 1;
@@ -1993,6 +2175,9 @@ export class DatabaseStorage implements IStorage {
           ))
           .returning();
         if (!updated) return undefined;
+        if (appointmentAvailabilityWindowsChanged(normalizedWindows, currentWindows)) {
+          await this.replaceAppointmentAvailabilityWindows(tx, id, normalizedWindows);
+        }
         if (current.seriesId) {
           await tx.update(appointmentSeries).set({
             notificationRevision: sql`${appointmentSeries.notificationRevision} + 1`,
@@ -2733,6 +2918,7 @@ export class MemoryStorage implements IStorage {
   private appointmentExtras: AppointmentExtra[] = [];
   private internalCostDefinitions: InternalCostDefinition[] = [];
   private appointmentInternalCosts: AppointmentInternalCost[] = [];
+  private appointmentAvailabilityWindows: AppointmentAvailabilityWindow[] = [];
   private appointments: Appointment[] = [];
   private appointmentSeries: AppointmentSeries[] = [];
   private admins: Admin[] = [];
@@ -2757,6 +2943,7 @@ export class MemoryStorage implements IStorage {
     extraDefinition: 1,
     internalCostDefinition: 1,
     appointmentInternalCost: 1,
+    appointmentAvailabilityWindow: 1,
     appointment: 1,
     admin: 1,
     blacklist: 1,
@@ -2864,6 +3051,7 @@ export class MemoryStorage implements IStorage {
       bufferBeforeMinutesSnapshot?: number | null;
       bufferAfterMinutesSnapshot?: number | null;
       status?: string | null;
+      availabilityWindows?: readonly AppointmentAvailabilityWindowInput[] | null;
     },
     ignoreAppointmentId?: number,
   ) {
@@ -2879,11 +3067,14 @@ export class MemoryStorage implements IStorage {
         durationMinutes: candidate.durationMinutes,
         bufferBeforeMinutes: candidate.bufferBeforeMinutesSnapshot,
         bufferAfterMinutes: candidate.bufferAfterMinutesSnapshot,
+        availabilityWindows: candidate.availabilityWindows,
       }, {
         startTime: appointment.startTime,
         durationMinutes: appointment.durationMinutes,
         bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
         bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+        availabilityWindows: this.appointmentAvailabilityWindows
+          .filter((window) => window.appointmentId === appointment.id),
       });
     });
 
@@ -3326,6 +3517,15 @@ export class MemoryStorage implements IStorage {
       .map((cost) => ({ ...cost }));
   }
 
+  async getAppointmentAvailabilityWindows(appointmentIds: number[]): Promise<AppointmentAvailabilityWindow[]> {
+    const selectedIds = new Set(appointmentIds);
+    return this.appointmentAvailabilityWindows
+      .filter((window) => selectedIds.has(window.appointmentId))
+      .sort((left, right) => left.appointmentId - right.appointmentId
+        || toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime())
+      .map((window) => ({ ...window }));
+  }
+
   async getAppointmentByToken(token: string): Promise<Appointment | undefined> {
     return this.appointments.find((appointment) => appointment.cancelToken === token);
   }
@@ -3351,9 +3551,11 @@ export class MemoryStorage implements IStorage {
 
     const originalLength = this.appointments.length;
     const originalExtrasLength = this.appointmentExtras.length;
+    const originalWindowsLength = this.appointmentAvailabilityWindows.length;
     const originalNextId = this.nextIds.appointment;
     const originalEventLength = this.appointmentNotificationEvents.length;
     const originalNextEventId = this.nextIds.appointmentNotificationEvent;
+    const originalNextWindowId = this.nextIds.appointmentAvailabilityWindow;
     const createdAppointments: Appointment[] = [];
 
     try {
@@ -3365,6 +3567,10 @@ export class MemoryStorage implements IStorage {
           appointment.locationId,
           appointment.serviceId,
           appointment.extras ?? [],
+        );
+        const normalizedWindows = normalizeAppointmentAvailabilityWindows(
+          appointment,
+          appointment.availabilityWindows,
         );
         const notificationRevision = appointment.notificationEventType ? 1 : 0;
         const locationId = appointment.locationId ?? 1;
@@ -3413,8 +3619,17 @@ export class MemoryStorage implements IStorage {
           seriesOccurrenceIndex: appointment.seriesOccurrenceIndex ?? null,
           createdAt: new Date(),
         };
-        this.assertNoAppointmentConflict(newAppointment);
+        this.assertNoAppointmentConflict({ ...newAppointment, availabilityWindows: normalizedWindows });
         this.appointments.push(newAppointment);
+        const now = new Date();
+        this.appointmentAvailabilityWindows.push(...normalizedWindows.map((window) => ({
+          id: this.nextIds.appointmentAvailabilityWindow++,
+          appointmentId: newAppointment.id,
+          startTime: toAppointmentDate(window.startTime),
+          endTime: toAppointmentDate(window.endTime),
+          createdAt: now,
+          updatedAt: now,
+        })));
         this.appointmentExtras.push(...extraSnapshots.map((snapshot) => ({
           ...snapshot,
           appointmentId: newAppointment.id,
@@ -3447,9 +3662,11 @@ export class MemoryStorage implements IStorage {
     } catch (error) {
       this.appointments.splice(originalLength);
       this.appointmentExtras.splice(originalExtrasLength);
+      this.appointmentAvailabilityWindows.splice(originalWindowsLength);
       this.nextIds.appointment = originalNextId;
       this.appointmentNotificationEvents.splice(originalEventLength);
       this.nextIds.appointmentNotificationEvent = originalNextEventId;
+      this.nextIds.appointmentAvailabilityWindow = originalNextWindowId;
       throw error;
     }
   }
@@ -3538,18 +3755,44 @@ export class MemoryStorage implements IStorage {
     id: number,
     appointment: Partial<Omit<Appointment, "id">>,
     expectedStatus?: AppointmentStatus,
+    availabilityWindows?: AppointmentAvailabilityWindowInput[],
   ): Promise<Appointment | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
     if (expectedStatus && this.appointments[index].status !== expectedStatus) return undefined;
     const current = this.appointments[index];
     const candidate = { ...current, ...appointment };
+    const currentWindows = this.appointmentAvailabilityWindows
+      .filter((window) => window.appointmentId === id)
+      .sort((left, right) => toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime());
+    const startDelta = toAppointmentDate(candidate.startTime).getTime()
+      - toAppointmentDate(current.startTime).getTime();
+    const normalizedWindows = normalizeAppointmentAvailabilityWindows(
+      candidate,
+      availabilityWindows !== undefined
+        ? availabilityWindows
+        : startDelta !== 0 ? shiftAppointmentAvailabilityWindows(currentWindows, startDelta) : currentWindows,
+    );
+    const windowsChanged = appointmentAvailabilityWindowsChanged(normalizedWindows, currentWindows);
+    if (windowsChanged && (current.status !== "booked" || candidate.status !== "booked" || current.seriesId)) {
+      throw new AppointmentAvailabilityWindowsError(appointmentAvailabilityWindowsNotEditableCode);
+    }
     const compensationSnapshot = candidate.status === "completed" && !current.compensationModelSnapshot
       ? this.resolveAppointmentCompensationSnapshot(candidate)
       : {};
     const updatedAppointment = { ...candidate, ...compensationSnapshot };
-    this.assertNoAppointmentConflict(updatedAppointment, id);
+    this.assertNoAppointmentConflict({ ...updatedAppointment, availabilityWindows: normalizedWindows }, id);
     this.appointments[index] = updatedAppointment;
+    if (windowsChanged) {
+      this.appointmentAvailabilityWindows = this.appointmentAvailabilityWindows
+        .filter((window) => window.appointmentId !== id);
+      const now = new Date();
+      this.appointmentAvailabilityWindows.push(...normalizedWindows.map((window) => ({
+        id: this.nextIds.appointmentAvailabilityWindow++, appointmentId: id,
+        startTime: toAppointmentDate(window.startTime), endTime: toAppointmentDate(window.endTime),
+        createdAt: now, updatedAt: now,
+      })));
+    }
     if (current.seriesId) {
       const series = this.appointmentSeries.find((item) => item.id === current.seriesId);
       if (series) { series.notificationRevision += 1; series.updatedAt = new Date(); }
@@ -3564,6 +3807,7 @@ export class MemoryStorage implements IStorage {
     expectedStatus?: AppointmentStatus,
     extras?: AppointmentExtraInput[],
     internalCosts?: AppointmentInternalCostInput[],
+    availabilityWindows?: AppointmentAvailabilityWindowInput[],
   ): Promise<UpdateAppointmentWithNotificationResult | undefined> {
     const index = this.appointments.findIndex((item) => item.id === id);
     if (index === -1) return undefined;
@@ -3571,6 +3815,21 @@ export class MemoryStorage implements IStorage {
     if (expectedStatus && current.status !== expectedStatus) return undefined;
     const { notificationRevision: _ignoredRevision, ...safePatch } = appointment;
     const changes = getAppointmentUpdateChanges(current, safePatch);
+    const currentWindows = this.appointmentAvailabilityWindows
+      .filter((window) => window.appointmentId === id)
+      .sort((left, right) => toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime());
+    const normalizedWindows = normalizeAppointmentAvailabilityWindows(
+      changes.candidate,
+      availabilityWindows !== undefined
+        ? availabilityWindows
+        : changes.startChanged
+          ? shiftAppointmentAvailabilityWindows(
+              currentWindows,
+              toAppointmentDate(changes.candidate.startTime).getTime() - toAppointmentDate(current.startTime).getTime(),
+            )
+          : currentWindows,
+    );
+    const windowsChanged = appointmentAvailabilityWindowsChanged(normalizedWindows, currentWindows);
     const compensationSnapshot = changes.candidate.status === "completed" && !current.compensationModelSnapshot
       ? this.resolveAppointmentCompensationSnapshot(changes.candidate)
       : {};
@@ -3615,10 +3874,16 @@ export class MemoryStorage implements IStorage {
         currentInternalCosts,
       );
     }
-    if (changes.changedFields.length === 0 && !extrasChanged && !internalCostsChanged) {
+    if (windowsChanged
+      && (current.status !== "booked" || changes.candidate.status !== "booked" || current.seriesId)) {
+      throw new AppointmentAvailabilityWindowsError(appointmentAvailabilityWindowsNotEditableCode);
+    }
+    if (changes.changedFields.length === 0 && !extrasChanged && !internalCostsChanged && !windowsChanged) {
       return { appointment: current, notificationEvent: null };
     }
-    if (changes.changedFields.length > 0) this.assertNoAppointmentConflict(changes.candidate, id);
+    if (changes.changedFields.length > 0 || windowsChanged) {
+      this.assertNoAppointmentConflict({ ...changes.candidate, availabilityWindows: normalizedWindows }, id);
+    }
     const notificationContextChanged = changes.startChanged || changes.barberChanged
       || changes.serviceChanged || changes.serviceNameChanged || changes.durationChanged
       || changes.contactChanged || changes.deliveryPreferenceChanged
@@ -3646,6 +3911,16 @@ export class MemoryStorage implements IStorage {
         ...snapshot,
         id: this.nextIds.appointmentInternalCost++,
         appointmentId: id,
+      })));
+    }
+    if (windowsChanged) {
+      this.appointmentAvailabilityWindows = this.appointmentAvailabilityWindows
+        .filter((window) => window.appointmentId !== id);
+      const now = new Date();
+      this.appointmentAvailabilityWindows.push(...normalizedWindows.map((window) => ({
+        id: this.nextIds.appointmentAvailabilityWindow++, appointmentId: id,
+        startTime: toAppointmentDate(window.startTime), endTime: toAppointmentDate(window.endTime),
+        createdAt: now, updatedAt: now,
       })));
     }
     if (current.seriesId && notificationContextChanged) {
@@ -3766,8 +4041,28 @@ export class MemoryStorage implements IStorage {
       rescheduleRevision: current.rescheduleRevision + 1,
       notificationRevision: current.notificationRevision + 1,
     };
-    this.assertNoAppointmentConflict(updated, id);
+    const currentWindows = this.appointmentAvailabilityWindows
+      .filter((window) => window.appointmentId === id)
+      .sort((left, right) => toAppointmentDate(left.startTime).getTime() - toAppointmentDate(right.startTime).getTime());
+    const normalizedWindows = normalizeAppointmentAvailabilityWindows(
+      updated,
+      shiftAppointmentAvailabilityWindows(
+        currentWindows,
+        startTime.getTime() - toAppointmentDate(current.startTime).getTime(),
+      ),
+    );
+    this.assertNoAppointmentConflict({ ...updated, availabilityWindows: normalizedWindows }, id);
     this.appointments[index] = updated;
+    if (appointmentAvailabilityWindowsChanged(normalizedWindows, currentWindows)) {
+      this.appointmentAvailabilityWindows = this.appointmentAvailabilityWindows
+        .filter((window) => window.appointmentId !== id);
+      const now = new Date();
+      this.appointmentAvailabilityWindows.push(...normalizedWindows.map((window) => ({
+        id: this.nextIds.appointmentAvailabilityWindow++, appointmentId: id,
+        startTime: toAppointmentDate(window.startTime), endTime: toAppointmentDate(window.endTime),
+        createdAt: now, updatedAt: now,
+      })));
+    }
     if (current.seriesId) {
       const series = this.appointmentSeries.find((item) => item.id === current.seriesId);
       if (series) { series.notificationRevision += 1; series.updatedAt = new Date(); }

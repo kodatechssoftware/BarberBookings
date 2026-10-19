@@ -50,6 +50,7 @@ export type AvailabilityAppointment = {
   bufferAfterMinutes?: number | null;
   bufferBeforeMinutesSnapshot?: number | null;
   bufferAfterMinutesSnapshot?: number | null;
+  availabilityWindows?: ReadonlyArray<{ startTime: string | Date; endTime: string | Date }>;
 };
 
 function calendarDateKey(date: Date) {
@@ -94,6 +95,7 @@ export function hasAppointmentIntervalConflict({
   durationMinutes,
   bufferBeforeMinutes = 0,
   bufferAfterMinutes = 0,
+  availabilityWindows,
 }: {
   appointments: AvailabilityAppointment[];
   barberId: number;
@@ -101,6 +103,7 @@ export function hasAppointmentIntervalConflict({
   durationMinutes: number;
   bufferBeforeMinutes?: number;
   bufferAfterMinutes?: number;
+  availabilityWindows?: ReadonlyArray<{ startTime: string | Date; endTime: string | Date }>;
 }) {
   return appointments.some((appointment) => {
     if (appointment.barberId !== barberId) return false;
@@ -117,11 +120,13 @@ export function hasAppointmentIntervalConflict({
       durationMinutes,
       bufferBeforeMinutes,
       bufferAfterMinutes,
+      availabilityWindows,
     }, {
       startTime: appointmentStart,
       durationMinutes: appointmentDuration,
       bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot ?? appointment.bufferBeforeMinutes,
       bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot ?? appointment.bufferAfterMinutes,
+      availabilityWindows: appointment.availabilityWindows,
     });
   });
 }

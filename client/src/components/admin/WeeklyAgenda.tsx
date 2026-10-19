@@ -31,6 +31,7 @@ export type WeeklyAgendaAppointment = {
   depositRequired?: boolean;
   depositReason?: string | null;
   canManage?: boolean;
+  availabilityWindows?: Array<{ startTime: string; endTime: string }>;
 };
 
 type AppointmentStatusFilter = AppointmentStatus | "all";
@@ -158,6 +159,32 @@ function OperationalBufferBands({ appointment, color }: {
       )}
     </>
   );
+}
+
+function AvailabilityWindowBands({ appointment, color }: {
+  appointment: WeeklyAgendaAppointment;
+  color: string;
+}) {
+  const operationalStart = getWeeklyAppointmentOperationalStart(appointment).getTime();
+  return <>{(appointment.availabilityWindows ?? []).map((window, index) => {
+    const start = parseISO(window.startTime);
+    const end = parseISO(window.endTime);
+    const top = Math.max(0, (start.getTime() - operationalStart) / 60_000) * weeklyAgendaPixelsPerMinute;
+    const height = Math.max(2, (end.getTime() - start.getTime()) / 60_000 * weeklyAgendaPixelsPerMinute);
+    return <span
+      key={`${window.startTime}-${window.endTime}`}
+      data-testid="agenda-availability-window"
+      title={`Disponível ${format(start, "HH:mm")}–${format(end, "HH:mm")}`}
+      aria-label={`Disponível das ${format(start, "HH:mm")} às ${format(end, "HH:mm")}`}
+      className="pointer-events-none absolute inset-x-1 z-[1] rounded border border-dashed"
+      style={{
+        top,
+        height,
+        borderColor: colorWithAlpha(color, 0.8),
+        background: `repeating-linear-gradient(135deg, ${colorWithAlpha(color, 0.06)}, ${colorWithAlpha(color, 0.06)} 4px, ${colorWithAlpha(color, 0.2)} 4px, ${colorWithAlpha(color, 0.2)} 7px)`,
+      }}
+    />;
+  })}</>;
 }
 
 function createAgendaHours(startMinutes: number, endMinutes: number) {
@@ -1131,6 +1158,7 @@ export function WeeklyAgenda({
                                       }}
                                     >
                                       <OperationalBufferBands appointment={appointment} color={color} />
+                                      <AvailabilityWindowBands appointment={appointment} color={color} />
                                       <div className="flex min-w-0 items-center justify-between gap-2">
                                         <span className={cn("min-w-0 truncate font-bold text-white", isTiny ? "text-[10px] leading-none" : "text-xs")}>
                                           {format(start, "HH:mm")} - {appointment.customerName}
@@ -1459,6 +1487,7 @@ export function WeeklyAgenda({
                                 }}
                               >
                                 <OperationalBufferBands appointment={appointment} color={color} />
+                                <AvailabilityWindowBands appointment={appointment} color={color} />
                                 <span
                                   className={cn(
                                     "inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-black/15 font-semibold uppercase text-gray-100",

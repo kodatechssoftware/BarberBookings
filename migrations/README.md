@@ -116,6 +116,14 @@ inferred from historical Extras or business expenses, and public-booking
 availability remains disabled by default. Number `0019` is deliberately not
 reused because it is reserved by the shared notification/reminder migration.
 
+Migration `0021_appointment_availability_windows.sql` adds concrete availability
+windows to long, non-recurring appointments. It materializes each booked
+appointment's effective occupied periods (commercial time minus those windows,
+with preparation/cleanup buffers kept occupied) so PostgreSQL can enforce the
+same global no-overlap rule under concurrency. Existing appointments are
+backfilled as one continuous occupied interval and retain their previous
+behaviour. The feature is enabled by default only for the Beauty vertical.
+
 Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification

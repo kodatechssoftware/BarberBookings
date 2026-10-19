@@ -59,6 +59,7 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
   assert.equal(barber.features.workspaceRent, true);
   assert.equal(barber.features.multiLocation, false);
   assert.equal(barber.features.preparationBuffers, false);
+  assert.equal(barber.features.appointmentAvailabilityWindows, false);
   assert.equal(barber.features.recurringExpenses, false);
 
   assert.deepEqual(beauty.booking.flow, ["service", "professional", "datetime", "customer"]);
@@ -82,8 +83,10 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
   assert.deepEqual(beauty.runtime.multiLocation, { enabled: true, maxLocations: 3 });
   assert.equal(beauty.features.multiLocation, true);
   assert.equal(beauty.features.preparationBuffers, true);
+  assert.equal(beauty.features.appointmentAvailabilityWindows, true);
   assert.equal(beauty.features.recurringExpenses, true);
   assert.equal(businessCapabilityRegistry.preparationBuffers.implemented, true);
+  assert.equal(businessCapabilityRegistry.appointmentAvailabilityWindows.implemented, true);
   assert.equal(businessCapabilityRegistry.recurringExpenses.implemented, true);
 
   for (const feature of [
