@@ -20,7 +20,10 @@ type AppointmentMessageParams = {
 };
 
 const communicationsCopy = resolvedBusinessConfig.copy.communications;
-const SHOP_NAME = process.env.SHOP_NAME?.trim() || communicationsCopy.establishmentFallback;
+const SHOP_NAME = process.env.SHOP_NAME?.trim()
+  || (resolvedBusinessConfig.vertical === "beauty"
+    ? resolvedBusinessConfig.branding.defaultName
+    : communicationsCopy.establishmentFallback);
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const DEFAULT_COUNTRY_CODE = (process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || "351").replace(/\D/g, "");
 const REQUEST_TIMEOUT_MS = Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000);
@@ -783,7 +786,10 @@ export function buildBookingConfirmationMessage({
   cancelUrl,
 }: Omit<AppointmentMessageParams, "customerPhone">,
   copy: CommunicationsCopy = communicationsCopy,
-  establishmentName = process.env.SHOP_NAME?.trim() || copy.establishmentFallback,
+  establishmentName = process.env.SHOP_NAME?.trim()
+    || (resolvedBusinessConfig.vertical === "beauty"
+      ? resolvedBusinessConfig.branding.defaultName
+      : copy.establishmentFallback),
 ) {
   const date = formatAppointmentDate(startTime);
   const time = formatAppointmentTime(startTime);
@@ -808,7 +814,10 @@ export function buildBookingCancellationMessage({
   startTime,
 }: Omit<AppointmentMessageParams, "customerPhone" | "cancelUrl">,
   copy: CommunicationsCopy = communicationsCopy,
-  establishmentName = process.env.SHOP_NAME?.trim() || copy.establishmentFallback,
+  establishmentName = process.env.SHOP_NAME?.trim()
+    || (resolvedBusinessConfig.vertical === "beauty"
+      ? resolvedBusinessConfig.branding.defaultName
+      : copy.establishmentFallback),
 ) {
   const date = formatAppointmentDate(startTime);
   const time = formatAppointmentTime(startTime);

@@ -56,6 +56,11 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
   assert.equal(barber.branding.defaultIconUrl, "/images/logo.jpg");
   assert.equal(barber.branding.professionalFallbackMode, "legacy-barber-avatars");
   assert.equal(barber.branding.manifest.name, "BarberBookings");
+  assert.equal(barber.branding.metadata.description, "Marcações online de Baptista Barber Shop.");
+  assert.deepEqual(
+    barber.branding.manifest.icons.map(({ src }) => src),
+    ["/icons/icon-192.png", "/icons/icon-512.png"],
+  );
   assert.equal(barber.features.workspaceRent, true);
   assert.equal(barber.features.multiLocation, false);
   assert.equal(barber.features.preparationBuffers, false);
@@ -68,18 +73,18 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
   assert.equal(beauty.copy.admin.team.heading, "Equipa de Profissionais");
   assert.equal(beauty.copy.agenda.professional.allFilter, "Todos os profissionais");
   assert.equal(beauty.theme.id, "beauty-clean");
-  assert.equal(beauty.branding.defaultName, "Ana Isabel Nail Art & Design");
-  assert.equal(beauty.branding.defaultShortName, "Ana Isabel");
-  assert.equal(beauty.branding.defaultLogoUrl, "/images/beauty-brand/ana-isabel-logo.svg");
-  assert.equal(beauty.branding.defaultHorizontalLogoUrl, "/images/beauty-brand/ana-isabel-logo-horizontal.svg");
-  assert.equal(beauty.branding.defaultIconUrl, "/images/beauty-brand/ana-isabel-icon.svg");
-  assert.equal(beauty.branding.hero.title, "Unhas com detalhe, elegância e personalidade");
-  assert.equal(beauty.branding.hero.description, "Cuidados personalizados, nail art e beleza com atenção a cada detalhe.");
-  assert.equal(beauty.branding.hero.imageUrl, "/images/beauty-brand/ana-isabel-hero.svg");
+  assert.equal(beauty.branding.defaultName, "Beauty Studio");
+  assert.equal(beauty.branding.defaultShortName, "Beauty");
+  assert.equal(beauty.branding.defaultLogoUrl, "/images/beauty-logo.svg");
+  assert.equal(beauty.branding.defaultHorizontalLogoUrl, "/images/beauty-logo.svg");
+  assert.equal(beauty.branding.defaultIconUrl, "/images/beauty-logo.svg");
+  assert.equal(beauty.branding.hero.title, "Beleza e cuidado à sua medida");
+  assert.equal(beauty.branding.hero.description, "Serviços personalizados de beleza e bem-estar, com atenção a cada detalhe.");
+  assert.equal(beauty.branding.hero.imageUrl, "/images/beauty-hero.svg");
   assert.equal(beauty.branding.professionalFallbackMode, "brand-logo");
-  assert.equal(beauty.branding.manifest.name, "Ana Isabel Nail Art & Design");
-  assert.equal(beauty.branding.manifest.icons[0]?.src, "/images/beauty-brand/ana-isabel-icon.svg");
-  assert.doesNotMatch(JSON.stringify(beauty.branding), /Baptista|Powerhouse|barbeiro|barbearia|corte e barba/i);
+  assert.equal(beauty.branding.manifest.name, "Beauty Studio");
+  assert.equal(beauty.branding.manifest.icons[0]?.src, "/images/beauty-logo.svg");
+  assert.doesNotMatch(JSON.stringify(beauty.branding), /Ana Isabel|Nail Art|Baptista|Powerhouse|barbeiro|barbearia|corte e barba/i);
   assert.deepEqual(beauty.runtime.multiLocation, { enabled: true, maxLocations: 3 });
   assert.equal(beauty.features.multiLocation, true);
   assert.equal(beauty.features.preparationBuffers, true);
@@ -102,6 +107,75 @@ test("resolved Barber and Beauty profiles expose declarations without enabling f
     assert.equal(businessCapabilityRegistry[feature].implemented, false);
     assert.equal(beauty.features[feature], false);
   }
+});
+
+test("Ana Isabel is an explicit Beauty deployment profile rather than a vertical default", () => {
+  const genericBeauty = resolveBusinessRuntimeConfig(
+    { BUSINESS_VERTICAL: "beauty" },
+    { productionDeployment: true },
+  ).config;
+  const anaIsabel = resolveBusinessRuntimeConfig(
+    { BUSINESS_VERTICAL: "beauty", BUSINESS_BRANDING_PROFILE: "ana-isabel" },
+    { productionDeployment: true },
+  ).config;
+
+  assert.doesNotMatch(JSON.stringify(genericBeauty.branding), /Ana Isabel|Nail Art/i);
+  assert.equal(anaIsabel.branding.defaultName, "Ana Isabel Nail Art & Design");
+  assert.equal(anaIsabel.branding.defaultShortName, "Ana Isabel");
+  assert.equal(anaIsabel.branding.hero.title, "Unhas com detalhe, elegância e personalidade");
+  assert.equal(anaIsabel.branding.hero.description, "Cuidados personalizados, nail art e beleza com atenção a cada detalhe.");
+  assert.equal(anaIsabel.branding.defaultLogoUrl, "/images/beauty-brand/ana-isabel-logo.svg");
+  assert.equal(anaIsabel.branding.defaultHorizontalLogoUrl, "/images/beauty-brand/ana-isabel-logo-horizontal.svg");
+  assert.equal(anaIsabel.branding.defaultIconUrl, "/images/beauty-brand/ana-isabel-icon.svg");
+  assert.equal(anaIsabel.branding.manifest.name, "Ana Isabel Nail Art & Design");
+  assert.equal(anaIsabel.branding.manifest.icons[0]?.src, "/images/beauty-brand/ana-isabel-icon.svg");
+  assert.equal(anaIsabel.branding.metadata.description, "Nail art e cuidados de beleza com atenção a cada detalhe.");
+});
+
+test("deployment branding overrides keep runtime config, metadata and manifest aligned", () => {
+  const custom = resolveBusinessRuntimeConfig({
+    BUSINESS_VERTICAL: "beauty",
+    VITE_SHOP_NAME: "Estúdio Aurora",
+    VITE_SHOP_SHORT_NAME: "Aurora",
+    VITE_SHOP_ICON_URL: "/images/aurora.svg",
+    VITE_HERO_TITLE: "Cuidado pensado para si",
+    VITE_HERO_DESCRIPTION: "Serviços de beleza personalizados.",
+    VITE_HERO_IMAGE_URL: "/images/aurora-hero.webp",
+    VITE_HOME_SERVICES_TITLE: "Os nossos serviços",
+    VITE_META_DESCRIPTION: "Estúdio Aurora — beleza e bem-estar.",
+    VITE_MANIFEST_SHORT_NAME: "Aurora App",
+  }, { productionDeployment: true }).config;
+
+  assert.equal(custom.branding.defaultName, "Estúdio Aurora");
+  assert.equal(custom.branding.hero.title, "Cuidado pensado para si");
+  assert.equal(custom.branding.home.servicesTitle, "Os nossos serviços");
+  assert.equal(custom.branding.metadata.title, "Estúdio Aurora");
+  assert.equal(custom.branding.metadata.description, "Estúdio Aurora — beleza e bem-estar.");
+  assert.equal(custom.branding.metadata.socialImageUrl, "/images/aurora-hero.webp");
+  assert.equal(custom.branding.manifest.name, "Estúdio Aurora");
+  assert.equal(custom.branding.manifest.shortName, "Aurora App");
+  assert.equal(custom.branding.manifest.description, "Estúdio Aurora — beleza e bem-estar.");
+  assert.deepEqual(custom.branding.manifest.icons, [{
+    src: "/images/aurora.svg",
+    sizes: "any",
+    type: "image/svg+xml",
+    purpose: "any maskable",
+  }]);
+
+  assert.throws(
+    () => resolveBusinessRuntimeConfig(
+      { BUSINESS_VERTICAL: "beauty", BUSINESS_BRANDING_PROFILE: "unknown" },
+      { productionDeployment: true },
+    ),
+    /BUSINESS_BRANDING_PROFILE/,
+  );
+  assert.throws(
+    () => resolveBusinessRuntimeConfig(
+      { BUSINESS_VERTICAL: "barber", BUSINESS_BRANDING_PROFILE: "ana-isabel" },
+      { productionDeployment: true },
+    ),
+    /not compatible/,
+  );
 });
 
 test("unsupported or unknown feature activation fails fast", () => {

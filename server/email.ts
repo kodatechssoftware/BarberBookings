@@ -9,8 +9,12 @@ const fromEmail = process.env.RESEND_FROM_EMAIL?.trim();
 const resend = resendApiKey && fromEmail ? new Resend(resendApiKey) : null;
 const isProduction = process.env.NODE_ENV === "production";
 const communicationsCopy = resolvedBusinessConfig.copy.communications;
-const shopName = process.env.SHOP_NAME?.trim() || communicationsCopy.establishmentFallback;
-const shopAddress = process.env.SHOP_ADDRESS?.trim() || "";
+const shopName = process.env.SHOP_NAME?.trim()
+  || (resolvedBusinessConfig.vertical === "beauty"
+    ? resolvedBusinessConfig.branding.defaultName
+    : communicationsCopy.establishmentFallback);
+const shopAddress = process.env.SHOP_ADDRESS?.trim()
+  || (resolvedBusinessConfig.vertical === "beauty" ? resolvedBusinessConfig.branding.defaultAddress : "");
 const shopTimeZone = process.env.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon";
 const emailFrom = fromEmail ? `${shopName} <${fromEmail}>` : "";
 

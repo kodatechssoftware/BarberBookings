@@ -51,6 +51,38 @@ transactional notification outbox. They remain fail-closed until
 uses the location timezone and never sends a retroactive reminder for a booking
 created after its intended previous-day delivery time.
 
+### Branding Beauty por deployment
+
+`BUSINESS_VERTICAL=beauty` seleciona uma vertical Beauty genérica: **Beauty
+Studio**, copy transversal a serviços de beleza e bem-estar e assets neutros em
+`/images/beauty-logo.svg` e `/images/beauty-hero.svg`. A vertical, por si só,
+não ativa Ana Isabel nem pressupõe unhas ou nail art.
+
+O deployment Ana Isabel preserva a apresentação existente através de uma
+camada explícita sobre os defaults Beauty:
+
+```env
+BUSINESS_VERTICAL=beauty
+BUSINESS_THEME=beauty-clean
+BUSINESS_BRANDING_PROFILE=ana-isabel
+SHOP_NAME=Ana Isabel Nail Art & Design
+```
+
+O perfil controla Home, logos, favicon, metadata social e manifest. Os
+`VITE_SHOP_*` existentes continuam disponíveis para identidade, morada e
+assets. Overrides opcionais `VITE_HERO_*`, `VITE_HOME_*`, `VITE_META_*`,
+`VITE_SOCIAL_IMAGE_URL` e `VITE_MANIFEST_*` permitem personalizar outro
+deployment sem alterar os defaults da vertical. A precedência é:
+
+```text
+overrides explícitos VITE_* > BUSINESS_BRANDING_PROFILE > defaults da vertical
+```
+
+As mesmas variáveis devem estar disponíveis ao runtime do servidor para que
+`/api/runtime-config` e `/manifest.webmanifest` permaneçam coerentes com o
+cliente. `SHOP_NAME`/`SHOP_ADDRESS` continuam a ser os overrides server-side
+das comunicações quando definidos.
+
 4. Arrancar a aplicacao:
 
 ```powershell
