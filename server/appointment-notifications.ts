@@ -40,8 +40,12 @@ export function getAppointmentNotificationFallbacks(
 ) {
   return {
     professionalName: copy.professionalUnavailable,
-    locationName: environment.SHOP_NAME?.trim() || copy.establishmentFallback,
-    locationAddress: environment.SHOP_ADDRESS?.trim() || "",
+    locationName: environment.SHOP_NAME?.trim()
+      || (resolvedBusinessConfig.vertical === "beauty"
+        ? resolvedBusinessConfig.branding.defaultName
+        : copy.establishmentFallback),
+    locationAddress: environment.SHOP_ADDRESS?.trim()
+      || (resolvedBusinessConfig.vertical === "beauty" ? resolvedBusinessConfig.branding.defaultAddress : ""),
     locationTimeZone: environment.SHOP_TIME_ZONE?.trim() || "Europe/Lisbon",
   };
 }

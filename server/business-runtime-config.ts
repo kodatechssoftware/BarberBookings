@@ -1,4 +1,5 @@
 import { parseBookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
+import { resolveBusinessBrandingProfile } from "@shared/business/branding";
 import { resolveBusinessFeatures } from "@shared/business/features";
 import { getBusinessProfile } from "@shared/business/profiles";
 import {
@@ -47,7 +48,7 @@ export function resolveBusinessRuntimeConfig(
       terms: profile.terms,
       copy: profile.copy,
       booking: { flow: profile.bookingFlow },
-      branding: profile.branding,
+      branding: resolveBusinessBrandingProfile(vertical, environment),
       features,
       theme: { id: themeId },
       runtime: {

@@ -1173,9 +1173,9 @@ test("runtime vertical selects neutral email and inbound fallbacks without clien
   assert.match(barber.subject, /Barbearia/);
   assert.match(barber.html, /Barbeiro:/);
   assert.match(barber.inbound, /mensagem automática da Barbearia/);
-  assert.match(beauty.subject, /Estabelecimento/);
+  assert.match(beauty.subject, /Beauty Studio/);
   assert.match(beauty.html, /Profissional:/);
-  assert.match(beauty.inbound, /mensagem automática de Estabelecimento/);
+  assert.match(beauty.inbound, /mensagem automática de Beauty Studio/);
   assert.doesNotMatch(
     `${beauty.subject}\n${beauty.html}\n${beauty.inbound}`,
     /Baptista|Powerhouse|barbeiro|barbeiros|barbearia|Comandante Agatão/i,
