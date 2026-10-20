@@ -1,5 +1,3 @@
-import { shopBranding } from "@/lib/branding";
-
 type CalendarEvent = {
   title: string;
   start: Date;
@@ -31,7 +29,7 @@ export function buildGoogleCalendarUrl(event: CalendarEvent) {
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
-export function buildIcsDataUri(event: CalendarEvent) {
+export function buildIcsDataUri(event: CalendarEvent, businessName: string) {
   const end = new Date(event.start.getTime() + event.durationMinutes * 60000);
   const uid =
     globalThis.crypto?.randomUUID?.() ||
@@ -39,7 +37,7 @@ export function buildIcsDataUri(event: CalendarEvent) {
   const ics = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    `PRODID:-//${escapeIcsText(shopBranding.name)}//Bookings//PT`,
+    `PRODID:-//${escapeIcsText(businessName)}//Bookings//PT`,
     "BEGIN:VEVENT",
     `UID:${uid}@barberbookings`,
     `DTSTAMP:${toCalendarDate(new Date())}`,

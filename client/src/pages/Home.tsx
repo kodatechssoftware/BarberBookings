@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Clock, MapPin, Scissors } from "lucide-react";
+import { Clock, MapPin } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
@@ -8,17 +8,15 @@ import { periodsForShop } from "@/lib/availability";
 import { preloadAdminPage, preloadBookingPage } from "@/lib/page-preloads";
 import { useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
-import type { ResolvedShopBranding } from "@/lib/branding";
 import { useBusinessBranding } from "@/business/use-business-branding";
+import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
 import { useBusinessConfig } from "@/business/use-business-config";
 import type { BusinessBrandingProfile } from "@shared/business/branding";
 import { useLocations } from "@/hooks/use-locations";
 import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context";
 import { resolveLocationMapLinks } from "@shared/location-maps";
 import { groupServicesForDisplay } from "@/lib/service-groups";
-
-import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
-import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
+import { getProfessionalAvatar } from "@/lib/professional-presentation";
 
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
@@ -90,22 +88,10 @@ function getTodayOpeningStatus(
   };
 }
 
-function getBarberAvatar(
-  barber: { name: string; avatar?: string | null },
-  branding: ResolvedShopBranding,
-) {
-  if (barber.avatar) return barber.avatar;
-  const name = barber.name.toLowerCase();
-  if (branding.professionalFallbackMode === "legacy-barber-avatars" && branding.useLegacyBarberAvatars) {
-    if (name.includes("baptista")) return fabioAvatar;
-    if (name.includes("bruno")) return brunoAvatar;
-  }
-  return branding.logoUrl;
-}
-
 export default function Home() {
   const businessConfig = useBusinessConfig();
   const shopBranding = useBusinessBranding();
+  const ServiceIcon = useBusinessServiceIcon();
   const homeCopy = businessConfig.branding.home;
   const instagramUrl = shopBranding.instagramUrl;
   const [activeSection, setActiveSection] = useState("");
@@ -383,7 +369,7 @@ export default function Home() {
                         <div className="flex flex-1 items-start justify-between gap-4">
                           <div className="flex min-w-0 items-start gap-3">
                             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                              <Scissors className="h-5 w-5" />
+                              <ServiceIcon className="h-5 w-5" />
                             </span>
                             <div className="min-w-0">
                               <h4 className="text-lg font-bold text-white">{service.name}</h4>
@@ -431,7 +417,7 @@ export default function Home() {
                 >
                   <div className="grid flex-1 grid-cols-[112px_1fr] gap-0 sm:grid-cols-[160px_1fr]">
                     <img
-                      src={getBarberAvatar(barber, shopBranding)}
+                      src={getProfessionalAvatar(barber, shopBranding)}
                       alt={barber.name}
                       loading="lazy"
                       decoding="async"

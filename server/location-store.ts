@@ -1,8 +1,13 @@
 import { pool } from "./db";
 import type { LocationInput, LocationUpdate, ShopLocation } from "@shared/locations";
+import { parseBusinessVertical } from "@shared/business/vertical";
+import { getBusinessLocationFallbackName } from "@shared/business/presentation";
 
 const useMemoryStorage = process.env.USE_MEMORY_STORAGE === "true";
 const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+const defaultBusinessName = getBusinessLocationFallbackName(
+  parseBusinessVertical(process.env.BUSINESS_VERTICAL) || "barber",
+);
 
 function quoteIdentifier(identifier: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
@@ -48,7 +53,7 @@ function mapLocation(row: any): ShopLocation {
 
 let memoryLocations: ShopLocation[] = [{
   id: 1,
-  name: process.env.SHOP_NAME?.trim() || "Barbearia",
+  name: process.env.SHOP_NAME?.trim() || defaultBusinessName,
   slug: "principal",
   address: process.env.SHOP_ADDRESS?.trim() || "Morada principal",
   logoUrl: null,

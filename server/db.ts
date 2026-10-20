@@ -6,12 +6,17 @@ import { instrumentPool } from "./performance-timings";
 import { startupTimings } from "./startup-timings";
 import { buildTextEncodingRepairQuery } from "./text-encoding-repair";
 import { installPostgresPoolLifecycle } from "./postgres-pool-lifecycle";
+import { parseBusinessVertical } from "@shared/business/vertical";
+import { getBusinessLocationFallbackName } from "@shared/business/presentation";
 
 
 const { Pool } = pg;
 
 const useMemoryStorage = process.env.USE_MEMORY_STORAGE === "true";
 const fallbackMemoryDatabaseUrl = "postgresql://memory:memory@127.0.0.1:1/memory";
+const defaultBusinessName = getBusinessLocationFallbackName(
+  parseBusinessVertical(process.env.BUSINESS_VERTICAL) || "barber",
+);
 
 function getPositiveInteger(value: string | undefined, fallback: number) {
   const parsed = Number.parseInt(value || "", 10);
@@ -120,7 +125,7 @@ export async function ensureMultiLocationFoundation() {
         VALUES ($1, 'principal', $2, $3, $4, $5, true)
         RETURNING id
       `, [
-        process.env.SHOP_NAME?.trim() || "Barbearia",
+        process.env.SHOP_NAME?.trim() || defaultBusinessName,
         process.env.SHOP_ADDRESS?.trim() || "",
         process.env.SHOP_MAP_URL?.trim() || process.env.VITE_SHOP_MAP_URL?.trim() || null,
         process.env.SHOP_MAP_EMBED_URL?.trim() || process.env.VITE_SHOP_MAP_EMBED_URL?.trim() || null,

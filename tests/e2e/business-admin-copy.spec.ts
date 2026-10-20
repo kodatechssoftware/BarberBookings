@@ -15,6 +15,18 @@ async function loginAdmin(request: APIRequestContext) {
 }
 
 async function mockDashboardAndReports(page: Page) {
+  await page.route("**/api/admin/audit-logs**", async (route) => {
+    await route.fulfill({
+      json: [{
+        id: 101,
+        action: "barber.services_updated",
+        actorType: "barber",
+        actorName: "Bruno Santos",
+        summary: "Serviços do barbeiro atualizados: Bruno Santos",
+        createdAt: "2026-10-19T10:00:00.000Z",
+      }],
+    });
+  });
   await page.route("**/api/admin/dashboard?**", async (route) => {
     await route.fulfill({
       json: {
@@ -78,6 +90,9 @@ test("Barber Admin and Agenda preserve the existing copy", async ({ page }) => {
   await expect(page.getByText("Barbeiro mais ocupado", { exact: true })).toBeVisible();
   await expect(page.getByText("Parte dos barbeiros", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Período", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Mostrar atividade recente" }).click();
+  await expect(page.getByText("Serviços do barbeiro atualizados: Bruno Santos", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Barbeiro: Bruno Santos/)).toBeVisible();
 
   await page.getByRole("tab", { name: "Relatórios", exact: true }).click();
   await expect(page.getByText("Exportar Relatório Excel", { exact: true })).toBeVisible();
@@ -130,11 +145,16 @@ test("Beauty Admin and Agenda use neutral copy on mobile", async ({ page }) => {
   await expect(page.getByText("Profissional mais ocupado", { exact: true })).toBeVisible();
   await expect(page.getByText("Parte dos profissionais", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Profissional", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Mostrar atividade recente" }).click();
+  await expect(page.getByText("Serviços do profissional atualizados: Bruno Santos", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Profissional: Bruno Santos/)).toBeVisible();
+  await expect(page.getByText(/Serviços do barbeiro atualizados|Barbeiro: Bruno Santos/)).toHaveCount(0);
 
   await page.getByRole("tab", { name: "Relatórios", exact: true }).click();
   await expect(page.getByLabel("Selecione o profissional")).toBeVisible();
   await expect(page.getByText("Despesas do Estabelecimento", { exact: true })).toBeVisible();
   await expect(page.getByText(/pagamentos estimados aos profissionais/i)).toBeVisible();
+  await expect(page.getByText("Produtos, materiais e consumíveis", { exact: true })).toBeVisible();
 
   await page.getByRole("tab", { name: "Equipa", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Equipa de Profissionais" })).toBeVisible();
@@ -198,6 +218,9 @@ test("Admin team and schedule API errors follow the resolved backend vertical", 
   const expectedSpecialty = runtime.vertical === "beauty"
     ? "Indique a especialidade do profissional."
     : "Indique a especialidade do barbeiro.";
+  const expectedBusyProfessional = runtime.vertical === "beauty"
+    ? "Indique um profissional para consultar os horários ocupados."
+    : "Indique um barbeiro para consultar os horários ocupados.";
 
   const updateResponse = await request.patch("/api/barbers/not-a-number", { data: {} });
   expect(updateResponse.status()).toBe(400);
@@ -206,6 +229,14 @@ test("Admin team and schedule API errors follow the resolved backend vertical", 
   const scheduleResponse = await request.get("/api/barbers/not-a-number/availability");
   expect(scheduleResponse.status()).toBe(400);
   expect(await scheduleResponse.json()).toMatchObject({ message: expectedInvalid });
+
+  const resetResponse = await request.patch("/api/barbers/not-a-number/reset-password", { data: {} });
+  expect(resetResponse.status()).toBe(400);
+  expect(await resetResponse.json()).toMatchObject({ message: expectedInvalid });
+
+  const busyResponse = await request.get("/api/appointments?scope=busy");
+  expect(busyResponse.status()).toBe(400);
+  expect(await busyResponse.json()).toMatchObject({ message: expectedBusyProfessional });
 
   const createResponse = await request.post("/api/barbers", {
     data: { name: "", specialty: "" },

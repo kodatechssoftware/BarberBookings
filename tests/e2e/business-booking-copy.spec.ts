@@ -14,8 +14,7 @@ test("Barber Booking preserves its public copy", async ({ page }) => {
   await expect(page.getByLabel("Voltar ao início")).toBeVisible();
 });
 
-test("Beauty Booking is service-first and only offers professionals for that service on mobile", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test("Beauty Booking is service-first and only offers professionals for that service on mobile and desktop", async ({ page }) => {
   await page.route("**/api/runtime-config", async (route) => {
     await route.fulfill({ json: beautyRuntimeConfig });
   });
@@ -57,29 +56,32 @@ test("Beauty Booking is service-first and only offers professionals for that ser
     });
   });
 
-  await page.goto("/booking");
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/booking");
 
-  await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
-  await page.getByText("Tratamento facial", { exact: true }).click();
-  await page.getByRole("button", { name: "Seguinte" }).click();
+    await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
+    await page.getByText("Tratamento facial", { exact: true }).click();
+    await page.getByRole("button", { name: "Seguinte" }).click();
 
-  await expect(page.getByRole("heading", { name: "Selecione o profissional" })).toBeVisible();
-  await expect(page.getByText("Qualquer profissional disponível", { exact: true })).toBeVisible();
-  await expect(page.getByText("Ana Silva", { exact: true })).toBeVisible();
-  await expect(page.getByText("Berta Costa", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Voltar ao passo anterior")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Selecione o profissional" })).toBeVisible();
+    await expect(page.getByText("Qualquer profissional disponível", { exact: true })).toBeVisible();
+    await expect(page.getByText("Ana Silva", { exact: true })).toBeVisible();
+    await expect(page.getByText("Berta Costa", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Voltar ao passo anterior")).toBeVisible();
 
-  const bodyText = await page.locator("body").innerText();
-  expect(bodyText).not.toMatch(
-    /Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira/i,
-  );
-  expect(await page.evaluate(() => document.documentElement.scrollWidth))
-    .toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth + 1));
+    const bodyText = await page.locator("body").innerText();
+    expect(bodyText).not.toMatch(
+      /Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira/i,
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth))
+      .toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth + 1));
 
-  await page.getByLabel("Voltar ao passo anterior").click();
-  await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
+    await page.getByLabel("Voltar ao passo anterior").click();
+    await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
 
-  await page.goto("/booking?serviceId=701");
-  await expect(page.getByRole("heading", { name: "Selecione o profissional" })).toBeVisible();
-  await expect(page.getByText("Ana Silva", { exact: true })).toBeVisible();
+    await page.goto("/booking?serviceId=701");
+    await expect(page.getByRole("heading", { name: "Selecione o profissional" })).toBeVisible();
+    await expect(page.getByText("Ana Silva", { exact: true })).toBeVisible();
+  }
 });
