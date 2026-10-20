@@ -588,7 +588,7 @@ export class AppointmentLocationIntegrityError extends Error {
   ) {
     super(code === appointmentLocationInactiveCode
       ? "Esta localização não aceita novas marcações."
-      : "Este barbeiro já não está disponível nesta localização.");
+      : "Este profissional já não está disponível nesta localização.");
     this.name = "AppointmentLocationIntegrityError";
   }
 }

@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { addDays, format, parseISO, startOfWeek } from "date-fns";
 import { pt } from "date-fns/locale";
-import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Plus, Scissors } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { AppointmentStatus } from "@/hooks/use-appointments";
-import { shopBranding } from "@/lib/branding";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import { useBusinessBranding } from "@/business/use-business-branding";
+import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
+import { getProfessionalColorOptions, normalizeProfessionalColor } from "@/lib/professional-presentation";
 import { getAgendaServiceLabel } from "@shared/agenda-service-label";
 import { getOperationalAppointmentBounds } from "@shared/appointment-occupancy";
 
@@ -53,10 +55,8 @@ const appointmentStatusFilterOptions: Array<{ value: AppointmentStatusFilter; la
   { value: "no_show", label: "Faltas" },
 ];
 
-const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#9F2638" : "#D4AF37";
-
 function normalizeBarberColor(color?: string | null) {
-  return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : defaultBarberColor;
+  return normalizeProfessionalColor(color, "#D4AF37");
 }
 
 function colorWithAlpha(color: string | undefined | null, alpha: number) {
@@ -582,6 +582,10 @@ export function WeeklyAgenda({
   getStatusLabel: (status: string) => string;
 }) {
   const agendaCopy = useBusinessCopy().agenda;
+  const branding = useBusinessBranding();
+  const ServiceIcon = useBusinessServiceIcon();
+  const { defaultColor } = getProfessionalColorOptions(branding);
+  const normalizeActiveColor = (color?: string | null) => normalizeProfessionalColor(color, defaultColor);
   const [selectedCrowdedGroup, setSelectedCrowdedGroup] = useState<WeeklyAgendaCrowdedGroup | null>(null);
   const [internalWeekStartDate, setInternalWeekStartDate] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const visibleWeekStartDate = weekStartDate || internalWeekStartDate;
@@ -723,7 +727,7 @@ export function WeeklyAgenda({
     const end = getWeeklyAppointmentEnd(appointment);
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-    const color = normalizeBarberColor(barber?.color);
+    const color = normalizeActiveColor(barber?.color);
     const serviceBadge = getAgendaServiceLabel(service, appointment.serviceNameSnapshot);
     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
@@ -750,7 +754,7 @@ export function WeeklyAgenda({
           </div>
           <div className="mt-1 flex min-w-0 items-center gap-2">
             <span className="inline-flex h-5 max-w-full min-w-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-2 text-[10px] font-semibold uppercase tracking-wide text-gray-300">
-              <Scissors className="h-3 w-3 shrink-0" />
+              <ServiceIcon className="h-3 w-3 shrink-0" />
               <span className="min-w-0 truncate">{serviceBadge}</span>
             </span>
           </div>
@@ -770,7 +774,7 @@ export function WeeklyAgenda({
     const end = getWeeklyAppointmentEnd(appointment);
     const barber = barbersById.get(appointment.barberId);
     const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-    const color = normalizeBarberColor(barber?.color);
+    const color = normalizeActiveColor(barber?.color);
 
     return (
       <button
@@ -870,7 +874,7 @@ export function WeeklyAgenda({
             <div className="flex min-w-0 flex-wrap gap-2">
               {visibleBarbers.map((barber) => (
                 <span key={barber.id} className="inline-flex max-w-full min-w-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-gray-300 sm:max-w-[220px]">
-                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: normalizeBarberColor(barber.color) }} />
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: normalizeActiveColor(barber.color) }} />
                   <span className="min-w-0 truncate">{barber.name}</span>
                 </span>
               ))}
@@ -930,7 +934,7 @@ export function WeeklyAgenda({
                                         <span
                                           key={appointment.id}
                                           className="h-3 w-3 rounded-full border border-background"
-                                          style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                          style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                         />
                                       );
                                     })}
@@ -996,7 +1000,7 @@ export function WeeklyAgenda({
                                 <span
                                   key={appointment.id}
                                   className="h-3 w-3 rounded-full border border-background"
-                                  style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                  style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                 />
                               );
                             })}
@@ -1043,7 +1047,7 @@ export function WeeklyAgenda({
                               <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
                                 <span
                                   className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: normalizeBarberColor(barber.color) }}
+                                  style={{ backgroundColor: normalizeActiveColor(barber.color) }}
                                 />
                                 <span className="truncate text-sm font-bold text-white">{barber.name}</span>
                               </div>
@@ -1127,7 +1131,7 @@ export function WeeklyAgenda({
                                   const layout = appointmentLayouts.get(appointment.id) || { laneIndex: 0, laneCount: 1 };
                                   const laneWidth = 100 / layout.laneCount;
                                   const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-                                  const color = normalizeBarberColor(barber.color);
+                                  const color = normalizeActiveColor(barber.color);
                                   const serviceBadge = getAgendaServiceLabel(service, appointment.serviceNameSnapshot);
                                   const isCompact = height < 46 || laneWidth < 55;
                                   const isTiny = height < 32;
@@ -1167,7 +1171,7 @@ export function WeeklyAgenda({
                                       </div>
                                       {!isCompact && (
                                         <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] font-semibold uppercase text-gray-200">
-                                          <Scissors className="h-3 w-3 shrink-0" />
+                                          <ServiceIcon className="h-3 w-3 shrink-0" />
                                           <span className="truncate">{serviceBadge}</span>
                                         </div>
                                       )}
@@ -1281,7 +1285,7 @@ export function WeeklyAgenda({
                                 const hasMultipleAppointments = group.appointments.length > 1;
                                 const representativeColor = hasMultipleAppointments
                                   ? startSummaryGroupColor
-                                  : normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
+                                  : normalizeActiveColor(barbersById.get(firstAppointment.barberId)?.color);
                                 const groupLabel = `Ver ${formatAppointmentCount(group.appointments.length)} às ${formatAgendaMinutes(group.startMinutes)}`;
                                 const timeRange = `${formatAgendaMinutes(group.startMinutes)}-${formatAgendaMinutes(group.endMinutes)}`;
                                 const isDetailedSummary = group.appointments.length <= 2;
@@ -1315,7 +1319,7 @@ export function WeeklyAgenda({
                                             <span
                                               key={appointment.id}
                                               className="h-3 w-3 rounded-full border border-background"
-                                              style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                              style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                             />
                                           );
                                         })}
@@ -1325,7 +1329,7 @@ export function WeeklyAgenda({
                                       <span className="mt-1 flex min-w-0 flex-col gap-0.5">
                                         {group.appointments.map((appointment) => {
                                           const barber = barbersById.get(appointment.barberId);
-                                          const barberColor = normalizeBarberColor(barber?.color);
+                                          const barberColor = normalizeActiveColor(barber?.color);
                                           return (
                                             <span
                                               key={appointment.id}
@@ -1357,7 +1361,7 @@ export function WeeklyAgenda({
                             const hasMultipleAppointments = group.appointments.length > 1;
                             const representativeColor = hasMultipleAppointments
                               ? startSummaryGroupColor
-                              : normalizeBarberColor(barbersById.get(firstAppointment.barberId)?.color);
+                              : normalizeActiveColor(barbersById.get(firstAppointment.barberId)?.color);
                             const groupLabel = `Ver ${formatAppointmentCount(group.appointments.length)} às ${format(start, "HH:mm")}`;
                             const summaryText =
                               group.appointments.length === 1
@@ -1399,7 +1403,7 @@ export function WeeklyAgenda({
                                     <span className="flex min-w-0 flex-col gap-0.5">
                                       {group.appointments.slice(0, 2).map((appointment) => {
                                         const barber = barbersById.get(appointment.barberId);
-                                        const barberColor = normalizeBarberColor(barber?.color);
+                                        const barberColor = normalizeActiveColor(barber?.color);
                                         return (
                                           <span
                                             key={appointment.id}
@@ -1429,7 +1433,7 @@ export function WeeklyAgenda({
                                           <span
                                             key={appointment.id}
                                             className="h-3 w-3 rounded-full border border-background"
-                                            style={{ backgroundColor: normalizeBarberColor(barber?.color) }}
+                                            style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                           />
                                         );
                                       })}
@@ -1456,7 +1460,7 @@ export function WeeklyAgenda({
                             const isTiny = height < 20 || laneWidth < 40;
                             const barber = barbersById.get(appointment.barberId);
                             const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
-                            const color = normalizeBarberColor(barber?.color);
+                            const color = normalizeActiveColor(barber?.color);
                             const serviceBadge = getAgendaServiceLabel(service, appointment.serviceNameSnapshot);
                             const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")} a ${format(end, "HH:mm")}`;
 
@@ -1494,7 +1498,7 @@ export function WeeklyAgenda({
                                     isCompact ? "h-4 shrink-0 px-1 text-[8px]" : "h-5 px-1.5 text-[9px]",
                                   )}
                                 >
-                                  <Scissors className="h-3 w-3 shrink-0" />
+                                  <ServiceIcon className="h-3 w-3 shrink-0" />
                                   {!isTiny && <span className="truncate">{serviceBadge}</span>}
                                 </span>
                                 <span

@@ -8,12 +8,12 @@ import {
   CheckCircle2,
   Home,
   Loader2,
-  Scissors,
   UserRound,
   XCircle,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { shopBranding } from "@/lib/branding";
+import { useBusinessBranding } from "@/business/use-business-branding";
+import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
 import { AppointmentCommercialSummary } from "@/components/AppointmentCommercialSummary";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { formatBusinessCopy } from "@shared/business/copy/types";
@@ -70,6 +70,8 @@ function StatusScreen({
 }
 
 export default function Cancellation() {
+  const shopBranding = useBusinessBranding();
+  const ServiceIcon = useBusinessServiceIcon();
   const copy = useBusinessCopy().publicCycle;
   const [, params] = useRoute("/cancel/:token");
   const token = params?.token;
@@ -183,7 +185,7 @@ export default function Cancellation() {
               </div>
 
               <div className="flex items-start gap-3 border-b border-white/10 py-4 sm:pl-4">
-                <Scissors className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                <ServiceIcon className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                 <div>
                   <p className="text-xs uppercase text-gray-500">{copy.cancellation.serviceLabel}</p>
                   <p className="text-sm font-semibold text-white">{appointment?.serviceName}</p>

@@ -95,6 +95,7 @@ export type AgendaCopy = {
   professional: {
     label: string;
     fallbackName: string;
+    unknownName: string;
     filterPlaceholder: string;
     allFilter: string;
     empty: string;
@@ -117,6 +118,23 @@ export type AgendaCopy = {
   historyNotesHelp: string;
   historyNotesPlaceholder: string;
   appointmentNotesPlaceholder: string;
+  backend: {
+    invalidProfessional: string;
+    professionalNotFound: string;
+    unavailableProfessional: string;
+    professionalRequiredForBusy: string;
+    bookingBlocked: string;
+    noProfessionalAvailable: string;
+    professionalUnavailableOnline: string;
+    selectedServiceUnsupported: string;
+    appointmentServiceUnsupported: string;
+    absenceHasExistingAppointments: string;
+    unavailableForProfessional: string;
+    appointmentConflict: string;
+    locationUnavailable: string;
+    establishmentClosed: string;
+    outsideEstablishmentHours: string;
+  };
 };
 
 export type PublicCycleCopy = {
@@ -265,6 +283,21 @@ export type AdminCopy = {
   auth: {
     accessAudience: string;
     passwordInviteHelp: string;
+  };
+  audit: {
+    activityFallback: string;
+    actorAdministrator: string;
+    actorProfessional: string;
+    actorCustomer: string;
+    actorSystem: string;
+    actions: Record<string, string>;
+    professionalCreated: string;
+    professionalUpdated: string;
+    professionalServicesUpdated: string;
+    professionalHiddenForHistory: string;
+    professionalRemoved: string;
+    establishmentScheduleUpdated: string;
+    professionalScheduleUpdated: string;
   };
   team: {
     tabLabel: string;
@@ -524,6 +557,8 @@ export type AdminCopy = {
     expenseDescriptionPlaceholder: string;
     expenseRecurrenceHelp: string;
     expenseNotesPlaceholder: string;
+    expenseMaterialsHelp: string;
+    expenseEquipmentHelp: string;
     registerExpense: string;
     financeSummaryTitle: string;
     financeSummaryDescription: string;

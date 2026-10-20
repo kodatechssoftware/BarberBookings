@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -93,9 +93,6 @@ import {
   toStoredPhone,
   type PhoneCountryCode,
 } from "@shared/phone-countries";
-import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
-import { shopBranding } from "@/lib/branding";
-import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 import { useServiceCategories } from "@/hooks/use-service-categories";
 import {
   DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES,
@@ -117,7 +114,18 @@ import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { useBusinessConfig } from "@/business/use-business-config";
 import { useBusinessBranding } from "@/business/use-business-branding";
+import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
 import { formatBusinessCopy, type AdminCopy } from "@shared/business/copy/types";
+import {
+  getProfessionalAvatar,
+  getProfessionalColorOptions,
+  normalizeProfessionalColor,
+} from "@/lib/professional-presentation";
+import {
+  getAuditActionLabel,
+  getAuditActorLabel,
+  getAuditSummary,
+} from "@/lib/audit-presentation";
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -326,17 +334,19 @@ type BusinessExpenseForm = {
   notes: string;
 };
 
-const businessExpenseCategories: Array<{ value: BusinessExpenseCategory; label: string; help: string }> = [
-  { value: "rent", label: "Renda", help: "Valor fixo do espaço." },
-  { value: "utilities", label: "Água / luz", help: "Contas de funcionamento." },
-  { value: "internet", label: "Internet / telefone", help: "Comunicações da loja." },
-  { value: "materials", label: "Material e produtos", help: "Produtos, lâminas, toalhas e consumíveis." },
-  { value: "equipment", label: "Equipamentos", help: "Máquinas, cadeiras e reparações." },
-  { value: "marketing", label: "Marketing", help: "Publicidade e conteúdo." },
-  { value: "accounting", label: "Contabilidade", help: "Apoio contabilístico e administrativo." },
-  { value: "staff", label: "Pagamentos de equipa", help: "Acertos manuais fora das regras automáticas." },
-  { value: "other", label: "Outros", help: "Qualquer despesa pontual." },
-];
+function getBusinessExpenseCategories(copy: AdminCopy["reports"]): Array<{ value: BusinessExpenseCategory; label: string; help: string }> {
+  return [
+    { value: "rent", label: "Renda", help: "Valor fixo do espaço." },
+    { value: "utilities", label: "Água / luz", help: "Contas de funcionamento." },
+    { value: "internet", label: "Internet / telefone", help: "Comunicações da loja." },
+    { value: "materials", label: "Material e produtos", help: copy.expenseMaterialsHelp },
+    { value: "equipment", label: "Equipamentos", help: copy.expenseEquipmentHelp },
+    { value: "marketing", label: "Marketing", help: "Publicidade e conteúdo." },
+    { value: "accounting", label: "Contabilidade", help: "Apoio contabilístico e administrativo." },
+    { value: "staff", label: "Pagamentos de equipa", help: "Acertos manuais fora das regras automáticas." },
+    { value: "other", label: "Outros", help: "Qualquer despesa pontual." },
+  ];
+}
 
 const businessExpenseRecurrences: Array<{ value: BusinessExpenseRecurrence; label: string }> = [
   { value: "once", label: "Única" },
@@ -353,8 +363,8 @@ const defaultBusinessExpenseForm: BusinessExpenseForm = {
   notes: "",
 };
 
-function getBusinessExpenseCategoryLabel(category: BusinessExpenseCategory) {
-  return businessExpenseCategories.find((item) => item.value === category)?.label || category;
+function getBusinessExpenseCategoryLabel(category: BusinessExpenseCategory, copy: AdminCopy["reports"]) {
+  return getBusinessExpenseCategories(copy).find((item) => item.value === category)?.label || category;
 }
 
 function getBusinessExpenseRecurrenceLabel(recurrence: BusinessExpenseRecurrence) {
@@ -402,51 +412,16 @@ function formatAuditTimestamp(value: string) {
   return format(date, "dd/MM HH:mm", { locale: pt });
 }
 
-const auditActionLabels: Record<string, string> = {
-  "appointment.created_online": "Marcação criada pelo site",
-  "appointment.created_manual": "Marcação manual criada",
-  "appointment.absence_created": "Ausência criada na agenda",
-  "appointment.updated": "Marcação alterada",
-  "appointment.status_changed": "Estado da marcação alterado",
-  "barber.created": "Barbeiro criado",
-  "barber.updated": "Barbeiro atualizado",
-  "barber.services_updated": "Serviços do barbeiro atualizados",
-  "barber.deleted": "Barbeiro removido",
-  "barber.password_reset": "Acesso do barbeiro reposto",
-  "barber.invite_created": "Convite enviado ao barbeiro",
-  "service.created": "Serviço criado",
-  "service.updated": "Serviço atualizado",
-  "service.deleted": "Serviço removido",
-  "extra.created": "Extra criado",
-  "extra.updated": "Extra atualizado",
-  "extra.activated": "Extra ativado",
-  "extra.deactivated": "Extra desativado",
-  "shop_availability.updated": "Horário da barbearia atualizado",
-  "barber_availability.updated": "Horário do barbeiro atualizado",
-  "customer.blocked": "Cliente bloqueado",
-  "customer.unblocked": "Cliente desbloqueado",
-  "customer_note.updated": "Notas do cliente atualizadas",
-};
-
-function getAuditActionLabel(action: string) {
-  return auditActionLabels[action] || "Atividade registada";
-}
-
-function getAuditActorLabel(log: AuditLogItem) {
-  if (log.actorType === "admin") return log.actorName || "Administrador";
-  if (log.actorType === "barber") return log.actorName ? `Barbeiro: ${log.actorName}` : "Barbeiro";
-  if (log.actorType === "customer") return log.actorName ? `Cliente: ${log.actorName}` : "Cliente";
-  return log.actorName || "Sistema";
-}
-
 const adminTabTriggerClass = "h-10 shrink-0 gap-2 whitespace-nowrap px-3 text-white data-[state=active]:text-primary";
 
 function AuditLogPanel({
   logs,
   isLoading,
+  copy,
 }: {
   logs?: AuditLogItem[];
   isLoading: boolean;
+  copy: AdminCopy["audit"];
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const latestLogs = (logs || []).slice(0, 6);
@@ -489,9 +464,9 @@ function AuditLogPanel({
                   className="flex flex-col gap-2 rounded-lg border border-white/10 bg-background/60 p-3 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">{log.summary}</p>
+                    <p className="truncate text-sm font-semibold text-white">{getAuditSummary(log, copy)}</p>
                     <p className="mt-1 text-xs text-gray-500">
-                      {getAuditActorLabel(log)} · {getAuditActionLabel(log.action)}
+                      {getAuditActorLabel(log, copy)} · {getAuditActionLabel(log.action, copy)}
                     </p>
                   </div>
                   <span className="shrink-0 text-xs text-gray-500">
@@ -588,6 +563,7 @@ function TodayOverviewPanel({
 
 function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
   const copy = useBusinessCopy().admin.dashboard;
+  const ServiceIcon = useBusinessServiceIcon();
   const busiestBarber = [...data.barbers].sort((a, b) => b.booked - a.booked)[0];
   const topServices = data.services.slice(0, 5);
   const noShowsByMonth = Array.from(
@@ -690,7 +666,7 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
         <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
             <div className="mb-4 flex items-center gap-2">
-              <Scissors className="h-4 w-4 text-primary" />
+              <ServiceIcon className="h-4 w-4 text-primary" />
               <h3 className="font-semibold text-white">{copy.popularServices}</h3>
             </div>
             {topServices.length === 0 ? (
@@ -742,14 +718,6 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
       </CardContent>
     </Card>
   );
-}
-
-function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
-  if (barber.avatar) return barber.avatar;
-  const name = barber.name.toLowerCase();
-  if (shopBranding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
-  if (name.includes("bruno")) return brunoAvatar;
-  return shopBranding.logoUrl;
 }
 
 const MAX_BARBER_PHOTO_INPUT_BYTES = 25 * 1024 * 1024;
@@ -1049,20 +1017,12 @@ type BarberListCacheItem = {
   [key: string]: unknown;
 };
 
-const barberColorPalette = shopBranding.theme === "barber-pole"
-  ? ["#9F2638", "#6B7280", "#374151", "#7F1D1D", "#52525B", "#A85555", "#475569", "#78716C"]
-  : ["#38BDF8", "#22C55E", "#F97316", "#D4AF37", "#A78BFA", "#F43F5E", "#14B8A6", "#EAB308"];
-const defaultBarberColor = shopBranding.theme === "barber-pole" ? "#9F2638" : "#D4AF37";
 const defaultBarberCompensationFormData: BarberCompensationFormData = {
   compensationModel: "none",
   commissionPercent: "40",
   chairRentAmount: "0",
   chairRentPeriod: "month",
 };
-
-function normalizeBarberColor(color?: string | null) {
-  return color && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : defaultBarberColor;
-}
 
 function centsToEurosInputValue(cents?: number | null) {
   if (!cents) return "";
@@ -1135,14 +1095,6 @@ function getCompensationSummary(barber: BarberListItem, copy: AdminCopy["compens
   }
 
   return copy.noneSummary;
-}
-
-function colorWithAlpha(color: string | undefined | null, alpha: number) {
-  const normalized = normalizeBarberColor(color).replace("#", "");
-  const r = parseInt(normalized.slice(0, 2), 16);
-  const g = parseInt(normalized.slice(2, 4), 16);
-  const b = parseInt(normalized.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function isBarbersQuery(queryKey: readonly unknown[]) {
@@ -1362,14 +1314,16 @@ function BarberColorField({
   value: string;
   onChange: (color: string) => void;
 }) {
-  const selectedColor = normalizeBarberColor(value);
+  const branding = useBusinessBranding();
+  const { defaultColor, palette } = getProfessionalColorOptions(branding);
+  const selectedColor = normalizeProfessionalColor(value, defaultColor);
   const copy = useBusinessCopy().admin.team;
 
   return (
     <div className="space-y-2">
       <Label>{copy.agendaColorLabel}</Label>
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-background/50 p-3">
-        {barberColorPalette.map((color) => (
+        {palette.map((color) => (
           <button
             key={color}
             type="button"
@@ -1385,7 +1339,7 @@ function BarberColorField({
         <Input
           type="color"
           value={selectedColor}
-          onChange={(event) => onChange(normalizeBarberColor(event.target.value))}
+          onChange={(event) => onChange(normalizeProfessionalColor(event.target.value, defaultColor))}
           className="h-8 w-12 cursor-pointer border-white/10 bg-transparent p-1"
         />
         <span className="text-xs text-gray-400">{selectedColor}</span>
@@ -1520,6 +1474,16 @@ export default function Admin() {
   const adminCopy = businessCopy.admin;
   const agendaCopy = businessCopy.agenda;
   const inviteCopy = businessCopy.publicCycle.invite;
+  const ServiceIcon = useBusinessServiceIcon();
+  const { defaultColor: defaultBarberColor } = useMemo(
+    () => getProfessionalColorOptions(resolvedShopBranding),
+    [resolvedShopBranding],
+  );
+  const businessExpenseCategories = useMemo(
+    () => getBusinessExpenseCategories(adminCopy.reports),
+    [adminCopy.reports],
+  );
+  const normalizeBarberColor = (color?: string | null) => normalizeProfessionalColor(color, defaultBarberColor);
 
   useEffect(() => {
     document.documentElement.dataset.adminSurface = "true";
@@ -4391,7 +4355,7 @@ export default function Admin() {
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> {adminCopy.team.tabLabel}</TabsTrigger>}
-            {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
+            {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><ServiceIcon className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
             {canManageExpenses && <TabsTrigger value="internal-costs" className={adminTabTriggerClass}><Boxes className="w-4 h-4" /> Custos / Consumos</TabsTrigger>}
             {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> {adminCopy.schedules.tabLabel}</TabsTrigger>}
@@ -4438,7 +4402,7 @@ export default function Admin() {
             />
 
             {canViewAudit && (
-              <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs || (isLoadingAgenda && !auditLogs)} />
+              <AuditLogPanel logs={auditLogs} isLoading={isLoadingAuditLogs || (isLoadingAgenda && !auditLogs)} copy={adminCopy.audit} />
             )}
 
             {canUseOwnOrTeamFinance && (
@@ -4604,7 +4568,7 @@ export default function Admin() {
                     <BarberPhotoPicker
                       inputId="new-barber-photo"
                       value={barberFormData.avatar}
-                      fallbackSrc={getBarberAvatar({ name: barberFormData.name, avatar: null })}
+                      fallbackSrc={getProfessionalAvatar({ name: barberFormData.name, avatar: null }, resolvedShopBranding)}
                       onChange={(avatar) => setBarberFormData({ ...barberFormData, avatar })}
                       onRemove={() => setBarberFormData({ ...barberFormData, avatar: "" })}
                       toast={toast}
@@ -4644,7 +4608,7 @@ export default function Admin() {
                   className="bg-card border-white/10 overflow-hidden text-white"
                 >
                   <div className="aspect-square bg-muted relative">
-                    <img src={getBarberAvatar(barber)} className="w-full h-full object-cover" />
+                    <img src={getProfessionalAvatar(barber, resolvedShopBranding)} className="w-full h-full object-cover" />
                     {(multiLocationConfig?.enabled ? canAssignTeamLocation : canManageTeamGlobal) && <ConfirmAction
                       title={formatBusinessCopy(adminCopy.team.removeTitle, { name: barber.name })}
                       description={adminCopy.team.removeDescription}
@@ -4752,7 +4716,7 @@ export default function Admin() {
                             {canManageTeamGlobal && <BarberPhotoPicker
                               inputId={`edit-barber-photo-${barber.id}`}
                               value={getEditedBarberAvatar(barberAvatarDrafts, barber)}
-                              fallbackSrc={getBarberAvatar({ ...barber, avatar: null })}
+                              fallbackSrc={getProfessionalAvatar({ ...barber, avatar: null }, resolvedShopBranding)}
                               onChange={(avatar) => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: avatar }))}
                               onRemove={() => setBarberAvatarDrafts((current) => ({ ...current, [barber.id]: null }))}
                               toast={toast}
@@ -4943,7 +4907,7 @@ export default function Admin() {
                   {archivedBarbers.map((barber) => (
                     <div key={barber.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-card p-3 text-white">
                       <img
-                        src={getBarberAvatar(barber)}
+                        src={getProfessionalAvatar(barber, resolvedShopBranding)}
                         className="h-14 w-14 rounded-md object-cover"
                         alt=""
                       />
@@ -6001,7 +5965,7 @@ export default function Admin() {
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="font-semibold text-white">{expense.description}</p>
                               <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300">
-                                {getBusinessExpenseCategoryLabel(expense.category)}
+                                {getBusinessExpenseCategoryLabel(expense.category, adminCopy.reports)}
                               </span>
                               <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-xs text-gray-300">
                                 {getBusinessExpenseRecurrenceLabel(expense.recurrence)}

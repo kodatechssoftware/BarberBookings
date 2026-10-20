@@ -259,6 +259,8 @@ const canonicalBootstrapRateLimiter = createFixedWindowRateLimiter({
 const ADMIN_PUBLIC_COPY = resolvedBusinessConfig.copy.admin;
 const TEAM_PUBLIC_COPY = ADMIN_PUBLIC_COPY.team;
 const REPORT_PUBLIC_COPY = ADMIN_PUBLIC_COPY.reports;
+const AUDIT_PUBLIC_COPY = ADMIN_PUBLIC_COPY.audit;
+const AGENDA_PUBLIC_COPY = resolvedBusinessConfig.copy.agenda;
 const PUBLIC_CYCLE_COPY = resolvedBusinessConfig.copy.publicCycle;
 const COMMUNICATIONS_COPY = resolvedBusinessConfig.copy.communications;
 const INVALID_PROFESSIONAL_SERVICE_CODE = "INVALID_PROFESSIONAL_SERVICE";
@@ -579,7 +581,7 @@ async function getAuditActor(req: Request) {
     return {
       actorType: "barber",
       actorId: appSession.barberId,
-      actorName: barber?.name || "Barbeiro",
+      actorName: barber?.name || AUDIT_PUBLIC_COPY.actorProfessional,
     };
   }
 
@@ -953,7 +955,7 @@ async function getBlacklistAppointmentSummaries(appointments: Appointment[]) {
   return appointments.map((appointment) => ({
     id: appointment.id,
     barberId: appointment.barberId,
-    barberName: barbersById.get(appointment.barberId)?.name || "Barbeiro desconhecido",
+    barberName: barbersById.get(appointment.barberId)?.name || AGENDA_PUBLIC_COPY.professional.unknownName,
     serviceId: appointment.serviceId,
     serviceName: resolveAppointmentServiceName(
       appointment,
@@ -1200,7 +1202,7 @@ function sendAppointmentLocationIntegrityError(res: Response, error: unknown) {
   const message = error.code === appointmentLocationInactiveCode
     ? "Esta localização não aceita novas marcações."
     : error.code === appointmentBarberLocationUnavailableCode
-      ? "Este barbeiro já não está disponível nesta localização."
+      ? AGENDA_PUBLIC_COPY.backend.locationUnavailable
       : error.message;
   res.status(409).json({ code: error.code, message });
   return true;
@@ -1741,11 +1743,11 @@ function getScheduleValidationError(
 
   const periods = workingPeriods ?? getDefaultShopWorkingPeriods(start.weekday);
   if (periods.length === 0) {
-    return publicCopy?.establishmentClosed ?? "A barbearia está encerrada neste dia.";
+    return publicCopy?.establishmentClosed ?? AGENDA_PUBLIC_COPY.backend.establishmentClosed;
   }
 
   if (start.dateKey !== end.dateKey) {
-    return publicCopy?.outsideEstablishmentHours ?? "A marcação não cabe dentro do horário de funcionamento da barbearia.";
+    return publicCopy?.outsideEstablishmentHours ?? AGENDA_PUBLIC_COPY.backend.outsideEstablishmentHours;
   }
 
   const startMinutes = start.hour * 60 + start.minute;
@@ -1755,7 +1757,7 @@ function getScheduleValidationError(
   );
 
   if (!fitsWorkingPeriod) {
-    return publicCopy?.outsideEstablishmentHours ?? "A marcação não cabe dentro do horário de funcionamento da barbearia.";
+    return publicCopy?.outsideEstablishmentHours ?? AGENDA_PUBLIC_COPY.backend.outsideEstablishmentHours;
   }
 
   return null;
@@ -3581,7 +3583,7 @@ export async function registerRoutes(
         action: "barber.created",
         entityType: "barber",
         entityId: barber.id,
-        summary: `Barbeiro criado: ${barber.name}`,
+        summary: formatBusinessCopy(AUDIT_PUBLIC_COPY.professionalCreated, { name: barber.name }),
         metadata: { serviceIds: selectedServiceIds, compensationModel: compensationRule.model },
       });
       res.status(201).json({
@@ -3720,7 +3722,7 @@ export async function registerRoutes(
         action: "barber.updated",
         entityType: "barber",
         entityId: barberId,
-        summary: `Barbeiro atualizado: ${updatedBarber.name}`,
+        summary: formatBusinessCopy(AUDIT_PUBLIC_COPY.professionalUpdated, { name: updatedBarber.name }),
         metadata: {
           fields: [
             ...Object.keys(barberPatch),
@@ -3799,7 +3801,7 @@ export async function registerRoutes(
         action: "barber.services_updated",
         entityType: "barber",
         entityId: barberId,
-        summary: `Serviços do barbeiro atualizados: ${barber.name}`,
+        summary: formatBusinessCopy(AUDIT_PUBLIC_COPY.professionalServicesUpdated, { name: barber.name }),
         metadata: { serviceIds: savedServiceIds },
       });
       res.json({ ...barber, serviceIds: savedServiceIds });
@@ -3881,8 +3883,8 @@ export async function registerRoutes(
         entityType: "barber",
         entityId: barberId,
         summary: wasHidden
-          ? `Barbeiro ocultado por ter histórico: ${barber?.name || barberId}`
-          : `Barbeiro removido: ${barber?.name || barberId}`,
+          ? formatBusinessCopy(AUDIT_PUBLIC_COPY.professionalHiddenForHistory, { name: barber?.name || barberId })
+          : formatBusinessCopy(AUDIT_PUBLIC_COPY.professionalRemoved, { name: barber?.name || barberId }),
       });
       res.json({
         message: wasHidden
@@ -3908,9 +3910,9 @@ export async function registerRoutes(
   app.patch("/api/barbers/:id/reset-password", requireUsersManage, async (req, res) => {
     try {
       const barberId = parsePositiveInteger(req.params.id);
-      if (barberId === null) return res.status(400).json({ message: "Barbeiro inválido." });
+      if (barberId === null) return res.status(400).json({ message: TEAM_PUBLIC_COPY.invalidProfessional });
       if (!await isBarberAssignedToLocation(barberId, Number(res.locals.locationId))) {
-        return res.status(404).json({ message: "Barbeiro não encontrado" });
+        return res.status(404).json({ message: TEAM_PUBLIC_COPY.professionalNotFound });
       }
       if (authRuntimeMode === "canonical") {
         const reset = await resetCanonicalPasswordForProfessional(pool, barberId);
@@ -3929,7 +3931,7 @@ export async function registerRoutes(
         return res.json({ message: "Palavra-passe removida" });
       }
       const updated = await storage.updateBarber(barberId, { password: null });
-      if (!updated) return res.status(404).json({ message: "Barbeiro não encontrado" });
+      if (!updated) return res.status(404).json({ message: TEAM_PUBLIC_COPY.professionalNotFound });
       await recordAuditLog(req, {
         action: "barber.password_reset",
         entityType: "barber",
@@ -4654,7 +4656,7 @@ export async function registerRoutes(
     await recordAuditLog(req, {
       action: "shop_availability.updated",
       entityType: "shop_availability",
-      summary: "Horário base da barbearia atualizado",
+      summary: AUDIT_PUBLIC_COPY.establishmentScheduleUpdated,
       metadata: { rows: availability.length },
     });
     res.json(availability);
@@ -4732,7 +4734,7 @@ export async function registerRoutes(
       action: "barber_availability.updated",
       entityType: "barber",
       entityId: barberId,
-      summary: `Horário do barbeiro atualizado: ${barber.name}`,
+      summary: formatBusinessCopy(AUDIT_PUBLIC_COPY.professionalScheduleUpdated, { name: barber.name }),
       metadata: { rows: availability.length },
     });
     res.json(availability);
@@ -4862,11 +4864,11 @@ export async function registerRoutes(
       if (req.query.barberId === undefined || !effectiveBarberId) {
         return res.status(400).json({
           code: "BARBER_ID_REQUIRED",
-          message: "Indique um barbeiro para consultar os horários ocupados.",
+          message: AGENDA_PUBLIC_COPY.backend.professionalRequiredForBusy,
         });
       }
       if (!await isBarberAssignedToLocation(effectiveBarberId, locationId)) {
-        return res.status(404).json({ message: "Barbeiro não encontrado." });
+        return res.status(404).json({ message: AGENDA_PUBLIC_COPY.backend.professionalNotFound });
       }
       const busyAppointments = await attachAppointmentAvailabilityWindows(date
         ? await storage.getAppointmentsRange(
@@ -5000,7 +5002,7 @@ export async function registerRoutes(
         normalizedCustomerPhone,
       );
       if (isBlacklisted) {
-        return res.status(403).json({ message: "Não é possível realizar a marcação online. Contacte a barbearia." });
+        return res.status(403).json({ message: AGENDA_PUBLIC_COPY.backend.bookingBlocked });
       }
 
 
@@ -5057,7 +5059,7 @@ export async function registerRoutes(
         }
 
         if (availableBarbers.length === 0) {
-          return res.status(409).json({ message: "Nenhum barbeiro disponível para este horário." });
+          return res.status(409).json({ message: AGENDA_PUBLIC_COPY.backend.noProfessionalAvailable });
         }
         const availableBarber = availableBarbers.sort((a, b) => {
           const countDifference =
@@ -5069,10 +5071,10 @@ export async function registerRoutes(
         const selectedBarber = await storage.getBarber(finalBarberId);
         const locationBarberIds = await getBarberIdsForLocation(locationId);
         if (!selectedBarber?.isVisible || (locationBarberIds !== undefined && !locationBarberIds.includes(finalBarberId))) {
-          return res.status(400).json({ message: "Barbeiro indisponível para marcação online." });
+          return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.professionalUnavailableOnline });
         }
         if (!barberCanPerformService(barberServiceMap, finalBarberId, input.serviceId)) {
-          return res.status(400).json({ message: "Este barbeiro não executa o serviço escolhido." });
+          return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.selectedServiceUnsupported });
         }
 
         const workingPeriods = await getBarberWorkingPeriods(finalBarberId, getShopDateParts(input.startTime).weekday, locationId);
@@ -5289,10 +5291,10 @@ export async function registerRoutes(
         : undefined;
       const locationBarberIds = await getBarberIdsForLocation(locationId);
       if (!selectedBarber || (locationBarberIds !== undefined && !locationBarberIds.includes(barberIdNumber))) {
-        return res.status(400).json({ message: "Barbeiro inválido." });
+        return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.invalidProfessional });
       }
       if (selectedBarber.isVisible === false) {
-        return res.status(400).json({ message: "Barbeiro indisponível para novas marcações." });
+        return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.unavailableProfessional });
       }
 
       const rawRequestedStarts: unknown[] = startTimes === undefined ? [startTime] : startTimes;
@@ -5447,7 +5449,7 @@ export async function registerRoutes(
       if (isManualBooking && serviceIdNumber) {
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
         if (!barberCanPerformService(barberServiceMap, barberIdNumber, serviceIdNumber)) {
-          return res.status(400).json({ message: "Este barbeiro não executa o serviço escolhido." });
+          return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.selectedServiceUnsupported });
         }
       }
       // Determine how many occurrences
@@ -5550,7 +5552,7 @@ export async function registerRoutes(
           if (affectedAppointments.length > 0) {
             return res.status(409).json({
               code: "ABSENCE_HAS_EXISTING_APPOINTMENTS",
-              message: "Este barbeiro já tem marcações ou bloqueios neste período. Reatribua, cancele ou remova esses registos antes de criar a ausência.",
+              message: AGENDA_PUBLIC_COPY.backend.absenceHasExistingAppointments,
               affectedAppointments: affectedAppointments.map((appointment) => ({
                 id: appointment.id,
                 barberId: appointment.barberId,
@@ -5623,7 +5625,7 @@ export async function registerRoutes(
           conflicts 
         });
       } else if (conflicts.length > 0) {
-        return res.status(409).json({ message: "Horário indisponível para este barbeiro." });
+        return res.status(409).json({ message: AGENDA_PUBLIC_COPY.backend.unavailableForProfessional });
       }
 
       const shouldCreateSeries = Boolean(
@@ -5737,7 +5739,7 @@ export async function registerRoutes(
       });
     } catch (error) {
       if (isAppointmentConflictError(error)) {
-        return res.status(409).json({ message: "Horário indisponível para este barbeiro." });
+        return res.status(409).json({ message: AGENDA_PUBLIC_COPY.backend.unavailableForProfessional });
       }
       if (sendAppointmentExtrasError(res, error)) return;
       if (sendAppointmentAvailabilityWindowsError(res, error)) return;
@@ -5969,17 +5971,17 @@ export async function registerRoutes(
       }
 
       if (!Number.isFinite(newBarberId) || newBarberId <= 0) {
-        return res.status(400).json({ message: "Barbeiro inválido." });
+        return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.invalidProfessional });
       }
 
       if (hasBarberPatch) {
         const selectedBarber = await storage.getBarber(newBarberId);
         const locationBarberIds = await getBarberIdsForLocation(locationId);
         if (!selectedBarber || (locationBarberIds !== undefined && !locationBarberIds.includes(newBarberId))) {
-          return res.status(400).json({ message: "Barbeiro não encontrado." });
+          return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.professionalNotFound });
         }
         if (selectedBarber.isVisible === false && newBarberId !== currentApp.barberId) {
-          return res.status(400).json({ message: "Barbeiro indisponível para novas marcações." });
+          return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.unavailableProfessional });
         }
       }
 
@@ -6018,7 +6020,7 @@ export async function registerRoutes(
         }
         const barberServiceMap = buildBarberServiceMap(await storage.getAllBarberServices(locationId));
         if (!barberCanPerformService(barberServiceMap, newBarberId, selectedService.id)) {
-          return res.status(400).json({ message: "Este barbeiro não executa o serviço desta marcação." });
+          return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.appointmentServiceUnsupported });
         }
       }
 
@@ -6146,7 +6148,7 @@ export async function registerRoutes(
           { before: finalBufferBefore, after: finalBufferAfter },
           effectiveAvailabilityWindows,
         )) {
-          return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
+          return res.status(409).json({ message: AGENDA_PUBLIC_COPY.backend.appointmentConflict });
         }
       }
       if (hasStatusPatch) {
@@ -6305,7 +6307,7 @@ export async function registerRoutes(
       res.json(responseAppointment);
     } catch (error) {
       if (isAppointmentConflictError(error)) {
-        return res.status(409).json({ message: "Este barbeiro já tem uma marcação para este horário." });
+        return res.status(409).json({ message: AGENDA_PUBLIC_COPY.backend.appointmentConflict });
       }
       if (sendAppointmentExtrasError(res, error)) return;
       if (sendAppointmentInternalCostsError(res, error)) return;
@@ -6856,7 +6858,7 @@ export async function registerRoutes(
       ? parsePositiveInteger(req.query.barberId)
       : undefined;
     if (hasRequestedBarber && requestedBarberId === null) {
-      return res.status(400).json({ message: "Barbeiro inválido." });
+      return res.status(400).json({ message: AGENDA_PUBLIC_COPY.backend.invalidProfessional });
     }
     const canonicalCanViewTeam = Boolean(canonicalContext && hasCanonicalCapability(
       canonicalContext,

@@ -4,7 +4,7 @@ import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/
 import { useServices } from "@/hooks/use-services";
 import { type AppointmentRecord, useCreateAppointment, usePublicAppointments } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
-import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Scissors, Loader2, MapPin } from "lucide-react";
+import { ChevronLeft, Check, Calendar as CalendarIcon, Clock, User, Loader2, MapPin } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { eachDayOfInterval, endOfMonth, endOfWeek, format, parseISO, startOfMonth, startOfToday, startOfWeek } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -14,9 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
-import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
-import type { ResolvedShopBranding } from "@/lib/branding";
-import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
+import { getProfessionalAvatar } from "@/lib/professional-presentation";
 import {
   DEFAULT_PHONE_COUNTRY,
   PHONE_COUNTRIES,
@@ -45,6 +43,7 @@ import { groupServicesForDisplay } from "@/lib/service-groups";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { useBusinessConfig } from "@/business/use-business-config";
 import { useBusinessBranding } from "@/business/use-business-branding";
+import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
 import { formatBusinessCopy } from "@shared/business/copy";
 import type { BusinessBookingFlow } from "@shared/business/booking-flow";
 
@@ -208,27 +207,6 @@ const saveLastBookingPreference = ({
   }
 };
 
-function getBarberAvatar(
-  barber: { name: string; avatar?: string | null },
-  locationLogoUrl: string,
-  branding: ResolvedShopBranding,
-) {
-  const customAvatar = barber.avatar?.trim();
-  if (customAvatar) return customAvatar;
-
-  const name = barber.name.toLowerCase();
-  if (branding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
-  if (branding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
-  return locationLogoUrl;
-}
-
-function getBarberAvatarFallback(barber: { name: string }, branding: ResolvedShopBranding) {
-  const name = barber.name.toLowerCase();
-  if (branding.useLegacyBarberAvatars && name.includes("baptista")) return fabioAvatar;
-  if (branding.useLegacyBarberAvatars && name.includes("bruno")) return brunoAvatar;
-  return branding.logoUrl;
-}
-
 const BarberCardSkeleton = () => (
   <div className="overflow-hidden rounded-xl border border-white/5 bg-card">
     <div className="aspect-[4/3] sm:aspect-[4/5] lg:aspect-[4/3] animate-pulse bg-white/5" />
@@ -323,6 +301,7 @@ const StepIndicator = ({
 export default function Booking() {
   const businessConfig = useBusinessConfig();
   const shopBranding = useBusinessBranding();
+  const ServiceIcon = useBusinessServiceIcon();
   const copy = useBusinessCopy().booking;
   const [initialPreference] = useState(() => getInitialBookingPreference(businessConfig.booking.flow));
   const [step, setStep] = useState(initialPreference.step);
@@ -473,7 +452,7 @@ export default function Booking() {
           "w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center border shrink-0",
           selectedServiceId === service.id ? "border-primary text-primary" : "border-white/20 text-gray-400"
         )}>
-          <Scissors className="w-4 h-4 md:w-5 md:h-5" />
+          <ServiceIcon className="w-4 h-4 md:w-5 md:h-5" />
         </div>
         <div className="flex min-h-full min-w-0 flex-col justify-between">
           <h3 className="font-bold text-sm md:text-lg text-white leading-tight">{service.name}</h3>
@@ -1060,12 +1039,12 @@ export default function Booking() {
                     </motion.div>
 
                     {selectableBarbers.map((barber) => {
-                      const avatarSrc = getBarberAvatar(
+                      const avatarSrc = getProfessionalAvatar(
                         barber,
-                        activeLocation?.logoUrl?.trim() || shopBranding.logoUrl,
                         shopBranding,
+                        activeLocation?.logoUrl?.trim() || shopBranding.logoUrl,
                       );
-                      const fallbackAvatarSrc = getBarberAvatarFallback(barber, shopBranding);
+                      const fallbackAvatarSrc = getProfessionalAvatar({ ...barber, avatar: null }, shopBranding);
                       return (
                         <motion.div 
                           key={barber.id}

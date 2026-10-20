@@ -4,6 +4,13 @@ import test from "node:test";
 import { barberBusinessCopy } from "../../shared/business/copy/barber.pt";
 import { beautyBusinessCopy } from "../../shared/business/copy/beauty.pt";
 import { formatBusinessCopy } from "../../shared/business/copy/types";
+import {
+  getAuditActionLabel,
+  getAuditActorLabel,
+  getAuditSummary,
+} from "../../client/src/lib/audit-presentation";
+import { getProfessionalAvatarFallback } from "../../client/src/lib/professional-fallback-policy";
+import { getBusinessLocationFallbackName } from "../../shared/business/presentation";
 
 function collectShape(value: unknown): unknown {
   if (typeof value === "string") return "string";
@@ -52,6 +59,58 @@ test("Beauty Admin and Agenda use neutral professional and establishment termino
   assert.equal(agenda.professional.allFilter, "Todos os profissionais");
   assert.equal(agenda.professional.filterPlaceholder, "Filtrar profissional");
   assert.equal(agenda.professional.label, "Profissional");
+  assert.equal(agenda.backend.invalidProfessional, "Profissional inválido.");
+  assert.equal(agenda.backend.selectedServiceUnsupported, "Este profissional não executa o serviço escolhido.");
+  assert.equal(agenda.backend.unavailableForProfessional, "Horário indisponível para este profissional.");
+  assert.equal(agenda.backend.bookingBlocked, "Não é possível realizar a marcação online. Contacte o estabelecimento.");
+  assert.doesNotMatch(agenda.historyNotesPlaceholder, /pele|unhas|cabelo/i);
+  assert.doesNotMatch(agenda.appointmentNotesPlaceholder, /pele|unhas|cabelo/i);
+});
+
+test("Audit presentation neutralizes historical Barber summaries only in Beauty", () => {
+  const historical = {
+    action: "barber.services_updated",
+    actorType: "barber",
+    actorName: "Bruno Santos",
+    summary: "Serviços do barbeiro atualizados: Bruno Santos",
+  };
+
+  assert.equal(
+    getAuditSummary(historical, beautyBusinessCopy.admin.audit),
+    "Serviços do profissional atualizados: Bruno Santos",
+  );
+  assert.equal(
+    getAuditActorLabel(historical, beautyBusinessCopy.admin.audit),
+    "Profissional: Bruno Santos",
+  );
+  assert.equal(
+    getAuditActionLabel("shop_availability.updated", beautyBusinessCopy.admin.audit),
+    "Horário do estabelecimento atualizado",
+  );
+  assert.equal(
+    getAuditSummary({ ...historical, action: "barber.hidden", summary: "Barbeiro ocultado por ter histórico: Bruno Santos" }, beautyBusinessCopy.admin.audit),
+    "Profissional ocultado por ter histórico: Bruno Santos",
+  );
+  assert.equal(
+    getAuditSummary(historical, barberBusinessCopy.admin.audit),
+    "Serviços do barbeiro atualizados: Bruno Santos",
+  );
+  assert.equal(
+    getAuditActorLabel(historical, barberBusinessCopy.admin.audit),
+    "Barbeiro: Bruno Santos",
+  );
+});
+
+test("Beauty branding never selects legacy Baptista or Bruno avatar fallbacks", () => {
+  assert.equal(getProfessionalAvatarFallback("Bruno Santos", false), "brand");
+  assert.equal(getProfessionalAvatarFallback("Fábio Baptista", false), "brand");
+  assert.equal(getProfessionalAvatarFallback("Bruno Santos", true), "bruno");
+  assert.equal(getProfessionalAvatarFallback("Fábio Baptista", true), "baptista");
+});
+
+test("memory and foundation location fallbacks remain vertical-aware", () => {
+  assert.equal(getBusinessLocationFallbackName("barber"), "Barbearia");
+  assert.equal(getBusinessLocationFallbackName("beauty"), "Estabelecimento");
 });
 
 test("Barber B3 copy preserves services, categories, team associations and schedules", () => {
@@ -90,6 +149,8 @@ test("Barber B4 copy preserves Dashboard and report terminology", () => {
   assert.equal(dashboard.professionalPerformance, "Desempenho por barbeiro");
   assert.equal(reports.professionalLabel, "Barbeiro");
   assert.equal(reports.expensesTitle, "Despesas da Barbearia");
+  assert.equal(reports.expenseMaterialsHelp, "Produtos, lâminas, toalhas e consumíveis");
+  assert.equal(reports.expenseEquipmentHelp, "Máquinas, cadeiras e reparações");
   assert.equal(reports.workbook.settlementsSheet, "Acertos com Barbeiros");
   assert.equal(reports.workbook.workspaceRent, "Aluguer de cadeira (€)");
 });
@@ -107,6 +168,9 @@ test("Beauty B4 copy uses neutral Dashboard and report terminology", () => {
   assert.equal(reports.workbook.settlementsSheet, "Acertos com Profissionais");
   assert.equal(reports.workbook.workspaceRent, "Renda de espaço (€)");
   assert.equal(reports.workbook.establishmentValue, "Valor do estabelecimento (€)");
+  assert.equal(reports.expenseMaterialsHelp, "Produtos, materiais e consumíveis");
+  assert.equal(reports.expenseEquipmentHelp, "Equipamentos, mobiliário e reparações");
+  assert.doesNotMatch(`${reports.expenseMaterialsHelp} ${reports.expenseEquipmentHelp}`, /lâminas|cadeiras/i);
 });
 
 test("Barber B5A keeps cancellation, reschedule and professional invite wording", () => {
@@ -244,7 +308,7 @@ test("B4 Dashboard and final Excel output resolve public domain wording through 
   const chartSource = readFileSync("client/src/components/admin/DashboardChartCard.tsx", "utf8");
   const serverSource = readFileSync("server/routes.ts", "utf8");
   const dashboardStart = adminSource.indexOf("function TodayOverviewPanel");
-  const dashboardEnd = adminSource.indexOf("function getBarberAvatar", dashboardStart);
+  const dashboardEnd = adminSource.indexOf("const MAX_BARBER_PHOTO_INPUT_BYTES", dashboardStart);
   const dashboardSectionStart = adminSource.indexOf('ref={businessDashboardRef}');
   const dashboardSectionEnd = adminSource.indexOf('<TabsContent value="appointments"', dashboardSectionStart);
   const reportsStart = adminSource.indexOf('<TabsContent value="reports"');
@@ -345,4 +409,27 @@ test("B5B communication surfaces resolve domain wording through typed server cop
     .filter((line) => /["'`][^"'`]*(?:Baptista|Powerhouse|barbeiro|barbeiros|barbearia)[^"'`]*["'`]/i.test(line))
     .filter((line) => !/barberName|MetaAppointmentTemplateParams|barberName:/i.test(line));
   assert.deepEqual(forbiddenPublicLiterals, []);
+});
+
+test("Beauty visible terminology package resolves audit, backend errors and active branding centrally", () => {
+  const adminSource = readFileSync("client/src/pages/Admin.tsx", "utf8");
+  const agendaSource = readFileSync("client/src/components/admin/WeeklyAgenda.tsx", "utf8");
+  const cancellationSource = readFileSync("client/src/pages/Cancellation.tsx", "utf8");
+  const calendarSource = readFileSync("client/src/lib/calendar.ts", "utf8");
+  const routesSource = readFileSync("server/routes.ts", "utf8");
+
+  assert.match(adminSource, /getAuditSummary\(log, copy\)/);
+  assert.match(adminSource, /getProfessionalAvatar\([^\n]+resolvedShopBranding\)/);
+  assert.doesNotMatch(adminSource, /name\.includes\(["']bruno["']\)/i);
+  assert.doesNotMatch(adminSource, /Produtos, lâminas|Máquinas, cadeiras/);
+  assert.match(agendaSource, /useBusinessBranding\(\)/);
+  assert.match(cancellationSource, /useBusinessBranding\(\)/);
+  assert.doesNotMatch(calendarSource, /shopBranding/);
+  assert.match(routesSource, /AGENDA_PUBLIC_COPY\.backend\.selectedServiceUnsupported/);
+  assert.match(routesSource, /AUDIT_PUBLIC_COPY\.professionalCreated/);
+
+  const userVisibleBackendLiterals = routesSource
+    .split(/\r?\n/)
+    .filter((line) => /message:\s*["'`][^"'`]*(?:barbeiro|barbearia)/i.test(line));
+  assert.deepEqual(userVisibleBackendLiterals, []);
 });
