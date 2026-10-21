@@ -4,13 +4,6 @@ import { Link } from "wouter";
 import { shopBranding } from "@/lib/branding";
 import { LAST_BOOKING_RETENTION_DAYS } from "@/lib/last-booking-storage";
 
-const pendingBusinessDecisions = [
-  "Identificação legal e fiscal completa do Baptista Barber Shop, quando aplicável",
-  "Validação jurídica final das bases legais propostas",
-  "Período legal aplicável aos dados financeiros e fiscais",
-  "DPA, regiões de tratamento e mecanismos de transferências internacionais",
-];
-
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
@@ -33,18 +26,10 @@ export default function Privacy() {
             <ShieldCheck className="mt-1 h-7 w-7 shrink-0 text-primary" aria-hidden="true" />
             <div>
               <h1 className="font-display text-3xl font-bold text-white">Política de Privacidade</h1>
-              <p className="mt-2 text-sm text-gray-400">Proposta para {shopBranding.name}</p>
+              <p className="mt-2 text-sm text-gray-400">Como {shopBranding.name} trata e protege os seus dados pessoais</p>
             </div>
           </div>
         </header>
-
-        <aside className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
-          <p className="font-semibold">Rascunho — não publicar antes da validação do negócio.</p>
-          <p className="mt-2">Esta proposta descreve apenas o tratamento identificado na aplicação. Falta decidir e preencher:</p>
-          <ul className="mt-2 list-disc space-y-1 pl-5">
-            {pendingBusinessDecisions.map((decision) => <li key={decision}>{decision}</li>)}
-          </ul>
-        </aside>
 
         <Section title="1. Responsável e contacto">
           <p><strong className="text-white">Responsável pelo tratamento:</strong> Baptista Barber Shop.</p>
@@ -64,10 +49,9 @@ export default function Privacy() {
         </Section>
 
         <Section title="3. Finalidades e bases legais">
-          <p>As bases legais seguintes são uma proposta operacional baseada no tratamento atualmente identificado e aguardam validação jurídica e do negócio:</p>
           <ul className="list-disc space-y-2 pl-5">
             <li>criação e gestão de marcações: execução de contrato ou diligências pré-contratuais solicitadas pelo cliente;</li>
-            <li>confirmações, alterações, cancelamentos e lembretes transacionais: execução do serviço e/ou interesse legítimo do Baptista, sujeito a validação;</li>
+            <li>confirmações, alterações, cancelamentos e lembretes transacionais: gestão e execução do serviço solicitado;</li>
             <li>segurança, registos técnicos e prevenção de abuso: interesse legítimo na proteção da plataforma, dos clientes e do negócio;</li>
             <li>dados necessários para faturação ou outras obrigações aplicáveis: cumprimento de obrigação legal, quando aplicável.</li>
           </ul>
@@ -81,19 +65,14 @@ export default function Privacy() {
         </Section>
 
         <Section title="5. Conservação">
-          <p>A política operacional inicial prevê os seguintes prazos e revisões:</p>
+          <p>Como regra operacional, aplicam-se os seguintes prazos:</p>
           <ul className="list-disc space-y-2 pl-5">
             <li>identidade e dados pessoais associados a marcações: anonimização após 24 meses desde a última interação ou marcação, salvo quando uma obrigação legal justificar conservação superior;</li>
-            <li>dados financeiros ou fiscais legalmente necessários: conservação apenas durante o período legal aplicável, ainda sujeito a validação contabilística e jurídica;</li>
+            <li>dados financeiros ou fiscais legalmente necessários: conservação durante o período exigido pela legislação aplicável;</li>
             <li>backups operacionais: 14 dias;</li>
             <li>preferência <code className="text-gray-200">baptista:lastBooking</code> guardada neste browser: remoção automática após {LAST_BOOKING_RETENTION_DAYS} dias;</li>
-            <li>códigos de verificação: validade funcional de 10 minutos e eliminação operacional no máximo 24 horas após expiração ou utilização;</li>
-            <li>payloads e respostas técnicas de notificações: 90 dias após conclusão do processamento;</li>
-            <li>notas internas: revisão após 12 meses sem interação;</li>
-            <li>registos de blacklist: revisão pelo menos anual;</li>
-            <li>registos de auditoria: 24 meses desde a criação.</li>
           </ul>
-          <p>Alguns dados podem ter de ser conservados durante mais tempo quando exista uma obrigação legal aplicável. A anonimização e as limpezas ainda sem automatização técnica devem ser asseguradas por procedimento operacional até existir suporte próprio.</p>
+          <p>Alguns dados podem ser conservados durante mais tempo quando exista uma obrigação legal, litígio ou necessidade de proteção de direitos.</p>
         </Section>
 
         <Section title="6. Fornecedores e destinatários">
@@ -105,7 +84,7 @@ export default function Privacy() {
             <li><strong className="text-white">Resend:</strong> envio de emails transacionais e de fallback;</li>
             <li><strong className="text-white">Cloudflare:</strong> serviços de rede e armazenamento dos backups operacionais em R2;</li>
           </ul>
-          <p><strong className="text-white">DPA, regiões e garantias de transferência:</strong> [PENDENTE DE VALIDAÇÃO CONTRATUAL E JURÍDICA]</p>
+          <p>Alguns fornecedores podem tratar dados fora do Espaço Económico Europeu. Quando aplicável, são utilizadas as salvaguardas previstas na legislação de proteção de dados.</p>
         </Section>
 
         <Section title="7. Direitos">
@@ -122,7 +101,7 @@ export default function Privacy() {
         </Section>
 
         <footer className="border-t border-white/10 pt-5 text-xs leading-6 text-gray-500">
-          Última revisão técnica desta proposta: 21 de outubro de 2026. A data de entrada em vigor deve ser definida aquando da aprovação final.
+          Última atualização: 21 de outubro de 2026.
         </footer>
       </article>
     </main>
