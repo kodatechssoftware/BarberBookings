@@ -8,8 +8,6 @@ const pendingBusinessDecisions = [
   "Identificação legal e fiscal completa do Baptista Barber Shop, quando aplicável",
   "Validação jurídica final das bases legais propostas",
   "Período legal aplicável aos dados financeiros e fiscais",
-  "Prazo final dos registos de auditoria",
-  "Validação do prazo proposto para payloads técnicos de notificações",
   "DPA, regiões de tratamento e mecanismos de transferências internacionais",
 ];
 
@@ -89,13 +87,13 @@ export default function Privacy() {
             <li>dados financeiros ou fiscais legalmente necessários: conservação apenas durante o período legal aplicável, ainda sujeito a validação contabilística e jurídica;</li>
             <li>backups operacionais: 14 dias;</li>
             <li>preferência <code className="text-gray-200">baptista:lastBooking</code> guardada neste browser: remoção automática após {LAST_BOOKING_RETENTION_DAYS} dias;</li>
-            <li>códigos de verificação: retenção curta, com limpeza recomendada após a respetiva expiração;</li>
-            <li>payloads e respostas técnicas de notificações: proposta de 90 dias, sujeita a validação final;</li>
+            <li>códigos de verificação: validade funcional de 10 minutos e eliminação operacional no máximo 24 horas após expiração ou utilização;</li>
+            <li>payloads e respostas técnicas de notificações: 90 dias após conclusão do processamento;</li>
             <li>notas internas: revisão após 12 meses sem interação;</li>
             <li>registos de blacklist: revisão pelo menos anual;</li>
-            <li>registos de auditoria: prazo final ainda pendente de validação.</li>
+            <li>registos de auditoria: 24 meses desde a criação.</li>
           </ul>
-          <p>Alguns dados podem ter de ser conservados durante mais tempo quando exista uma obrigação legal aplicável. Os prazos sem automatização técnica devem ser assegurados por procedimento operacional até existir suporte próprio.</p>
+          <p>Alguns dados podem ter de ser conservados durante mais tempo quando exista uma obrigação legal aplicável. A anonimização e as limpezas ainda sem automatização técnica devem ser asseguradas por procedimento operacional até existir suporte próprio.</p>
         </Section>
 
         <Section title="6. Fornecedores e destinatários">

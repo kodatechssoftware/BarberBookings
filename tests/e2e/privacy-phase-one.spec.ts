@@ -14,7 +14,8 @@ test("publishes the privacy draft and links it from the public site", async ({ p
   await expect(page.getByText("Não utiliza os dados dos clientes para finalidades próprias.", { exact: false })).toBeVisible();
   await expect(page.getByText("anonimização após 24 meses", { exact: false })).toBeVisible();
   await expect(page.getByText("backups operacionais: 14 dias", { exact: false })).toBeVisible();
-  await expect(page.getByText("payloads e respostas técnicas de notificações: proposta de 90 dias", { exact: false })).toBeVisible();
+  await expect(page.getByText("payloads e respostas técnicas de notificações: 90 dias", { exact: false })).toBeVisible();
+  await expect(page.getByText("registos de auditoria: 24 meses", { exact: false })).toBeVisible();
   await expect(page.getByText("DPA, regiões e garantias de transferência:")).toBeVisible();
   await expect(page.getByText("GitHub Actions")).toHaveCount(0);
 });
