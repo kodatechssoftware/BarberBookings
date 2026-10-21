@@ -5,10 +5,11 @@ import { shopBranding } from "@/lib/branding";
 import { LAST_BOOKING_RETENTION_DAYS } from "@/lib/last-booking-storage";
 
 const pendingBusinessDecisions = [
-  "Identificação legal completa, morada e contactos do Baptista Barber Shop",
-  "Email ou outro canal dedicado a pedidos de privacidade",
+  "Identificação legal e fiscal completa do Baptista Barber Shop, quando aplicável",
   "Validação jurídica final das bases legais propostas",
-  "Prazos de conservação por categoria e obrigações fiscais aplicáveis",
+  "Período legal aplicável aos dados financeiros e fiscais",
+  "Prazo final dos registos de auditoria",
+  "Validação do prazo proposto para payloads técnicos de notificações",
   "DPA, regiões de tratamento e mecanismos de transferências internacionais",
 ];
 
@@ -49,8 +50,11 @@ export default function Privacy() {
 
         <Section title="1. Responsável e contacto">
           <p><strong className="text-white">Responsável pelo tratamento:</strong> Baptista Barber Shop.</p>
-          <p><strong className="text-white">Identificação legal completa, morada e contactos:</strong> [PENDENTE DE VALIDAÇÃO DO NEGÓCIO]</p>
-          <p><strong className="text-white">Contacto de privacidade:</strong> [DECISÃO DO NEGÓCIO — email ou canal para exercício de direitos]</p>
+          <p><strong className="text-white">Morada:</strong> R. Cmte. Agatão Lança 28, 4640-142 Baião, Portugal.</p>
+          <p>
+            <strong className="text-white">Contacto de privacidade e exercício de direitos:</strong>{" "}
+            <a href="tel:+351916852841" className="text-primary underline underline-offset-2 hover:text-primary/80">+351 916 852 841</a>.
+          </p>
           <p><strong className="text-white">Subcontratante tecnológico:</strong> KodaTechs.</p>
           <p>A KodaTechs fornece, mantém e opera a plataforma tecnológica por conta do Baptista Barber Shop e segundo as suas instruções. Não utiliza os dados dos clientes para finalidades próprias.</p>
         </Section>
@@ -79,8 +83,19 @@ export default function Privacy() {
         </Section>
 
         <Section title="5. Conservação">
-          <p><strong className="text-white">Prazos da base de dados e logs:</strong> [DECISÃO DO NEGÓCIO — definir por categoria e validar obrigações fiscais]</p>
-          <p>A preferência guardada neste browser para repetir uma marcação é removida automaticamente após {LAST_BOOKING_RETENTION_DAYS} dias. Os backups operacionais têm atualmente uma janela técnica de retenção de 14 dias.</p>
+          <p>A política operacional inicial prevê os seguintes prazos e revisões:</p>
+          <ul className="list-disc space-y-2 pl-5">
+            <li>identidade e dados pessoais associados a marcações: anonimização após 24 meses desde a última interação ou marcação, salvo quando uma obrigação legal justificar conservação superior;</li>
+            <li>dados financeiros ou fiscais legalmente necessários: conservação apenas durante o período legal aplicável, ainda sujeito a validação contabilística e jurídica;</li>
+            <li>backups operacionais: 14 dias;</li>
+            <li>preferência <code className="text-gray-200">baptista:lastBooking</code> guardada neste browser: remoção automática após {LAST_BOOKING_RETENTION_DAYS} dias;</li>
+            <li>códigos de verificação: retenção curta, com limpeza recomendada após a respetiva expiração;</li>
+            <li>payloads e respostas técnicas de notificações: proposta de 90 dias, sujeita a validação final;</li>
+            <li>notas internas: revisão após 12 meses sem interação;</li>
+            <li>registos de blacklist: revisão pelo menos anual;</li>
+            <li>registos de auditoria: prazo final ainda pendente de validação.</li>
+          </ul>
+          <p>Alguns dados podem ter de ser conservados durante mais tempo quando exista uma obrigação legal aplicável. Os prazos sem automatização técnica devem ser assegurados por procedimento operacional até existir suporte próprio.</p>
         </Section>
 
         <Section title="6. Fornecedores e destinatários">
@@ -91,14 +106,16 @@ export default function Privacy() {
             <li><strong className="text-white">Meta / WhatsApp:</strong> envio e estado de comunicações transacionais;</li>
             <li><strong className="text-white">Resend:</strong> envio de emails transacionais e de fallback;</li>
             <li><strong className="text-white">Cloudflare:</strong> serviços de rede e armazenamento dos backups operacionais em R2;</li>
-            <li><strong className="text-white">GitHub Actions:</strong> automatização operacional dos backups, com processamento temporário durante a execução.</li>
           </ul>
           <p><strong className="text-white">DPA, regiões e garantias de transferência:</strong> [PENDENTE DE VALIDAÇÃO CONTRATUAL E JURÍDICA]</p>
         </Section>
 
         <Section title="7. Direitos">
-          <p>Pode solicitar informação e acesso aos seus dados, correção, apagamento quando aplicável, limitação, oposição e portabilidade nos casos previstos no RGPD. Pode ainda apresentar reclamação à Comissão Nacional de Proteção de Dados.</p>
-          <p><strong className="text-white">Como exercer os direitos:</strong> [DECISÃO DO NEGÓCIO — inserir contacto, processo de identificação e prazo de resposta]</p>
+          <p>Pode solicitar acesso aos seus dados, retificação, apagamento quando aplicável, limitação, oposição e portabilidade quando aplicável. Pode ainda apresentar reclamação à Comissão Nacional de Proteção de Dados.</p>
+          <p>
+            Para exercer estes direitos ou colocar uma questão de privacidade, contacte o Baptista Barber Shop através do número{" "}
+            <a href="tel:+351916852841" className="text-primary underline underline-offset-2 hover:text-primary/80">+351 916 852 841</a>.
+          </p>
         </Section>
 
         <Section title="8. Segurança, cookies e armazenamento local">
