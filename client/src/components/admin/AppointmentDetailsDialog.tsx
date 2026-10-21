@@ -1053,7 +1053,7 @@ export function AppointmentDetailsDialog({
               <div>
                 <Label className="text-sm font-semibold text-white">Notas internas</Label>
                 <p className="mt-1 text-xs text-gray-400">
-                  Preferências, atrasos habituais, alergias ou detalhes importantes do cliente.
+                  Preferências de atendimento e detalhes práticos. Não registe informação sensível ou dados de saúde.
                 </p>
               </div>
               {customerNotesUpdatedAt && (

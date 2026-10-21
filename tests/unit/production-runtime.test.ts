@@ -94,9 +94,12 @@ test("recurring expenses are disabled by default and require an explicit valid o
   ));
 });
 
-test("Production rejects ambiguous APP_ENV, localhost URL and weak session secret", () => {
+test("Production rejects ambiguous APP_ENV, localhost URL and missing or weak session secret", () => {
   assert.throws(() => evaluate({ ...baseEnvironment, APP_ENV: "" }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, PUBLIC_URL: "http://localhost:5000" }, "m.validateRuntimeConfiguration()"));
+  const missingSessionSecret: NodeJS.ProcessEnv = { ...baseEnvironment };
+  delete missingSessionSecret.SESSION_SECRET;
+  assert.throws(() => evaluate(missingSessionSecret, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, SESSION_SECRET: "short" }, "m.validateRuntimeConfiguration()"));
 });
 

@@ -31,6 +31,10 @@ import {
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import {
+  readLastBookingPreference as readStoredLastBookingPreference,
+  saveLastBookingPreference as saveStoredLastBookingPreference,
+} from "@/lib/last-booking-storage";
+import {
   DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES,
   isClockTimeAligned,
 } from "@shared/booking-slot-interval";
@@ -57,7 +61,6 @@ type BookingPreference = {
   };
 };
 
-const lastBookingStorageKey = "baptista:lastBooking";
 const MAX_NAME_LENGTH = 80;
 const MAX_EMAIL_LENGTH = 120;
 type CustomerField = keyof BookingPreference["customerDetails"];
@@ -97,29 +100,7 @@ const parseTimeParam = (value: string | null) => {
 
 const readLastBookingPreference = () => {
   if (typeof window === "undefined") return null;
-
-  try {
-    const raw = window.localStorage.getItem(lastBookingStorageKey);
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw) as Partial<{
-      barberId: number;
-      serviceId: number;
-      customerName: string;
-      customerEmail: string;
-      customerPhone: string;
-    }>;
-
-    return {
-      barberId: typeof parsed.barberId === "number" ? parsed.barberId : null,
-      serviceId: typeof parsed.serviceId === "number" ? parsed.serviceId : null,
-      customerName: parsed.customerName || "",
-      customerEmail: parsed.customerEmail || "",
-      customerPhone: parsed.customerPhone || "",
-    };
-  } catch {
-    return null;
-  }
+  return readStoredLastBookingPreference(window.localStorage);
 };
 
 const getInitialBookingPreference = (): BookingPreference => {
@@ -175,22 +156,13 @@ const saveLastBookingPreference = ({
   customerPhone: string;
 }) => {
   if (typeof window === "undefined") return;
-
-  try {
-    window.localStorage.setItem(
-      lastBookingStorageKey,
-      JSON.stringify({
-        barberId,
-        serviceId,
-        customerName,
-        customerEmail: customerEmail || "",
-        customerPhone,
-        updatedAt: new Date().toISOString(),
-      }),
-    );
-  } catch {
-    // Falhas de localStorage não devem impedir uma marcação confirmada.
-  }
+  saveStoredLastBookingPreference(window.localStorage, {
+    barberId,
+    serviceId,
+    customerName,
+    customerEmail,
+    customerPhone,
+  });
 };
 
 function getBarberAvatar(barber: { name: string; avatar?: string | null }) {
@@ -1268,6 +1240,12 @@ export default function Booking() {
                       </p>
                     )}
                   </div>
+                  <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-relaxed text-gray-400">
+                    Utilizamos estes dados para gerir a marcação e enviar comunicações operacionais. Consulte a nossa{" "}
+                    <Link href="/privacidade" className="font-medium text-primary underline underline-offset-2 hover:text-primary/80">
+                      Política de Privacidade
+                    </Link>.
+                  </p>
                 </div>
               </div>
             )}

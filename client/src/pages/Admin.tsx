@@ -3432,7 +3432,7 @@ export default function Admin() {
                       <div>
                         <Label className="text-sm font-semibold text-white">Notas do cliente</Label>
                         <p className="text-xs text-gray-400">
-                          Preferências de corte, hábitos de visita, barbeiro preferido ou cuidados a lembrar.
+                          Preferências de corte, hábitos de visita ou barbeiro preferido. Não registe informação sensível ou dados de saúde.
                         </p>
                       </div>
                       {customerHistory.notes?.updatedAt && (

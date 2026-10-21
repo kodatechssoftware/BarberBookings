@@ -519,6 +519,9 @@ export default function Home() {
           <img src={shopBranding.logoUrl} alt={shopBranding.name} className="h-10 w-10 rounded-full object-contain" />
           <p className="text-sm text-gray-500">© 2026 {shopBranding.name}. {shopBranding.address}.</p>
           <div className="flex flex-wrap justify-center gap-5 text-sm">
+            <Link href="/privacidade" className="text-gray-400 hover:text-primary">
+              Política de Privacidade
+            </Link>
             {instagramUrl && (
               <a href={instagramUrl} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-primary">
                 Instagram
