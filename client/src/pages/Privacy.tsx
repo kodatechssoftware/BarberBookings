@@ -5,12 +5,11 @@ import { shopBranding } from "@/lib/branding";
 import { LAST_BOOKING_RETENTION_DAYS } from "@/lib/last-booking-storage";
 
 const pendingBusinessDecisions = [
-  "Identidade legal e contacto do responsável pelo tratamento",
+  "Identificação legal completa, morada e contactos do Baptista Barber Shop",
   "Email ou outro canal dedicado a pedidos de privacidade",
-  "Base legal final para cada finalidade",
-  "Prazos de conservação dos dados da aplicação",
-  "Papéis e responsabilidades do Baptista e da KodaTechs",
-  "Lista contratual de fornecedores, localizações e transferências internacionais",
+  "Validação jurídica final das bases legais propostas",
+  "Prazos de conservação por categoria e obrigações fiscais aplicáveis",
+  "DPA, regiões de tratamento e mecanismos de transferências internacionais",
 ];
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -49,9 +48,11 @@ export default function Privacy() {
         </aside>
 
         <Section title="1. Responsável e contacto">
-          <p><strong className="text-white">Responsável pelo tratamento:</strong> [DECISÃO DO NEGÓCIO — entidade legal, morada e contactos]</p>
+          <p><strong className="text-white">Responsável pelo tratamento:</strong> Baptista Barber Shop.</p>
+          <p><strong className="text-white">Identificação legal completa, morada e contactos:</strong> [PENDENTE DE VALIDAÇÃO DO NEGÓCIO]</p>
           <p><strong className="text-white">Contacto de privacidade:</strong> [DECISÃO DO NEGÓCIO — email ou canal para exercício de direitos]</p>
-          <p><strong className="text-white">Papel da KodaTechs:</strong> [DECISÃO CONTRATUAL — confirmar se atua como subcontratante e em que âmbito]</p>
+          <p><strong className="text-white">Subcontratante tecnológico:</strong> KodaTechs.</p>
+          <p>A KodaTechs fornece, mantém e opera a plataforma tecnológica por conta do Baptista Barber Shop e segundo as suas instruções. Não utiliza os dados dos clientes para finalidades próprias.</p>
         </Section>
 
         <Section title="2. Dados tratados">
@@ -61,14 +62,20 @@ export default function Privacy() {
         </Section>
 
         <Section title="3. Finalidades e bases legais">
-          <p>Os dados são utilizados para criar e gerir marcações, comunicar confirmações, alterações, cancelamentos e lembretes, prestar o serviço, registar pagamentos e proteger a segurança da aplicação.</p>
-          <p><strong className="text-white">Bases legais:</strong> [DECISÃO JURÍDICA/NEGÓCIO — confirmar execução de contrato, obrigação legal, interesse legítimo e, quando aplicável, consentimento para cada finalidade]</p>
-          <p>Os contactos utilizados para comunicações transacionais não são, por si só, uma autorização para marketing.</p>
+          <p>As bases legais seguintes são uma proposta operacional baseada no tratamento atualmente identificado e aguardam validação jurídica e do negócio:</p>
+          <ul className="list-disc space-y-2 pl-5">
+            <li>criação e gestão de marcações: execução de contrato ou diligências pré-contratuais solicitadas pelo cliente;</li>
+            <li>confirmações, alterações, cancelamentos e lembretes transacionais: execução do serviço e/ou interesse legítimo do Baptista, sujeito a validação;</li>
+            <li>segurança, registos técnicos e prevenção de abuso: interesse legítimo na proteção da plataforma, dos clientes e do negócio;</li>
+            <li>dados necessários para faturação ou outras obrigações aplicáveis: cumprimento de obrigação legal, quando aplicável.</li>
+          </ul>
+          <p>O fluxo atual não autoriza marketing. Uma utilização futura para fins promocionais deverá ser separada das comunicações transacionais e ter informação e fundamento próprios.</p>
         </Section>
 
         <Section title="4. WhatsApp e email">
           <p>O telemóvel pode ser utilizado para comunicações operacionais da marcação através do WhatsApp. O email opcional pode ser utilizado como alternativa quando o envio por WhatsApp não for possível.</p>
-          <p>Não foi identificado um fluxo de campanhas promocionais nesta versão da aplicação. Uma utilização futura para marketing exigirá informação e fundamento próprios.</p>
+          <p>Estas mensagens são transacionais: incluem confirmações, alterações, cancelamentos e lembretes relacionados com a marcação. O atual mecanismo não deve ser reutilizado para marketing.</p>
+          <p>Não foi identificado um fluxo de campanhas promocionais nesta versão da aplicação. Uma utilização futura para marketing exigirá informação, escolha e fundamento próprios, quando legalmente necessários.</p>
         </Section>
 
         <Section title="5. Conservação">
@@ -77,8 +84,16 @@ export default function Privacy() {
         </Section>
 
         <Section title="6. Fornecedores e destinatários">
-          <p>A infraestrutura identificada pode envolver Supabase, Render, Meta/WhatsApp, Resend, Cloudflare e GitHub Actions. Google Fonts e, quando utilizados, Google Maps ou Calendar também podem receber dados técnicos de ligação.</p>
-          <p><strong className="text-white">Lista final, funções, regiões e garantias de transferência:</strong> [DECISÃO CONTRATUAL — validar fornecedores ativos, contratos e subprocessadores antes de publicar]</p>
+          <p>A KodaTechs pode recorrer aos seguintes subcontratantes posteriores, de acordo com os serviços efetivamente utilizados em Production:</p>
+          <ul className="list-disc space-y-2 pl-5">
+            <li><strong className="text-white">Supabase:</strong> alojamento e operação da base de dados PostgreSQL;</li>
+            <li><strong className="text-white">Render:</strong> alojamento e execução da aplicação;</li>
+            <li><strong className="text-white">Meta / WhatsApp:</strong> envio e estado de comunicações transacionais;</li>
+            <li><strong className="text-white">Resend:</strong> envio de emails transacionais e de fallback;</li>
+            <li><strong className="text-white">Cloudflare:</strong> serviços de rede e armazenamento dos backups operacionais em R2;</li>
+            <li><strong className="text-white">GitHub Actions:</strong> automatização operacional dos backups, com processamento temporário durante a execução.</li>
+          </ul>
+          <p><strong className="text-white">DPA, regiões e garantias de transferência:</strong> [PENDENTE DE VALIDAÇÃO CONTRATUAL E JURÍDICA]</p>
         </Section>
 
         <Section title="7. Direitos">

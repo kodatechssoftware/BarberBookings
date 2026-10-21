@@ -7,7 +7,10 @@ test("publishes the privacy draft and links it from the public site", async ({ p
   await expect(page).toHaveURL(/\/privacidade$/);
   await expect(page.getByRole("heading", { name: "Política de Privacidade" })).toBeVisible();
   await expect(page.getByText("Rascunho — não publicar antes da validação do negócio.")).toBeVisible();
-  await expect(page.getByText("Responsável pelo tratamento:")).toBeVisible();
+  await expect(page.getByText(/Responsável pelo tratamento:\s*Baptista Barber Shop\./)).toBeVisible();
+  await expect(page.getByText(/Subcontratante tecnológico:\s*KodaTechs\./)).toBeVisible();
+  await expect(page.getByText("Não utiliza os dados dos clientes para finalidades próprias.", { exact: false })).toBeVisible();
+  await expect(page.getByText("DPA, regiões e garantias de transferência:")).toBeVisible();
 });
 
 test("shows a privacy notice in booking and removes health-data suggestions", async ({ page }) => {
