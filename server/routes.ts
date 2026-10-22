@@ -103,6 +103,7 @@ import {
   supportedPhonesMatch,
 } from "@shared/phone-countries";
 import {
+  getOpenPublicBookingWindow,
   getPublicBookingWindow,
   isDateWithinPublicBookingWindow,
   PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
@@ -506,10 +507,9 @@ function requestLocationTimeZone(res: Response) {
 }
 
 function currentPublicBookingWindow(now = new Date()) {
-  const bookingWindow = getPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY);
   return PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED
-    ? bookingWindow
-    : { ...bookingWindow, enabled: false, maxDate: "9999-12-31" };
+    ? getPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY)
+    : getOpenPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY);
 }
 
 function sendPublicBookingWindowClosed(res: Response) {
@@ -4390,13 +4390,11 @@ export async function registerRoutes(
     const startDate = req.query.startDate as string | undefined;
     let endDate = req.query.endDate as string | undefined;
     const bookingWindow = currentPublicBookingWindow();
-    if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED) {
-      if ((date && date > bookingWindow.maxDate) || (startDate && startDate > bookingWindow.maxDate)) {
-        return res.json([]);
-      }
-      if (endDate && endDate > bookingWindow.maxDate) {
-        endDate = bookingWindow.maxDate;
-      }
+    if ((date && date > bookingWindow.maxDate) || (startDate && startDate > bookingWindow.maxDate)) {
+      return res.json([]);
+    }
+    if (endDate && endDate > bookingWindow.maxDate) {
+      endDate = bookingWindow.maxDate;
     }
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
     const appointments = date
