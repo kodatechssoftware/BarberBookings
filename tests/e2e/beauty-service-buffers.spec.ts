@@ -43,6 +43,26 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
   let eligibleProfessional: any;
   let ineligibleProfessional: any;
 
+  test("keeps open public booking ranges finite and rejects the former sentinel safely", async ({ request }) => {
+    const windowResponse = await request.get("/api/public-booking-window");
+    expect(windowResponse.ok(), await windowResponse.text()).toBe(true);
+    const bookingWindow = await windowResponse.json();
+    expect(bookingWindow.enabled).toBe(false);
+    expect(bookingWindow.maxDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(bookingWindow.maxDate).not.toBe("9999-12-31");
+
+    const supportedRange = await request.get(
+      `/api/appointments/public?startDate=${bookingWindow.today}&endDate=${bookingWindow.maxDate}`,
+    );
+    expect(supportedRange.ok(), await supportedRange.text()).toBe(true);
+
+    const formerSentinel = await request.get(
+      `/api/appointments/public?startDate=${bookingWindow.today}&endDate=9999-12-31`,
+    );
+    expect(formerSentinel.ok(), await formerSentinel.text()).toBe(true);
+    expect(await formerSentinel.json()).toEqual(await supportedRange.json());
+  });
+
   test("renders a local Beauty Home and beauty-clean theme at responsive widths", async ({ page }) => {
     const documentResponse = await page.request.get("/");
     expect(documentResponse.ok()).toBe(true);
@@ -275,6 +295,41 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
     expect(recurringAppointments.every((appointment: any) =>
       appointment.bufferBeforeMinutesSnapshot === 20
       && appointment.bufferAfterMinutesSnapshot === 25)).toBe(true);
+  });
+
+  test("returns only occupancy intersecting the requested Lisbon calendar date", async ({ request }) => {
+    await loginAdmin(request);
+    const nextYear = new Date().getUTCFullYear() + 1;
+    const appointmentStart = new Date(Date.UTC(nextYear, 0, 15, 10, 0));
+    const appointmentDate = `${nextYear}-01-15`;
+    const previousDate = `${nextYear}-01-14`;
+    const unrelatedDate = `${nextYear}-01-13`;
+    const createResponse = await request.post("/api/appointments/block", { data: {
+      barberId: eligibleProfessional.id,
+      serviceId: service.id,
+      serviceMode: "existing",
+      startTime: appointmentStart.toISOString(),
+      name: "Date filter QA",
+      phone: "+351912640099",
+      customerEmail: "",
+      isManualBooking: true,
+      allowOutsideHours: true,
+    } });
+    expect(createResponse.status(), await createResponse.text()).toBe(201);
+    const appointment = (await createResponse.json()).appointments[0];
+
+    const onAppointmentDate = await request.get(
+      `/api/appointments/public?barberId=${eligibleProfessional.id}&date=${appointmentDate}`,
+    );
+    const onPreviousDate = await request.get(
+      `/api/appointments/public?barberId=${eligibleProfessional.id}&date=${previousDate}`,
+    );
+    const onUnrelatedDate = await request.get(
+      `/api/appointments/public?barberId=${eligibleProfessional.id}&date=${unrelatedDate}`,
+    );
+    expect((await onAppointmentDate.json()).some((item: any) => item.id === appointment.id)).toBe(true);
+    expect((await onPreviousDate.json()).some((item: any) => item.id === appointment.id)).toBe(false);
+    expect((await onUnrelatedDate.json()).some((item: any) => item.id === appointment.id)).toBe(false);
   });
 
   test("opens concrete availability windows for public/manual booking and preserves them safely", async ({ request }) => {

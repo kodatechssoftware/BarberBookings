@@ -949,7 +949,6 @@ export async function acceptCanonicalUserInvite(
   options: { schemaName?: string; now?: Date } = {},
 ): Promise<CanonicalSessionIdentity> {
   const schema = resolveSchemaName(options.schemaName);
-  const now = options.now ?? new Date();
   const passwordHash = await bcrypt.hash(password, 10);
   const digest = inviteDigest(token);
   return transaction(pool, async (client) => {
@@ -963,11 +962,13 @@ export async function acceptCanonicalUserInvite(
       expires_at: Date;
       accepted_at: Date | null;
       revoked_at: Date | null;
+      database_now: Date;
     }>(`
       SELECT invite.id, invite.user_id, canonical_user.display_name, canonical_user.email,
         canonical_user.status,
         professional.id AS professional_id,
-        invite.expires_at, invite.accepted_at, invite.revoked_at
+        invite.expires_at, invite.accepted_at, invite.revoked_at,
+        clock_timestamp() AS database_now
       FROM ${table(schema, "user_invites")} invite
       INNER JOIN ${table(schema, "users")} canonical_user ON canonical_user.id = invite.user_id
       LEFT JOIN ${table(schema, "barbers")} professional ON professional.user_id = canonical_user.id
@@ -975,6 +976,7 @@ export async function acceptCanonicalUserInvite(
       FOR UPDATE OF invite, canonical_user
     `, [digest]);
     const invite = claimed.rows[0];
+    const now = options.now ?? invite?.database_now ?? new Date();
     const state = canonicalInviteState(invite, now);
     if (state !== "valid") throwCanonicalInviteState(state);
     if (invite.status !== "invited") {
@@ -984,6 +986,13 @@ export async function acceptCanonicalUserInvite(
         "Este utilizador já não está a aguardar ativação.",
       );
     }
+    const accepted = await client.query<{ accepted_at: Date }>(`
+      UPDATE ${table(schema, "user_invites")}
+      SET accepted_at = GREATEST($2, created_at)
+      WHERE id = $1
+      RETURNING accepted_at
+    `, [invite.id, now]);
+    const acceptedAt = accepted.rows[0].accepted_at;
     const updated = await client.query<{ id: number; auth_version: number }>(`
       UPDATE ${table(schema, "users")}
       SET password_hash = $2,
@@ -992,16 +1001,15 @@ export async function acceptCanonicalUserInvite(
           updated_at = $3
       WHERE id = $1 AND status = 'invited'
       RETURNING id, auth_version
-    `, [invite.user_id, passwordHash, now]);
+    `, [invite.user_id, passwordHash, acceptedAt]);
     if (updated.rows.length !== 1) {
       throw new CanonicalUserManagementError("USER_NOT_INVITED", 409, "Este utilizador já não está a aguardar ativação.");
     }
-    await client.query(`UPDATE ${table(schema, "user_invites")} SET accepted_at = $2 WHERE id = $1`, [invite.id, now]);
     await client.query(`
       UPDATE ${table(schema, "user_invites")}
       SET revoked_at = GREATEST($2, created_at)
       WHERE user_id = $1 AND id <> $3 AND accepted_at IS NULL AND revoked_at IS NULL
-    `, [invite.user_id, now, invite.id]);
+    `, [invite.user_id, acceptedAt, invite.id]);
     await writeAudit(client, schema, {
       user: { id: invite.user_id, displayName: invite.display_name, email: invite.email },
       professionalId: invite.professional_id === null ? null : Number(invite.professional_id),
