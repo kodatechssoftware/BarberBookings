@@ -365,6 +365,10 @@ const businessExpenseInputSchema = z.object({
   recurrence: z.enum(businessExpenseRecurrences).default("once"),
   notes: z.string().trim().max(500, "As notas não podem ter mais de 500 caracteres.").optional().nullable(),
 });
+const businessExpenseUpdateInputSchema = businessExpenseInputSchema
+  .omit({ recurrence: true })
+  .partial()
+  .extend({ recurrence: z.enum(businessExpenseRecurrences).optional() });
 const recurringExpenseTermsInputSchema = businessExpenseInputSchema.omit({ expenseDate: true }).extend({
   recurrence: z.enum(["weekly", "monthly"]),
 });
@@ -470,8 +474,8 @@ function sendCanonicalUserManagementError(res: Response, error: unknown) {
   if (error instanceof z.ZodError) {
     return res.status(400).json({
       code: "VALIDATION_ERROR",
-      message: error.errors[0]?.message || "Pedido inválido.",
-      field: error.errors[0]?.path.join("."),
+      message: error.issues[0]?.message || "Pedido inválido.",
+      field: error.issues[0]?.path.join("."),
     });
   }
   const code = (error as { code?: string } | null)?.code;
@@ -2626,7 +2630,7 @@ export async function registerRoutes(
     }
     const parsed = locationInputSchema.safeParse({ ...req.body, timezone: req.body?.timezone ?? SHOP_TIME_ZONE });
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Localização inválida." });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message || "Localização inválida." });
     }
     if (parsed.data.timezone !== SHOP_TIME_ZONE) {
       return res.status(400).json({ message: `As lojas desta instalação utilizam o fuso horário ${SHOP_TIME_ZONE}.` });
@@ -2650,7 +2654,7 @@ export async function registerRoutes(
     if (locationId === null) return res.status(400).json({ message: "Localização inválida." });
     const parsed = locationUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Localização inválida." });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message || "Localização inválida." });
     }
     if (parsed.data.timezone !== undefined && parsed.data.timezone !== SHOP_TIME_ZONE) {
       return res.status(400).json({ message: `As lojas desta instalação utilizam o fuso horário ${SHOP_TIME_ZONE}.` });
@@ -2740,8 +2744,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (hasDatabaseErrorCode(error, "23505")) {
@@ -2812,8 +2816,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (hasDatabaseErrorCode(error, "23505")) {
@@ -2895,7 +2899,7 @@ export async function registerRoutes(
       res.status(created.reused ? 200 : 201).json(created);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       if (sendRecurringExpenseError(res, error)) return;
       console.error("Create recurring expense series error:", error);
@@ -2931,7 +2935,7 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       if (sendRecurringExpenseError(res, error)) return;
       console.error("Update recurring expense series error:", error);
@@ -2991,7 +2995,7 @@ export async function registerRoutes(
       res.status(201).json(version);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       if (sendRecurringExpenseError(res, error)) return;
       console.error("Version recurring expense series error:", error);
@@ -3024,7 +3028,7 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       if (sendRecurringExpenseError(res, error)) return;
       console.error("Update recurring expense state error:", error);
@@ -3053,7 +3057,7 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       console.error("Update recurring expense occurrence error:", error);
       res.status(500).json({ message: "Erro ao alterar ocorrência" });
@@ -3127,8 +3131,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       console.error("Create expense error:", error);
@@ -3149,7 +3153,7 @@ export async function registerRoutes(
           message: "Escolha alterar apenas esta ocorrência ou esta e as seguintes.",
         });
       }
-      const parsed = businessExpenseInputSchema.partial().parse(req.body);
+      const parsed = businessExpenseUpdateInputSchema.parse(req.body);
       const patch = {
         ...parsed,
         expenseDate: parsed.expenseDate ? getShopDateBounds(parsed.expenseDate).start : undefined,
@@ -3169,8 +3173,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       console.error("Update expense error:", error);
@@ -3297,8 +3301,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
@@ -3462,8 +3466,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
@@ -3511,8 +3515,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (error instanceof Error && error.message === "Serviço inválido para este barbeiro.") {
@@ -3738,7 +3742,7 @@ export async function registerRoutes(
       const parsedPassword = barberInvitePasswordSchema.safeParse(req.body);
       if (!parsedPassword.success) {
         return res.status(400).json({
-          message: parsedPassword.error.errors[0]?.message || "Palavra-passe inválida.",
+          message: parsedPassword.error.issues[0]?.message || "Palavra-passe inválida.",
         });
       }
       const { password } = parsedPassword.data;
@@ -3815,7 +3819,7 @@ export async function registerRoutes(
       res.status(201).json(category);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       if (hasDatabaseErrorCode(error, "23505")) {
         return res.status(409).json({ message: "Já existe uma categoria com este nome." });
@@ -3837,7 +3841,7 @@ export async function registerRoutes(
       });
       res.json(categories);
     } catch (error) {
-      if (error instanceof z.ZodError) return res.status(400).json({ message: error.errors[0].message });
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues[0].message });
       if (getErrorCode(error) === "SERVICE_CATEGORY_ORDER_MISMATCH") {
         return res.status(409).json({ message: "A lista de categorias mudou. Atualize a página e tente novamente." });
       }
@@ -3864,7 +3868,7 @@ export async function registerRoutes(
       res.json(category);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       if (hasDatabaseErrorCode(error, "23505")) {
         return res.status(409).json({ message: "Já existe uma categoria com este nome." });
@@ -3920,8 +3924,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (error instanceof Error && error.message === "SERVICE_CATEGORY_NOT_FOUND") {
@@ -4006,8 +4010,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       if (error instanceof Error && error.message === "SERVICE_CATEGORY_NOT_FOUND") {
@@ -4122,7 +4126,7 @@ export async function registerRoutes(
       return res.status(201).json(effectiveService);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       throw error;
     }
@@ -4156,7 +4160,7 @@ export async function registerRoutes(
       return res.json(effectiveService);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message, field: error.errors[0].path.join(".") });
+        return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
       }
       throw error;
     }
@@ -4200,8 +4204,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message || "Dados de administrador inválidos.",
-          field: error.errors[0]?.path.join("."),
+          message: error.issues[0]?.message || "Dados de administrador inválidos.",
+          field: error.issues[0]?.path.join("."),
         });
       }
       if (getErrorCode(error) === "23505") {
@@ -4315,7 +4319,7 @@ export async function registerRoutes(
 
     const parsed = inputSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Disponibilidade inválida." });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message || "Disponibilidade inválida." });
     }
 
     const rows = parsed.data.map((row) => {
@@ -4392,7 +4396,7 @@ export async function registerRoutes(
 
     const parsed = inputSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Disponibilidade inválida." });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message || "Disponibilidade inválida." });
     }
 
     const rows = parsed.data.map((row) => {
@@ -4825,8 +4829,8 @@ export async function registerRoutes(
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
+          message: err.issues[0].message,
+          field: err.issues[0].path.join('.'),
         });
       }
       if (isAppointmentConflictError(err)) {
@@ -6488,8 +6492,8 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0].message,
-          field: error.errors[0].path.join("."),
+          message: error.issues[0].message,
+          field: error.issues[0].path.join("."),
         });
       }
       res.status(500).json({ message: "Erro ao adicionar à lista de bloqueio" });
@@ -6754,7 +6758,7 @@ export async function registerRoutes(
   app.patch("/api/admin/customers/notes", requireAuth, async (req, res) => {
     const parsed = customerNotesByAppointmentInputSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Notas inválidas." });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message || "Notas inválidas." });
     }
 
     const locationId = Number(res.locals.locationId);
@@ -6816,7 +6820,7 @@ export async function registerRoutes(
 
     const parsed = customerNotesInputSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: parsed.error.errors[0]?.message || "Notas inválidas." });
+      return res.status(400).json({ message: parsed.error.issues[0]?.message || "Notas inválidas." });
     }
 
     const email = normalizeEmail(parsed.data.email);

@@ -51,7 +51,22 @@ export const locationInputSchema = z.object({
   isActive: z.boolean().optional().default(false),
 });
 
-export const locationUpdateSchema = locationInputSchema.partial();
+// Zod 4 applies defaults nested inside optional fields. Keep PATCH requests
+// sparse so omitted location fields retain their existing values.
+export const locationUpdateSchema = z.object({
+  name: locationInputSchema.shape.name.optional(),
+  address: locationInputSchema.shape.address.optional(),
+  logoUrl: optionalLogoUrl.optional(),
+  mapUrl: optionalHttpUrl.optional(),
+  mapEmbedUrl: optionalGoogleMapsEmbedUrl.optional(),
+  phone: z.string().trim().max(40).optional(),
+  email: z.string().trim().max(120).refine(
+    (value) => !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+    "Indique um email válido.",
+  ).optional(),
+  timezone: z.string().trim().min(1).max(80).optional(),
+  isActive: z.boolean().optional(),
+});
 
 export type LocationInput = z.infer<typeof locationInputSchema>;
 export type LocationUpdate = z.infer<typeof locationUpdateSchema>;
