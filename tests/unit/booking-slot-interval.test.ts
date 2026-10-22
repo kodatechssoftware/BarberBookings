@@ -16,7 +16,7 @@ import {
 const timeZone = "Europe/Lisbon";
 const selectedDate = new Date(2026, 8, 17);
 const now = new Date("2026-09-01T00:00:00.000Z");
-const visibleBarbers = [{ id: 1 }];
+const visibleBarbers = [{ id: 1, serviceIds: [1] }];
 
 function slots({
   interval,
