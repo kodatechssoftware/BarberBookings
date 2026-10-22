@@ -6237,6 +6237,25 @@ test.describe("booking rules", () => {
     }
   });
 
+  test("caps open public booking ranges at a finite operational horizon", async ({ request }) => {
+    const windowResponse = await request.get("/api/public-booking-window");
+    expect(windowResponse.ok(), await windowResponse.text()).toBe(true);
+    const bookingWindow = await windowResponse.json();
+    expect(bookingWindow.enabled).toBe(false);
+    expect(bookingWindow.maxDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(bookingWindow.maxDate).not.toBe("9999-12-31");
+
+    const supportedRange = await request.get(
+      `/api/appointments/public?startDate=${bookingWindow.today}&endDate=${bookingWindow.maxDate}`,
+    );
+    const formerSentinel = await request.get(
+      `/api/appointments/public?startDate=${bookingWindow.today}&endDate=9999-12-31`,
+    );
+    expect(supportedRange.ok(), await supportedRange.text()).toBe(true);
+    expect(formerSentinel.ok(), await formerSentinel.text()).toBe(true);
+    expect(await formerSentinel.json()).toEqual(await supportedRange.json());
+  });
+
   test("does not advance manipulated booking URLs with impossible or past dates", async ({ page, request }) => {
     const [barbersResponse, servicesResponse] = await Promise.all([
       request.get("/api/barbers"),

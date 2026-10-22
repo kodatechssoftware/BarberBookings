@@ -1,4 +1,5 @@
 export const DEFAULT_PUBLIC_BOOKING_OPEN_DAY = 20;
+export const DEFAULT_PUBLIC_BOOKING_HORIZON_DAYS = 366;
 export const PUBLIC_BOOKING_WINDOW_CLOSED_CODE = "PUBLIC_BOOKING_WINDOW_CLOSED";
 
 export type PublicBookingWindow = {
@@ -67,6 +68,30 @@ export function getPublicBookingWindow(
     openDay,
     nextMonthAvailable,
     nextOpeningDate: dateKey({ ...openingMonth, day: openDay }),
+  };
+}
+
+export function getOpenPublicBookingWindow(
+  now: Date,
+  timeZone: string,
+  rawOpenDay: string | number | undefined = DEFAULT_PUBLIC_BOOKING_OPEN_DAY,
+  horizonDays = DEFAULT_PUBLIC_BOOKING_HORIZON_DAYS,
+): PublicBookingWindow {
+  const window = getPublicBookingWindow(now, timeZone, rawOpenDay);
+  const today = getCalendarDateInTimeZone(now, timeZone);
+  const safeHorizonDays = Number.isInteger(horizonDays) && horizonDays > 0
+    ? horizonDays
+    : DEFAULT_PUBLIC_BOOKING_HORIZON_DAYS;
+  const horizon = new Date(Date.UTC(today.year, today.month - 1, today.day + safeHorizonDays));
+
+  return {
+    ...window,
+    enabled: false,
+    maxDate: dateKey({
+      year: horizon.getUTCFullYear(),
+      month: horizon.getUTCMonth() + 1,
+      day: horizon.getUTCDate(),
+    }),
   };
 }
 

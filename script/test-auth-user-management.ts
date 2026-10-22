@@ -178,6 +178,33 @@ try {
   );
   assert.equal((await pool.query(`SELECT count(*)::integer AS count FROM ${table(schema, "admins")}`)).rows[0].count, 1);
 
+  const clockSkewed = await create(root, {
+    displayName: "Convite com relógio divergente",
+    email: "clock-skew@example.test",
+    access: [{ kind: "location", locationId: 1, preset: "professional", capabilities: [] }],
+  });
+  const clockSkewCreatedAt = (await pool.query<{ created_at: Date }>(`
+    SELECT created_at FROM ${table(schema, "user_invites")} WHERE user_id = $1
+  `, [clockSkewed.user.id])).rows[0].created_at;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await accept(
+    clockSkewed.invite.token,
+    "Clock-skew-password-2026",
+    new Date(clockSkewCreatedAt.getTime() - 60_000),
+  );
+  const clockSkewAccepted = (await pool.query<{ created_at: Date; accepted_at: Date; updated_at: Date }>(`
+    SELECT invite.created_at, invite.accepted_at, canonical_user.updated_at
+    FROM ${table(schema, "user_invites")} invite
+    INNER JOIN ${table(schema, "users")} canonical_user ON canonical_user.id = invite.user_id
+    WHERE invite.user_id = $1
+  `, [clockSkewed.user.id])).rows[0];
+  assert(clockSkewAccepted.accepted_at.getTime() >= clockSkewAccepted.created_at.getTime());
+  assert.equal(clockSkewAccepted.updated_at.getTime(), clockSkewAccepted.accepted_at.getTime());
+  await assert.rejects(
+    accept(clockSkewed.invite.token, "Clock-skew-password-2026"),
+    expectManagementCode("INVITE_USED"),
+  );
+
   await assert.rejects(create(root, {
     displayName: "Duplicado",
     email: "ADMIN-ONLY@EXAMPLE.TEST",
