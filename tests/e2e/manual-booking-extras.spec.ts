@@ -706,6 +706,11 @@ test.describe.serial("manual booking Extras", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdminPage(page);
+    const todayKey = dateKey(new Date().toISOString());
+    const todayButton = page.getByRole("button", { name: "Hoje", exact: true });
+    await expect(todayButton).toBeVisible();
+    await todayButton.click();
+    await expect(page.getByTestId(`weekly-agenda-day-${todayKey}`).filter({ visible: true }).first()).toBeVisible();
     const dayKey = dateKey(scenarios[0].startTime);
     let dayButton = page.getByTestId(`weekly-agenda-day-${dayKey}`).filter({ visible: true }).first();
     if (await dayButton.count() === 0) {
@@ -1217,6 +1222,11 @@ test.describe.serial("manual booking Extras", () => {
 
   test("uses the central finance engine in dashboard, rankings and the accounting workbook", async ({ request }) => {
     test.setTimeout(120_000);
+    const runtimeConfigResponse = await request.get("/api/runtime-config");
+    expect(runtimeConfigResponse.ok(), await runtimeConfigResponse.text()).toBe(true);
+    const runtimeConfig = await runtimeConfigResponse.json();
+    const workbookCopy = runtimeConfig.copy.admin.reports.workbook;
+    const totalForProfessionalsLabel = workbookCopy.totalForProfessionals;
     const suffix = Date.now();
     const financeBarberResponse = await request.post("/api/barbers", { data: {
       name: `Barbeiro Finance Extras QA ${suffix}`,
@@ -1432,7 +1442,7 @@ test.describe.serial("manual booking Extras", () => {
     expect(voucherSummary.get("Receita realizada")).toBe(25);
     expect(voucherSummary.get("Recebimentos confirmados")).toBe(0);
     expect(voucherSummary.get("Valor coberto por Vale/Cupão")).toBe(25);
-    expect(voucherSummary.get("Total atribuído aos barbeiros")).toBe(16);
+    expect(voucherSummary.get(totalForProfessionalsLabel)).toBe(16);
     expect(voucherSummary.get("Total atribuído ao estabelecimento")).toBe(9);
     const voucherDetail = voucherWorkbook.getWorksheet("Detalhe dos Movimentos")!;
     const voucherHeader = getHeaderRow(voucherDetail, "Data do serviço");
@@ -1569,7 +1579,7 @@ test.describe.serial("manual booking Extras", () => {
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
       "Resumo Financeiro",
       "Detalhe dos Movimentos",
-      "Acertos com Barbeiros",
+      workbookCopy.settlementsSheet,
     ]);
 
     const summary = getSummaryValues(workbook.getWorksheet("Resumo Financeiro")!);
@@ -1577,7 +1587,7 @@ test.describe.serial("manual booking Extras", () => {
     expect(summary.get("Receita de Extras concluídos")).toBe(10);
     expect(summary.get("Receita total concluída")).toBe(25);
     expect(summary.get("Receita realizada")).toBe(25);
-    expect(summary.get("Total atribuído aos barbeiros")).toBe(16);
+    expect(summary.get(totalForProfessionalsLabel)).toBe(16);
     expect(summary.get("Total atribuído ao estabelecimento")).toBe(9);
 
     const detail = workbook.getWorksheet("Detalhe dos Movimentos")!;
@@ -1590,8 +1600,8 @@ test.describe.serial("manual booking Extras", () => {
     const totalColumn = headers.indexOf("Valor final (€)");
     const receivedColumn = headers.indexOf("Valor recebido (€)");
     const realizedColumn = headers.indexOf("Valor realizado (€)");
-    const barberColumn = headers.indexOf("Parte barbeiro (€)");
-    const establishmentColumn = headers.indexOf("Parte estabelecimento (€)");
+    const barberColumn = headers.indexOf(workbookCopy.professionalShare);
+    const establishmentColumn = headers.indexOf(workbookCopy.establishmentShare);
     let movement: ExcelJS.Row | undefined;
     detail.eachRow((row, rowNumber) => {
       if (rowNumber > detailHeader.number && row.getCell(idColumn).value === barberCase.appointment.id) movement = row;
@@ -1609,14 +1619,14 @@ test.describe.serial("manual booking Extras", () => {
       expect(typeof movement!.getCell(column).value).toBe("number");
     }
 
-    const settlements = workbook.getWorksheet("Acertos com Barbeiros")!;
-    const settlementHeader = getHeaderRow(settlements, "Barbeiro");
+    const settlements = workbook.getWorksheet(workbookCopy.settlementsSheet)!;
+    const settlementHeader = getHeaderRow(settlements, workbookCopy.professionalLabel);
     const settlementHeaders = settlementHeader.values as unknown[];
-    const settlementBarberColumn = settlementHeaders.indexOf("Barbeiro");
+    const settlementBarberColumn = settlementHeaders.indexOf(workbookCopy.professionalLabel);
     const settlementBaseColumn = settlementHeaders.indexOf("Base de acerto (€)");
-    const settlementCommissionColumn = settlementHeaders.indexOf("Comissões do barbeiro (€)");
-    const settlementBarberValueColumn = settlementHeaders.indexOf("Valor do barbeiro (€)");
-    const settlementShopValueColumn = settlementHeaders.indexOf("Valor da barbearia (€)");
+    const settlementCommissionColumn = settlementHeaders.indexOf(workbookCopy.professionalCommissions);
+    const settlementBarberValueColumn = settlementHeaders.indexOf(workbookCopy.professionalValue);
+    const settlementShopValueColumn = settlementHeaders.indexOf(workbookCopy.establishmentValue);
     let settlement: ExcelJS.Row | undefined;
     settlements.eachRow((row, rowNumber) => {
       if (rowNumber > settlementHeader.number && row.getCell(settlementBarberColumn).value === financeBarber.name) settlement = row;
@@ -1668,12 +1678,12 @@ test.describe.serial("manual booking Extras", () => {
     expect(chairSummary.get("Ofertas (valor dos Extras, sem recebimento)")).toBe(10);
     expect(chairSummary.get("Ofertas (valor total, sem recebimento)")).toBe(25);
     expect(chairSummary.get("Receita realizada")).toBe(0);
-    const chairSettlements = chairWorkbook.getWorksheet("Acertos com Barbeiros")!;
-    const chairSettlementHeader = getHeaderRow(chairSettlements, "Barbeiro");
+    const chairSettlements = chairWorkbook.getWorksheet(workbookCopy.settlementsSheet)!;
+    const chairSettlementHeader = getHeaderRow(chairSettlements, workbookCopy.professionalLabel);
     const chairHeaders = chairSettlementHeader.values as unknown[];
-    const chairRentColumn = chairHeaders.indexOf("Aluguer de cadeira (€)");
-    const chairBarberValueColumn = chairHeaders.indexOf("Valor do barbeiro (€)");
-    const chairShopValueColumn = chairHeaders.indexOf("Valor da barbearia (€)");
+    const chairRentColumn = chairHeaders.indexOf(workbookCopy.workspaceRent);
+    const chairBarberValueColumn = chairHeaders.indexOf(workbookCopy.professionalValue);
+    const chairShopValueColumn = chairHeaders.indexOf(workbookCopy.establishmentValue);
     const chairSettlement = chairSettlements.getRow(chairSettlementHeader.number + 1);
     expect(chairSettlement.getCell(chairRentColumn).value).toBe(25);
     expect(chairSettlement.getCell(chairBarberValueColumn).value).toBe(-25);
