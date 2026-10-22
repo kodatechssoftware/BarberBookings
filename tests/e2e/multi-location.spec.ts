@@ -598,7 +598,14 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
       expect(adminBusyResponse.ok(), await adminBusyResponse.text()).toBe(true);
       const adminBusy = await adminBusyResponse.json();
       expect(adminBusy).toHaveLength(1);
-      expect(Object.keys(adminBusy[0]).sort()).toEqual(["barberId", "durationMinutes", "startTime", "status"]);
+      expect(Object.keys(adminBusy[0]).sort()).toEqual([
+        "barberId",
+        "bufferAfterMinutesSnapshot",
+        "bufferBeforeMinutesSnapshot",
+        "durationMinutes",
+        "startTime",
+        "status",
+      ]);
       for (const forbidden of [
         "id", "locationId", "serviceId", "customerName", "customerEmail", "customerPhone",
         "paymentMethod", "depositRequired", "seriesId", "notificationRevision", "createdAt", "cancelToken",

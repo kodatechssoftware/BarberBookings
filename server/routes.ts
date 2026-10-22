@@ -119,6 +119,7 @@ import {
   supportedPhonesMatch,
 } from "@shared/phone-countries";
 import {
+  getOpenPublicBookingWindow,
   getPublicBookingWindow,
   isDateWithinPublicBookingWindow,
   PUBLIC_BOOKING_WINDOW_CLOSED_CODE,
@@ -155,7 +156,12 @@ import {
   updateRecurringExpenseOccurrence,
 } from "./recurring-expenses";
 import { resolveServiceLocationTerms } from "@shared/service-location-terms";
-import { appointmentOccupancyOverlaps, getOperationalAppointmentBounds } from "@shared/appointment-occupancy";
+import {
+  appointmentOccupancyOverlaps,
+  getAppointmentOccupancyPeriods,
+  getOperationalAppointmentBounds,
+} from "@shared/appointment-occupancy";
+import { getCalendarDateBounds } from "./calendar-timezone";
 import {
   acceptLegacyProfessionalInviteCanonical,
   authenticateCanonicalUser,
@@ -690,10 +696,9 @@ function requestLocationTimeZone(res: Response) {
 }
 
 function currentPublicBookingWindow(now = new Date()) {
-  const bookingWindow = getPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY);
   return PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED
-    ? bookingWindow
-    : { ...bookingWindow, enabled: false, maxDate: "9999-12-31" };
+    ? getPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY)
+    : getOpenPublicBookingWindow(now, SHOP_TIME_ZONE, PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY);
 }
 
 function sendPublicBookingWindowClosed(res: Response) {
@@ -1045,6 +1050,45 @@ function shiftCalendarDateKey(value: string, days: number) {
   const [year, month, day] = value.split("-").map(Number);
   const shifted = new Date(Date.UTC(year, month - 1, day + days));
   return shifted.toISOString().slice(0, 10);
+}
+
+type PublicAppointmentResponseBounds = {
+  start: Date | null;
+  endExclusive: Date | null;
+};
+
+function getPublicAppointmentResponseBounds(
+  date: string | undefined,
+  startDate: string | undefined,
+  endDate: string | undefined,
+  timeZone: string,
+): PublicAppointmentResponseBounds | null {
+  if (date) {
+    const bounds = getCalendarDateBounds(date, timeZone);
+    return { start: bounds.start, endExclusive: bounds.endExclusive };
+  }
+  if (!startDate && !endDate) return null;
+  return {
+    start: startDate ? getCalendarDateBounds(startDate, timeZone).start : null,
+    endExclusive: endDate ? getCalendarDateBounds(endDate, timeZone).endExclusive : null,
+  };
+}
+
+function appointmentIntersectsPublicResponseBounds(
+  appointment: AppointmentLike,
+  serviceDurations: Map<number, number>,
+  bounds: PublicAppointmentResponseBounds | null,
+) {
+  if (!bounds) return true;
+  return getAppointmentOccupancyPeriods({
+    startTime: appointment.startTime,
+    durationMinutes: getEffectiveAppointmentDurationMinutes(appointment, serviceDurations),
+    bufferBeforeMinutes: appointment.bufferBeforeMinutesSnapshot,
+    bufferAfterMinutes: appointment.bufferAfterMinutesSnapshot,
+    availabilityWindows: appointment.availabilityWindows,
+  }).some((period) =>
+    (!bounds.start || period.endTime > bounds.start)
+      && (!bounds.endExclusive || period.startTime < bounds.endExclusive));
 }
 
 function getErrorCode(error: unknown) {
@@ -5758,13 +5802,11 @@ export async function registerRoutes(
     const startDate = req.query.startDate as string | undefined;
     let endDate = req.query.endDate as string | undefined;
     const bookingWindow = currentPublicBookingWindow();
-    if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED) {
-      if ((date && date > bookingWindow.maxDate) || (startDate && startDate > bookingWindow.maxDate)) {
-        return res.json([]);
-      }
-      if (endDate && endDate > bookingWindow.maxDate) {
-        endDate = bookingWindow.maxDate;
-      }
+    if ((date && date > bookingWindow.maxDate) || (startDate && startDate > bookingWindow.maxDate)) {
+      return res.json([]);
+    }
+    if (endDate && endDate > bookingWindow.maxDate) {
+      endDate = bookingWindow.maxDate;
     }
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
     const appointments = await attachAppointmentAvailabilityWindows(date
@@ -5788,8 +5830,16 @@ export async function registerRoutes(
     const serviceDurations = new Map(
       (await loadLocationServiceCatalogue(locationId, true)).map((service) => [service.id, service.duration]),
     );
+    const responseBounds = getPublicAppointmentResponseBounds(
+      date,
+      startDate,
+      endDate,
+      requestLocationTimeZone(res),
+    );
     const publicAppointments = appointments
-      .filter((app) => app.status === "booked" && visibleBarberIds.has(app.barberId))
+      .filter((app) => app.status === "booked"
+        && visibleBarberIds.has(app.barberId)
+        && appointmentIntersectsPublicResponseBounds(app, serviceDurations, responseBounds))
       .map((app) => ({
         id: app.id,
         startTime: app.startTime,
