@@ -108,6 +108,7 @@ export function AppointmentBlockDialog({
   hasLocationDataError = false,
 }: AppointmentBlockDialogProps) {
   const agendaCopy = useBusinessCopy().agenda;
+  const extrasCopy = useBusinessCopy().admin.extras;
   const businessConfig = useBusinessConfig();
   const [isEmailTouched, setIsEmailTouched] = useState(false);
   const [isExtrasOpen, setIsExtrasOpen] = useState(false);
@@ -170,8 +171,8 @@ export function AppointmentBlockDialog({
   const incompleteVariableExtra = selectedExtraRows.find((extra) => extra.effectiveAmountCents === null);
   const selectedExtrasCount = blockData.extras.length;
   const extrasHeading = selectedExtrasCount === 0
-    ? "Extras (opcional)"
-    : `Extras (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
+    ? `${extrasCopy.tabLabel} (opcional)`
+    : `${extrasCopy.tabLabel} (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
   const availabilityWindowsEnabled = businessConfig.features.appointmentAvailabilityWindows
     && blockData.isManualBooking && !blockData.isRecurring && !blockData.isAlreadyCompleted;
   const selectedDuration = blockData.serviceMode === "custom"
@@ -888,9 +889,9 @@ export function AppointmentBlockDialog({
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-3 border-t border-white/10 p-4" data-testid="manual-booking-extras-content">
-                  <p className="text-xs text-gray-400">Selecione um ou vários Extras para esta marcação.</p>
+                  <p className="text-xs text-gray-400">{extrasCopy.catalogDescription}</p>
                   {isLoadingExtras ? (
-                    <p className="text-xs text-gray-500">A carregar Extras...</p>
+                    <p className="text-xs text-gray-500">A carregar {extrasCopy.pluralLabel}...</p>
                   ) : (
                     <div className="space-y-2">
                     {applicableExtras.map((extra) => {
@@ -919,7 +920,7 @@ export function AppointmentBlockDialog({
                                       }]
                                   : current.extras.filter((candidate) => candidate.extraId !== extra.id),
                               }))}
-                              aria-label={`Selecionar Extra ${extra.name}`}
+                              aria-label={`Selecionar ${extrasCopy.singularLabel} ${extra.name}`}
                             />
                             <span className="min-w-0 flex-1 break-words text-sm text-gray-200">{extra.name}</span>
                             <span className="shrink-0 text-sm font-semibold text-primary">
@@ -958,7 +959,7 @@ export function AppointmentBlockDialog({
                                     : candidate),
                                 }))}
                                 placeholder="Ex.: 18,00"
-                                aria-label={`Valor do Extra ${extra.name}`}
+                                aria-label={`Valor do ${extrasCopy.singularLabel} ${extra.name}`}
                                 className="h-11 border-white/10 bg-background text-white"
                               />
                               </div>
@@ -976,7 +977,7 @@ export function AppointmentBlockDialog({
                                       ? { ...candidate, quantity: Math.max(1, Math.min(99, Number(event.target.value) || 1)) }
                                       : candidate),
                                   }))}
-                                  aria-label={`Quantidade do Extra ${extra.name}`}
+                                  aria-label={`Quantidade do ${extrasCopy.singularLabel} ${extra.name}`}
                                   className="h-11 border-white/10 bg-background text-white"
                                 />
                               </div>

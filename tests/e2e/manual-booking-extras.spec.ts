@@ -85,6 +85,9 @@ test.describe.serial("manual booking Extras", () => {
   let travelExtra: any;
   let specialExtra: any;
   let inactiveExtra: any;
+  let runtimeExtrasCopy: { tabLabel: string; singularLabel: string; pluralLabel: string };
+  let runtimeInternalCostsCopy: { tabLabel: string; description: string };
+  let runtimeWorkbookCopy: { nominalTotalRevenue: string };
   let originalShopAvailability: any[] = [];
   const createdAppointmentIds = new Set<number>();
 
@@ -126,6 +129,10 @@ test.describe.serial("manual booking Extras", () => {
 
   test.beforeAll(async ({ request }) => {
     await loginAdmin(request);
+    const runtimeConfig = await (await request.get("/api/runtime-config")).json();
+    runtimeExtrasCopy = runtimeConfig.copy.admin.extras;
+    runtimeInternalCostsCopy = runtimeConfig.copy.admin.internalCosts;
+    runtimeWorkbookCopy = runtimeConfig.copy.admin.reports.workbook;
     originalShopAvailability = await (await request.get("/api/shop/availability")).json();
     expect((await request.patch("/api/shop/availability", { data: shopHours() })).ok()).toBe(true);
 
@@ -732,18 +739,18 @@ test.describe.serial("manual booking Extras", () => {
       const completion = page.getByRole("alertdialog", { name: "Concluir marcação" });
       await expect(completion).toBeVisible();
       await expect(completion.getByText("Nenhum", { exact: true })).toBeVisible();
-      await expect(completion).not.toContainText("Custos / Consumos");
+      await expect(completion).not.toContainText(runtimeInternalCostsCopy.tabLabel);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
       if (scenario.extras.length > 0) {
         await completion.getByTestId("beauty-completion-add-extra").click();
         for (const selected of scenario.extras) {
-          await completion.getByLabel(`Selecionar Extra ${selected.extra.name}`).click();
+          await completion.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${selected.extra.name}`).click();
           if (selected.amount) {
-            await completion.getByLabel(`Valor do Extra ${selected.extra.name}`).fill(selected.amount);
+            await completion.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${selected.extra.name}`).fill(selected.amount);
           }
           if (selected.quantity) {
-            await completion.getByLabel(`Quantidade do Extra ${selected.extra.name}`).fill(String(selected.quantity));
+            await completion.getByLabel(`Quantidade do ${runtimeExtrasCopy.singularLabel} ${selected.extra.name}`).fill(String(selected.quantity));
           }
         }
       }
@@ -787,10 +794,10 @@ test.describe.serial("manual booking Extras", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginAdminPage(page);
-    await page.getByRole("tab", { name: "Custos / Consumos" }).click();
+    await page.getByRole("tab", { name: runtimeInternalCostsCopy.tabLabel }).click();
     const manager = page.getByTestId("internal-costs-manager");
     await expect(manager).toContainText(definition.name);
-    await expect(manager).toContainText("Nunca altera o preço cobrado");
+    await expect(manager).toContainText(runtimeInternalCostsCopy.description);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(manager).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
@@ -910,20 +917,20 @@ test.describe.serial("manual booking Extras", () => {
     const extrasEditor = editor.getByTestId("appointment-extras-editor");
     const extrasEditorTrigger = editor.getByTestId("appointment-extras-editor-trigger");
     await expect(extrasEditorTrigger).toHaveAttribute("aria-expanded", "true");
-    await expect(extrasEditorTrigger).toContainText("Extras (2 selecionados)");
-    await expect(extrasEditor.getByLabel(`Selecionar Extra ${variable.name}`)).toBeChecked();
-    await expect(extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`)).toBeChecked();
+    await expect(extrasEditorTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (2 selecionados)`);
+    await expect(extrasEditor.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${variable.name}`)).toBeChecked();
+    await expect(extrasEditor.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${fixed.name}`)).toBeChecked();
     await expect(extrasEditor.getByText("Inativo · pode remover, mas não voltar a adicionar")).toBeVisible();
-    await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toHaveValue("5,00");
-    await expect(extrasEditor.getByLabel(`Valor do Extra ${fixed.name}`)).toBeDisabled();
+    await expect(extrasEditor.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${fixed.name}`)).toHaveValue("5,00");
+    await expect(extrasEditor.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${fixed.name}`)).toBeDisabled();
     await extrasEditorTrigger.click();
     await expect(extrasEditorTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(extrasEditorTrigger).toContainText("Extras (2 selecionados)");
+    await expect(extrasEditorTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (2 selecionados)`);
     await extrasEditorTrigger.click();
-    await expect(extrasEditor.getByLabel(`Valor do Extra ${variable.name}`)).toHaveValue("10,00");
-    await extrasEditor.getByLabel(`Valor do Extra ${variable.name}`).fill("18,00");
-    await extrasEditor.getByLabel(`Selecionar Extra ${fixed.name}`).click();
-    await expect(extrasEditorTrigger).toContainText("Extras (1 selecionado)");
+    await expect(extrasEditor.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${variable.name}`)).toHaveValue("10,00");
+    await extrasEditor.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${variable.name}`).fill("18,00");
+    await extrasEditor.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${fixed.name}`).click();
+    await expect(extrasEditorTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (1 selecionado)`);
     await expect(editor.getByTestId("appointment-edit-total")).toContainText("43,00 €");
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -966,18 +973,18 @@ test.describe.serial("manual booking Extras", () => {
     const extrasTrigger = dialog.getByTestId("manual-booking-extras-trigger");
     await expect(extrasSection).toBeVisible();
     await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(extrasTrigger).toContainText("Extras (opcional)");
+    await expect(extrasTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (opcional)`);
     await expect(dialog.getByTestId("manual-booking-extras-content")).not.toBeVisible();
     await extrasTrigger.press("Enter");
     await expect(extrasTrigger).toHaveAttribute("aria-expanded", "true");
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).not.toBeChecked();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${inactiveExtra.name}`)).toHaveCount(0);
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).not.toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).not.toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${inactiveExtra.name}`)).toHaveCount(0);
 
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
-    await extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
-    await expect(extrasTrigger).toContainText("Extras (1 selecionado)");
+    await extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`).click();
+    await expect(extrasTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (1 selecionado)`);
     await expect(extrasTrigger).toContainText("Valor por completar");
     await dialog.getByLabel("Nome do cliente", { exact: true }).fill(`Extra incompleto UI ${Date.now()}`);
     await clickFirstEnabledManualTime(dialog);
@@ -985,27 +992,27 @@ test.describe.serial("manual booking Extras", () => {
     await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
     await dialog.getByRole("button", { name: "Criar marcação" }).click();
     await expect(extrasTrigger).toHaveAttribute("aria-expanded", "true");
-    await expect(extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`)).toBeFocused();
+    await expect(extrasSection.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toBeFocused();
     await page.getByText("Valor inválido", { exact: true }).waitFor({ state: "hidden", timeout: 10_000 });
-    await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
-    await extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`).fill("10,00");
-    await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
+    await extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`).click();
+    await extrasSection.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`).fill("10,00");
+    await expect(extrasTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (2 selecionados)`);
     await expect(extrasTrigger).not.toContainText("Valor por completar");
-    await expect(extrasSection.getByLabel(`Valor do Extra ${specialExtra.name}`)).toHaveValue("5,00");
+    await expect(extrasSection.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).toHaveValue("5,00");
     await extrasTrigger.click();
     await expect(extrasTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
+    await expect(extrasTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (2 selecionados)`);
     await page.setViewportSize({ width: 820, height: 1080 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await dialog.screenshot({ path: "test-results/manual-booking-extras-collapsed-tablet.png" });
     await extrasTrigger.click();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).toBeChecked();
-    await expect(extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`)).toHaveValue("10,00");
-    await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
-    await expect(extrasTrigger).toContainText("Extras (1 selecionado)");
-    await extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
-    await expect(extrasTrigger).toContainText("Extras (2 selecionados)");
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toHaveValue("10,00");
+    await extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`).click();
+    await expect(extrasTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (1 selecionado)`);
+    await extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`).click();
+    await expect(extrasTrigger).toContainText(`${runtimeExtrasCopy.tabLabel} (2 selecionados)`);
     await page.setViewportSize({ width: 1280, height: 900 });
 
     let summary = dialog.getByTestId("manual-booking-summary");
@@ -1016,28 +1023,28 @@ test.describe.serial("manual booking Extras", () => {
     await dialog.screenshot({ path: "test-results/manual-booking-extras-desktop.png" });
 
     await selectDialogOption(page, dialog, 1, alternateService.name);
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).toBeChecked();
-    await expect(extrasSection.getByLabel(`Valor do Extra ${travelExtra.name}`)).toHaveValue("10,00");
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toHaveValue("10,00");
     await expect(summary.getByText("35,00 €", { exact: true })).toBeVisible();
 
     const specialTermsSwitch = dialog.getByLabel("Condições especiais desta marcação");
     await specialTermsSwitch.click();
     await dialog.locator("#manual-booking-special-price").fill("22,00");
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toBeChecked();
     await expect(summary.getByText("Preço especial", { exact: true })).toBeVisible();
     await expect(summary.getByText("37,00 €", { exact: true })).toBeVisible();
     await specialTermsSwitch.click();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).toBeChecked();
 
     await specialTermsSwitch.click();
     await dialog.getByRole("button", { name: "Serviço personalizado" }).click();
     await dialog.locator("#manual-booking-custom-service").fill("Serviço custom UI com Extras");
     await dialog.locator("#manual-booking-custom-duration").fill("45");
     await dialog.locator("#manual-booking-custom-price").fill("30,00");
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${travelExtra.name}`)).toBeChecked();
-    await expect(extrasSection.getByLabel(`Selecionar Extra ${specialExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).toBeChecked();
+    await expect(extrasSection.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).toBeChecked();
     await expect(summary.getByText("45,00 €", { exact: true })).toBeVisible();
 
     await dialog.getByLabel("Repetir marcação").click();
@@ -1047,20 +1054,20 @@ test.describe.serial("manual booking Extras", () => {
     await expect(dialog.getByTestId("manual-booking-extras")).toBeVisible();
     await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
     await dialog.getByTestId("manual-booking-extras-trigger").click();
-    await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
-    await expect(dialog.getByLabel(`Selecionar Extra ${specialExtra.name}`)).not.toBeChecked();
+    await expect(dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).not.toBeChecked();
+    await expect(dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`)).not.toBeChecked();
 
     await dialog.getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Marcação manual" }).click();
     dialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
     await dialog.getByTestId("manual-booking-extras-trigger").click();
-    await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
+    await expect(dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).not.toBeChecked();
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
-    await dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
-    await dialog.getByLabel(`Selecionar Extra ${specialExtra.name}`).click();
-    await dialog.getByLabel(`Valor do Extra ${travelExtra.name}`).fill("10,00");
+    await dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`).click();
+    await dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${specialExtra.name}`).click();
+    await dialog.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`).fill("10,00");
     await dialog.getByLabel("Nome do cliente", { exact: true }).fill(`Payload Extras UI ${Date.now()}`);
     await clickFirstEnabledManualTime(dialog);
 
@@ -1078,7 +1085,7 @@ test.describe.serial("manual booking Extras", () => {
     await expect(summary.getByText("30,00 €", { exact: true })).toBeVisible();
     await dialog.getByTestId("manual-booking-extras-trigger").click();
     await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
-    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toContainText("Extras (2 selecionados)");
+    await expect(dialog.getByTestId("manual-booking-extras-trigger")).toContainText(`${runtimeExtrasCopy.tabLabel} (2 selecionados)`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await dialog.screenshot({ path: "test-results/manual-booking-extras-mobile.png" });
     await dialog.getByRole("button", { name: "Criar marcação" }).click();
@@ -1114,8 +1121,8 @@ test.describe.serial("manual booking Extras", () => {
     await existingPrice.fill("12,345");
     await expect(existingPrice).toHaveValue("21,00");
 
-    await dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`).click();
-    const variableExtraAmount = dialog.getByLabel(`Valor do Extra ${travelExtra.name}`);
+    await dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`).click();
+    const variableExtraAmount = dialog.getByLabel(`Valor do ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`);
     await variableExtraAmount.fill("0.50");
     await expect(variableExtraAmount).toHaveValue("0,50");
     await variableExtraAmount.fill("0,558");
@@ -1206,7 +1213,7 @@ test.describe.serial("manual booking Extras", () => {
     await expect(dialog.getByRole("combobox").nth(1)).toContainText("Selecione");
     await expect(dialog.getByTestId("manual-booking-extras-trigger")).toHaveAttribute("aria-expanded", "false");
     await dialog.getByTestId("manual-booking-extras-trigger").click();
-    await expect(dialog.getByLabel(`Selecionar Extra ${travelExtra.name}`)).not.toBeChecked();
+    await expect(dialog.getByLabel(`Selecionar ${runtimeExtrasCopy.singularLabel} ${travelExtra.name}`)).not.toBeChecked();
 
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
@@ -1438,7 +1445,7 @@ test.describe.serial("manual booking Extras", () => {
     const voucherWorkbook = new ExcelJS.Workbook();
     await voucherWorkbook.xlsx.load(await voucherExportResponse.body());
     const voucherSummary = getSummaryValues(voucherWorkbook.getWorksheet("Resumo Financeiro")!);
-    expect(voucherSummary.get("Receita total concluída")).toBe(25);
+    expect(voucherSummary.get(runtimeWorkbookCopy.nominalTotalRevenue)).toBe(25);
     expect(voucherSummary.get("Receita realizada")).toBe(25);
     expect(voucherSummary.get("Recebimentos confirmados")).toBe(0);
     expect(voucherSummary.get("Valor coberto por Vale/Cupão")).toBe(25);
@@ -1555,7 +1562,7 @@ test.describe.serial("manual booking Extras", () => {
     const multipleHeader = getHeaderRow(multipleDetail, "Data do serviço");
     const multipleHeaders = multipleHeader.values as unknown[];
     const multipleIdColumn = multipleHeaders.indexOf("ID da marcação");
-    const multipleExtrasColumn = multipleHeaders.indexOf("Extras");
+    const multipleExtrasColumn = multipleHeaders.indexOf(workbookCopy.commercialExtras);
     const multipleExtrasValueColumn = multipleHeaders.indexOf("Valor extras (€)");
     const multipleTotalColumn = multipleHeaders.indexOf("Valor final (€)");
     let multipleMovement: ExcelJS.Row | undefined;
@@ -1583,9 +1590,9 @@ test.describe.serial("manual booking Extras", () => {
     ]);
 
     const summary = getSummaryValues(workbook.getWorksheet("Resumo Financeiro")!);
-    expect(summary.get("Receita de serviços concluídos")).toBe(15);
-    expect(summary.get("Receita de Extras concluídos")).toBe(10);
-    expect(summary.get("Receita total concluída")).toBe(25);
+    expect(summary.get(workbookCopy.nominalServiceRevenue)).toBe(15);
+    expect(summary.get(workbookCopy.commercialExtrasRevenue)).toBe(10);
+    expect(summary.get(workbookCopy.nominalTotalRevenue)).toBe(25);
     expect(summary.get("Receita realizada")).toBe(25);
     expect(summary.get(totalForProfessionalsLabel)).toBe(16);
     expect(summary.get("Total atribuído ao estabelecimento")).toBe(9);
@@ -1595,7 +1602,7 @@ test.describe.serial("manual booking Extras", () => {
     const headers = detailHeader.values as unknown[];
     const idColumn = headers.indexOf("ID da marcação");
     const serviceValueColumn = headers.indexOf("Valor serviço (€)");
-    const extrasColumn = headers.indexOf("Extras");
+    const extrasColumn = headers.indexOf(workbookCopy.commercialExtras);
     const extrasValueColumn = headers.indexOf("Valor extras (€)");
     const totalColumn = headers.indexOf("Valor final (€)");
     const receivedColumn = headers.indexOf("Valor recebido (€)");
@@ -1675,7 +1682,7 @@ test.describe.serial("manual booking Extras", () => {
     await chairWorkbook.xlsx.load(await chairExportResponse.body());
     const chairSummary = getSummaryValues(chairWorkbook.getWorksheet("Resumo Financeiro")!);
     expect(chairSummary.get("Ofertas (valor dos serviços, sem recebimento)")).toBe(15);
-    expect(chairSummary.get("Ofertas (valor dos Extras, sem recebimento)")).toBe(10);
+    expect(chairSummary.get(`Ofertas (valor dos ${workbookCopy.commercialExtras}, sem recebimento)`)).toBe(10);
     expect(chairSummary.get("Ofertas (valor total, sem recebimento)")).toBe(25);
     expect(chairSummary.get("Receita realizada")).toBe(0);
     const chairSettlements = chairWorkbook.getWorksheet(workbookCopy.settlementsSheet)!;
@@ -1767,5 +1774,75 @@ test.describe.serial("manual booking Extras", () => {
     ]));
     expect((await request.patch(`/api/barbers/${chairBarber.id}`, { data: { isVisible: false } })).ok()).toBe(true);
     expect((await request.patch(`/api/barbers/${financeBarber.id}`, { data: { isVisible: false } })).ok()).toBe(true);
+  });
+
+  test("keeps terminal appointment states immutable and completes concurrently only once", async ({ request }) => {
+    const suffix = Date.now();
+    const completedStart = futureThursdayIso(-310, 10);
+    const completedName = `Estado terminal QA ${suffix}`;
+    const completedCreation = await createManual(request, completedName, completedStart, {
+      allowOutsideHours: true,
+      isAlreadyCompleted: true,
+      paymentMethod: "cash",
+      extras: [{ extraId: specialExtra.id }],
+    });
+    expect(completedCreation.response.status(), JSON.stringify(completedCreation.body)).toBe(201);
+    const completedAppointment = completedCreation.body.appointments[0];
+
+    for (const [path, status] of [
+      [`/api/appointments/${completedAppointment.id}/status`, "booked"],
+      [`/api/appointments/${completedAppointment.id}`, "cancelled"],
+      [`/api/appointments/${completedAppointment.id}/status`, "no_show"],
+    ] as const) {
+      const response = await request.patch(path, { data: { status } });
+      const body = await response.json();
+      expect(response.status(), JSON.stringify(body)).toBe(409);
+      expect(body).toMatchObject({
+        code: "INVALID_APPOINTMENT_STATUS_TRANSITION",
+        currentStatus: "completed",
+        requestedStatus: status,
+      });
+    }
+
+    const completedHistory = await findAppointments(request, completedName, completedStart);
+    expect(completedHistory).toEqual([expect.objectContaining({
+      id: completedAppointment.id,
+      status: "completed",
+      paymentMethod: "cash",
+      extras: [expect.objectContaining({ extraDefinitionId: specialExtra.id })],
+    })]);
+    const rejectedAuditResponse = await request.get("/api/admin/audit-logs?limit=100");
+    expect(rejectedAuditResponse.ok(), await rejectedAuditResponse.text()).toBe(true);
+    const rejectedAudits = (await rejectedAuditResponse.json()).filter((log: any) =>
+      log.action === "appointment.status_change_rejected" && log.entityId === completedAppointment.id);
+    expect(rejectedAudits).toHaveLength(3);
+
+    const concurrentStart = futureThursdayIso(-311, 10);
+    const concurrentCreation = await createManual(request, `Conclusão concorrente QA ${suffix}`, concurrentStart, {
+      allowOutsideHours: true,
+      extras: [{ extraId: specialExtra.id }],
+    });
+    expect(concurrentCreation.response.status(), JSON.stringify(concurrentCreation.body)).toBe(201);
+    const concurrentAppointment = concurrentCreation.body.appointments[0];
+    const responses = await Promise.all([
+      request.patch(`/api/appointments/${concurrentAppointment.id}/status`, {
+        data: { status: "completed", expectedStatus: "booked", paymentMethod: "card" },
+      }),
+      request.patch(`/api/appointments/${concurrentAppointment.id}/status`, {
+        data: { status: "completed", expectedStatus: "booked", paymentMethod: "card" },
+      }),
+    ]);
+    expect(responses.map((response) => response.status()).sort()).toEqual([200, 409]);
+
+    const concurrentHistory = await findAppointments(
+      request,
+      `Conclusão concorrente QA ${suffix}`,
+      concurrentStart,
+    );
+    expect(concurrentHistory).toEqual([expect.objectContaining({
+      id: concurrentAppointment.id,
+      status: "completed",
+      paymentMethod: "card",
+    })]);
   });
 });

@@ -50,6 +50,7 @@ import { getAppointmentReminderAvailableAt } from "./appointment-reminders";
 import {
   createDefaultCompensationRule as defaultCompensationRule,
   loadAppointmentsFinancials,
+  summarizeCompletedServicesAnalytics,
   type AppointmentFinancialResult,
 } from "./appointment-finance";
 import {
@@ -57,6 +58,7 @@ import {
   isMinuteOfDayAligned,
 } from "@shared/booking-slot-interval";
 import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
+import { appointmentStatusTransitionError } from "@shared/appointment-status-transitions";
 import {
   DEFAULT_APPOINTMENT_DURATION_MINUTES,
   hasAppointmentServiceTermsSnapshot,
@@ -936,6 +938,43 @@ function getStatusPatch(status: Appointment["status"]) {
   }
 
   return patch;
+}
+
+async function rejectInvalidAppointmentStatusTransition(
+  req: Request,
+  res: Response,
+  appointment: Appointment,
+  nextStatus: Appointment["status"],
+) {
+  const message = appointmentStatusTransitionError(appointment.status, nextStatus);
+  if (!message) return false;
+
+  try {
+    const actor = await getAuditActor(req);
+    await storage.createAuditLog({
+      ...actor,
+      locationId: appointment.locationId,
+      action: "appointment.status_change_rejected",
+      entityType: "appointment",
+      entityId: appointment.id,
+      summary: `Alteração de estado rejeitada: ${appointment.customerName}`,
+      metadata: serializeSafeAuditMetadata({
+        currentStatus: appointment.status,
+        requestedStatus: nextStatus,
+        reason: "invalid_transition",
+      }),
+    });
+  } catch (error) {
+    console.warn("Rejected appointment status audit skipped:", error instanceof Error ? error.message : String(error));
+  }
+
+  res.status(409).json({
+    message,
+    code: "INVALID_APPOINTMENT_STATUS_TRANSITION",
+    currentStatus: appointment.status,
+    requestedStatus: nextStatus,
+  });
+  return true;
 }
 
 async function getFutureBookedCustomerAppointments(locationId: number, phone: string, email?: string) {
@@ -5957,6 +5996,12 @@ export async function registerRoutes(
           return res.status(401).json({ message: "Não autorizado" });
         }
       }
+      if (hasStatusPatch && !isKnownAppointmentStatus(status)) {
+        return res.status(400).json({ message: "Estado de marcação inválido." });
+      }
+      if (hasStatusPatch && await rejectInvalidAppointmentStatusTransition(req, res, currentApp, status)) {
+        return;
+      }
       if (currentApp.status !== "booked" && hasAppointmentDetailsPatch) {
         return res.status(409).json({
           message: "Apenas marcações ativas podem ser editadas.",
@@ -6202,9 +6247,6 @@ export async function registerRoutes(
         }
       }
       if (hasStatusPatch) {
-        if (!isKnownAppointmentStatus(status)) {
-          return res.status(400).json({ message: "Estado de marcação inválido." });
-        }
         Object.assign(updateData, getStatusPatch(status));
         if (status === "completed") {
           const paymentError = getCompletedAppointmentPaymentMethodError(requestedPaymentMethod);
@@ -6287,7 +6329,7 @@ export async function registerRoutes(
         appointmentId,
         updateData,
         appointmentNotificationEventsEnabled,
-        undefined,
+        hasStatusPatch ? currentApp.status : undefined,
         hasExtrasPatch ? extras : undefined,
         hasInternalCostsPatch ? internalCosts : undefined,
         parsedAvailabilityWindows,
@@ -6404,6 +6446,9 @@ export async function registerRoutes(
         && current.barberId !== Number(appSession.barberId)) {
         return res.status(403).json({ message: "Não autorizado" });
       }
+      if (await rejectInvalidAppointmentStatusTransition(req, res, current, "completed")) {
+        return;
+      }
       const serviceDurations = new Map(
         (await loadLocationServiceCatalogue(locationId, true)).map((service) => [service.id, service.duration]),
       );
@@ -6498,6 +6543,21 @@ export async function registerRoutes(
         }] : []),
       ])) return;
 
+      const appSession = getAppSession(req);
+      if (authRuntimeMode !== "canonical"
+        && appSession.role === "barber"
+        && currentApp.barberId !== Number(appSession.barberId)) {
+        return res.status(403).json({ message: "Não autorizado" });
+      }
+      if (expectedStatus !== undefined && expectedStatus !== currentApp.status) {
+        return res.status(409).json({
+          message: "A marcação foi alterada entretanto. Atualize a agenda e tente novamente.",
+          status: currentApp.status,
+        });
+      }
+      if (await rejectInvalidAppointmentStatusTransition(req, res, currentApp, status)) {
+        return;
+      }
       if (status === "completed" || status === "no_show") {
         const serviceDurations = new Map(
           (await loadLocationServiceCatalogue(currentApp.locationId, true))
@@ -6507,13 +6567,6 @@ export async function registerRoutes(
         if (timingError) {
           return res.status(400).json({ message: timingError });
         }
-      }
-
-      const appSession = getAppSession(req);
-      if (authRuntimeMode !== "canonical"
-        && appSession.role === "barber"
-        && currentApp.barberId !== Number(appSession.barberId)) {
-        return res.status(403).json({ message: "Não autorizado" });
       }
 
       if (status === "completed") {
@@ -6573,9 +6626,12 @@ export async function registerRoutes(
         : null;
       const updated = cancellationResult?.appointment || (
         !appointmentNotificationEventsEnabled || !isCancellation
-          ? expectedStatus === undefined
-            ? await storage.updateAppointmentStatus(appointmentId, status, paymentMethod)
-            : await storage.updateAppointmentStatusIfCurrent(appointmentId, expectedStatus, status, paymentMethod)
+          ? await storage.updateAppointmentStatusIfCurrent(
+              appointmentId,
+              currentApp.status,
+              status,
+              paymentMethod,
+            )
           : undefined
       );
       if (!updated) {
@@ -6930,11 +6986,21 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Não autorizado" });
     }
 
-    const [allAppointments, rawBarbers, allServices, locationBarberIds] = await Promise.all([
+    const includesBusinessExpenses = resolvedBusinessConfig.vertical === "beauty" && barberId === undefined;
+    const location = await getLocation(locationId, true);
+    const [allAppointments, rawBarbers, allServices, locationBarberIds, businessExpenses] = await Promise.all([
       storage.getAppointments(barberId, undefined, locationId),
       storage.getBarbers(),
       loadLocationServiceCatalogue(locationId, true),
       getBarberIdsForLocation(locationId, true),
+      includesBusinessExpenses
+        ? storage.getBusinessExpenses({
+            startDate: startDateKey,
+            endDate: endDateKey,
+            locationId,
+            timeZone: location?.timezone,
+          })
+        : Promise.resolve([]),
     ]);
     const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
     const allBarbers = rawBarbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
@@ -6960,8 +7026,19 @@ export async function registerRoutes(
     const noShowAppointments = rangeAppointments.filter((appointment) => appointment.status === "no_show");
 
     const dashboardFinancials = await loadAppointmentsFinancials(storage, rangeAppointments, servicePrices);
+    const completedAnalytics = summarizeCompletedServicesAnalytics(
+      rangeAppointments,
+      dashboardFinancials,
+    );
     const revenueCents = dashboardFinancials.realizedAmountCents;
     const projectedRevenueCents = dashboardFinancials.projectedAmountCents;
+    const businessExpensesCents = businessExpenses.reduce(
+      (total, expense) => total + expense.amountCents,
+      0,
+    );
+    const establishmentResultCents = includesBusinessExpenses
+      ? revenueCents - dashboardFinancials.barberAmountCents - businessExpensesCents
+      : null;
     const riskCount = noShowAppointments.length + lateCancelledAppointments.length;
     const completedOrMissed = completedAppointments.length + noShowAppointments.length + lateCancelledAppointments.length;
 
@@ -7124,10 +7201,7 @@ export async function registerRoutes(
         cancellations: cancelledAppointments.length + lateCancelledAppointments.length,
         noShows: noShowAppointments.length,
         revenueCents,
-        nominalCompletedCents: completedAppointments.reduce(
-          (total, appointment) => total + dashboardFinancials.byAppointmentId.get(appointment.id)!.totalAmountCents,
-          0,
-        ),
+        nominalCompletedCents: completedAnalytics.nominalRevenueCents,
         receivedCents: dashboardFinancials.receivedAmountCents,
         cashCents: dashboardFinancials.cashAmountCents,
         cardCents: dashboardFinancials.cardAmountCents,
@@ -7145,6 +7219,13 @@ export async function registerRoutes(
         establishmentRevenueCents: dashboardFinancials.establishmentAmountCents,
         commissionCents: dashboardFinancials.commissionAmountCents,
         chairRentCents: dashboardFinancials.chairRentAmountCents,
+        businessExpensesIncluded: includesBusinessExpenses,
+        businessExpensesCents,
+        establishmentResultCents,
+        nominalServiceRevenueCents: completedAnalytics.serviceRevenueCents,
+        nominalExtrasRevenueCents: completedAnalytics.extrasRevenueCents,
+        directCostCents: completedAnalytics.directCostCents,
+        directMarginCents: completedAnalytics.directMarginCents,
         averageTicketCents: completedAppointments.length ? Math.round(revenueCents / completedAppointments.length) : 0,
         completionRate: rangeAppointments.length ? Math.round((completedAppointments.length / rangeAppointments.length) * 100) : 0,
         noShowRate: completedOrMissed ? Math.round((riskCount / completedOrMissed) * 100) : 0,
@@ -7851,6 +7932,10 @@ export async function registerRoutes(
       }
 
       const reportFinancials = await loadAppointmentsFinancials(storage, rangeAppointments, servicePrices);
+      const completedAnalytics = summarizeCompletedServicesAnalytics(
+        rangeAppointments,
+        reportFinancials,
+      );
       const formatExtraAmount = (amountCents: number) =>
         `${(amountCents / 100).toFixed(2).replace(".", ",")} €`;
       const describeExtras = (financial: AppointmentFinancialResult) => {
@@ -7860,18 +7945,8 @@ export async function registerRoutes(
         return labels.length > 0 ? labels.join("; ") : null;
       };
       const appointmentsById = new Map(rangeAppointments.map((appointment) => [appointment.id, appointment]));
-      const completedServiceAmountCents = reportFinancials.appointments.reduce(
-        (total, financial) => total + (appointmentsById.get(financial.appointmentId)?.status === "completed"
-          ? financial.serviceAmountCents
-          : 0),
-        0,
-      );
-      const completedExtrasAmountCents = reportFinancials.appointments.reduce(
-        (total, financial) => total + (appointmentsById.get(financial.appointmentId)?.status === "completed"
-          ? financial.extrasAmountCents
-          : 0),
-        0,
-      );
+      const completedServiceAmountCents = completedAnalytics.serviceRevenueCents;
+      const completedExtrasAmountCents = completedAnalytics.extrasRevenueCents;
       const giftServiceAmountCents = reportFinancials.appointments.reduce(
         (total, financial) => total + (appointmentsById.get(financial.appointmentId)?.status === "completed"
           && appointmentsById.get(financial.appointmentId)?.paymentMethod === "gift"
@@ -7888,6 +7963,7 @@ export async function registerRoutes(
       );
 
       const totalSummary = createSummaryRow("Total geral");
+      const includesDirectMarginAnalysis = resolvedBusinessConfig.vertical === "beauty";
       const barberSummaryMap = new Map<number, ExportSummaryRow>();
       const serviceSummaryMap = new Map<string, ExportSummaryRow>();
       const dailySummaryMap = new Map<string, ExportDailyRow>();
@@ -8554,7 +8630,7 @@ export async function registerRoutes(
         ["", ""],
         ["Despesas e resultado", ""],
         ["Despesas registadas", centsToEuros(businessExpensesCents)],
-        ["Resultado estimado após despesas", centsToEuros(estimatedResultCents)],
+        [REPORT_PUBLIC_COPY.workbook.establishmentResult, centsToEuros(estimatedResultCents)],
         ["", ""],
         ["Nota", "No modelo de comissão, o barbeiro recebe a percentagem definida. No modelo de aluguer de cadeira, o barbeiro fica com a receita dos serviços e paga a renda ao salão; essa renda aparece como receita da barbearia, não como despesa operacional."],
       ]);
@@ -8581,7 +8657,7 @@ export async function registerRoutes(
             "Valor líquido estimado dos barbeiros",
             "Valor estimado da barbearia antes de despesas",
             "Despesas registadas",
-            "Resultado estimado após despesas",
+            REPORT_PUBLIC_COPY.workbook.establishmentResult,
           ].includes(label)) {
             row.getCell(2).numFmt = currencyFormat;
           }
@@ -8743,9 +8819,13 @@ export async function registerRoutes(
       accountingSummarySheet.getCell(summarySectionRow, 1).value = "Receitas e recebimentos";
       styleSection(accountingSummarySheet, summarySectionRow, 2);
       const financialRows: Array<[string, number]> = [
-        ["Receita de serviços concluídos", centsToEuros(completedServiceAmountCents)],
-        ["Receita de Extras concluídos", centsToEuros(completedExtrasAmountCents)],
-        ["Receita total concluída", centsToEuros(totalSummary.earnedCents)],
+        [REPORT_PUBLIC_COPY.workbook.nominalServiceRevenue, centsToEuros(completedServiceAmountCents)],
+        [REPORT_PUBLIC_COPY.workbook.commercialExtrasRevenue, centsToEuros(completedExtrasAmountCents)],
+        [REPORT_PUBLIC_COPY.workbook.nominalTotalRevenue, centsToEuros(totalSummary.earnedCents)],
+        ...(includesDirectMarginAnalysis ? [
+          [REPORT_PUBLIC_COPY.workbook.directCosts, centsToEuros(completedAnalytics.directCostCents)] as [string, number],
+          [REPORT_PUBLIC_COPY.workbook.directMargin, centsToEuros(completedAnalytics.directMarginCents)] as [string, number],
+        ] : []),
         ["Receita realizada", centsToEuros(totalSummary.realizedCents)],
         ["Receita prevista em agenda", centsToEuros(totalSummary.projectedCents)],
         ["Recebimentos confirmados", centsToEuros(totalSummary.confirmedPaymentCents)],
@@ -8754,7 +8834,7 @@ export async function registerRoutes(
         ["Valor coberto por Vale/Cupão", centsToEuros(totalSummary.voucherCents)],
         ["Pagamentos por confirmar", centsToEuros(totalSummary.pendingPaymentCents)],
         ["Ofertas (valor dos serviços, sem recebimento)", centsToEuros(giftServiceAmountCents)],
-        ["Ofertas (valor dos Extras, sem recebimento)", centsToEuros(giftExtrasAmountCents)],
+        [`Ofertas (valor dos ${REPORT_PUBLIC_COPY.workbook.commercialExtras}, sem recebimento)`, centsToEuros(giftExtrasAmountCents)],
         ["Ofertas (valor total, sem recebimento)", centsToEuros(totalSummary.giftCents)],
         [REPORT_PUBLIC_COPY.workbook.totalForProfessionals, centsToEuros(barberPayoutCents)],
         ["Total atribuído ao estabelecimento", centsToEuros(shopCompensationCents)],
@@ -8762,7 +8842,7 @@ export async function registerRoutes(
         ...(includesShopExpenses ? [
           ["Despesas registadas", centsToEuros(businessExpensesCents)] as [string, number],
           ["Saldo de recebimentos após despesas registadas", centsToEuros(cashBalanceAfterExpensesCents)] as [string, number],
-          ["Resultado líquido estimado", centsToEuros(estimatedResultCents)] as [string, number],
+          [REPORT_PUBLIC_COPY.workbook.establishmentResult, centsToEuros(estimatedResultCents)] as [string, number],
         ] : []),
       ];
       financialRows.forEach(([label, value], index) => {
@@ -8772,11 +8852,12 @@ export async function registerRoutes(
         row.getCell(2).numFmt = currencyFormat;
         row.getCell(2).alignment = { horizontal: "right", vertical: "middle" };
         if ([
-          "Receita total concluída",
+          REPORT_PUBLIC_COPY.workbook.nominalTotalRevenue,
           "Receita realizada",
+          REPORT_PUBLIC_COPY.workbook.directMargin,
           REPORT_PUBLIC_COPY.workbook.totalForProfessionals,
           "Total atribuído ao estabelecimento",
-          "Resultado líquido estimado",
+          REPORT_PUBLIC_COPY.workbook.establishmentResult,
         ].includes(label)) {
           row.font = { bold: true };
         }
@@ -8787,7 +8868,7 @@ export async function registerRoutes(
       const accountingNoteRow = summarySectionRow + financialRows.length + 2;
       accountingSummarySheet.mergeCells(accountingNoteRow, 1, accountingNoteRow, 4);
       accountingSummarySheet.getCell(accountingNoteRow, 1).value =
-        "Os totais financeiros incluem o valor efetivo do serviço e os Extras. Os recebimentos confirmados incluem apenas dinheiro e Multibanco; Vale/Cupão, oferta e pagamentos por confirmar aparecem em separado.";
+        `Os totais financeiros incluem o valor efetivo do serviço e os ${REPORT_PUBLIC_COPY.workbook.commercialExtras}. Os recebimentos confirmados incluem apenas dinheiro e Multibanco; Vale/Cupão, oferta e pagamentos por confirmar aparecem em separado. ${REPORT_PUBLIC_COPY.workbook.directMarginNote}`;
       accountingSummarySheet.getCell(accountingNoteRow, 1).font = { italic: true, color: { argb: "FF4B5563" } };
       accountingSummarySheet.getCell(accountingNoteRow, 1).alignment = { wrapText: true, vertical: "top" };
       accountingSummarySheet.getRow(accountingNoteRow).height = 34;
@@ -8829,7 +8910,8 @@ export async function registerRoutes(
         views: [{ showGridLines: false }],
         pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
       });
-      styleReportTitle(movementsSheet, "A1:Q1", "Detalhe dos movimentos");
+      const movementLastColumn = includesDirectMarginAnalysis ? 19 : 17;
+      styleReportTitle(movementsSheet, `A1:${includesDirectMarginAnalysis ? "S" : "Q"}1`, "Detalhe dos movimentos");
       movementsSheet.getCell("A3").value = "Período";
       movementsSheet.getCell("B3").value = reportPeriod;
       movementsSheet.getCell("D3").value = REPORT_PUBLIC_COPY.workbook.professionalLabel;
@@ -8849,7 +8931,7 @@ export async function registerRoutes(
           REPORT_PUBLIC_COPY.workbook.professionalLabel,
           "Serviço efetivo",
           "Valor serviço (€)",
-          "Extras",
+          REPORT_PUBLIC_COPY.workbook.commercialExtras,
           "Valor extras (€)",
           "Duração (min)",
           "Valor final (€)",
@@ -8861,6 +8943,10 @@ export async function registerRoutes(
           "Valor realizado (€)",
           REPORT_PUBLIC_COPY.workbook.professionalShare,
           REPORT_PUBLIC_COPY.workbook.establishmentShare,
+          ...(includesDirectMarginAnalysis ? [
+            REPORT_PUBLIC_COPY.workbook.directCosts,
+            REPORT_PUBLIC_COPY.workbook.directMargin,
+          ] : []),
         ].map((name) => ({ name, filterButton: true })),
         rows: rangeAppointments.map((appointment) => {
           const financial = reportFinancials.byAppointmentId.get(appointment.id)!;
@@ -8894,10 +8980,14 @@ export async function registerRoutes(
             centsToEuros(financial.realizedAmountCents),
             centsToEuros(financial.barberAmountCents),
             centsToEuros(financial.establishmentAmountCents),
+            ...(includesDirectMarginAnalysis ? [
+              appointment.status === "completed" ? centsToEuros(financial.directCostAmountCents) : null,
+              appointment.status === "completed" ? centsToEuros(financial.grossMarginCents) : null,
+            ] : []),
           ];
         }),
       });
-      styleReportTable(movementsSheet, movementHeaderRow, [20, 17, 40, 36, 19, 52, 18, 16, 18, 22, 26, 38, 20, 31, 20, 21, 27], {
+      const movementNumberFormats: Record<number, string> = {
         1: dateTimeFormat,
         5: currencyFormat,
         7: currencyFormat,
@@ -8907,10 +8997,18 @@ export async function registerRoutes(
         15: currencyFormat,
         16: currencyFormat,
         17: currencyFormat,
-      });
+      };
+      if (includesDirectMarginAnalysis) {
+        movementNumberFormats[18] = currencyFormat;
+        movementNumberFormats[19] = currencyFormat;
+      }
+      styleReportTable(movementsSheet, movementHeaderRow, [
+        20, 17, 40, 36, 19, 52, 18, 16, 18, 22, 26, 38, 20, 31, 20, 21, 27,
+        ...(includesDirectMarginAnalysis ? [24, 24] : []),
+      ], movementNumberFormats);
       if (rangeAppointments.length === 0) {
         const emptyMessageRow = movementHeaderRow + 1;
-        movementsSheet.mergeCells(emptyMessageRow, 1, emptyMessageRow, 17);
+        movementsSheet.mergeCells(emptyMessageRow, 1, emptyMessageRow, movementLastColumn);
         const emptyMessageCell = movementsSheet.getCell(emptyMessageRow, 1);
         emptyMessageCell.value = "Sem movimentos no período para o filtro selecionado.";
         emptyMessageCell.font = { italic: true, color: { argb: "FF4B5563" } };

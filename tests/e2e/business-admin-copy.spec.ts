@@ -51,6 +51,13 @@ async function mockDashboardAndReports(page: Page) {
           establishmentRevenueCents: 2500,
           commissionCents: 2500,
           chairRentCents: 0,
+          businessExpensesIncluded: true,
+          businessExpensesCents: 750,
+          establishmentResultCents: 1750,
+          nominalServiceRevenueCents: 4500,
+          nominalExtrasRevenueCents: 500,
+          directCostCents: 400,
+          directMarginCents: 4600,
           averageTicketCents: 2500,
           completionRate: 50,
           noShowRate: 0,
@@ -89,6 +96,8 @@ test("Barber Admin and Agenda preserve the existing copy", async ({ page }) => {
   await expect(page.getByLabel("Filtrar barbeiro")).toBeVisible();
   await expect(page.getByText("Barbeiro mais ocupado", { exact: true })).toBeVisible();
   await expect(page.getByText("Parte dos barbeiros", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("dashboard-establishment-result")).toHaveCount(0);
+  await expect(page.getByTestId("dashboard-direct-margin")).toHaveCount(0);
   await expect(page.getByLabel("Período", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Mostrar atividade recente" }).click();
   await expect(page.getByText("Serviços do barbeiro atualizados: Bruno Santos", { exact: true })).toBeVisible();
@@ -144,6 +153,13 @@ test("Beauty Admin and Agenda use neutral copy on mobile", async ({ page }) => {
   await expect(page.getByLabel("Filtrar profissional")).toBeVisible();
   await expect(page.getByText("Profissional mais ocupado", { exact: true })).toBeVisible();
   await expect(page.getByText("Parte dos profissionais", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("dashboard-establishment-result")).toContainText(
+    "Resultado do estabelecimento após profissionais e despesas",
+  );
+  await expect(page.getByTestId("dashboard-establishment-result")).toContainText("7,50 €");
+  await expect(page.getByTestId("dashboard-establishment-result")).toContainText("17,50 €");
+  await expect(page.getByTestId("dashboard-direct-margin")).toContainText("Margem analítica dos serviços");
+  await expect(page.getByTestId("dashboard-direct-margin")).toContainText("46,00 €");
   await expect(page.getByLabel("Profissional", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Mostrar atividade recente" }).click();
   await expect(page.getByText("Serviços do profissional atualizados: Bruno Santos", { exact: true })).toBeVisible();

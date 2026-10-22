@@ -5,11 +5,13 @@ import {
   calculateAppointmentsFinancials,
   getChairRentUnitKey,
   loadAppointmentsFinancials,
+  summarizeCompletedServicesAnalytics,
 } from "../../server/appointment-finance";
 import { MemoryStorage } from "../../server/storage";
 import type {
   Appointment,
   AppointmentExtra,
+  AppointmentInternalCost,
   AppointmentPaymentMethod,
   AppointmentStatus,
   BarberCompensationModel,
@@ -71,6 +73,24 @@ function extra(
     position: overrides.position ?? 0,
     createdAt: new Date("2035-01-01T00:00:00.000Z"),
     ...overrides,
+  };
+}
+
+function internalCost(
+  appointmentId: number,
+  unitCostCentsSnapshot: number,
+  quantity = 1,
+): AppointmentInternalCost {
+  return {
+    id: appointmentId * 100 + quantity,
+    appointmentId,
+    internalCostDefinitionId: unitCostCentsSnapshot,
+    nameSnapshot: `Consumo ${unitCostCentsSnapshot}`,
+    unitCostCentsSnapshot,
+    quantity,
+    unitLabelSnapshot: "unidade",
+    position: 0,
+    createdAt: new Date("2035-01-01T00:00:00.000Z"),
   };
 }
 
@@ -251,6 +271,52 @@ test("booked is projected while cancelled, late-cancelled, no-show and gift real
     assert.equal(result.establishmentAmountCents, 0);
     assert.ok(result.lines.every((line) => line.realizedAmountCents === 0));
   }
+});
+
+test("completed-service analytics use nominal revenue and never subtract consumptions from the global result", () => {
+  const paid = appointment({ paymentMethod: "cash" });
+  const gift = appointment({ paymentMethod: "gift" });
+  const pending = appointment({ paymentMethod: "pending" });
+  const booked = appointment({ status: "booked", paymentMethod: "pending" });
+  const cancelled = appointment({ status: "cancelled", paymentMethod: "pending" });
+  const financials = calculateAppointmentsFinancials({
+    appointments: [paid, gift, pending, booked, cancelled],
+    appointmentExtras: [
+      extra(paid.id, 500, "establishment"),
+      extra(gift.id, 500, "establishment"),
+      extra(pending.id, 500, "establishment"),
+      extra(booked.id, 500, "establishment"),
+      extra(cancelled.id, 500, "establishment"),
+    ],
+    appointmentInternalCosts: [
+      internalCost(paid.id, 150, 2),
+      internalCost(gift.id, 300),
+      internalCost(pending.id, 300),
+      internalCost(booked.id, 999),
+      internalCost(cancelled.id, 999),
+    ],
+    servicePrices,
+    compensationRules: [compensationRule("none")],
+  });
+
+  assert.deepEqual(summarizeCompletedServicesAnalytics(
+    [paid, gift, pending, booked, cancelled],
+    financials,
+  ), {
+    appointmentCount: 3,
+    serviceRevenueCents: 4500,
+    extrasRevenueCents: 1500,
+    nominalRevenueCents: 6000,
+    directCostCents: 900,
+    directMarginCents: 5100,
+  });
+
+  const businessExpensesCents = 10_000;
+  const establishmentResultCents = financials.realizedAmountCents
+    - financials.barberAmountCents
+    - businessExpensesCents;
+  assert.equal(establishmentResultCents, -6_000);
+  assert.equal(establishmentResultCents, financials.realizedAmountCents - businessExpensesCents);
 });
 
 test("voucher preserves nominal value and remuneration without becoming a cash/card receipt", () => {

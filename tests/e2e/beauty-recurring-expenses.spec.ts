@@ -11,7 +11,7 @@ async function mockReports(page: Page) {
   await page.route("**/api/admin/dashboard?**", (route) => route.fulfill({
     json: {
       range: { startDate: "2026-10-01", endDate: "2026-10-30", days: 30, barberId: "all" },
-      summary: { appointments: 0, completed: 0, booked: 0, cancellations: 0, noShows: 0, revenueCents: 0, nominalCompletedCents: 0, receivedCents: 0, cashCents: 0, cardCents: 0, voucherCents: 0, giftCents: 0, pendingPaymentCents: 0, projectedRevenueCents: 0, extrasRevenueCents: 0, barberRevenueCents: 0, establishmentRevenueCents: 0, commissionCents: 0, chairRentCents: 0, averageTicketCents: 0, completionRate: 0, noShowRate: 0, upcomingWeek: 0, inactiveCustomers: 0, busiestHour: null },
+      summary: { appointments: 0, completed: 0, booked: 0, cancellations: 0, noShows: 0, revenueCents: 0, nominalCompletedCents: 0, receivedCents: 0, cashCents: 0, cardCents: 0, voucherCents: 0, giftCents: 0, pendingPaymentCents: 0, projectedRevenueCents: 0, extrasRevenueCents: 0, barberRevenueCents: 0, establishmentRevenueCents: 0, commissionCents: 0, chairRentCents: 0, businessExpensesIncluded: true, businessExpensesCents: 0, establishmentResultCents: 0, nominalServiceRevenueCents: 0, nominalExtrasRevenueCents: 0, directCostCents: 0, directMarginCents: 0, averageTicketCents: 0, completionRate: 0, noShowRate: 0, upcomingWeek: 0, inactiveCustomers: 0, busiestHour: null },
       daily: [], barbers: [], services: [], inactiveCustomers: [],
     },
   }));

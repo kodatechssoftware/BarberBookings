@@ -124,7 +124,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
       : null;
     const sortOrder = Number(form.sortOrder);
     if (!name) {
-      setFormError("Indique o nome do Extra.");
+      setFormError(`Indique o nome do ${copy.singularLabel}.`);
       return;
     }
     if (form.pricingMode === "fixed" && amountCents === null) {
@@ -156,10 +156,10 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
       closeDialog();
       toast({
         title: "Sucesso",
-        description: editingExtra ? "Extra atualizado." : "Extra criado.",
+        description: editingExtra ? `${copy.singularLabel} atualizado.` : `${copy.singularLabel} criado.`,
       });
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "Não foi possível guardar o Extra.");
+      setFormError(error instanceof Error ? error.message : `Não foi possível guardar o ${copy.singularLabel}.`);
     } finally {
       pendingActionRef.current = null;
       setPendingAction(null);
@@ -176,12 +176,12 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
       await refresh();
       toast({
         title: "Sucesso",
-        description: isActive ? "Extra ativado." : "Extra desativado.",
+        description: isActive ? `${copy.singularLabel} ativado.` : `${copy.singularLabel} desativado.`,
       });
     } catch (error) {
       toast({
         title: "Erro",
-        description: error instanceof Error ? error.message : "Não foi possível atualizar o Extra.",
+        description: error instanceof Error ? error.message : `Não foi possível atualizar o ${copy.singularLabel}.`,
         variant: "destructive",
       });
     } finally {
@@ -196,14 +196,14 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2 text-xl">
-              <Sparkles className="h-5 w-5 text-primary" /> Catálogo de Extras
+              <Sparkles className="h-5 w-5 text-primary" /> {copy.catalogTitle}
             </CardTitle>
             <p className="mt-2 max-w-2xl text-sm text-gray-400">
-              Defina os Extras disponíveis nesta localização, o tipo de valor e a distribuição financeira.
+              {copy.catalogDescription}
             </p>
           </div>
           <Button variant="gold" className="w-full gap-2 sm:w-auto" onClick={openCreateDialog}>
-            <Plus className="h-4 w-4" /> Novo Extra
+            <Plus className="h-4 w-4" /> Novo {copy.singularLabel}
           </Button>
         </div>
       </CardHeader>
@@ -211,18 +211,18 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
       <CardContent className="pt-6">
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-gray-400">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" /> A carregar Extras...
+            <Loader2 className="h-4 w-4 animate-spin text-primary" /> A carregar {copy.pluralLabel}...
           </div>
         ) : isError ? (
           <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-100">
-            <p>Não foi possível carregar os Extras desta localização.</p>
+            <p>Não foi possível carregar {copy.pluralLabel} desta localização.</p>
             <Button variant="outline" size="sm" className="mt-3" onClick={() => void refetch()}>
               Tentar novamente
             </Button>
           </div>
         ) : extras.length === 0 ? (
           <div className="rounded-lg border border-dashed border-white/15 p-8 text-center text-sm text-gray-400">
-            Ainda não existem Extras nesta localização.
+            Ainda não existem {copy.pluralLabel} nesta localização.
           </div>
         ) : (
           <div className="space-y-3">
@@ -299,9 +299,9 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
           className="w-[calc(100vw-1rem)] max-w-lg overflow-y-auto border-white/10 bg-card text-white"
         >
           <DialogHeader>
-            <DialogTitle>{editingExtra ? "Editar Extra" : "Novo Extra"}</DialogTitle>
+            <DialogTitle>{editingExtra ? `Editar ${copy.singularLabel}` : `Novo ${copy.singularLabel}`}</DialogTitle>
             <DialogDescription className="text-gray-400">
-              O Extra fica disponível apenas na localização ativa. A ordem mais baixa aparece primeiro.
+              O {copy.singularLabel} fica disponível apenas na localização ativa. A ordem mais baixa aparece primeiro.
             </DialogDescription>
           </DialogHeader>
 
@@ -424,7 +424,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
             <div className="space-y-3 rounded-lg border border-white/10 p-3">
               <div>
                 <Label>Serviços aplicáveis</Label>
-                <p className="mt-1 text-xs text-gray-400">Sem seleção, o Extra aplica-se a todos os serviços.</p>
+                <p className="mt-1 text-xs text-gray-400">Sem seleção, o {copy.singularLabel} aplica-se a todos os serviços.</p>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {services.map((service) => {
@@ -433,7 +433,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
                     <label key={service.id} className="flex min-h-10 items-center gap-2 rounded-md border border-white/10 px-3 text-sm">
                       <Switch
                         checked={checked}
-                        aria-label={`Aplicar ${form.name || "Extra"} a ${service.name}`}
+                        aria-label={`Aplicar ${form.name || copy.singularLabel} a ${service.name}`}
                         onCheckedChange={(value) => setForm((current) => ({
                           ...current,
                           serviceIds: value
@@ -451,12 +451,12 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
             <label className="flex items-start gap-3 rounded-lg border border-white/10 p-3 text-sm">
               <Switch
                 checked={form.isPubliclyBookable}
-                aria-label="Marcar Extra como elegível para futura seleção online"
+                aria-label={`Marcar ${copy.singularLabel} como elegível para futura seleção online`}
                 onCheckedChange={(isPubliclyBookable) => setForm((current) => ({ ...current, isPubliclyBookable }))}
               />
               <span>
                 <strong className="block text-white">Elegível para futura seleção online</strong>
-                <span className="text-gray-400">A marcação pública de Extras continua desativada nesta fase.</span>
+                <span className="text-gray-400">A marcação pública de {copy.pluralLabel} continua desativada nesta fase.</span>
               </span>
             </label>
 
@@ -472,7 +472,7 @@ export function ExtrasManager({ enabled }: { enabled: boolean }) {
               </Button>
               <Button type="submit" variant="gold" disabled={pendingAction !== null}>
                 {pendingAction && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {editingExtra ? "Guardar alterações" : "Criar Extra"}
+                {editingExtra ? "Guardar alterações" : `Criar ${copy.singularLabel}`}
               </Button>
             </DialogFooter>
           </form>
