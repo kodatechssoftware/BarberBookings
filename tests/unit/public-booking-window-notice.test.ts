@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatPublicBookingMonthOpeningNotice,
+  getOpenPublicBookingWindow,
   getPublicBookingMonthOpeningNotice,
   getPublicBookingWindow,
 } from "../../shared/public-booking-window";
@@ -78,4 +79,26 @@ test("notice is hidden when the feature is disabled or the next visible month is
   assert.equal(getPublicBookingMonthOpeningNotice({ ...window, enabled: false }, "2026-10-01"), null);
   assert.equal(getPublicBookingMonthOpeningNotice(window, "2026-09-01"), null);
   assert.equal(getPublicBookingMonthOpeningNotice(window, "invalid"), null);
+});
+
+test("open booking uses a finite operational horizon across DST and year boundaries", () => {
+  assert.deepEqual(
+    getOpenPublicBookingWindow(new Date("2026-10-22T12:00:00Z"), timeZone, 20),
+    {
+      enabled: false,
+      today: "2026-10-22",
+      maxDate: "2027-10-23",
+      openDay: 20,
+      nextMonthAvailable: true,
+      nextOpeningDate: "2026-11-20",
+    },
+  );
+  assert.equal(
+    getOpenPublicBookingWindow(new Date("2027-12-31T23:30:00Z"), timeZone, 20).maxDate,
+    "2028-12-31",
+  );
+  assert.equal(
+    getOpenPublicBookingWindow(new Date("2026-10-22T12:00:00Z"), timeZone, 20, 0).maxDate,
+    "2027-10-23",
+  );
 });
