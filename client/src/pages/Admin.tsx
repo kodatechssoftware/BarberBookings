@@ -235,6 +235,13 @@ type DashboardData = {
     establishmentRevenueCents: number;
     commissionCents: number;
     chairRentCents: number;
+    businessExpensesIncluded: boolean;
+    businessExpensesCents: number;
+    establishmentResultCents: number | null;
+    nominalServiceRevenueCents: number;
+    nominalExtrasRevenueCents: number;
+    directCostCents: number;
+    directMarginCents: number;
     averageTicketCents: number;
     completionRate: number;
     noShowRate: number;
@@ -563,6 +570,7 @@ function TodayOverviewPanel({
 
 function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
   const copy = useBusinessCopy().admin.dashboard;
+  const isBeauty = useBusinessConfig().vertical === "beauty";
   const ServiceIcon = useBusinessServiceIcon();
   const busiestBarber = [...data.barbers].sort((a, b) => b.booked - a.booked)[0];
   const topServices = data.services.slice(0, 5);
@@ -662,6 +670,54 @@ function SimpleBusinessDashboard({ data }: { data: DashboardData }) {
             ))}
           </div>
         </div>
+
+        {isBeauty && <div className="space-y-3" data-testid="dashboard-establishment-result">
+          <div>
+            <h3 className="font-semibold text-white">{copy.establishmentResult}</h3>
+            <p className="mt-1 text-xs text-gray-400">
+              {data.summary.businessExpensesIncluded
+                ? copy.establishmentResultDescription
+                : copy.professionalExpenseFilterHelp}
+            </p>
+          </div>
+          {data.summary.businessExpensesIncluded && data.summary.establishmentResultCents !== null ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+                <p className="text-xs uppercase tracking-wider text-gray-500">{copy.registeredExpenses}</p>
+                <p className="mt-2 text-xl font-bold text-white">{formatCents(data.summary.businessExpensesCents)}</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-background/60 p-4">
+                <p className="text-xs uppercase tracking-wider text-gray-500">{copy.establishmentResult}</p>
+                <p className={cn(
+                  "mt-2 text-xl font-bold",
+                  data.summary.establishmentResultCents >= 0 ? "text-green-300" : "text-rose-300",
+                )}>
+                  {formatCents(data.summary.establishmentResultCents)}
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>}
+
+        {isBeauty && <div className="space-y-3" data-testid="dashboard-direct-margin">
+          <div>
+            <h3 className="font-semibold text-white">{copy.directMarginTitle}</h3>
+            <p className="mt-1 text-xs text-gray-400">{copy.directMarginDescription}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {[
+              [copy.nominalServiceRevenue, data.summary.nominalServiceRevenueCents],
+              [copy.nominalExtrasRevenue, data.summary.nominalExtrasRevenueCents],
+              [copy.directCosts, data.summary.directCostCents],
+              [copy.directMargin, data.summary.directMarginCents],
+            ].map(([label, amount]) => (
+              <div key={String(label)} className="rounded-xl border border-white/10 bg-background/60 p-3">
+                <p className="text-xs uppercase tracking-wider text-gray-500">{label}</p>
+                <p className="mt-2 text-lg font-bold text-white">{formatCents(Number(amount))}</p>
+              </div>
+            ))}
+          </div>
+        </div>}
 
         <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
           <div className="rounded-xl border border-white/10 bg-background/60 p-4">
@@ -3537,8 +3593,8 @@ export default function Admin() {
         const definition = activeManualBookingExtras.find((extra) => extra.id === selection.extraId);
         if (!definition) {
           toast({
-            title: "Extra indisponível",
-            description: "Atualize a seleção de Extras e tente novamente.",
+            title: `${adminCopy.extras.singularLabel} indisponível`,
+            description: `Atualize a seleção de ${adminCopy.extras.pluralLabel} e tente novamente.`,
             variant: "destructive",
           });
           return;
@@ -4356,8 +4412,8 @@ export default function Admin() {
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
             {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> {adminCopy.team.tabLabel}</TabsTrigger>}
             {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><ServiceIcon className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
-            {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
-            {canManageExpenses && <TabsTrigger value="internal-costs" className={adminTabTriggerClass}><Boxes className="w-4 h-4" /> Custos / Consumos</TabsTrigger>}
+            {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> {adminCopy.extras.tabLabel}</TabsTrigger>}
+            {canManageExpenses && <TabsTrigger value="internal-costs" className={adminTabTriggerClass}><Boxes className="w-4 h-4" /> {adminCopy.internalCosts.tabLabel}</TabsTrigger>}
             {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> {adminCopy.schedules.tabLabel}</TabsTrigger>}
             {canManageLocations && multiLocationConfig?.enabled && (
               <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>

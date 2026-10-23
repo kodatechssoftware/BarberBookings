@@ -13,6 +13,7 @@ import { useInternalCosts } from "@/hooks/use-internal-costs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { centsToMoneyInput, formatMoneyInputOnBlur, moneyInputToCents, normalizeMoneyInput } from "@/lib/money-input";
+import { useBusinessCopy } from "@/business/use-business-copy";
 
 type CostForm = {
   name: string;
@@ -33,6 +34,7 @@ const emptyForm: CostForm = {
 const euroFormatter = new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" });
 
 export function InternalCostsManager({ enabled }: { enabled: boolean }) {
+  const copy = useBusinessCopy().admin.internalCosts;
   const { data: costs = [], isLoading, isError, refetch } = useInternalCosts({ enabled });
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -135,8 +137,8 @@ export function InternalCostsManager({ enabled }: { enabled: boolean }) {
       <CardHeader className="border-b border-white/10">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <CardTitle className="flex items-center gap-2 text-xl"><Boxes className="h-5 w-5 text-primary" /> Custos / Consumos</CardTitle>
-            <p className="mt-2 max-w-2xl text-sm text-gray-400">Catálogo exclusivamente interno para apurar custo direto e margem. Nunca altera o preço cobrado à cliente.</p>
+            <CardTitle className="flex items-center gap-2 text-xl"><Boxes className="h-5 w-5 text-primary" /> {copy.title}</CardTitle>
+            <p className="mt-2 max-w-2xl text-sm text-gray-400">{copy.description}</p>
           </div>
           <Button variant="gold" className="w-full gap-2 sm:w-auto" onClick={create}><Plus className="h-4 w-4" /> Novo custo</Button>
         </div>

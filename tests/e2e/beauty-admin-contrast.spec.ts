@@ -257,7 +257,7 @@ test.describe("Beauty Admin contrast", () => {
       await expectFormSurfaceLegible(page.getByRole("dialog", { name: /Detalhes da marca/i }));
       await page.keyboard.press("Escape");
 
-      await page.getByRole("tab", { name: /Servi/ }).click();
+      await page.getByRole("tab", { name: "Serviços", exact: true }).click();
       await page.getByRole("button", { name: /Adicionar Servi/, exact: true }).click();
       await expectFormSurfaceLegible(page.getByRole("dialog", { name: /Novo Servi/ }));
       await page.keyboard.press("Escape");
@@ -276,12 +276,12 @@ test.describe("Beauty Admin contrast", () => {
       expect((await contrastRatio(categoryInput, categoryInput)).ratio).toBeGreaterThanOrEqual(7);
       await page.keyboard.press("Escape");
 
-      await page.getByRole("tab", { name: "Extras", exact: true }).click();
-      await page.getByRole("button", { name: "Novo Extra", exact: true }).click();
-      await expectFormSurfaceLegible(page.getByRole("dialog", { name: "Novo Extra" }));
+      await page.getByRole("tab", { name: "Complementos / Extras", exact: true }).click();
+      await page.getByRole("button", { name: "Novo Complemento / Extra", exact: true }).click();
+      await expectFormSurfaceLegible(page.getByRole("dialog", { name: "Novo Complemento / Extra" }));
       await page.keyboard.press("Escape");
 
-      await page.getByRole("tab", { name: "Custos / Consumos", exact: true }).click();
+      await page.getByRole("tab", { name: "Consumos por Serviço", exact: true }).click();
       await page.getByRole("button", { name: "Novo custo", exact: true }).click();
       await expectFormSurfaceLegible(page.getByRole("dialog", { name: "Novo custo/consumo" }));
       await page.keyboard.press("Escape");

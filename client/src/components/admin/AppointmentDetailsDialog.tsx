@@ -185,7 +185,10 @@ function EditAppointmentDialog({
   disabled?: boolean;
   locationLogoUrl?: string | null;
 }) {
-  const agendaCopy = useBusinessCopy().agenda;
+  const businessCopy = useBusinessCopy();
+  const agendaCopy = businessCopy.agenda;
+  const extrasCopy = businessCopy.admin.extras;
+  const internalCostsCopy = businessCopy.admin.internalCosts;
   const businessConfig = useBusinessConfig();
   const isCustomAppointment = appointment.serviceId === null
     && appointment.serviceNameSnapshot != null
@@ -374,8 +377,8 @@ function EditAppointmentDialog({
   });
   const selectedExtrasCount = selectedExtras.length;
   const extrasHeading = selectedExtrasCount === 0
-    ? "Extras (opcional)"
-    : `Extras (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
+    ? `${extrasCopy.tabLabel} (opcional)`
+    : `${extrasCopy.tabLabel} (${selectedExtrasCount} ${selectedExtrasCount === 1 ? "selecionado" : "selecionados"})`;
   const existingInternalCostsByDefinitionId = useMemo(
     () => new Map((appointment.internalCosts ?? []).map((cost) => [cost.internalCostDefinitionId, cost])),
     [appointment.internalCosts],
@@ -545,8 +548,8 @@ function EditAppointmentDialog({
         document.getElementById(`edit-appointment-extra-amount-${incompleteVariableExtra.extraId}`)?.focus();
       }, 0);
       toast({
-        title: "Valor de Extra inválido",
-        description: "Indique um valor superior a zero para cada Extra variável.",
+        title: `Valor de ${extrasCopy.singularLabel} inválido`,
+        description: `Indique um valor superior a zero para cada ${extrasCopy.singularLabel} variável.`,
         variant: "destructive",
       });
       return;
@@ -838,9 +841,9 @@ function EditAppointmentDialog({
             <CollapsibleContent className="space-y-3 border-t border-white/10 p-3" data-testid="appointment-extras-editor-content">
               <p className="text-xs text-gray-400">Os valores guardados só mudam quando altera explicitamente a seleção.</p>
               {isLoadingExtras ? (
-                <p className="text-xs text-gray-500">A carregar Extras...</p>
+                <p className="text-xs text-gray-500">A carregar {extrasCopy.pluralLabel}...</p>
               ) : visibleExtraDefinitions.length === 0 && missingSelectedExtras.length === 0 ? (
-                <p className="text-xs text-gray-500">Não existem Extras disponíveis nesta localização.</p>
+                <p className="text-xs text-gray-500">Não existem {extrasCopy.pluralLabel} disponíveis nesta localização.</p>
               ) : (
                 <div className="space-y-2">
                 {visibleExtraDefinitions.map((extra) => {
@@ -863,7 +866,7 @@ function EditAppointmentDialog({
                                   quantity: 1,
                                 }]
                             : current.filter((candidate) => candidate.extraId !== extra.id))}
-                          aria-label={`Selecionar Extra ${extra.name}`}
+                          aria-label={`Selecionar ${extrasCopy.singularLabel} ${extra.name}`}
                         />
                         <span className="min-w-0 flex-1">
                           <span className="block break-words text-sm text-gray-200">{existing?.nameSnapshot ?? extra.name}</span>
@@ -905,7 +908,7 @@ function EditAppointmentDialog({
                                     }),
                                   }
                                 : candidate))}
-                            aria-label={`Valor do Extra ${extra.name}`}
+                            aria-label={`Valor do ${extrasCopy.singularLabel} ${extra.name}`}
                             className="h-10 border-white/10 bg-background text-white"
                           />
                           </div>
@@ -923,7 +926,7 @@ function EditAppointmentDialog({
                                 candidate.extraId === extra.id
                                   ? { ...candidate, quantity: Math.max(1, Math.min(99, Number(event.target.value) || 1)) }
                                   : candidate))}
-                              aria-label={`Quantidade do Extra ${extra.name}`}
+                              aria-label={`Quantidade do ${extrasCopy.singularLabel} ${extra.name}`}
                               className="h-10 border-white/10 bg-background text-white"
                             />
                           </div>
@@ -941,7 +944,7 @@ function EditAppointmentDialog({
                         onCheckedChange={(checked) => {
                           if (!checked) setSelectedExtras((current) => current.filter((candidate) => candidate.extraId !== extra.extraDefinitionId));
                         }}
-                        aria-label={`Remover Extra ${extra.nameSnapshot}`}
+                        aria-label={`Remover ${extrasCopy.singularLabel} ${extra.nameSnapshot}`}
                       />
                       <span className="min-w-0 flex-1 text-sm text-gray-200">
                         {extra.nameSnapshot}
@@ -964,8 +967,8 @@ function EditAppointmentDialog({
             <CollapsibleTrigger asChild>
               <button type="button" className="flex min-h-14 w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-white/5">
                 <span>
-                  <span className="block font-semibold text-white">Custos / Consumos internos</span>
-                  <span className="mt-1 block text-xs text-gray-400">Não alteram o total cobrado à cliente.</span>
+                  <span className="block font-semibold text-white">{internalCostsCopy.title}</span>
+                  <span className="mt-1 block text-xs text-gray-400">{internalCostsCopy.description}</span>
                 </span>
                 <ChevronDown className={cn("h-5 w-5 text-gray-400 transition-transform", areInternalCostsOpen && "rotate-180")} />
               </button>
@@ -1175,7 +1178,10 @@ export function AppointmentDetailsDialog({
   pendingAction?: AppointmentMutationPendingAction | null;
   locationLogoUrl?: string | null;
 }) {
-  const agendaCopy = useBusinessCopy().agenda;
+  const businessCopy = useBusinessCopy();
+  const agendaCopy = businessCopy.agenda;
+  const extrasCopy = businessCopy.admin.extras;
+  const internalCostsCopy = businessCopy.admin.internalCosts;
   const businessConfig = useBusinessConfig();
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerNotesUpdatedAt, setCustomerNotesUpdatedAt] = useState<string | null>(null);
@@ -1481,7 +1487,7 @@ export function AppointmentDetailsDialog({
               </div>
               {appointmentExtras.length > 0 && (
                 <>
-                  <p className="pt-1 text-xs uppercase tracking-widest text-gray-500">Extras</p>
+                  <p className="pt-1 text-xs uppercase tracking-widest text-gray-500">{extrasCopy.tabLabel}</p>
                   {appointmentExtras.map((extra) => (
                     <div key={`${extra.extraDefinitionId}-${extra.position}`} className="flex items-start justify-between gap-4">
                       <span className="min-w-0 break-words text-gray-300">{extra.nameSnapshot}{extra.quantity > 1 ? ` × ${extra.quantity}` : ""}</span>
@@ -1497,7 +1503,7 @@ export function AppointmentDetailsDialog({
             </div>
             {appointmentInternalCosts.length > 0 && (
               <div className="mt-3 space-y-2 rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-3 text-sm" data-testid="appointment-internal-costs-breakdown">
-                <p className="text-xs uppercase tracking-widest text-amber-200">Custos / Consumos internos</p>
+                <p className="text-xs uppercase tracking-widest text-amber-200">{internalCostsCopy.title}</p>
                 {appointmentInternalCosts.map((cost) => <div key={cost.id} className="flex justify-between gap-4">
                   <span className="min-w-0 text-gray-300">{cost.nameSnapshot}{cost.quantity > 1 ? ` × ${cost.quantity}` : ""}</span>
                   <span className="shrink-0 text-white">{formatAppointmentPrice(cost.unitCostCentsSnapshot * cost.quantity)}</span>
@@ -1668,7 +1674,7 @@ export function AppointmentDetailsDialog({
               <AlertDialogHeader>
                 <AlertDialogTitle>Concluir marcação</AlertDialogTitle>
                 <AlertDialogDescription className="text-gray-400">
-                  Confirme o serviço, acrescente Extras pedidos durante o atendimento e escolha o pagamento.
+                  Confirme o serviço, acrescente {extrasCopy.pluralLabel.toLowerCase()} pedidos durante o atendimento e escolha o pagamento.
                 </AlertDialogDescription>
               </AlertDialogHeader>
 
@@ -1684,7 +1690,7 @@ export function AppointmentDetailsDialog({
                 <div className="rounded-xl border border-white/10 bg-background/60 p-3" data-testid="beauty-completion-extras">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Extras</p>
+                      <p className="text-xs font-bold uppercase tracking-widest text-gray-400">{extrasCopy.tabLabel}</p>
                       {completionExtras.length === 0 && <p className="mt-1 text-sm text-gray-300">Nenhum</p>}
                     </div>
                     <Button
@@ -1697,7 +1703,7 @@ export function AppointmentDetailsDialog({
                       data-testid="beauty-completion-add-extra"
                       className="shrink-0"
                     >
-                      <Plus className="mr-1 h-4 w-4" /> Adicionar extra
+                      <Plus className="mr-1 h-4 w-4" /> Adicionar {extrasCopy.singularLabel.toLowerCase()}
                     </Button>
                   </div>
 
@@ -1713,7 +1719,7 @@ export function AppointmentDetailsDialog({
                         return (
                           <div key={selection.extraId} className="flex items-start justify-between gap-4 text-sm">
                             <span className="min-w-0 break-words text-gray-200">
-                              {existing?.nameSnapshot ?? definition?.name ?? "Extra indisponível"}
+                              {existing?.nameSnapshot ?? definition?.name ?? `${extrasCopy.singularLabel} indisponível`}
                               {selection.quantity > 1 ? ` × ${selection.quantity}` : ""}
                             </span>
                             <span className="shrink-0 font-semibold text-primary">
@@ -1728,9 +1734,9 @@ export function AppointmentDetailsDialog({
                   {isCompletionExtrasOpen && (
                     <div className="mt-3 space-y-2 border-t border-white/10 pt-3" data-testid="beauty-completion-extra-catalogue">
                       {isLoadingCompletionExtras ? (
-                        <p className="text-sm text-gray-400">A carregar Extras...</p>
+                        <p className="text-sm text-gray-400">A carregar {extrasCopy.pluralLabel}...</p>
                       ) : completionVisibleExtraDefinitions.length === 0 && completionMissingExtras.length === 0 ? (
-                        <p className="text-sm text-gray-400">Não existem Extras disponíveis para este serviço.</p>
+                        <p className="text-sm text-gray-400">Não existem {extrasCopy.pluralLabel} disponíveis para este serviço.</p>
                       ) : (
                         <>
                           {completionVisibleExtraDefinitions.map((extra) => {
@@ -1753,7 +1759,7 @@ export function AppointmentDetailsDialog({
                                             quantity: 1,
                                           }]
                                       : current.filter((candidate) => candidate.extraId !== extra.id))}
-                                    aria-label={`Selecionar Extra ${extra.name}`}
+                                    aria-label={`Selecionar ${extrasCopy.singularLabel} ${extra.name}`}
                                   />
                                   <span className="min-w-0 flex-1 text-sm text-gray-200">
                                     {existing?.nameSnapshot ?? extra.name}
@@ -1786,7 +1792,7 @@ export function AppointmentDetailsDialog({
                                               }),
                                             }
                                           : candidate))}
-                                        aria-label={`Valor do Extra ${extra.name}`}
+                                        aria-label={`Valor do ${extrasCopy.singularLabel} ${extra.name}`}
                                       />
                                     </div>
                                     <div className="space-y-1.5">
@@ -1801,7 +1807,7 @@ export function AppointmentDetailsDialog({
                                         onChange={(event) => setCompletionExtras((current) => current.map((candidate) => candidate.extraId === extra.id
                                           ? { ...candidate, quantity: Math.max(1, Math.min(99, Number(event.target.value) || 1)) }
                                           : candidate))}
-                                        aria-label={`Quantidade do Extra ${extra.name}`}
+                                        aria-label={`Quantidade do ${extrasCopy.singularLabel} ${extra.name}`}
                                       />
                                     </div>
                                   </div>
@@ -1818,7 +1824,7 @@ export function AppointmentDetailsDialog({
                                   onCheckedChange={(checked) => {
                                     if (!checked) setCompletionExtras((current) => current.filter((candidate) => candidate.extraId !== extra.extraDefinitionId));
                                   }}
-                                  aria-label={`Remover Extra ${extra.nameSnapshot}`}
+                                  aria-label={`Remover ${extrasCopy.singularLabel} ${extra.nameSnapshot}`}
                                 />
                                 <span className="min-w-0 flex-1 text-sm text-gray-200">{extra.nameSnapshot}</span>
                                 <span className="shrink-0 text-sm font-semibold text-primary">{formatAppointmentPrice(extra.amountCentsSnapshot)}</span>
@@ -1829,7 +1835,7 @@ export function AppointmentDetailsDialog({
                       )}
                       {incompleteCompletionExtra && (
                         <p className="flex items-center gap-1.5 text-xs font-medium text-amber-300" role="alert">
-                          <AlertTriangle className="h-3.5 w-3.5" /> Indique um valor superior a zero para cada Extra selecionado.
+                          <AlertTriangle className="h-3.5 w-3.5" /> Indique um valor superior a zero para cada {extrasCopy.singularLabel} selecionado.
                         </p>
                       )}
                     </div>

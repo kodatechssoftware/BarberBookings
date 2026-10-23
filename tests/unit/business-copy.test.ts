@@ -153,6 +153,8 @@ test("Barber B4 copy preserves Dashboard and report terminology", () => {
   assert.equal(reports.expenseEquipmentHelp, "Máquinas, cadeiras e reparações");
   assert.equal(reports.workbook.settlementsSheet, "Acertos com Barbeiros");
   assert.equal(reports.workbook.workspaceRent, "Aluguer de cadeira (€)");
+  assert.equal(barberBusinessCopy.admin.extras.tabLabel, "Extras");
+  assert.equal(barberBusinessCopy.admin.internalCosts.tabLabel, "Custos / Consumos");
 });
 
 test("Beauty B4 copy uses neutral Dashboard and report terminology", () => {
@@ -170,7 +172,26 @@ test("Beauty B4 copy uses neutral Dashboard and report terminology", () => {
   assert.equal(reports.workbook.establishmentValue, "Valor do estabelecimento (€)");
   assert.equal(reports.expenseMaterialsHelp, "Produtos, materiais e consumíveis");
   assert.equal(reports.expenseEquipmentHelp, "Equipamentos, mobiliário e reparações");
+  assert.equal(beautyBusinessCopy.admin.extras.tabLabel, "Complementos / Extras");
+  assert.equal(beautyBusinessCopy.admin.extras.catalogDescription,
+    "Adicione serviços ou complementos cobrados à parte, aumentando o valor da marcação.");
+  assert.equal(beautyBusinessCopy.admin.internalCosts.tabLabel, "Consumos por Serviço");
+  assert.equal(beautyBusinessCopy.admin.internalCosts.description,
+    "Registe os materiais utilizados nos serviços para calcular os custos diretos e as margens. Estes valores são internos e não representam novas despesas.");
+  assert.equal(reports.expensesDescription,
+    "Registe compras e despesas do negócio. Estes valores são considerados no resultado financeiro do estabelecimento.");
+  assert.equal(dashboard.establishmentResult,
+    "Resultado do estabelecimento após profissionais e despesas");
+  assert.equal(reports.workbook.establishmentResult,
+    "Resultado do estabelecimento após profissionais e despesas");
   assert.doesNotMatch(`${reports.expenseMaterialsHelp} ${reports.expenseEquipmentHelp}`, /lâminas|cadeiras/i);
+});
+
+test("Barber shared report copy remains unchanged when the workbook uses its legacy label", () => {
+  assert.equal(
+    barberBusinessCopy.admin.reports.workbook.establishmentResult,
+    "Resultado líquido estimado",
+  );
 });
 
 test("Barber B5A keeps cancellation, reschedule and professional invite wording", () => {

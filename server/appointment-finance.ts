@@ -77,6 +77,15 @@ export type AppointmentsFinancialResult = {
   chairRentAmountCents: number;
 };
 
+export type CompletedServicesAnalytics = {
+  appointmentCount: number;
+  serviceRevenueCents: number;
+  extrasRevenueCents: number;
+  nominalRevenueCents: number;
+  directCostCents: number;
+  directMarginCents: number;
+};
+
 export type AppointmentFinanceDataSource = {
   getAppointmentExtras(appointmentIds: number[]): Promise<AppointmentExtra[]>;
   getAppointmentInternalCosts?(appointmentIds: number[]): Promise<AppointmentInternalCost[]>;
@@ -256,6 +265,31 @@ function createFinancialLine(
 
 function sum<T>(values: readonly T[], select: (value: T) => number) {
   return values.reduce((total, value) => total + select(value), 0);
+}
+
+export function summarizeCompletedServicesAnalytics(
+  appointments: readonly Pick<Appointment, "id" | "status">[],
+  financials: Pick<AppointmentsFinancialResult, "byAppointmentId">,
+): CompletedServicesAnalytics {
+  const completed = appointments.filter((appointment) => appointment.status === "completed");
+  return completed.reduce<CompletedServicesAnalytics>((summary, appointment) => {
+    const financial = financials.byAppointmentId.get(appointment.id);
+    if (!financial) return summary;
+    summary.appointmentCount += 1;
+    summary.serviceRevenueCents += financial.serviceAmountCents;
+    summary.extrasRevenueCents += financial.extrasAmountCents;
+    summary.nominalRevenueCents += financial.totalAmountCents;
+    summary.directCostCents += financial.directCostAmountCents;
+    summary.directMarginCents += financial.grossMarginCents;
+    return summary;
+  }, {
+    appointmentCount: 0,
+    serviceRevenueCents: 0,
+    extrasRevenueCents: 0,
+    nominalRevenueCents: 0,
+    directCostCents: 0,
+    directMarginCents: 0,
+  });
 }
 
 export function getAppointmentPaymentAmounts(

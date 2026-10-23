@@ -522,6 +522,16 @@ export type AdminCopy = {
     professionalShare: string;
     establishmentShare: string;
     commissions: string;
+    registeredExpenses: string;
+    establishmentResult: string;
+    establishmentResultDescription: string;
+    professionalExpenseFilterHelp: string;
+    directMarginTitle: string;
+    directMarginDescription: string;
+    nominalServiceRevenue: string;
+    nominalExtrasRevenue: string;
+    directCosts: string;
+    directMargin: string;
     popularServices: string;
     noDataInPeriod: string;
     appointmentCount: string;
@@ -593,6 +603,14 @@ export type AdminCopy = {
       workspaceRent: string;
       professionalValue: string;
       establishmentValue: string;
+      commercialExtras: string;
+      nominalServiceRevenue: string;
+      commercialExtrasRevenue: string;
+      nominalTotalRevenue: string;
+      directCosts: string;
+      directMargin: string;
+      establishmentResult: string;
+      directMarginNote: string;
     };
   };
   services: {
@@ -722,6 +740,16 @@ export type AdminCopy = {
     followCompensation: string;
     professional: string;
     establishment: string;
+    tabLabel: string;
+    catalogTitle: string;
+    catalogDescription: string;
+    singularLabel: string;
+    pluralLabel: string;
+  };
+  internalCosts: {
+    tabLabel: string;
+    title: string;
+    description: string;
   };
 };
 

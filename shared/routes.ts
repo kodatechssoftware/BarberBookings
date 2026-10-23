@@ -205,6 +205,7 @@ export const api = {
       responses: {
         200: z.custom<typeof appointments.$inferSelect>(),
         404: errorSchemas.notFound,
+        409: errorSchemas.conflict,
       },
     },
     cancel: {
