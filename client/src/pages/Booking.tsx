@@ -815,7 +815,7 @@ export default function Booking() {
   }
 
   if (locationsError || locations.length === 0) {
-    return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6 text-center text-white">
+    return <div className="booking-shell flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6 text-center text-white">
       <h1 className="text-2xl font-display">{copy.locations.unavailableTitle}</h1>
       <p>{locationsError ? copy.locations.loadError : copy.locations.empty}</p>
       <Button variant="outline" onClick={() => navigate("/")}>{copy.navigation.backHome}</Button>
@@ -824,7 +824,7 @@ export default function Booking() {
 
   if (hasMultipleLocations && !activeLocation) {
     return (
-      <div data-testid="booking-location-choice" className="relative min-h-screen overflow-x-hidden bg-background text-white">
+      <div data-testid="booking-location-choice" className="booking-shell relative min-h-screen overflow-x-hidden bg-background text-white">
         <div className="absolute inset-x-0 top-0 z-10 mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 sm:pt-6 lg:px-8">
           <Button variant="ghost" onClick={() => navigate("/")}>
             <ChevronLeft className="mr-2 h-4 w-4" /> {copy.navigation.back}
@@ -873,7 +873,7 @@ export default function Booking() {
 
   if (step === 5) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="booking-shell min-h-screen bg-background flex items-center justify-center p-4">
         <div className="max-w-md w-full text-center">
           <motion.div 
             initial={{ scale: 0.8, opacity: 0 }}
@@ -922,7 +922,7 @@ export default function Booking() {
 
 
   return (
-    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background font-body text-foreground">
+    <div className="booking-shell flex min-h-screen flex-col overflow-x-hidden bg-background font-body text-foreground">
       <nav data-testid="public-booking-header" className="sticky top-0 z-50 border-b border-white/10 bg-background/95 py-3 backdrop-blur sm:py-4">
         <div className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 sm:gap-3 sm:px-6 lg:px-8">
           <Button 
@@ -1150,7 +1150,7 @@ export default function Booking() {
                   <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     <CalendarIcon className="w-5 h-5 text-primary" /> {copy.dateTime.dateHeading}
                   </h3>
-                  <div className="bg-card border border-white/5 rounded-xl p-2 md:p-4 overflow-x-auto">
+                  <div className="booking-calendar-card bg-card border border-white/5 rounded-xl p-2 md:p-4 overflow-x-auto">
                     <Calendar
                       mode="single"
                       selected={selectedDate}
@@ -1174,8 +1174,10 @@ export default function Booking() {
                         hasAvailability: "booking-day-available",
                       }}
                       classNames={{
-                        day_selected: "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
-                        day_today: "bg-white/10 text-white",
+                        day_selected: "booking-calendar-day-selected bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+                        day_today: "booking-calendar-day-today bg-white/10 text-white",
+                        day_outside: "booking-calendar-day-outside day-outside text-muted-foreground",
+                        day_disabled: "booking-calendar-day-disabled text-muted-foreground opacity-50",
                         months: "w-full",
                         month: "w-full space-y-4",
                         table: "w-full border-collapse",
@@ -1184,7 +1186,7 @@ export default function Booking() {
                         head_cell: "text-muted-foreground rounded-md w-auto font-normal text-[0.8rem]",
                         cell: "h-11 w-full text-center text-sm p-0 relative",
                         day: cn(
-                          "relative mx-auto h-10 w-10 p-0 pb-1 font-normal aria-selected:opacity-100 hover:bg-white/5 rounded-md transition-colors"
+                          "booking-calendar-day relative mx-auto h-10 w-10 p-0 pb-1 font-normal aria-selected:opacity-100 hover:bg-white/5 rounded-md transition-colors"
                         ),
                       }}
                     />
@@ -1247,17 +1249,19 @@ export default function Booking() {
                             <button
                               key={time}
                               disabled={!available}
+                              aria-pressed={selectedTime === time}
+                              data-slot-state={!available ? "unavailable" : selectedTime === time ? "selected" : "available"}
                               onClick={() => {
                                 setSelectedTime(prev => prev === time ? null : time);
                                 setShowTimeError(false);
                               }}
                               className={cn(
-                                "py-3 md:py-2 px-1 rounded-lg text-sm font-medium transition-all duration-200 border",
+                                "booking-time-slot py-3 md:py-2 px-1 rounded-lg text-sm font-medium transition-all duration-200 border",
                                 !available 
-                                  ? "bg-white/5 text-gray-600 border-transparent cursor-not-allowed" 
+                                  ? "booking-time-slot-unavailable bg-white/5 text-gray-600 border-transparent cursor-not-allowed"
                                   : selectedTime === time 
-                                    ? "bg-primary text-background border-primary shadow-lg scale-105" 
-                                    : "bg-transparent text-gray-300 border-white/10 hover:border-primary/50 hover:bg-white/5"
+                                    ? "booking-time-slot-selected bg-primary text-background border-primary shadow-lg scale-105"
+                                    : "booking-time-slot-available bg-transparent text-gray-300 border-white/10 hover:border-primary/50 hover:bg-white/5"
                               )}
                             >
                               {time}h
@@ -1336,7 +1340,7 @@ export default function Booking() {
                   <div className="space-y-2">
                     <Label htmlFor="phone">{copy.details.phoneLabel}</Label>
                     <div className={cn(
-                      "flex rounded-md border bg-background focus-within:ring-1",
+                      "booking-phone-field flex rounded-md border bg-background focus-within:ring-1",
                       showCustomerError("phone")
                         ? "border-red-500 focus-within:border-red-500 focus-within:ring-red-500"
                         : "border-white/10 focus-within:border-primary focus-within:ring-primary",
@@ -1344,7 +1348,7 @@ export default function Booking() {
                       <div className="relative shrink-0 border-r border-white/10">
                         <select
                           aria-label={copy.details.phoneCountryAriaLabel}
-                          className="h-12 w-[116px] appearance-none rounded-l-md bg-transparent px-3 pr-6 text-sm font-medium text-white outline-none"
+                          className="booking-phone-country-select h-12 w-[116px] appearance-none rounded-l-md bg-transparent px-3 pr-6 text-sm font-medium text-white outline-none"
                           value={selectedPhoneCountry}
                           onChange={(e) => {
                             setSelectedPhoneCountry(e.target.value as PhoneCountryCode);
@@ -1353,7 +1357,7 @@ export default function Booking() {
                           }}
                         >
                           {PHONE_COUNTRIES.map((country) => (
-                            <option key={country.code} value={country.code} className="bg-card text-white">
+                            <option key={country.code} value={country.code} className="booking-phone-country-option bg-card text-white">
                               {country.flag} {country.dialCode}
                             </option>
                           ))}

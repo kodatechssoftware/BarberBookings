@@ -149,7 +149,7 @@ export default function Reschedule() {
 
   if (appointmentLoadError || !appointment) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
+      <div className="public-cycle-shell min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">
           <XCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
           <h1 className="text-3xl font-display mb-4">{appointmentLoadError ? copy.common.genericErrorTitle : copy.reschedule.notFoundTitle}</h1>
@@ -162,7 +162,7 @@ export default function Reschedule() {
 
   if (appointment.manualOutsideHours && appointment.status === "booked") {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
+      <div className="public-cycle-shell min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">
           <Clock className="mx-auto mb-4 h-16 w-16 text-primary" />
           <h1 className="mb-4 text-3xl font-display">{copy.reschedule.assistedTitle}</h1>
@@ -185,7 +185,7 @@ export default function Reschedule() {
 
   if (appointment.status !== "booked" || success) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4 text-center">
+      <div className="public-cycle-shell min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">
           <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-20 h-20 bg-primary rounded-full flex items-center justify-center mx-auto mb-6">
             <Check className="w-10 h-10 text-background" />
@@ -206,7 +206,7 @@ export default function Reschedule() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-body">
+    <div className="public-cycle-shell min-h-screen bg-background text-foreground font-body">
       <div className="container mx-auto px-4 py-8 max-w-3xl">
         <div className="mb-8 text-center">
           <h1 className="text-3xl md:text-5xl font-display mb-3">{copy.reschedule.pageTitle}</h1>
@@ -232,7 +232,7 @@ export default function Reschedule() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-card border border-white/10 rounded-xl p-4">
+          <div className="booking-calendar-card bg-card border border-white/10 rounded-xl p-4">
             <h2 className="font-bold mb-4 flex items-center gap-2"><CalendarIcon className="w-5 h-5 text-primary" aria-hidden="true" /> {copy.reschedule.newDateHeading}</h2>
             <Calendar
               mode="single"
@@ -248,6 +248,13 @@ export default function Reschedule() {
               disabled={(date) => !isPublicDateAllowed(date)}
               locale={pt}
               className="rounded-md mx-auto"
+              classNames={{
+                day_selected: "booking-calendar-day-selected bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+                day_today: "booking-calendar-day-today border border-primary/50 text-primary",
+                day_outside: "booking-calendar-day-outside day-outside text-muted-foreground",
+                day_disabled: "booking-calendar-day-disabled text-muted-foreground opacity-50",
+                day: "booking-calendar-day h-9 w-9 p-0 font-normal aria-selected:opacity-100",
+              }}
             />
             {(loadingPublicBookingWindow || bookingMonthOpeningNotice) && publicBookingWindow?.enabled !== false && (
               <p className="mt-3 text-center text-xs leading-relaxed text-gray-400">
@@ -271,12 +278,14 @@ export default function Reschedule() {
                     key={time}
                     aria-label={`${time}h`}
                     disabled={!available}
+                    aria-pressed={selectedTime === time}
+                    data-slot-state={!available ? "unavailable" : selectedTime === time ? "selected" : "available"}
                     onClick={() => setSelectedTime(time)}
                     className={cn(
-                      "py-3 rounded-lg text-sm border transition-colors",
-                      !available ? "bg-white/5 text-gray-600 border-transparent cursor-not-allowed" :
-                        selectedTime === time ? "bg-primary text-background border-primary" :
-                          "border-white/10 text-gray-300 hover:border-primary/50",
+                      "booking-time-slot py-3 rounded-lg text-sm border transition-colors",
+                      !available ? "booking-time-slot-unavailable bg-white/5 text-gray-600 border-transparent cursor-not-allowed" :
+                        selectedTime === time ? "booking-time-slot-selected bg-primary text-background border-primary" :
+                          "booking-time-slot-available border-white/10 text-gray-300 hover:border-primary/50",
                     )}
                   >
                     {time}h

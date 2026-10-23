@@ -48,7 +48,7 @@ function StatusScreen({
   const bgClass = tone === "success" ? "bg-emerald-500/10" : tone === "danger" ? "bg-red-500/10" : "bg-primary/10";
 
   return (
-    <div className="min-h-[100svh] bg-background text-white flex items-center justify-center px-4 py-8">
+    <div className="public-cycle-shell min-h-[100svh] bg-background text-white flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-md rounded-lg border border-white/10 bg-card/80 p-6 text-center shadow-2xl shadow-black/30">
         <motion.div
           initial={{ scale: 0.9, opacity: 0 }}
@@ -155,7 +155,7 @@ export default function Cancellation() {
   }
 
   return (
-    <div className="min-h-[100svh] bg-background text-white flex items-center justify-center px-4 py-6">
+    <div className="public-cycle-shell min-h-[100svh] bg-background text-white flex items-center justify-center px-4 py-6">
       <main className="w-full max-w-md">
         <div className="mb-5 text-center">
           <p className="text-xs font-semibold uppercase text-primary">{appointment?.locationName || shopBranding.name}</p>
