@@ -8605,6 +8605,9 @@ export async function registerRoutes(
         4: currencyFormat,
       });
 
+      const workbookEstablishmentResultLabel = resolvedBusinessConfig.vertical === "beauty"
+        ? REPORT_PUBLIC_COPY.workbook.establishmentResult
+        : "Resultado estimado após despesas";
       const financialSheet = workbook.addWorksheet("Resumo Financeiro");
       financialSheet.mergeCells("A1:B1");
       financialSheet.getCell("A1").value = "Resumo financeiro";
@@ -8630,7 +8633,7 @@ export async function registerRoutes(
         ["", ""],
         ["Despesas e resultado", ""],
         ["Despesas registadas", centsToEuros(businessExpensesCents)],
-        [REPORT_PUBLIC_COPY.workbook.establishmentResult, centsToEuros(estimatedResultCents)],
+        [workbookEstablishmentResultLabel, centsToEuros(estimatedResultCents)],
         ["", ""],
         ["Nota", "No modelo de comissão, o barbeiro recebe a percentagem definida. No modelo de aluguer de cadeira, o barbeiro fica com a receita dos serviços e paga a renda ao salão; essa renda aparece como receita da barbearia, não como despesa operacional."],
       ]);
@@ -8657,7 +8660,7 @@ export async function registerRoutes(
             "Valor líquido estimado dos barbeiros",
             "Valor estimado da barbearia antes de despesas",
             "Despesas registadas",
-            REPORT_PUBLIC_COPY.workbook.establishmentResult,
+            workbookEstablishmentResultLabel,
           ].includes(label)) {
             row.getCell(2).numFmt = currencyFormat;
           }
@@ -8842,7 +8845,7 @@ export async function registerRoutes(
         ...(includesShopExpenses ? [
           ["Despesas registadas", centsToEuros(businessExpensesCents)] as [string, number],
           ["Saldo de recebimentos após despesas registadas", centsToEuros(cashBalanceAfterExpensesCents)] as [string, number],
-          [REPORT_PUBLIC_COPY.workbook.establishmentResult, centsToEuros(estimatedResultCents)] as [string, number],
+          [workbookEstablishmentResultLabel, centsToEuros(estimatedResultCents)] as [string, number],
         ] : []),
       ];
       financialRows.forEach(([label, value], index) => {
@@ -8857,7 +8860,7 @@ export async function registerRoutes(
           REPORT_PUBLIC_COPY.workbook.directMargin,
           REPORT_PUBLIC_COPY.workbook.totalForProfessionals,
           "Total atribuído ao estabelecimento",
-          REPORT_PUBLIC_COPY.workbook.establishmentResult,
+          workbookEstablishmentResultLabel,
         ].includes(label)) {
           row.font = { bold: true };
         }

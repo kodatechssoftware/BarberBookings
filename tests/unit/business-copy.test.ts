@@ -187,6 +187,13 @@ test("Beauty B4 copy uses neutral Dashboard and report terminology", () => {
   assert.doesNotMatch(`${reports.expenseMaterialsHelp} ${reports.expenseEquipmentHelp}`, /lâminas|cadeiras/i);
 });
 
+test("Barber shared report copy remains unchanged when the workbook uses its legacy label", () => {
+  assert.equal(
+    barberBusinessCopy.admin.reports.workbook.establishmentResult,
+    "Resultado líquido estimado",
+  );
+});
+
 test("Barber B5A keeps cancellation, reschedule and professional invite wording", () => {
   const { publicCycle } = barberBusinessCopy;
   assert.equal(publicCycle.cancellation.professionalLabel, "Barbeiro");

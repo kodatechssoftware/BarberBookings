@@ -295,16 +295,29 @@ test("Excel report headings follow the resolved backend vertical without changin
     }));
     return values;
   }).join("\n");
+  const movementHeader = movements!.findRow(
+    movements!.getColumn(1).values.findIndex((value) => value === "Data do serviço"),
+  );
+  expect(movementHeader).toBeTruthy();
+  const movementHeaders = movementHeader!.values as unknown[];
 
   if (runtime.vertical === "beauty") {
     expect(summary!.getCell("A3").value).toBe("Estabelecimento");
     expect(summary!.getCell("A5").value).toBe("Profissional");
     expect(movements!.getCell("D3").value).toBe("Profissional");
+    expect(visibleText).toContain("Resultado do estabelecimento após profissionais e despesas");
+    expect(movementHeaders).toContain("Consumos diretos da marcação");
+    expect(movementHeaders).toContain("Margem direta da marcação");
     expect(visibleText).not.toMatch(/Baptista|Powerhouse|barbeiro|barbeiros|barbearia|aluguer de cadeira/i);
   } else {
     expect(summary!.getCell("A3").value).toBe("Barbearia");
     expect(summary!.getCell("A5").value).toBe("Barbeiro");
     expect(movements!.getCell("D3").value).toBe("Barbeiro");
+    expect(visibleText).toContain("Resultado estimado após despesas");
+    expect(visibleText).not.toContain("Resultado líquido estimado");
+    expect(visibleText).not.toContain("Resultado do estabelecimento após profissionais e despesas");
+    expect(movementHeaders).not.toContain("Consumos diretos da marcação");
+    expect(movementHeaders).not.toContain("Margem direta da marcação");
   }
 });
 
