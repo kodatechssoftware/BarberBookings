@@ -88,6 +88,22 @@ async function loginAdminRequest(request: APIRequestContext) {
   expect(loginResponse.ok()).toBe(true);
 }
 
+async function selectPhoneCountry(
+  page: Page,
+  trigger: Locator,
+  search: string,
+  expectedDialCode: string,
+) {
+  await trigger.click();
+  const searchInput = page.getByRole("combobox", { name: "Pesquisar país ou indicativo" });
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill(search);
+  const option = page.getByRole("option").filter({ hasText: expectedDialCode }).first();
+  await expect(option).toBeVisible();
+  await option.click();
+  await expect(trigger).toContainText(expectedDialCode);
+}
+
 function currentWeekThursdayIso(hour = 10, minute = 0) {
   const now = new Date();
   const monday = new Date(now);
@@ -903,9 +919,14 @@ test.describe("public booking flow", () => {
     await expect(page.getByPlaceholder("O seu nome")).toBeVisible();
     await expect(page.getByPlaceholder("912 345 678")).toBeVisible();
     const countrySelect = page.getByLabel("País do telemóvel");
-    await expect(countrySelect.locator("option")).toHaveCount(9);
-    await countrySelect.selectOption("ES");
-    await expect(page.getByPlaceholder("612 345 678")).toBeVisible();
+    const phoneInput = page.locator("#phone");
+    await phoneInput.fill("912345678");
+    await countrySelect.click();
+    await expect(page.getByRole("option")).toHaveCount(245);
+    await page.keyboard.press("Escape");
+    await selectPhoneCountry(page, countrySelect, "Espanha", "+34");
+    expect((await phoneInput.inputValue()).replace(/\D/g, "")).toBe("912345678");
+    await expect(page.getByPlaceholder("612 34 56 78")).toBeVisible();
     await expect(page.getByRole("button", { name: "Confirmar" })).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
   });
@@ -1062,20 +1083,19 @@ test.describe("admin navigation", () => {
 
     const countrySelect = page.getByLabel("País do telemóvel da blacklist");
     const phoneInput = page.locator("#bl-phone");
-    await expect(countrySelect.locator("option")).toHaveCount(9);
-    await countrySelect.selectOption("ES");
-    await expect(phoneInput).toHaveAttribute("placeholder", "612 345 678");
+    await selectPhoneCountry(page, countrySelect, "+34", "+34");
+    await expect(phoneInput).toHaveAttribute("placeholder", "612 34 56 78");
 
     await phoneInput.fill(localPhone);
-    await expect(phoneInput).toHaveValue(localPhone);
+    expect((await phoneInput.inputValue()).replace(/\D/g, "")).toBe(localPhone);
     await page.getByRole("button", { name: "Bloquear Cliente" }).click();
 
     await expect(page.getByText("Cliente bloqueado", { exact: true })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "+34 612 698 764" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "+34 612 69 87 64" })).toBeVisible();
     await expect(phoneInput).toHaveValue("");
-    await expect(countrySelect).toHaveValue("PT");
+    await expect(countrySelect).toContainText("+351");
 
-    await countrySelect.selectOption("ES");
+    await selectPhoneCountry(page, countrySelect, "Espanha", "+34");
     await phoneInput.fill(localPhone);
     await page.getByRole("button", { name: "Bloquear Cliente" }).click();
     await expect(page.getByText("Cliente já bloqueado", { exact: true })).toBeVisible();
@@ -1083,7 +1103,7 @@ test.describe("admin navigation", () => {
       "Este contacto já se encontrava na lista de bloqueio. Não foi criado um duplicado.",
       { exact: true },
     )).toBeVisible();
-    await expect(page.getByRole("cell", { name: "+34 612 698 764" })).toHaveCount(1);
+    await expect(page.getByRole("cell", { name: "+34 612 69 87 64" })).toHaveCount(1);
     await expectNoHorizontalOverflow(page);
 
     if (process.env.VISUAL_QA === "true") {
@@ -1799,10 +1819,9 @@ test.describe("admin navigation", () => {
     const dialog = page.getByRole("dialog", { name: "Marcação manual" });
     await expect(dialog).toBeVisible();
     const manualCountrySelect = dialog.getByLabel("País do telemóvel da marcação manual");
-    await expect(manualCountrySelect).toHaveValue("PT");
-    await expect(manualCountrySelect.locator("option")).toHaveCount(9);
+    await expect(manualCountrySelect).toContainText("+351");
     await dialog.locator("#manual-booking-phone").fill("912695703");
-    await expect(dialog.locator("#manual-booking-phone")).toHaveValue("912695703");
+    expect((await dialog.locator("#manual-booking-phone").inputValue()).replace(/\D/g, "")).toBe("912695703");
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
     await dialog.getByLabel("Repetir marcação").click();
@@ -1953,9 +1972,8 @@ test.describe("admin navigation", () => {
     await selectDialogOption(page, dialog, 0, barber.name);
     await selectDialogOption(page, dialog, 1, service.name);
     const manualCountrySelect = dialog.getByLabel("País do telemóvel da marcação manual");
-    await expect(manualCountrySelect.locator("option")).toHaveCount(9);
-    await manualCountrySelect.selectOption("ES");
-    await expect(dialog.locator("#manual-booking-phone")).toHaveAttribute("placeholder", "612 345 678");
+    await selectPhoneCountry(page, manualCountrySelect, "Espanha", "+34");
+    await expect(dialog.locator("#manual-booking-phone")).toHaveAttribute("placeholder", "612 34 56 78");
     await dialog.locator("#manual-booking-name").fill("Cliente Manual");
     await dialog.locator("#manual-booking-phone").fill("612696001");
     await clickFirstEnabledManualTime(dialog);
@@ -4767,7 +4785,8 @@ test.describe("booking rules", () => {
       },
     });
 
-    expect(createResponse.status()).not.toBe(403);
+    expect(createResponse.ok(), await createResponse.text()).toBe(true);
+    expect((await createResponse.json()).customerPhone).toBe("+34912695702");
   });
 
   test("preserves Portuguese country code when storing customer phone", async ({ request }) => {
