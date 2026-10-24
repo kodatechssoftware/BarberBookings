@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef, type ChangeEvent, type ClipboardEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, useMemo, useRef, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -13,16 +13,14 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, canBarberPerformService, dateKeyInTimeZone, findFirstAvailableDate, getAvailableTimeSlots, periodsForShop } from "@/lib/availability";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
 import { shopBranding } from "@/lib/branding";
 import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 import {
   DEFAULT_PHONE_COUNTRY,
-  PHONE_COUNTRIES,
-  formatPhoneInput,
   getPhoneCountry,
-  isDigitsOnly,
   isValidPhoneForCountry,
   splitStoredPhone,
   toStoredPhone,
@@ -514,9 +512,6 @@ export default function Booking() {
   const selectedPhoneCountryData = getPhoneCountry(selectedPhoneCountry);
   const customerFieldErrors = useMemo(() => {
     const digits = customerDetails.phone.replace(/\D/g, "");
-    const phoneLengthLabel = selectedPhoneCountryData.minDigits === selectedPhoneCountryData.maxDigits
-      ? `${selectedPhoneCountryData.minDigits} dígitos`
-      : `entre ${selectedPhoneCountryData.minDigits} e ${selectedPhoneCountryData.maxDigits} dígitos`;
 
     return {
       name: customerDetails.name.trim() ? "" : "Indique o nome para a marcação.",
@@ -524,7 +519,7 @@ export default function Booking() {
         ? "Indique o telemóvel para confirmarmos a marcação."
         : isValidPhoneForCountry(customerDetails.phone, selectedPhoneCountry)
           ? ""
-          : `Confirme que o número tem ${phoneLengthLabel} para ${selectedPhoneCountryData.label}.`,
+          : `Introduza um número de telemóvel válido para ${selectedPhoneCountryData.label}.`,
       email: isValidOptionalEmail(customerDetails.email)
         ? ""
         : "Indique um email válido ou deixe o campo vazio.",
@@ -533,28 +528,6 @@ export default function Booking() {
   const showCustomerError = (field: CustomerField) => customerTouched[field] && Boolean(customerFieldErrors[field]);
   const markCustomerTouched = (field: CustomerField) => {
     setCustomerTouched((current) => ({ ...current, [field]: true }));
-  };
-  const handleCustomerPhoneBeforeInput = (event: FormEvent<HTMLInputElement>) => {
-    const inputEvent = event.nativeEvent as InputEvent;
-    if (inputEvent.data && !isDigitsOnly(inputEvent.data)) {
-      event.preventDefault();
-    }
-  };
-  const handleCustomerPhonePaste = (event: ClipboardEvent<HTMLInputElement>) => {
-    if (!isDigitsOnly(event.clipboardData.getData("text"))) {
-      event.preventDefault();
-    }
-  };
-  const handleCustomerPhoneChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const rawPhone = event.currentTarget.value;
-    if (!isDigitsOnly(rawPhone)) {
-      event.currentTarget.value = customerDetails.phone;
-      return;
-    }
-
-    const phone = rawPhone.slice(0, selectedPhoneCountryData.maxDigits);
-    event.currentTarget.value = phone;
-    setCustomerDetails((prev) => ({ ...prev, phone }));
   };
 
   useEffect(() => {
@@ -1296,47 +1269,20 @@ export default function Booking() {
                   
                   <div className="space-y-2">
                     <Label htmlFor="phone">Telemóvel *</Label>
-                    <div className={cn(
-                      "flex rounded-md border bg-background focus-within:ring-1",
-                      showCustomerError("phone")
-                        ? "border-red-500 focus-within:border-red-500 focus-within:ring-red-500"
-                        : "border-white/10 focus-within:border-primary focus-within:ring-primary",
-                    )}>
-                      <div className="relative shrink-0 border-r border-white/10">
-                        <select
-                          aria-label="País do telemóvel"
-                          className="h-12 w-[116px] appearance-none rounded-l-md bg-transparent px-3 pr-6 text-sm font-medium text-white outline-none"
-                          value={selectedPhoneCountry}
-                          onChange={(e) => {
-                            setSelectedPhoneCountry(e.target.value as PhoneCountryCode);
-                            setCustomerDetails(prev => ({ ...prev, phone: "" }));
-                            markCustomerTouched("phone");
-                          }}
-                        >
-                          {PHONE_COUNTRIES.map((country) => (
-                            <option key={country.code} value={country.code} className="bg-card text-white">
-                              {country.flag} {country.dialCode}
-                            </option>
-                          ))}
-                        </select>
-                        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
-                      </div>
-                      <Input 
-                        id="phone" 
-                        type="tel"
-                        inputMode="numeric"
-                        autoComplete="tel"
-                        placeholder={selectedPhoneCountryData.placeholder}
-                        className="h-12 flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
-                        aria-invalid={showCustomerError("phone")}
-                        aria-describedby={`${showCustomerError("phone") ? "phone-error " : ""}phone-whatsapp-notice`}
-                        value={customerDetails.phone}
-                        onBeforeInput={handleCustomerPhoneBeforeInput}
-                        onPaste={handleCustomerPhonePaste}
-                        onChange={handleCustomerPhoneChange}
-                        onBlur={() => markCustomerTouched("phone")}
-                      />
-                    </div>
+                    <InternationalPhoneInput
+                      id="phone"
+                      value={customerDetails.phone}
+                      countryCode={selectedPhoneCountry}
+                      onValueChange={(phone, countryCode) => {
+                        setSelectedPhoneCountry(countryCode);
+                        setCustomerDetails((previous) => ({ ...previous, phone }));
+                      }}
+                      onBlur={() => markCustomerTouched("phone")}
+                      countryAriaLabel="País do telemóvel"
+                      aria-invalid={showCustomerError("phone")}
+                      aria-describedby={`${showCustomerError("phone") ? "phone-error " : ""}phone-whatsapp-notice`}
+                      className="h-12"
+                    />
                     <p id="phone-whatsapp-notice" className="text-xs leading-relaxed text-gray-400">
                       Este número será utilizado para enviar confirmações e atualizações da marcação via WhatsApp.
                     </p>
