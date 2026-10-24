@@ -101,19 +101,23 @@ test.describe("Beauty public visual state contract", () => {
     date.setDate(date.getDate() + 8);
     await page.goto(`/book?barberId=1&serviceId=1&date=${localDateKey(date)}&time=15:30`);
 
-    const countrySelect = page.locator(".booking-phone-country-select");
+    const countrySelect = page.getByRole("combobox", { name: "País do telemóvel" });
     await expect(countrySelect).toBeVisible();
-    await expect(countrySelect).toHaveValue("PT");
-    await expect(countrySelect.locator("option:checked")).toContainText("+351");
-    await expectReadable(countrySelect);
+    await expect(countrySelect).toContainText("+351");
 
     await countrySelect.focus();
-    const phoneField = page.locator(".booking-phone-field");
+    const phoneField = countrySelect.locator("xpath=..");
+    await expectReadable(phoneField);
     await expect.poll(() => phoneField.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none");
 
-    await countrySelect.selectOption("ES");
-    await expect(page.getByPlaceholder("612 345 678")).toBeVisible();
-    await expect(countrySelect.locator("option")).toHaveCount(9);
+    const phoneInput = page.locator("#phone");
+    const portuguesePlaceholder = await phoneInput.getAttribute("placeholder");
+    await countrySelect.click();
+    await expect(page.getByRole("option")).toHaveCount(245);
+    await page.getByRole("combobox", { name: "Pesquisar país ou indicativo" }).fill("Espanha");
+    await page.getByRole("option", { name: /Espanha.*\+34/ }).click();
+    await expect(countrySelect).toContainText("+34");
+    await expect(phoneInput).not.toHaveAttribute("placeholder", portuguesePlaceholder || "");
 
     const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(hasOverflow).toBe(false);

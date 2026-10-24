@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { AppointmentDaySummary } from "@/components/admin/AppointmentDaySummary";
 import { getAppointmentContactLinks, type WeeklyAgendaAppointment } from "@/components/admin/WeeklyAgenda";
 import { useBusinessCopy } from "@/business/use-business-copy";
+import type { PhoneCountryCode } from "@shared/phone-countries";
 
 export type AppointmentStatusFilter = AppointmentStatus | "all";
 export type AppointmentViewMode = "day" | "upcoming";
@@ -28,6 +29,7 @@ export type AppointmentBlockData = {
   times: string[];
   name: string;
   phone: string;
+  phoneCountryCode: PhoneCountryCode;
   email: string;
   date: Date;
   endDate: Date;

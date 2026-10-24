@@ -1,6 +1,7 @@
 import "dotenv/config";
 import type { RecurringNotificationSnapshot, WhatsappMessageStatus, WhatsappMessageType } from "@shared/schema";
 import { formatBusinessCopy, type CommunicationsCopy } from "@shared/business/copy/types";
+import { PHONE_COUNTRIES, normalizeSupportedPhone, type PhoneCountryCode } from "@shared/phone-countries";
 
 import { storage } from "./storage";
 import {
@@ -26,6 +27,9 @@ const SHOP_NAME = process.env.SHOP_NAME?.trim()
     : communicationsCopy.establishmentFallback);
 const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const DEFAULT_COUNTRY_CODE = (process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || "351").replace(/\D/g, "");
+const DEFAULT_PHONE_COUNTRY = (PHONE_COUNTRIES.find(
+  (country) => country.dialCode === `+${DEFAULT_COUNTRY_CODE}`,
+)?.code || "PT") as PhoneCountryCode;
 const REQUEST_TIMEOUT_MS = Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000);
 const TWILIO_REQUEST_TIMEOUT_MS = Number(process.env.TWILIO_REQUEST_TIMEOUT_MS || 10000);
 const isProduction = process.env.NODE_ENV === "production";
@@ -101,20 +105,7 @@ function getTwilioConfig() {
 }
 
 function normalizeWhatsAppNumber(phone: string) {
-  const trimmed = phone.trim();
-  const hasExplicitCountryCode = trimmed.startsWith("+") || trimmed.startsWith("00");
-  const digits = trimmed.replace(/\D/g, "").replace(/^00/, "").replace(/^0+/, "");
-  if (!digits) return "";
-
-  if (hasExplicitCountryCode) {
-    return digits;
-  }
-
-  if (digits.startsWith(DEFAULT_COUNTRY_CODE)) {
-    return digits;
-  }
-
-  return `${DEFAULT_COUNTRY_CODE}${digits}`;
+  return normalizeSupportedPhone(phone, DEFAULT_PHONE_COUNTRY).replace(/^\+/, "");
 }
 
 function normalizeSmsNumber(phone: string) {
