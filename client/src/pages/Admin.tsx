@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -72,15 +73,10 @@ import {
   normalizeEmail,
 } from "@shared/customer-validation";
 import {
-  PHONE_COUNTRIES,
   formatPhoneForDisplay,
-  formatPhoneInput,
-  getPhoneCountry,
   normalizeSupportedPhone,
-  splitStoredPhone,
   supportedPhoneValidationMessage,
   supportedPhonesMatch,
-  toStoredPhone,
   type PhoneCountryCode,
 } from "@shared/phone-countries";
 import fabioAvatar from "@assets/fabio-baptista-avatar.jpg";
@@ -138,9 +134,8 @@ type AdminAppointment = {
   canManage?: boolean;
 };
 
-function normalizeManualBookingPhoneForSubmit(phone: string) {
-  const { localPhone } = splitStoredPhone(phone);
-  return localPhone ? normalizeSupportedPhone(phone) || phone.trim() : "";
+function normalizeManualBookingPhoneForSubmit(phone: string, countryCode: PhoneCountryCode) {
+  return phone.trim() ? normalizeSupportedPhone(phone, countryCode) : "";
 }
 
 type FutureBlacklistAppointment = {
@@ -1724,6 +1719,7 @@ export default function Admin() {
     times: [],
     name: "",
     phone: "900000000",
+    phoneCountryCode: "PT",
     email: "",
     date: startOfToday(),
     endDate: startOfToday(),
@@ -1769,8 +1765,7 @@ export default function Admin() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [blacklistForm, setBlacklistForm] = useState({ phone: "", email: "" });
-  const blacklistPhoneParts = splitStoredPhone(blacklistForm.phone);
-  const blacklistPhoneCountry = getPhoneCountry(blacklistPhoneParts.countryCode);
+  const [blacklistPhoneCountryCode, setBlacklistPhoneCountryCode] = useState<PhoneCountryCode>("PT");
   const [pendingBlacklistAction, setPendingBlacklistAction] = useState<PendingBlacklistAction | null>(null);
   const [pendingManualBookingBlacklistWarning, setPendingManualBookingBlacklistWarning] = useState<PendingManualBookingBlacklistWarning | null>(null);
   const [isSubmittingBlacklist, setIsSubmittingBlacklist] = useState(false);
@@ -2204,6 +2199,7 @@ export default function Admin() {
       times: initialTimes,
       name: "",
       phone: mode === "manual" ? "" : "900000000",
+      phoneCountryCode: "PT",
       email: "",
       date: date || current.date,
       endDate: date || current.endDate,
@@ -2647,7 +2643,7 @@ export default function Admin() {
   const handleAddBlacklistEntry = async () => {
     const phone = blacklistForm.phone;
     const email = blacklistForm.email;
-    const normalizedPhone = normalizeSupportedPhone(phone);
+    const normalizedPhone = normalizeSupportedPhone(phone, blacklistPhoneCountryCode);
     const normalizedEmail = normalizeEmail(email);
 
     if (!phone.trim()) {
@@ -2673,6 +2669,7 @@ export default function Admin() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/blacklist"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] });
     setBlacklistForm({ phone: "", email: "" });
+    setBlacklistPhoneCountryCode("PT");
     toast({ title: "Sucesso", description: "Cliente adicionado à lista de bloqueio." });
   };
 
@@ -2717,6 +2714,7 @@ export default function Admin() {
       setPendingBlacklistAction(null);
       if (options?.clearForm) {
         setBlacklistForm({ phone: "", email: "" });
+        setBlacklistPhoneCountryCode("PT");
       }
 
       toast({
@@ -2751,7 +2749,7 @@ export default function Admin() {
   const handleAddBlacklistEntryWithFutureCheck = async () => {
     const phone = blacklistForm.phone;
     const email = blacklistForm.email;
-    const normalizedPhone = normalizeSupportedPhone(phone);
+    const normalizedPhone = normalizeSupportedPhone(phone, blacklistPhoneCountryCode);
     const normalizedEmail = normalizeEmail(email);
 
     if (!phone.trim()) {
@@ -3005,7 +3003,7 @@ export default function Admin() {
   const findManualBookingBlacklistEntry = () => {
     if (!blockData.isManualBooking) return null;
 
-    const phone = normalizeSupportedPhone(blockData.phone);
+    const phone = normalizeSupportedPhone(blockData.phone, blockData.phoneCountryCode);
     const email = normalizeEmail(blockData.email);
 
     return blacklistEntries?.find((entry: any) => (
@@ -3056,6 +3054,18 @@ export default function Admin() {
     }
     if (blockData.isManualBooking && !blockData.name.trim()) {
       toast({ title: "Erro", description: "Indique o nome do cliente.", variant: "destructive" });
+      return;
+    }
+    if (
+      blockData.isManualBooking
+      && blockData.phone.trim()
+      && !normalizeManualBookingPhoneForSubmit(blockData.phone, blockData.phoneCountryCode)
+    ) {
+      toast({
+        title: "Telemóvel inválido",
+        description: supportedPhoneValidationMessage,
+        variant: "destructive",
+      });
       return;
     }
     if (blockData.isManualBooking && blockData.times.length !== 1) {
@@ -3150,7 +3160,7 @@ export default function Admin() {
           serviceMode: "existing",
           startTime: startTime,
           name: blockData.name.trim(),
-          phone: normalizeManualBookingPhoneForSubmit(blockData.phone),
+          phone: normalizeManualBookingPhoneForSubmit(blockData.phone, blockData.phoneCountryCode),
           customerEmail: normalizeEmail(blockData.email),
           isManualBooking: true,
           isRecurring: true,
@@ -3199,7 +3209,9 @@ export default function Admin() {
           startTime: startTimes[0],
           ...(!blockData.isManualBooking ? { startTimes } : {}),
           name: blockData.isManualBooking ? blockData.name.trim() : (blockData.name.trim() || "BLOQUEIO MANUAL"),
-          phone: blockData.isManualBooking ? normalizeManualBookingPhoneForSubmit(blockData.phone) : (blockData.phone || "900000000"),
+          phone: blockData.isManualBooking
+            ? normalizeManualBookingPhoneForSubmit(blockData.phone, blockData.phoneCountryCode)
+            : (blockData.phone || "900000000"),
           customerEmail: blockData.isManualBooking ? normalizeEmail(blockData.email) : "",
           isManualBooking: blockData.isManualBooking,
           allowOutsideHours: blockData.allowOutsideHours,
@@ -3218,6 +3230,7 @@ export default function Admin() {
         times: [],
         name: "",
         phone: "900000000",
+        phoneCountryCode: "PT",
         email: "",
         serviceId: "",
         serviceMode: "existing",
@@ -4430,43 +4443,18 @@ export default function Admin() {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-white/5 rounded-xl border border-white/10">
                     <div className="space-y-2">
                       <Label htmlFor="bl-phone" className="text-xs">Telemóvel (obrigatório)</Label>
-                      <div className="flex h-10 overflow-hidden rounded-md border border-white/10 bg-background focus-within:border-red-400/60 focus-within:ring-1 focus-within:ring-red-400/30">
-                        <div className="relative shrink-0 border-r border-white/10 bg-white/5">
-                          <select
-                            aria-label="País do telemóvel da blacklist"
-                            className="h-full w-[116px] appearance-none bg-transparent px-3 pr-6 text-sm font-semibold text-white outline-none"
-                            value={blacklistPhoneParts.countryCode}
-                            onChange={(event) => {
-                              const country = getPhoneCountry(event.target.value as PhoneCountryCode);
-                              setBlacklistForm((current) => ({ ...current, phone: country.dialCode }));
-                            }}
-                          >
-                            {PHONE_COUNTRIES.map((country) => (
-                              <option key={country.code} value={country.code} className="bg-card text-white">
-                                {country.flag} {country.dialCode}
-                              </option>
-                            ))}
-                          </select>
-                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
-                        </div>
-                        <Input
-                          id="bl-phone"
-                          type="tel"
-                          inputMode="numeric"
-                          autoComplete="tel-national"
-                          maxLength={blacklistPhoneCountry.maxDigits}
-                          value={blacklistPhoneParts.localPhone}
-                          onChange={(event) => setBlacklistForm((current) => ({
-                            ...current,
-                            phone: toStoredPhone(
-                              formatPhoneInput(event.target.value, blacklistPhoneCountry.maxDigits),
-                              blacklistPhoneParts.countryCode,
-                            ),
-                          }))}
-                          className="h-full min-w-0 rounded-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
-                          placeholder={blacklistPhoneCountry.placeholder}
-                        />
-                      </div>
+                      <InternationalPhoneInput
+                        id="bl-phone"
+                        value={blacklistForm.phone}
+                        countryCode={blacklistPhoneCountryCode}
+                        onValueChange={(phone, countryCode) => {
+                          setBlacklistPhoneCountryCode(countryCode);
+                          setBlacklistForm((current) => ({ ...current, phone }));
+                        }}
+                        countryAriaLabel="País do telemóvel da blacklist"
+                        autoComplete="tel"
+                        className="h-10 focus-within:border-red-400/60 focus-within:ring-red-400/30"
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label className="text-xs">Email (opcional)</Label>

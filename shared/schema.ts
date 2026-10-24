@@ -2,6 +2,7 @@ import { pgSchema, pgTable, text, serial, integer, boolean, timestamp, date, pri
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations, sql } from "drizzle-orm";
+import { normalizePhoneNumber, supportedPhoneValidationMessage } from "./phone-countries";
 
 const databaseSchema =
   typeof process !== "undefined" ? process.env.DATABASE_SCHEMA?.trim() : undefined;
@@ -735,15 +736,9 @@ export const updateExtraDefinitionSchema = z.object({
   isActive: extraDefinitionInputFields.isActive,
   sortOrder: extraDefinitionInputFields.sortOrder,
 });
-const localPortugueseMobilePattern = /^9\d{8}$/;
-const internationalPhonePattern = /^\+\d{7,15}$/;
-const internationalZeroPrefixPhonePattern = /^00\d{7,15}$/;
-const bookingPhoneSchema = z.string().trim().refine((value) => {
-  const trimmed = value.trim();
-  return localPortugueseMobilePattern.test(trimmed) ||
-    internationalPhonePattern.test(trimmed) ||
-    internationalZeroPrefixPhonePattern.test(trimmed);
-}, "Indique um telemovel valido.");
+const bookingPhoneSchema = z.string().trim()
+  .refine((value) => Boolean(normalizePhoneNumber(value)), supportedPhoneValidationMessage)
+  .transform((value) => normalizePhoneNumber(value));
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   id: true,
   locationId: true,
