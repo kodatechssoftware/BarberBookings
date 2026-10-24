@@ -104,7 +104,6 @@ import {
   emailValidationMessage,
   isValidOptionalEmail,
   normalizeEmail,
-  normalizePortuguesePhone,
 } from "@shared/customer-validation";
 import {
   normalizeSupportedPhone,
@@ -411,11 +410,9 @@ type BarberCompensationInput = {
 const blacklistInputSchema = z.object({
   phone: z
     .string()
-    .transform((value) => {
-      const normalizedPhone = normalizeSupportedPhone(value);
-      return normalizedPhone.startsWith("+351") ? normalizedPhone.slice(4) : normalizedPhone;
-    })
-    .refine((value) => Boolean(normalizeSupportedPhone(value)), supportedPhoneValidationMessage),
+    .trim()
+    .refine((value) => Boolean(normalizeSupportedPhone(value)), supportedPhoneValidationMessage)
+    .transform((value) => normalizeSupportedPhone(value)),
   email: z
     .string()
     .nullish()
@@ -822,38 +819,11 @@ function hasOverlappingAvailabilityPeriods(
 }
 
 function normalizePhone(value?: string | null) {
-  const supportedPhone = normalizeSupportedPhone(value);
-  if (supportedPhone) return supportedPhone;
-
-  const trimmed = (value || "").trim();
-  const digits = trimmed.replace(/\D/g, "");
-  if (!digits) return "";
-  if (trimmed.startsWith("+")) return `+${digits}`;
-  if (trimmed.startsWith("00")) return `+${digits.slice(2)}`;
-  return digits;
+  return normalizeSupportedPhone(value);
 }
 
 function normalizeCustomerPhoneForStorage(value?: string | null) {
-  const trimmed = (value || "").trim();
-  if (!trimmed) return "";
-
-  const digits = trimmed.replace(/\D/g, "");
-  if (!digits) return "";
-
-  if (trimmed.startsWith("+")) {
-    return `+${digits}`;
-  }
-
-  if (trimmed.startsWith("00")) {
-    return `+${digits.slice(2)}`;
-  }
-
-  const portuguesePhone = normalizePortuguesePhone(trimmed);
-  if (/^9\d{8}$/.test(portuguesePhone)) {
-    return `+351${portuguesePhone}`;
-  }
-
-  return digits;
+  return normalizeSupportedPhone(value);
 }
 
 function normalizeCustomerName(value?: string | null) {

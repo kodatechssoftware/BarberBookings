@@ -12,6 +12,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InternationalPhoneInput } from "@/components/InternationalPhoneInput";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -27,14 +28,6 @@ import {
   createClockAlignedTimeOptions,
   type BookingSlotIntervalMinutes,
 } from "@shared/booking-slot-interval";
-import {
-  PHONE_COUNTRIES,
-  formatPhoneInput,
-  getPhoneCountry,
-  splitStoredPhone,
-  toStoredPhone,
-  type PhoneCountryCode,
-} from "@shared/phone-countries";
 import type { ExtraDefinition } from "@shared/schema";
 import type { ShopLocation } from "@shared/locations";
 
@@ -126,8 +119,6 @@ export function AppointmentBlockDialog({
   const afternoonBlockTimes = visibleBlockTimeOptions.filter((time) => time >= "14:00");
   const today = startOfToday();
   const recurringStartsInPast = blockData.isRecurring && blockData.date < today;
-  const manualPhoneParts = splitStoredPhone(blockData.phone);
-  const manualPhoneCountry = getPhoneCountry(manualPhoneParts.countryCode);
   const showEmailError = blockData.isManualBooking && isEmailTouched && !isValidOptionalEmail(blockData.email);
   const selectedService = manualBookingServices.find((service) => String(service.id) === blockData.serviceId);
   const showSpecialTerms = blockData.isManualBooking && blockData.hasSpecialTerms && !blockData.isRecurring;
@@ -922,43 +913,19 @@ export function AppointmentBlockDialog({
               {blockData.isManualBooking && (
                 <div className="space-y-3">
                   <Label className="text-sm font-medium text-gray-300">Telemóvel (opcional)</Label>
-                  <div className="flex h-12 overflow-hidden rounded-xl border border-white/10 bg-background/50 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40">
-                    <div className="relative shrink-0 border-r border-white/10">
-                      <select
-                        aria-label="País do telemóvel da marcação manual"
-                        className="h-full w-[116px] appearance-none bg-transparent px-3 pr-6 text-sm font-semibold text-primary outline-none"
-                        value={manualPhoneParts.countryCode}
-                        onChange={(event) => {
-                          const country = getPhoneCountry(event.target.value as PhoneCountryCode);
-                          onBlockDataChange({ ...blockData, phone: country.dialCode });
-                        }}
-                      >
-                        {PHONE_COUNTRIES.map((country) => (
-                          <option key={country.code} value={country.code} className="bg-card text-white">
-                            {country.flag} {country.dialCode}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500">▾</span>
-                    </div>
-                    <Input
-                      id="manual-booking-phone"
-                      type="tel"
-                      inputMode="numeric"
-                      autoComplete="tel-national"
-                      maxLength={manualPhoneCountry.maxDigits}
-                      value={manualPhoneParts.localPhone}
-                      onChange={(event) => onBlockDataChange({
-                        ...blockData,
-                        phone: toStoredPhone(
-                          formatPhoneInput(event.target.value, manualPhoneCountry.maxDigits),
-                          manualPhoneParts.countryCode,
-                        ),
-                      })}
-                      className="h-full min-w-0 rounded-none border-0 bg-transparent text-white focus-visible:ring-0 focus-visible:ring-offset-0"
-                      placeholder={manualPhoneCountry.placeholder}
-                    />
-                  </div>
+                  <InternationalPhoneInput
+                    id="manual-booking-phone"
+                    value={blockData.phone}
+                    countryCode={blockData.phoneCountryCode}
+                    onValueChange={(phone, countryCode) => {
+                      onBlockDataChange({ ...blockData, phone, phoneCountryCode: countryCode });
+                    }}
+                    countryAriaLabel="País do telemóvel da marcação manual"
+                    autoComplete="tel"
+                    className="h-12 rounded-xl bg-background/50 focus-within:ring-primary/40"
+                    countryButtonClassName="text-primary"
+                    inputClassName="text-white"
+                  />
                   <p className="text-xs leading-relaxed text-gray-400">
                     Com um número válido, a confirmação e as atualizações serão enviadas por WhatsApp.
                   </p>
