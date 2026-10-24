@@ -658,6 +658,68 @@ test("all four appointment Meta payloads preserve exact body and button order", 
   assert.equal(bodies[3].template.components.length, 1);
 });
 
+test("Meta payloads preserve international country calling codes and reject invalid recipients", async () => {
+  const recipients = [
+    "+351912345678",
+    "+34612345678",
+    "+33612345678",
+    "+447700900123",
+    "+4915123456789",
+    "+5511912345678",
+  ];
+  const previousFetch = globalThis.fetch;
+  const previousAllowlist = process.env.META_WHATSAPP_DEV_ALLOWLIST;
+  process.env.WHATSAPP_NOTIFICATIONS_ENABLED = "true";
+  process.env.MESSAGING_PROVIDER = "meta";
+  process.env.META_WHATSAPP_GRAPH_API_VERSION = "v25.0";
+  process.env.META_WHATSAPP_PHONE_NUMBER_ID = "phone";
+  process.env.META_WHATSAPP_WABA_ID = "waba";
+  process.env.META_WHATSAPP_ACCESS_TOKEN = "fake";
+  process.env.META_WHATSAPP_DEV_ALLOWLIST = recipients.join(",");
+  const bodies: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ messages: [{ id: `wamid.international.${bodies.length}` }] }), { status: 200 });
+  };
+
+  try {
+    for (const recipient of recipients) {
+      const delivery = await sendMetaTemplate({
+        recipient,
+        eventType: "appointment_confirmation",
+        customerName: "Cliente",
+        locationName: "Estabelecimento",
+        serviceName: "Serviço",
+        barberName: "Profissional",
+        startTime: new Date("2026-11-10T10:00:00.000Z"),
+        timeZone: "Europe/Lisbon",
+        address: "Morada",
+        managementToken: token,
+      });
+      assert.equal(delivery.outcome, "accepted");
+    }
+    const invalid = await sendMetaTemplate({
+      recipient: "+35191",
+      eventType: "appointment_confirmation",
+      customerName: "Cliente",
+      locationName: "Estabelecimento",
+      serviceName: "Serviço",
+      barberName: "Profissional",
+      startTime: new Date("2026-11-10T10:00:00.000Z"),
+      timeZone: "Europe/Lisbon",
+      address: "Morada",
+      managementToken: token,
+    });
+    assert.equal(invalid.errorCode, "INVALID_RECIPIENT");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousAllowlist === undefined) delete process.env.META_WHATSAPP_DEV_ALLOWLIST;
+    else process.env.META_WHATSAPP_DEV_ALLOWLIST = previousAllowlist;
+  }
+
+  assert.deepEqual(bodies.map((body) => body.to), recipients.map((recipient) => recipient.slice(1)));
+});
+
 test("Development keeps existing defaults and appointment_updated requires explicit configuration", () => {
   const eventTypes = ["appointment_confirmation", "appointment_rescheduled", "appointment_updated", "appointment_cancelled",
     "appointment_recurring_confirmation"] as const;
