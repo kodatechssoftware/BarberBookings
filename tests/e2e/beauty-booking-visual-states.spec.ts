@@ -32,10 +32,29 @@ function contrastRatio(foreground: Rgb, background: Rgb) {
 async function expectReadable(locator: Locator, minimum = 4.5) {
   const colours = await locator.evaluate((element) => {
     const style = getComputedStyle(element);
-    return { color: style.color, backgroundColor: style.backgroundColor };
+    return {
+      className: element.className,
+      color: style.color,
+      backgroundColor: style.backgroundColor,
+    };
   });
   expect(parseRgb(colours.backgroundColor).a).toBeGreaterThan(0);
-  expect(contrastRatio(parseRgb(colours.color), parseRgb(colours.backgroundColor))).toBeGreaterThanOrEqual(minimum);
+  const ratio = contrastRatio(parseRgb(colours.color), parseRgb(colours.backgroundColor));
+  expect(
+    ratio,
+    `${colours.className}: ${colours.color} on ${colours.backgroundColor}`,
+  ).toBeGreaterThanOrEqual(minimum);
+}
+
+async function expectKeyboardFocus(locator: Locator) {
+  await locator.focus();
+  await expect(locator).toBeFocused();
+  const focus = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+  });
+  expect(focus.outlineStyle).toBe("solid");
+  expect(Number.parseFloat(focus.outlineWidth)).toBeGreaterThanOrEqual(2);
 }
 
 function localDateKey(date: Date) {
@@ -51,6 +70,7 @@ test.describe("Beauty public visual state contract", () => {
     const today = localDateKey(new Date());
     await page.goto(`/book?barberId=1&serviceId=1&date=${today}`);
 
+    await expect(page.locator("html")).toHaveAttribute("data-brand-theme", "beauty-clean");
     await expect(page.locator(".booking-shell")).toBeVisible();
     await expect(page.locator(".booking-calendar-card")).toBeVisible();
 
@@ -62,11 +82,31 @@ test.describe("Beauty public visual state contract", () => {
       ".booking-day-available.booking-calendar-day:not([aria-selected='true']):not(:disabled)",
     ).first();
     await expect(anotherAvailableDay).toBeVisible();
+    await expectReadable(anotherAvailableDay);
+    await anotherAvailableDay.hover();
+    await expectReadable(anotherAvailableDay);
+    await expectKeyboardFocus(anotherAvailableDay);
     await anotherAvailableDay.click();
 
     const todayButton = page.locator(".booking-calendar-day-today");
     await expect(todayButton).toBeVisible();
     await expectReadable(todayButton);
+
+    const unavailableDay = page.locator(
+      ".booking-calendar-day-unavailable.booking-calendar-day-disabled",
+    ).first();
+    await expect(unavailableDay).toBeVisible();
+    await expect(unavailableDay).toBeDisabled();
+    await expectReadable(unavailableDay);
+
+    const pastDay = page.locator(".booking-calendar-day-past.booking-calendar-day-disabled").first();
+    await expect(pastDay).toBeVisible();
+    await expect(pastDay).toBeDisabled();
+    await expectReadable(pastDay);
+
+    const outsideDay = page.locator(".booking-calendar-day-outside").first();
+    await expect(outsideDay).toBeVisible();
+    await expectReadable(outsideDay);
 
     const availableSlot = page.locator(".booking-time-slot[data-slot-state='available']").first();
     await expect(availableSlot).toBeVisible();
@@ -74,11 +114,9 @@ test.describe("Beauty public visual state contract", () => {
     await expectReadable(availableSlot);
     await expect(availableSlot).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
 
-    await availableSlot.focus();
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Shift+Tab");
-    await expect(availableSlot).toBeFocused();
-    await expect.poll(() => availableSlot.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe("solid");
+    await availableSlot.hover();
+    await expectReadable(availableSlot);
+    await expectKeyboardFocus(availableSlot);
     await availableSlot.click();
 
     const chosenSlot = page.locator(".booking-time-slot[data-slot-state='selected']");
@@ -93,6 +131,33 @@ test.describe("Beauty public visual state contract", () => {
     }
 
     await page.screenshot({ path: testInfo.outputPath("beauty-booking-date-time-desktop.png"), fullPage: true });
+  });
+
+  test("keeps calendar states readable without horizontal overflow on mobile", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const today = localDateKey(new Date());
+    await page.goto(`/book?barberId=1&serviceId=1&date=${today}`);
+
+    await expect(page.locator("html")).toHaveAttribute("data-brand-theme", "beauty-clean");
+    const selectedDay = page.locator(".booking-calendar-day[aria-selected='true']");
+    const availableDay = page.locator(
+      ".booking-day-available.booking-calendar-day:not([aria-selected='true']):not(:disabled)",
+    ).first();
+    const unavailableDay = page.locator(
+      ".booking-calendar-day-unavailable.booking-calendar-day-disabled",
+    ).first();
+    const pastDay = page.locator(".booking-calendar-day-past.booking-calendar-day-disabled").first();
+    const outsideDay = page.locator(".booking-calendar-day-outside").first();
+
+    for (const calendarDay of [selectedDay, availableDay, unavailableDay, pastDay, outsideDay]) {
+      await expect(calendarDay).toBeVisible();
+      await expectReadable(calendarDay);
+    }
+    await expectKeyboardFocus(availableDay);
+
+    const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    expect(hasOverflow).toBe(false);
+    await page.screenshot({ path: testInfo.outputPath("beauty-booking-calendar-mobile.png"), fullPage: true });
   });
 
   test("keeps the phone country selector readable and usable on mobile", async ({ page }, testInfo) => {
