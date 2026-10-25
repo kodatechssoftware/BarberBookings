@@ -628,6 +628,7 @@
 }
 
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day {
+  background-color: hsl(var(--card));
   color: hsl(var(--foreground));
 }
 
@@ -659,7 +660,7 @@
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day-disabled {
   border-color: transparent;
   background-color: hsl(31 18% 93%);
-  color: hsl(24 8% 42%);
+  color: hsl(24 10% 34%);
   opacity: 1;
   cursor: not-allowed;
 }
@@ -672,22 +673,25 @@
 }
 
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day-outside:not([aria-selected="true"]) {
-  color: hsl(24 8% 43%);
-  opacity: 0.62;
+  background-color: hsl(31 18% 95%);
+  color: hsl(24 10% 36%);
+  opacity: 1;
 }
 
 :root[data-brand-theme="beauty-clean"] .booking-time-slot {
   min-height: 2.75rem;
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-time-slot-available {
+:root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-available,
+:root[data-brand-theme="beauty-clean"] .public-cycle-shell .booking-time-slot-available {
   border-color: hsl(348 43% 58% / 0.72);
   background-color: hsl(40 50% 99%);
-  color: hsl(24 18% 25%);
+  color: hsl(24 20% 22%);
   box-shadow: 0 0.2rem 0.55rem hsl(25 14% 29% / 0.045);
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-time-slot-available:hover {
+:root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-available:hover,
+:root[data-brand-theme="beauty-clean"] .public-cycle-shell .booking-time-slot-available:hover {
   border-color: hsl(348 43% 43%);
   background-color: hsl(348 38% 94%);
   color: hsl(348 48% 34%);
@@ -699,16 +703,20 @@
   box-shadow: 0 0 0 4px hsl(42 52% 48% / 0.2);
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-time-slot-selected,
-:root[data-brand-theme="beauty-clean"] .booking-time-slot-selected:hover {
+:root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-selected,
+:root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-selected:hover,
+:root[data-brand-theme="beauty-clean"] .public-cycle-shell .booking-time-slot-selected,
+:root[data-brand-theme="beauty-clean"] .public-cycle-shell .booking-time-slot-selected:hover {
   border-color: hsl(348 46% 35%);
   background-color: hsl(348 46% 35%);
   color: hsl(0 0% 100%);
   box-shadow: 0 0.5rem 1rem hsl(348 43% 43% / 0.22);
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-time-slot-unavailable,
-:root[data-brand-theme="beauty-clean"] .booking-time-slot-unavailable:disabled {
+:root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-unavailable,
+:root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-unavailable:disabled,
+:root[data-brand-theme="beauty-clean"] .public-cycle-shell .booking-time-slot-unavailable,
+:root[data-brand-theme="beauty-clean"] .public-cycle-shell .booking-time-slot-unavailable:disabled {
   border-color: hsl(27 14% 79%);
   background-color: hsl(31 18% 92%);
   color: hsl(24 8% 40%);

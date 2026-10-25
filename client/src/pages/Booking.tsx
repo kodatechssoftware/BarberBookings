@@ -1137,9 +1137,15 @@ export default function Booking() {
                       locale={pt}
                       modifiers={{
                         hasAvailability: (date) => availableDateKeys.has(format(date, "yyyy-MM-dd")),
+                        pastDate: (date) => Boolean(
+                          publicBookingWindow && format(date, "yyyy-MM-dd") < publicBookingWindow.today,
+                        ),
+                        unavailableDate: (date) => isPublicDateAllowed(date) && isShopClosedDate(date),
                       }}
                       modifiersClassNames={{
                         hasAvailability: "booking-day-available",
+                        pastDate: "booking-calendar-day-past",
+                        unavailableDate: "booking-calendar-day-unavailable",
                       }}
                       classNames={{
                         day_selected: "booking-calendar-day-selected bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
