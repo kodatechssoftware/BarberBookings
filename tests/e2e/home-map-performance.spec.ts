@@ -3,7 +3,9 @@ import { expect, test, type Page } from "@playwright/test";
 type MapObserverHarness = {
   rootMargin: string;
   observed: boolean;
+  idleScheduled: boolean;
   trigger: () => void;
+  triggerIdle: () => void;
 };
 
 async function installMapObserverHarness(page: Page) {
@@ -11,7 +13,9 @@ async function installMapObserverHarness(page: Page) {
     const harness: MapObserverHarness = {
       rootMargin: "",
       observed: false,
+      idleScheduled: false,
       trigger: () => {},
+      triggerIdle: () => {},
     };
 
     class MapIntersectionObserver {
@@ -36,12 +40,43 @@ async function installMapObserverHarness(page: Page) {
       configurable: true,
       value: MapIntersectionObserver,
     });
+    Object.defineProperty(window, "requestIdleCallback", {
+      configurable: true,
+      value: (callback: () => void) => {
+        harness.idleScheduled = true;
+        harness.triggerIdle = callback;
+        return 1;
+      },
+    });
+    Object.defineProperty(window, "cancelIdleCallback", {
+      configurable: true,
+      value: () => {},
+    });
     Object.defineProperty(window, "__mapObserverHarness", {
       configurable: true,
       value: harness,
     });
   });
 }
+
+test("starts the map after initial work becomes idle even when it remains far below the viewport", async ({ page }) => {
+  await installMapObserverHarness(page);
+  await page.route("https://www.google.com/maps**", (route) => route.fulfill({
+    contentType: "text/html",
+    body: "<!doctype html><title>Mapa</title>",
+  }));
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("location-map-container")).toBeAttached();
+  await expect.poll(() => page.evaluate(() => (
+    (window as Window & { __mapObserverHarness?: MapObserverHarness }).__mapObserverHarness?.idleScheduled
+  ))).toBe(true);
+  await page.evaluate(() => {
+    (window as Window & { __mapObserverHarness?: MapObserverHarness }).__mapObserverHarness?.triggerIdle();
+  });
+
+  await expect(page.locator("iframe[title^='Mapa de']")).toHaveAttribute("loading", "eager");
+});
 
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
