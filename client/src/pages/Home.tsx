@@ -154,14 +154,38 @@ export default function Home() {
       return;
     }
 
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
+    const win = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    let hasStarted = false;
+    let idleHandle: number | undefined;
+    let timeoutHandle: number | undefined;
+    const loadMap = () => {
+      if (hasStarted) return;
+      hasStarted = true;
       setMapFrame({ key: selectedMapKey, src: mapSrc, loaded: false });
       observer.disconnect();
+      if (idleHandle !== undefined) win.cancelIdleCallback?.(idleHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+    };
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      loadMap();
     }, { rootMargin: mapPreloadRootMargin });
 
     observer.observe(container);
-    return () => observer.disconnect();
+    if (win.requestIdleCallback) {
+      idleHandle = win.requestIdleCallback(loadMap, { timeout: 2000 });
+    } else {
+      timeoutHandle = window.setTimeout(loadMap, 1500);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (idleHandle !== undefined) win.cancelIdleCallback?.(idleHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+    };
   }, [canLoadLocationMap, selectedMapKey, selectedMapLinks.mapEmbedUrl]);
 
   useEffect(() => {
