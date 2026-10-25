@@ -20,6 +20,7 @@ import brunoAvatar from "@assets/bruno-santos-avatar.jpg";
 const instagramUrl = shopBranding.instagramUrl;
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
+const mapPreloadRootMargin = "200% 0px";
 
 const navItems = [
   { id: "services", label: "Serviços" },
@@ -103,7 +104,7 @@ export default function Home() {
     isError: isServicesError,
   } = useServices();
   const { data: barbers, isLoading: isLoadingBarbers } = useBarbers();
-  const { data: locations } = useLocations();
+  const { data: locations, isError: isLocationsError } = useLocations();
   const activeLocationId = useActiveLocationId();
   const publicLocations = useMemo(() => {
     const available = locations?.filter((location) => location.isActive) ?? [];
@@ -140,27 +141,52 @@ export default function Home() {
     ?? publicLocations[0];
   const selectedMapLinks = resolveLocationMapLinks(selectedLocation);
   const selectedMapKey = `${selectedLocation.id}:${selectedMapLinks.mapEmbedUrl}`;
+  const canLoadLocationMap = locations !== undefined || isLocationsError;
 
   useEffect(() => {
     const container = mapContainerRef.current;
     const mapSrc = selectedMapLinks.mapEmbedUrl;
     setMapFrame({ key: selectedMapKey, src: "", loaded: false });
-    if (!container || !mapSrc) return;
+    if (!container || !mapSrc || !canLoadLocationMap) return;
 
     if (!("IntersectionObserver" in window)) {
       setMapFrame({ key: selectedMapKey, src: mapSrc, loaded: false });
       return;
     }
 
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
+    const win = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    let hasStarted = false;
+    let idleHandle: number | undefined;
+    let timeoutHandle: number | undefined;
+    const loadMap = () => {
+      if (hasStarted) return;
+      hasStarted = true;
       setMapFrame({ key: selectedMapKey, src: mapSrc, loaded: false });
       observer.disconnect();
-    }, { rootMargin: "400px 0px" });
+      if (idleHandle !== undefined) win.cancelIdleCallback?.(idleHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+    };
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      loadMap();
+    }, { rootMargin: mapPreloadRootMargin });
 
     observer.observe(container);
-    return () => observer.disconnect();
-  }, [selectedMapKey, selectedMapLinks.mapEmbedUrl]);
+    if (win.requestIdleCallback) {
+      idleHandle = win.requestIdleCallback(loadMap, { timeout: 2000 });
+    } else {
+      timeoutHandle = window.setTimeout(loadMap, 1500);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (idleHandle !== undefined) win.cancelIdleCallback?.(idleHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+    };
+  }, [canLoadLocationMap, selectedMapKey, selectedMapLinks.mapEmbedUrl]);
 
   useEffect(() => {
     if (!locations?.length || selectedLocationId === null) return;
@@ -489,9 +515,16 @@ export default function Home() {
             {(!mapFrame.loaded || mapFrame.key !== selectedMapKey) && (
               <div
                 data-testid="location-map-placeholder"
-                aria-hidden="true"
-                className="absolute inset-0 animate-pulse bg-white/[0.04]"
-              />
+                role="status"
+                aria-label={`A carregar mapa de ${selectedLocation.name}`}
+                className="absolute inset-0 z-10 flex items-center justify-center bg-card px-6 text-center"
+              >
+                <div className="max-w-sm">
+                  <MapPin aria-hidden="true" className="mx-auto h-8 w-8 text-primary" />
+                  <p className="mt-3 text-sm font-semibold text-white">A preparar o mapa</p>
+                  <p className="mt-1 text-xs leading-relaxed text-gray-400">{selectedLocation.address}</p>
+                </div>
+              </div>
             )}
             {mapFrame.key === selectedMapKey && mapFrame.src && (
               <iframe
@@ -502,12 +535,12 @@ export default function Home() {
                 height="100%"
                 style={{ border: 0 }}
                 allowFullScreen
-                loading="lazy"
+                loading="eager"
                 referrerPolicy="no-referrer-when-downgrade"
                 onLoad={() => setMapFrame((current) => current.key === selectedMapKey
                   ? { ...current, loaded: true }
                   : current)}
-                className="relative h-full w-full grayscale contrast-[1.1]"
+                className="absolute inset-0 h-full w-full grayscale contrast-[1.1]"
               />
             )}
           </div>}
