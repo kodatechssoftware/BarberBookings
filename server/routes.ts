@@ -114,9 +114,9 @@ import {
   assignServiceToLocation,
   createLocation,
   getBarberIdsForLocation,
+  getBarberLocationSummaries,
   getDefaultLocation,
   getLocation,
-  getLocationCountsForBarbers,
   getLocationIdsForBarber,
   getServiceIdsForLocation,
   listLocations,
@@ -1057,24 +1057,34 @@ async function saveBarberCompensationRuleIfNeeded(
   });
 }
 
-async function getBarbersWithServiceIds(locationId?: number, avatarReferences = false) {
-  const [barbers, serviceRows, compensationRows] = await Promise.all([
+async function getBarbersWithServiceIds(
+  locationId?: number,
+  avatarReferences = false,
+  includeCompensationRules = true,
+) {
+  const [barbers, serviceRows, compensationRows, locationServiceIds, locationSummaries] = await Promise.all([
     storage.getBarbers({ avatarReferences }),
     storage.getAllBarberServices(),
-    storage.getBarberCompensationRules(),
+    includeCompensationRules
+      ? storage.getBarberCompensationRules()
+      : Promise.resolve([]),
+    locationId === undefined ? Promise.resolve(undefined) : getServiceIdsForLocation(locationId),
+    locationId === undefined ? Promise.resolve(undefined) : getBarberLocationSummaries(locationId),
   ]);
-  const [locationBarberIds, locationServiceIds, activeLocationBarberIds] = locationId === undefined
-    ? [undefined, undefined, undefined]
-    : await Promise.all([
-      getBarberIdsForLocation(locationId, true), getServiceIdsForLocation(locationId), getBarberIdsForLocation(locationId),
-    ]);
-  const activeBarberIds = activeLocationBarberIds === undefined ? undefined : new Set(activeLocationBarberIds);
-  const allowedBarbers = locationBarberIds === undefined ? null : new Set(locationBarberIds);
+  const activeBarberIds = locationSummaries === undefined
+    ? undefined
+    : new Set(locationSummaries
+      .filter((summary) => summary.isActive)
+      .map((summary) => summary.barberId));
+  const allowedBarbers = locationSummaries === undefined
+    ? null
+    : new Set(locationSummaries.map((summary) => summary.barberId));
   const allowedServices = locationServiceIds === undefined ? null : new Set(locationServiceIds);
   const scopedBarbers = barbers.filter((barber) => !allowedBarbers || allowedBarbers.has(barber.id));
-  const locationCounts = locationId === undefined
+  const locationCounts = locationSummaries === undefined
     ? undefined
-    : await getLocationCountsForBarbers(scopedBarbers.map((barber) => barber.id));
+    : new Map(locationSummaries
+      .map((summary) => [summary.barberId, summary.locationCount] as const));
   const barberServiceMap = buildBarberServiceMap(serviceRows);
   const currentCompensationByBarberId = new Map<number, BarberCompensationRule>();
   compensationRows.forEach((rule) => {
@@ -3348,11 +3358,15 @@ export async function registerRoutes(
     const locationId = Number(res.locals.locationId);
     // Opt-in preserves the API contract for older clients still using inline photos.
     const avatarReferences = req.query.avatarMode === "reference";
-    const barbers = await getBarbersWithServiceIds(MULTI_LOCATION_CONFIG.enabled ? locationId : undefined, avatarReferences);
     const appSession = getAppSession(req);
     const isAdminSession = appSession.role === "admin" && Boolean(appSession.adminId);
     const ownBarberId = appSession.role === "barber" ? Number(appSession.barberId) : undefined;
     const includeHidden = req.query.includeHidden === "true" && isAdminSession;
+    const barbers = await getBarbersWithServiceIds(
+      MULTI_LOCATION_CONFIG.enabled ? locationId : undefined,
+      avatarReferences,
+      isAdminSession,
+    );
     const visibleBarbers = includeHidden
       ? barbers
       : barbers.filter((barber) => barber.isVisible || barber.id === ownBarberId);

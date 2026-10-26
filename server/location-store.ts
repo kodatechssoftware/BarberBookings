@@ -106,6 +106,56 @@ export async function getBarberIdsForLocation(locationId: number, includeInactiv
   return result.rows.map((row) => Number(row.barber_id));
 }
 
+export type BarberLocationSummary = {
+  barberId: number;
+  isActive: boolean;
+  locationCount: number;
+};
+
+// Public team catalogues need the selected-location state and the number of
+// active assignments together. Returning both in one read avoids three
+// sequential round trips without caching location-sensitive data.
+export async function getBarberLocationSummaries(locationId: number): Promise<BarberLocationSummary[]> {
+  if (useMemoryStorage) {
+    const activeAtLocation = memoryBarberLocations.get(locationId) ?? new Set<number>();
+    const inactiveAtLocation = memoryInactiveBarberLocations.get(locationId) ?? new Set<number>();
+    const assignedIds = new Set([
+      ...Array.from(activeAtLocation),
+      ...Array.from(inactiveAtLocation),
+    ]);
+    return Array.from(assignedIds)
+      .sort((left, right) => left - right)
+      .map((barberId) => ({
+        barberId,
+        isActive: activeAtLocation.has(barberId),
+        locationCount: Array.from(memoryBarberLocations.values())
+          .filter((assigned) => assigned.has(barberId)).length,
+      }));
+  }
+
+  const result = await pool.query<{
+    barber_id: number;
+    is_active: boolean;
+    location_count: number;
+  }>(`
+    SELECT target.barber_id,
+           target.is_active,
+           count(active.location_id)::integer AS location_count
+    FROM ${barberLocationsTable} target
+    LEFT JOIN ${barberLocationsTable} active
+      ON active.barber_id = target.barber_id AND active.is_active = true
+    WHERE target.location_id = $1
+    GROUP BY target.barber_id, target.is_active
+    ORDER BY target.barber_id
+  `, [locationId]);
+
+  return result.rows.map((row) => ({
+    barberId: Number(row.barber_id),
+    isActive: Boolean(row.is_active),
+    locationCount: Number(row.location_count),
+  }));
+}
+
 export async function getServiceIdsForLocation(locationId: number) {
   if (useMemoryStorage) {
     const assigned = memoryServiceLocations.get(locationId);
