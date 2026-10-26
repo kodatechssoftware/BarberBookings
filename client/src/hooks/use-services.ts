@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type CreateServiceRequest } from "@shared/routes";
+import { api } from "@/lib/client-api-contract";
+import type { CreateServiceRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type CreateAppointmentRequest } from "@shared/routes";
+import { api, buildUrl } from "@/lib/client-api-contract";
+import type { CreateAppointmentRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 
