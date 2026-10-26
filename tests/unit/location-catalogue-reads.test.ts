@@ -20,6 +20,11 @@ test("memory catalogue counts preserve active assignments, zeroes and fresh upda
     assert.deepEqual(await store.getLocationCountsForBarbers(ids), expected);
     assert.deepEqual(await store.getLocationCountsForBarbers([]), new Map());
     assert.deepEqual(await store.getLocationCountsForBarbers([2, 2, 999]), new Map([[2, 2], [999, 0]]));
+    assert.deepEqual(await store.getBarberLocationSummaries(1), ids.slice(0, 14).map(id => ({
+      barberId: id,
+      isActive: id !== 3,
+      locationCount: id === 2 ? 2 : id === 3 ? 0 : 1,
+    })));
     await store.removeBarberFromLocation(2, 2);
     assert.equal((await store.getLocationCountsForBarbers([2])).get(2), 1);
     await store.assignBarberToLocation(3, 1);
@@ -67,6 +72,10 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
         barber_id integer NOT NULL, location_id integer NOT NULL,
         is_active boolean NOT NULL, PRIMARY KEY (barber_id, location_id)
       );
+      CREATE TABLE catalogue_fixture.appointments (
+        barber_id integer NOT NULL, location_id integer NOT NULL,
+        status text NOT NULL, start_time timestamptz NOT NULL
+      );
       INSERT INTO catalogue_fixture.barber_locations
         SELECT id, 1, id <> 14 FROM generate_series(1, 14) AS id;
       INSERT INTO catalogue_fixture.barber_locations VALUES (2, 2, true), (3, 3, false);
@@ -95,6 +104,15 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
     assert.deepEqual(await store.getLocationCountsForBarbers([]), new Map());
     assert.equal(queryCount, 0);
     assert.deepEqual(await store.getLocationCountsForBarbers([2, 2, 999]), new Map([[2, 2], [999, 0]]));
+    queryCount = 0;
+    const summaries = await store.getBarberLocationSummaries(1);
+    assert.equal(queryCount, 1);
+    assert.deepEqual(summaries.find((entry) => entry.barberId === 2), {
+      barberId: 2, isActive: true, locationCount: 2,
+    });
+    assert.deepEqual(summaries.find((entry) => entry.barberId === 14), {
+      barberId: 14, isActive: false, locationCount: 0,
+    });
     await store.removeBarberFromLocation(2, 2);
     assert.equal((await store.getLocationCountsForBarbers([2])).get(2), 1);
     await store.assignBarberToLocation(14, 1);
@@ -103,11 +121,11 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
     // Real PostgreSQL projection: only the catalogue representation changes.
     await pool.query(`CREATE TABLE catalogue_fixture.barbers (
       id integer PRIMARY KEY, name text, specialty text, bio text, avatar text,
-      email text, password text, color text, is_visible boolean
+      email text, password text, user_id integer, color text, is_visible boolean
     )`);
     const upload = `data:image/jpeg;base64,${randomBytes(302_480).toString("base64")}`;
     for (const [id, avatar] of [[1, upload], [2, upload], [3, null], [4, "/images/barber.jpg"]] as const) {
-      await pool.query("INSERT INTO catalogue_fixture.barbers VALUES ($1, 'Fixture', 'Hair', NULL, $2, NULL, NULL, '#123456', true)", [id, avatar]);
+      await pool.query("INSERT INTO catalogue_fixture.barbers VALUES ($1, 'Fixture', 'Hair', NULL, $2, NULL, NULL, NULL, '#123456', true)", [id, avatar]);
     }
     const { DatabaseStorage } = await import("../../server/storage");
     const { barberAvatarReference } = await import("../../server/barber-avatars");
