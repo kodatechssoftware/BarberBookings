@@ -154,19 +154,21 @@ export function AppointmentsTab({
           </div>
         )}
 
-        <div className="grid h-11 grid-cols-2 gap-1 rounded-md border border-white/10 bg-background/60 p-1 sm:w-[178px]">
+        <div role="group" aria-label="Vista das marcações" className="grid h-11 w-full grid-cols-2 gap-1 rounded-md border border-white/10 bg-background/60 p-1 sm:w-[196px]">
           <Button
             type="button"
-            variant={appointmentViewMode === "day" ? "gold" : "ghost"}
-            className="h-full px-3 text-xs"
+            variant="ghost"
+            aria-pressed={appointmentViewMode === "day"}
+            className={cn("h-full min-h-0 min-w-0 rounded-md px-2 text-xs font-semibold", appointmentViewMode === "day" ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "text-foreground/80 hover:bg-accent/30 hover:text-foreground")}
             onClick={() => onAppointmentViewModeChange("day")}
           >
             Dia
           </Button>
           <Button
             type="button"
-            variant={appointmentViewMode === "upcoming" ? "gold" : "ghost"}
-            className="h-full px-3 text-xs"
+            variant="ghost"
+            aria-pressed={appointmentViewMode === "upcoming"}
+            className={cn("h-full min-h-0 min-w-0 rounded-md px-2 text-xs font-semibold", appointmentViewMode === "upcoming" ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground" : "text-foreground/80 hover:bg-accent/30 hover:text-foreground")}
             onClick={() => onAppointmentViewModeChange("upcoming")}
           >
             Próximas
