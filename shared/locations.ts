@@ -51,7 +51,17 @@ export const locationInputSchema = z.object({
   isActive: z.boolean().optional().default(false),
 });
 
-export const locationUpdateSchema = locationInputSchema.partial();
+export const locationUpdateSchema = z.object({
+  name: locationInputSchema.shape.name.optional(),
+  address: locationInputSchema.shape.address.optional(),
+  logoUrl: locationInputSchema.shape.logoUrl.removeDefault(),
+  mapUrl: locationInputSchema.shape.mapUrl.removeDefault(),
+  mapEmbedUrl: locationInputSchema.shape.mapEmbedUrl.removeDefault(),
+  phone: locationInputSchema.shape.phone.removeDefault(),
+  email: locationInputSchema.shape.email.removeDefault(),
+  timezone: locationInputSchema.shape.timezone.removeDefault().optional(),
+  isActive: locationInputSchema.shape.isActive.removeDefault(),
+});
 
 export type LocationInput = z.infer<typeof locationInputSchema>;
 export type LocationUpdate = z.infer<typeof locationUpdateSchema>;

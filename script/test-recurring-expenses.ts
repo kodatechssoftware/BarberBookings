@@ -572,8 +572,13 @@ try {
   );
   assert.equal(weeklyReportRows.reduce((sum, expense) => sum + expense.amountCents, 0), weeklyScheduledDates.length * 5000);
 
-  const legacy = await setupPool.query("SELECT recurring_series_id, scheduled_date FROM business_expenses WHERE description = 'Legacy weekly label'");
-  assert.deepEqual(legacy.rows[0], { recurring_series_id: null, scheduled_date: null });
+  const legacy = await setupPool.query("SELECT id, recurrence, recurring_series_id, scheduled_date FROM business_expenses WHERE description = 'Legacy weekly label'");
+  assert.deepEqual({
+    recurrence: legacy.rows[0].recurrence,
+    recurring_series_id: legacy.rows[0].recurring_series_id,
+    scheduled_date: legacy.rows[0].scheduled_date,
+  }, { recurrence: "weekly", recurring_series_id: null, scheduled_date: null });
+  const legacyExpenseId = Number(legacy.rows[0].id);
 
   const secondLocation = await setupPool.query(`
     INSERT INTO locations (name, slug, address, timezone, is_active, is_default)
@@ -681,6 +686,18 @@ try {
   const cookie = loginResponse.headers.get("set-cookie")?.split(";")[0];
   assert(cookie);
   const requestHeaders = { cookie };
+  const legacyUpdateResponse = await fetch(`${baseUrl}/api/admin/expenses/${legacyExpenseId}`, {
+    method: "PATCH",
+    headers: { ...requestHeaders, "content-type": "application/json" },
+    body: JSON.stringify({ notes: "Updated without changing recurrence" }),
+  });
+  await assertResponseOk(legacyUpdateResponse);
+  const legacyUpdate = await legacyUpdateResponse.json() as { recurrence: string };
+  assert.equal(legacyUpdate.recurrence, "weekly", "PATCH omitting recurrence must preserve a legacy value");
+  assert.equal((await setupPool.query(
+    "SELECT recurrence FROM business_expenses WHERE id = $1",
+    [legacyExpenseId],
+  )).rows[0].recurrence, "weekly");
   const futureEnd = addMonths(httpFutureStart, 2);
   const futureCountBeforeHttp = Number((await setupPool.query(
     "SELECT count(*) FROM business_expenses WHERE recurring_series_id = $1",

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type ServiceCategoryWithCount } from "@shared/routes";
+import { api } from "@/lib/client-api-contract";
+import type { ServiceCategoryWithCount } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 
 export function useServiceCategories(options?: { enabled?: boolean }) {
