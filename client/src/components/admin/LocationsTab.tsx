@@ -191,12 +191,14 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
               <Label htmlFor="location-address">Morada completa</Label>
               <Input id="location-address" value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="Rua, número, código postal e localidade" maxLength={300} />
               <p className="text-xs leading-relaxed text-gray-400">
-                {hasCustomMapLinks
+                {isSingleLocation
+                  ? "Esta morada é apresentada no site e utilizada no Google Maps quando não existem links personalizados."
+                  : hasCustomMapLinks
                   ? "Esta localização usa ligações personalizadas. Para usar apenas a morada, reponha o mapa automático nas opções avançadas."
                   : "O mapa e a ligação para o Google Maps são gerados automaticamente a partir desta morada. Confirme a localização no mapa depois de guardar."}
               </p>
             </div>
-            <div className="space-y-2 sm:col-span-2">
+            {!isSingleLocation && <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="location-logo-url">Logótipo da localização</Label>
               <Input
                 id="location-logo-url"
@@ -208,7 +210,7 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
               <p className="text-xs leading-relaxed text-gray-400">
                 Utilize um caminho local iniciado por / ou um endereço HTTP(S).
               </p>
-            </div>
+            </div>}
             <div className="space-y-2">
               <Label htmlFor="location-phone">Telefone</Label>
               <Input id="location-phone" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="Opcional" maxLength={40} />
@@ -219,9 +221,23 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
             </div>
             <details className="min-w-0 rounded-lg border border-white/10 p-4 sm:col-span-2">
               <summary className="cursor-pointer text-sm font-medium text-gray-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
-                Opções avançadas do mapa{hasCustomMapLinks ? " — ligações personalizadas" : " (opcional)"}
+                {isSingleLocation ? "Opções avançadas" : "Opções avançadas do mapa"}
+                {hasCustomMapLinks ? " — ligações personalizadas" : " (opcional)"}
               </summary>
               <div className="mt-4 space-y-4">
+                {isSingleLocation && <div className="space-y-2">
+                  <Label htmlFor="location-logo-url">Logótipo da localização</Label>
+                  <Input
+                    id="location-logo-url"
+                    value={form.logoUrl}
+                    onChange={(event) => setForm({ ...form, logoUrl: event.target.value })}
+                    placeholder="Opcional — usa o logótipo principal quando vazio"
+                    maxLength={1000}
+                  />
+                  <p className="text-xs leading-relaxed text-gray-400">
+                    Utilize um caminho local iniciado por / ou um endereço HTTP(S).
+                  </p>
+                </div>}
                 <p className="text-xs leading-relaxed text-gray-400">
                   Só precisa destas ligações se o Google Maps não localizar corretamente a entrada.
                   Cada campo vazio usa automaticamente a morada.
