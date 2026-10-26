@@ -424,6 +424,8 @@ test("B5B communication surfaces resolve domain wording through typed server cop
   assert.match(notificationsSource, /professionalName: copy\.professionalUnavailable/);
   assert.match(routesSource.slice(createdNotificationStart, communicationRoutesEnd),
     /COMMUNICATIONS_COPY\.professionalUnavailable/);
+  assert.match(routesSource.slice(createdNotificationStart, communicationRoutesEnd),
+    /MULTI_LOCATION_CONFIG\.enabled \|\| SINGLE_LOCATION_ADMIN_ENABLED/);
 
   const forbiddenPublicLiterals = publicSources
     .split(/\r?\n/)

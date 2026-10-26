@@ -308,6 +308,7 @@ export const beautyBusinessCopy = {
         "extra.updated": "Extra atualizado",
         "extra.activated": "Extra ativado",
         "extra.deactivated": "Extra desativado",
+        "location.updated": "Estabelecimento atualizado",
         "shop_availability.updated": "Horário do estabelecimento atualizado",
         "barber_availability.updated": "Horário do profissional atualizado",
         "customer.blocked": "Cliente bloqueado",

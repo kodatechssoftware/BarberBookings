@@ -1802,6 +1802,9 @@ export default function Admin() {
     refetchInterval: 15000,
   });
   const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
+  const canManageSingleBeautyLocation = canManageLocations
+    && businessConfig.vertical === "beauty"
+    && multiLocationConfig?.enabled === false;
   const bookingSlotIntervalMinutes = multiLocationConfig?.bookingSlotIntervalMinutes
     ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
   const { data: availableLocations = [] } = useQuery<ShopLocation[]>({
@@ -4428,8 +4431,10 @@ export default function Admin() {
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> {adminCopy.extras.tabLabel}</TabsTrigger>}
             {canManageExpenses && <TabsTrigger value="internal-costs" className={adminTabTriggerClass}><Boxes className="w-4 h-4" /> {adminCopy.internalCosts.tabLabel}</TabsTrigger>}
             {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> {adminCopy.schedules.tabLabel}</TabsTrigger>}
-            {canManageLocations && multiLocationConfig?.enabled && (
-              <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
+            {canManageLocations && (multiLocationConfig?.enabled || canManageSingleBeautyLocation) && (
+              <TabsTrigger value="locations" className={adminTabTriggerClass}>
+                <MapPin className="w-4 h-4" /> {multiLocationConfig?.enabled ? "Localizações" : "Estabelecimento"}
+              </TabsTrigger>
             )}
             {usesCanonicalAuth && canManageUsers && (
               <TabsTrigger value="users" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Utilizadores</TabsTrigger>
@@ -5748,9 +5753,12 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          {canManageLocations && multiLocationConfig?.enabled && (
+          {canManageLocations && (multiLocationConfig?.enabled || canManageSingleBeautyLocation) && (
             <TabsContent value="locations" className="outline-none">
-              <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
+              <LocationsTab
+                maxLocations={multiLocationConfig?.maxLocations ?? 1}
+                mode={multiLocationConfig?.enabled ? "multiple" : "single"}
+              />
             </TabsContent>
           )}
 

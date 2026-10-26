@@ -296,7 +296,7 @@ test("canonical scopes restrict location context and Professional linkage grants
 
   const accessible = await (await expectOk(await userA.get("/api/account/locations"))).json() as Location[];
   expect(accessible.map((location) => location.id)).toEqual([locationA.id]);
-  expect([401, 403]).toContain((await userA.get("/api/admin/locations")).status());
+  expect((await userA.get("/api/admin/locations")).status()).toBe(403);
 
   const forbidden = await userA.get("/api/appointments?scope=team", { headers: headersFor(locationB.id) });
   expect(forbidden.status()).toBe(403);

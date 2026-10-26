@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Clock, MapPin } from "lucide-react";
+import { Clock, ExternalLink, MapPin } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button-custom";
 import { cn } from "@/lib/utils";
@@ -488,6 +488,16 @@ export default function Home() {
                 </span>
               ))}
             </div>}
+            {businessConfig.vertical === "beauty" && shopBranding.showMap && selectedMapLinks.mapUrl && (
+              <a
+                href={selectedMapLinks.mapUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-primary/40 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                <MapPin className="h-4 w-4" /> Obter direções no Google Maps <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            )}
           </div>
 
           {shopBranding.showMap && selectedMapLinks.mapEmbedUrl && <div
@@ -526,7 +536,9 @@ export default function Home() {
       <footer className="home-footer mt-auto border-t border-white/10 bg-black/50 py-10">
         <div className="container mx-auto flex flex-col items-center gap-5 px-4 text-center">
           <img src={shopBranding.horizontalLogoUrl} alt={shopBranding.name} className="home-footer-logo h-10 w-10 rounded-full object-contain" />
-          <p className="text-sm text-gray-500">© 2026 {shopBranding.name}. {shopBranding.address}.</p>
+          <p className="text-sm text-gray-500">
+            © 2026 {shopBranding.name}. {businessConfig.vertical === "beauty" ? selectedLocation.address : shopBranding.address}.
+          </p>
           <div className="flex flex-wrap justify-center gap-5 text-sm">
             {instagramUrl && (
               <a href={instagramUrl} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-primary">
