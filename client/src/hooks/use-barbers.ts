@@ -3,6 +3,7 @@ import { api, buildUrl } from "@/lib/client-api-contract";
 import type { CreateBarberRequest } from "@shared/routes";
 import { apiFetch, toApiUrl } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
+import { takeHomeDataPreload } from "@/lib/home-data-preload";
 
 export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolean; locationId?: number }) {
   const activeLocationId = useActiveLocationId();
@@ -11,15 +12,22 @@ export function useBarbers(options?: { enabled?: boolean; includeHidden?: boolea
     queryKey: [api.barbers.list.path, { includeHidden: options?.includeHidden ?? false, locationId }],
     enabled: options?.enabled ?? true,
     queryFn: async () => {
+      const preloaded = !options?.includeHidden
+        ? takeHomeDataPreload<unknown>("barbers", locationId)
+        : undefined;
       const url = options?.includeHidden
         ? `${api.barbers.list.path}?includeHidden=true&avatarMode=reference`
         : `${api.barbers.list.path}?avatarMode=reference`;
-      const res = await apiFetch(url, {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", ...locationHeaders(locationId) },
-      });
-      if (!res.ok) throw new Error("Failed to fetch barbers");
-      return api.barbers.list.responses[200].parse(await res.json()).map((barber) => ({
+      const payload = preloaded
+        ? await preloaded
+        : await apiFetch(url, {
+            cache: "no-store",
+            headers: { "Cache-Control": "no-cache", ...locationHeaders(locationId) },
+          }).then(async (res) => {
+            if (!res.ok) throw new Error("Failed to fetch barbers");
+            return res.json();
+          });
+      return api.barbers.list.responses[200].parse(payload).map((barber) => ({
         ...barber,
         avatar: barber.avatar?.startsWith(`/api/barbers/${barber.id}/avatar?`)
           ? toApiUrl(barber.avatar) : barber.avatar,
@@ -67,6 +75,8 @@ export function useShopAvailability(options?: { locationId?: number | null; enab
     queryKey: ["/api/shop/availability", { locationId }],
     enabled: options?.enabled ?? true,
     queryFn: async () => {
+      const preloaded = takeHomeDataPreload<unknown>("availability", locationId);
+      if (preloaded) return preloaded;
       const res = await apiFetch("/api/shop/availability", { headers: locationHeaders(locationId) });
       if (!res.ok) throw new Error("Failed to fetch shop availability");
       return res.json();
