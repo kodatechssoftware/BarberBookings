@@ -113,6 +113,25 @@ test("canonical location enforcement fails closed outside the granted location",
   assert.equal(state.status, 403);
 });
 
+test("canonical location settings require the global locations.manage capability", () => {
+  const denied = responseRecorder();
+  assert.equal(enforceCanonicalCapability(
+    canonicalRequest(professional),
+    denied.response,
+    "locations.manage",
+  ), false);
+  assert.equal(denied.state.status, 403);
+
+  const administrator = context([{ kind: "global", preset: "administrator" }], null);
+  const allowed = responseRecorder();
+  assert.equal(enforceCanonicalCapability(
+    canonicalRequest(administrator),
+    allowed.response,
+    "locations.manage",
+  ), true);
+  assert.equal(allowed.state.status, undefined);
+});
+
 test("canonical administrator preset authorizes team ownership everywhere", () => {
   const administrator = context([
     { kind: "global", preset: "administrator" },

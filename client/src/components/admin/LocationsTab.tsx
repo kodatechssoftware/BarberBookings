@@ -38,8 +38,14 @@ const emptyForm: LocationForm = {
   isActive: false,
 };
 
-export function LocationsTab({ maxLocations }: { maxLocations: number }) {
+type LocationsTabProps = {
+  maxLocations: number;
+  mode?: "single" | "multiple";
+};
+
+export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabProps) {
   const copy = useBusinessCopy().admin.locations;
+  const isSingleLocation = mode === "single";
   const { toast } = useToast();
   const [editing, setEditing] = useState<ShopLocation | null>(null);
   const [open, setOpen] = useState(false);
@@ -79,7 +85,8 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
     setSaving(true);
     try {
       const path = editing ? `/api/admin/locations/${editing.id}` : "/api/admin/locations";
-      await apiRequest(editing ? "PATCH" : "POST", path, form);
+      const { isActive: _isActive, ...singleLocationForm } = form;
+      await apiRequest(editing ? "PATCH" : "POST", path, isSingleLocation ? singleLocationForm : form);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["/api/admin/locations"] }),
         queryClient.invalidateQueries({ queryKey: ["/api/account/locations"] }),
@@ -109,23 +116,25 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-xl font-bold text-white">Localizações</h2>
+          <h2 className="text-xl font-bold text-white">{isSingleLocation ? "Estabelecimento" : "Localizações"}</h2>
           <p className="mt-1 max-w-2xl text-sm text-gray-400">
-            {copy.description}
+            {isSingleLocation
+              ? "Atualize os dados públicos, a morada e o mapa do estabelecimento."
+              : copy.description}
           </p>
         </div>
-        <Button
+        {!isSingleLocation && <Button
           variant="gold"
           onClick={openCreate}
           disabled={locations.length >= maxLocations}
         >
           <Plus className="mr-2 h-4 w-4" /> Nova localização
-        </Button>
+        </Button>}
       </div>
 
-      <div className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-gray-400">
+      {!isSingleLocation && <div className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-gray-400">
         {locations.length} de {maxLocations} localizações utilizadas neste plano.
-      </div>
+      </div>}
 
       {isLoading ? (
         <div className="h-36 animate-pulse rounded-xl border border-white/10 bg-card" />
@@ -233,7 +242,7 @@ export function LocationsTab({ maxLocations }: { maxLocations: number }) {
                 )}
               </div>
             </details>
-            {editing && (
+            {editing && !isSingleLocation && (
               <div className="flex items-center justify-between rounded-lg border border-white/10 p-4 sm:col-span-2">
                 <div>
                   <p className="font-semibold">Visível no site</p>
