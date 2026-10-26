@@ -488,7 +488,7 @@ export default function Home() {
                 </span>
               ))}
             </div>}
-            {businessConfig.vertical === "beauty" && shopBranding.showMap && selectedMapLinks.mapUrl && (
+            {businessConfig.vertical === "beauty" && selectedMapLinks.mapUrl && (
               <a
                 href={selectedMapLinks.mapUrl}
                 target="_blank"

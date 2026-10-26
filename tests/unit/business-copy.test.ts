@@ -456,3 +456,16 @@ test("Beauty visible terminology package resolves audit, backend errors and acti
     .filter((line) => /message:\s*["'`][^"'`]*(?:barbeiro|barbearia)/i.test(line));
   assert.deepEqual(userVisibleBackendLiterals, []);
 });
+
+test("Beauty directions remain available when the embedded map is disabled", () => {
+  const homeSource = readFileSync("client/src/pages/Home.tsx", "utf8");
+
+  assert.match(
+    homeSource,
+    /businessConfig\.vertical === "beauty" && selectedMapLinks\.mapUrl/,
+  );
+  assert.doesNotMatch(
+    homeSource,
+    /businessConfig\.vertical === "beauty" && shopBranding\.showMap && selectedMapLinks\.mapUrl/,
+  );
+});
