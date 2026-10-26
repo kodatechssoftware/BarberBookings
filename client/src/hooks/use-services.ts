@@ -3,6 +3,7 @@ import { api } from "@/lib/client-api-contract";
 import type { CreateServiceRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
+import { takeHomeDataPreload } from "@/lib/home-data-preload";
 
 export function useServices(options?: { enabled?: boolean; includeHidden?: boolean; locationId?: number }) {
   const activeLocationId = useActiveLocationId();
@@ -11,6 +12,10 @@ export function useServices(options?: { enabled?: boolean; includeHidden?: boole
     queryKey: [api.services.list.path, { includeHidden: options?.includeHidden ?? false, locationId }],
     enabled: options?.enabled ?? true,
     queryFn: async () => {
+      const preloaded = !options?.includeHidden
+        ? takeHomeDataPreload<unknown>("services", locationId)
+        : undefined;
+      if (preloaded) return api.services.list.responses[200].parse(await preloaded);
       const url = options?.includeHidden
         ? `${api.services.list.path}?includeHidden=true`
         : api.services.list.path;

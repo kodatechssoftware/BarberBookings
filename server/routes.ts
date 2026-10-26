@@ -124,9 +124,9 @@ import {
   deleteServiceLocationOffers,
   createLocation,
   getBarberIdsForLocation,
+  getBarberLocationSummaries,
   getDefaultLocation,
   getLocation,
-  getLocationCountsForBarbers,
   getLocationIdsForBarber,
   getLocationIdsForService,
   getServiceLocationOffer,
@@ -1285,22 +1285,25 @@ async function getBarbersWithServiceIds(
   locationId: number,
   avatarReferences = false,
   includeInactiveServices = false,
+  includeCompensationRules = true,
 ) {
-  const [barbers, serviceRows, compensationRows] = await Promise.all([
+  const [barbers, serviceRows, compensationRows, locationServiceIds, locationSummaries] = await Promise.all([
     storage.getBarbers({ avatarReferences }),
     storage.getAllBarberServices(locationId),
-    storage.getBarberCompensationRules(undefined, locationId),
-  ]);
-  const [locationBarberIds, locationServiceIds, activeLocationBarberIds] = await Promise.all([
-    getBarberIdsForLocation(locationId, true),
+    includeCompensationRules
+      ? storage.getBarberCompensationRules(undefined, locationId)
+      : Promise.resolve([]),
     getServiceIdsForLocation(locationId, includeInactiveServices),
-    getBarberIdsForLocation(locationId),
+    getBarberLocationSummaries(locationId),
   ]);
-  const activeBarberIds = new Set(activeLocationBarberIds);
-  const allowedBarbers = new Set(locationBarberIds);
+  const activeBarberIds = new Set(locationSummaries
+    .filter((summary) => summary.isActive)
+    .map((summary) => summary.barberId));
+  const allowedBarbers = new Set(locationSummaries.map((summary) => summary.barberId));
   const allowedServices = new Set(locationServiceIds);
   const scopedBarbers = barbers.filter((barber) => allowedBarbers.has(barber.id));
-  const locationCounts = await getLocationCountsForBarbers(scopedBarbers.map((barber) => barber.id));
+  const locationCounts = new Map(locationSummaries
+    .map((summary) => [summary.barberId, summary.locationCount] as const));
   const barberServiceMap = buildBarberServiceMap(serviceRows);
   const currentCompensationByBarberId = new Map<number, BarberCompensationRule>();
   compensationRows.forEach((rule) => {
@@ -4243,7 +4246,12 @@ export async function registerRoutes(
         ? Number(appSession.barberId)
         : undefined;
     const includeHidden = req.query.includeHidden === "true" && canViewTeam;
-    const barbers = await getBarbersWithServiceIds(locationId, avatarReferences, includeHidden);
+    const barbers = await getBarbersWithServiceIds(
+      locationId,
+      avatarReferences,
+      includeHidden,
+      canViewTeamFinance,
+    );
     const visibleBarbers = includeHidden
       ? barbers
       : barbers.filter((barber) => barber.isVisible || barber.id === ownBarberId);
