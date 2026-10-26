@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, buildUrl, type CreateBarberRequest } from "@shared/routes";
+import { api, buildUrl } from "@/lib/client-api-contract";
+import type { CreateBarberRequest } from "@shared/routes";
 import { apiFetch, toApiUrl } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
 

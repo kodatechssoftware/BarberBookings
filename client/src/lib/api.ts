@@ -1,4 +1,4 @@
-import { buildUrl } from "@shared/routes";
+import { buildUrl } from "@/lib/client-api-contract";
 import { getActiveLocationId } from "@/lib/location-context";
 
 const ABSOLUTE_URL_REGEX = /^https?:\/\//i;
