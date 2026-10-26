@@ -87,6 +87,10 @@ test.describe("validação das ligações opcionais dos mapas", () => {
       .toEqual({ mapUrl: "", mapEmbedUrl: "" });
   });
 
+  test("partial updates preserve every omitted field", () => {
+    expect(locationUpdateSchema.parse({ name: "Novo nome" })).toEqual({ name: "Novo nome" });
+  });
+
   test("aceita logótipos locais ou HTTP(S) e permite regressar ao fallback global", () => {
     expect(locationUpdateSchema.parse({ logoUrl: "/images/logo-loja-a.svg" })).toEqual({
       logoUrl: "/images/logo-loja-a.svg",
