@@ -389,6 +389,10 @@ const businessExpenseInputSchema = z.object({
   recurrence: z.enum(businessExpenseRecurrences).default("once"),
   notes: z.string().trim().max(500, "As notas não podem ter mais de 500 caracteres.").optional().nullable(),
 });
+const businessExpenseUpdateInputSchema = businessExpenseInputSchema
+  .omit({ recurrence: true })
+  .partial()
+  .extend({ recurrence: z.enum(businessExpenseRecurrences).optional() });
 const recurringExpenseTermsInputSchema = businessExpenseInputSchema.omit({ expenseDate: true }).extend({
   recurrence: z.enum(["weekly", "monthly"]),
 });
@@ -3499,7 +3503,7 @@ export async function registerRoutes(
           message: "Escolha alterar apenas esta ocorrência ou esta e as seguintes.",
         });
       }
-      const parsed = businessExpenseInputSchema.partial().parse(req.body);
+      const parsed = businessExpenseUpdateInputSchema.parse(req.body);
       const patch = {
         ...parsed,
         expenseDate: parsed.expenseDate ? getShopDateBounds(parsed.expenseDate).start : undefined,
