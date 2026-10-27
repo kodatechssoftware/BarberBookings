@@ -49,22 +49,31 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
   const { toast } = useToast();
   const [editing, setEditing] = useState<ShopLocation | null>(null);
   const [open, setOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [form, setForm] = useState<LocationForm>(emptyForm);
   const hasCustomMapLinks = Boolean(form.mapUrl.trim() || form.mapEmbedUrl.trim());
+  const showCustomMapAddressWarning = Boolean(
+    isSingleLocation
+      && editing
+      && form.address.trim() !== editing.address.trim()
+      && hasCustomMapLinks,
+  );
   const { data: locations = [], isLoading } = useQuery<ShopLocation[]>({
     queryKey: ["/api/admin/locations"],
   });
 
   const openCreate = () => {
     setEditing(null);
+    setAdvancedOpen(false);
     setForm({ ...emptyForm, timezone: locations.find((location) => location.isDefault)?.timezone ?? emptyForm.timezone });
     setOpen(true);
   };
 
   const openEdit = (location: ShopLocation) => {
     setEditing(location);
+    setAdvancedOpen(false);
     setForm({
       name: location.name,
       address: location.address,
@@ -176,6 +185,7 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
 
       <Dialog open={open} onOpenChange={(nextOpen) => {
         if (!nextOpen && savingRef.current) return;
+        if (!nextOpen) setAdvancedOpen(false);
         setOpen(nextOpen);
       }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto border-white/10 bg-card text-white sm:max-w-2xl">
@@ -192,11 +202,16 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
               <Input id="location-address" value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="Rua, número, código postal e localidade" maxLength={300} />
               <p className="text-xs leading-relaxed text-gray-400">
                 {isSingleLocation
-                  ? "Esta morada é apresentada no site e utilizada no Google Maps quando não existem links personalizados."
+                  ? "Usamos esta morada no site e no Google Maps."
                   : hasCustomMapLinks
                   ? "Esta localização usa ligações personalizadas. Para usar apenas a morada, reponha o mapa automático nas opções avançadas."
                   : "O mapa e a ligação para o Google Maps são gerados automaticamente a partir desta morada. Confirme a localização no mapa depois de guardar."}
               </p>
+              {showCustomMapAddressWarning && (
+                <p role="status" className="rounded-md border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs leading-relaxed text-amber-100">
+                  Os links personalizados podem continuar a apontar para a morada anterior. Pode mantê-los ou usar o mapa automático.
+                </p>
+              )}
             </div>
             {!isSingleLocation && <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="location-logo-url">Logótipo da localização</Label>
@@ -219,10 +234,17 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
               <Label htmlFor="location-email">Email</Label>
               <Input id="location-email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="Opcional" maxLength={120} />
             </div>
-            <details className="min-w-0 rounded-lg border border-white/10 p-4 sm:col-span-2">
+            <details
+              open={isSingleLocation ? advancedOpen : undefined}
+              onToggle={(event) => {
+                if (isSingleLocation) setAdvancedOpen(event.currentTarget.open);
+              }}
+              className="min-w-0 rounded-lg border border-white/10 p-4 sm:col-span-2"
+            >
               <summary className="cursor-pointer text-sm font-medium text-gray-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
-                {isSingleLocation ? "Opções avançadas" : "Opções avançadas do mapa"}
-                {hasCustomMapLinks ? " — ligações personalizadas" : " (opcional)"}
+                {isSingleLocation
+                  ? "Opções avançadas (opcional)"
+                  : `Opções avançadas do mapa${hasCustomMapLinks ? " — ligações personalizadas" : " (opcional)"}`}
               </summary>
               <div className="mt-4 space-y-4">
                 {isSingleLocation && <div className="space-y-2">
@@ -235,12 +257,11 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
                     maxLength={1000}
                   />
                   <p className="text-xs leading-relaxed text-gray-400">
-                    Utilize um caminho local iniciado por / ou um endereço HTTP(S).
+                    Caminho local ou endereço HTTP(S).
                   </p>
                 </div>}
                 <p className="text-xs leading-relaxed text-gray-400">
-                  Só precisa destas ligações se o Google Maps não localizar corretamente a entrada.
-                  Cada campo vazio usa automaticamente a morada.
+                  Se deixar os links vazios, o mapa é gerado automaticamente a partir da morada.
                 </p>
                 <div className="space-y-2">
                   <Label htmlFor="location-map-url">Link do Google Maps</Label>
@@ -249,11 +270,11 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
                 <div className="space-y-2">
                   <Label htmlFor="location-map-embed">Link de incorporação do mapa</Label>
                   <Input id="location-map-embed" value={form.mapEmbedUrl} onChange={(event) => setForm({ ...form, mapEmbedUrl: event.target.value })} placeholder="Opcional — https://www.google.com/maps/embed?..." maxLength={1000} />
-                  <p className="text-xs leading-relaxed text-gray-500">No Google Maps, utilize Partilhar → Incorporar um mapa e copie apenas o endereço de «src».</p>
+                  <p className="text-xs leading-relaxed text-gray-500">Cole o endereço «src» obtido em Partilhar → Incorporar um mapa.</p>
                 </div>
                 {hasCustomMapLinks && (
                   <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setForm({ ...form, mapUrl: "", mapEmbedUrl: "" })}>
-                    Usar apenas a morada
+                    {isSingleLocation ? "Usar mapa automático" : "Usar apenas a morada"}
                   </Button>
                 )}
               </div>

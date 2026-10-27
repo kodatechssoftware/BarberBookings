@@ -40,12 +40,14 @@ test("Beauty single-location permite gerir apenas o estabelecimento principal", 
   await locationDialog.getByLabel("Logótipo da localização").fill("/images/beauty-logo.svg");
   await locationDialog.getByLabel("Link do Google Maps").fill("https://www.google.com/maps/search/?api=1&query=Ana+Isabel");
   await locationDialog.getByLabel("Link de incorporação do mapa").fill("https://www.google.com/maps?q=Ana+Isabel&output=embed");
+  await expect(locationDialog.getByRole("status")).toHaveCount(0);
   await locationDialog.getByText("Opções avançadas", { exact: false }).click();
   await expect(advancedOptions).not.toHaveAttribute("open", "");
   expect(await locationDialog.getByLabel("Logótipo da localização").inputValue()).toBe("/images/beauty-logo.svg");
 
   await page.getByLabel("Nome da localização").fill("Ana Isabel — Principal");
   await page.getByLabel("Morada completa").fill("Avenida dos Aliados, 100, 4000-064 Porto");
+  await expect(locationDialog.getByRole("status")).toContainText("podem continuar a apontar para a morada anterior");
   await page.getByLabel("Telefone").fill("+351 912 345 678");
   await page.getByLabel("Email").fill("contacto@example.test");
   await page.getByRole("button", { name: "Guardar localização" }).click();
@@ -68,6 +70,7 @@ test("Beauty single-location permite gerir apenas o estabelecimento principal", 
   await page.getByRole("button", { name: /Editar Ana Isabel — Principal/ }).click();
   const reopenedDialog = page.getByRole("dialog");
   await expect(reopenedDialog.locator("details")).not.toHaveAttribute("open", "");
+  await expect(reopenedDialog.getByRole("status")).toHaveCount(0);
   expect(await reopenedDialog.getByLabel("Logótipo da localização").inputValue()).toBe("/images/beauty-logo.svg");
   expect(await reopenedDialog.getByLabel("Link do Google Maps").inputValue()).toContain("query=Ana+Isabel");
   await reopenedDialog.getByLabel("Telefone").fill("+351 911 222 333");
@@ -85,14 +88,19 @@ test("Beauty single-location permite gerir apenas o estabelecimento principal", 
   await page.getByRole("button", { name: /Editar Ana Isabel — Principal/ }).click();
   const finalDialog = page.getByRole("dialog");
   await finalDialog.getByText("Opções avançadas", { exact: false }).click();
-  await finalDialog.getByLabel("Logótipo da localização").fill("");
-  await finalDialog.getByLabel("Link do Google Maps").fill("");
-  await finalDialog.getByLabel("Link de incorporação do mapa").fill("");
+  await finalDialog.getByRole("button", { name: "Usar mapa automático" }).click();
+  expect(await finalDialog.getByLabel("Logótipo da localização").inputValue()).toBe("/images/beauty-logo.svg");
+  expect(await finalDialog.getByLabel("Link do Google Maps").inputValue()).toBe("");
+  expect(await finalDialog.getByLabel("Link de incorporação do mapa").inputValue()).toBe("");
   await finalDialog.getByRole("button", { name: "Guardar localização" }).click();
   await expect(page.getByText("As informações da localização foram guardadas.", { exact: true })).toBeVisible();
 
   const [automaticMapLocation] = await (await page.request.get("/api/locations")).json();
-  expect(automaticMapLocation).toMatchObject({ logoUrl: null, mapUrl: null, mapEmbedUrl: null });
+  expect(automaticMapLocation).toMatchObject({
+    logoUrl: "/images/beauty-logo.svg",
+    mapUrl: null,
+    mapEmbedUrl: null,
+  });
 
   await expect.poll(async () => {
     const audit = await (await page.request.get("/api/admin/audit-logs")).json();
