@@ -29,6 +29,7 @@ test("Production-equivalent runtime remains single-location and keeps external f
     maxLocations: 1,
     bookingSlotIntervalMinutes: Number(process.env.BOOKING_SLOT_INTERVAL_MINUTES || 30),
     recurringExpensesEnabled: false,
+    singleLocationManagementEnabled: true,
   });
   const locations = await request.get("/api/locations");
   expect((await locations.json())).toHaveLength(1);
@@ -39,7 +40,6 @@ test("Production-equivalent runtime remains single-location and keeps external f
 
   const authHeaders = await login(request);
   for (const endpoint of [
-    "/api/admin/locations",
     "/api/admin/expense-series",
     "/api/admin/dev/whatsapp/meta/test/1",
     "/api/webhooks/whatsapp/meta",
@@ -55,6 +55,15 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(devMetaTest.headers()["content-type"]).toContain("application/json");
   const webhookPost = await request.post("/api/webhooks/whatsapp/meta", { data: {} });
   expect(webhookPost.status()).toBe(404);
+  const managedLocations = await request.get("/api/admin/locations", { headers: authHeaders });
+  expect(managedLocations.ok(), await managedLocations.text()).toBe(true);
+  const [managedLocation] = await managedLocations.json();
+  expect(managedLocation).toMatchObject({ isDefault: true, isActive: true });
+  const deactivateLocation = await request.patch(`/api/admin/locations/${managedLocation.id}`, {
+    headers: authHeaders,
+    data: { isActive: false },
+  });
+  expect(deactivateLocation.status()).toBe(409);
   const createLocation = await request.post("/api/admin/locations", { headers: authHeaders, data: {
     name: "Blocked", address: "Blocked", timezone: "Europe/Lisbon",
   } });

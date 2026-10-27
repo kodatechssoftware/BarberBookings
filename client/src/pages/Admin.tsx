@@ -1549,6 +1549,8 @@ export default function Admin() {
     refetchInterval: 15000,
   });
   const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
+  const canManageSingleLocation = user?.role === "admin"
+    && multiLocationConfig?.singleLocationManagementEnabled === true;
   const bookingSlotIntervalMinutes = multiLocationConfig?.bookingSlotIntervalMinutes
     ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
   const activeLocationId = useActiveLocationId();
@@ -3888,8 +3890,10 @@ export default function Admin() {
                 <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>
                 <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>
                 <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>
-                {multiLocationConfig?.enabled && (
-                  <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
+                {(multiLocationConfig?.enabled || canManageSingleLocation) && (
+                  <TabsTrigger value="locations" className={adminTabTriggerClass}>
+                    <MapPin className="w-4 h-4" /> {multiLocationConfig?.enabled ? "Localizações" : "Estabelecimento"}
+                  </TabsTrigger>
                 )}
                 <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>
               </>
@@ -4997,9 +5001,12 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          {user.role === "admin" && multiLocationConfig?.enabled && (
+          {user.role === "admin" && (multiLocationConfig?.enabled || canManageSingleLocation) && (
             <TabsContent value="locations" className="outline-none">
-              <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
+              <LocationsTab
+                maxLocations={multiLocationConfig?.maxLocations ?? 1}
+                mode={multiLocationConfig?.enabled ? "multiple" : "single"}
+              />
             </TabsContent>
           )}
 
