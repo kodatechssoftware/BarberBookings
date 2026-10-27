@@ -231,6 +231,7 @@ const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "Europe/Lisbon";
 const PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY = process.env.PUBLIC_BOOKING_NEXT_MONTH_OPEN_DAY;
 const PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED = process.env.PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED === "true";
 const MULTI_LOCATION_CONFIG = parseMultiLocationConfig(process.env);
+const SINGLE_LOCATION_ADMIN_ENABLED = isDevelopmentDeployment && !MULTI_LOCATION_CONFIG.enabled;
 const canonicalLoginRateLimiter = createFixedWindowRateLimiter({
   maxAttempts: 10,
   windowMs: 15 * 60 * 1_000,
@@ -1479,7 +1480,9 @@ function runNotificationJob(
 
 async function sendBookingCreatedNotification(params: BookingCreatedNotificationParams) {
   if (!params.customerEmail) return "none";
-  const location = MULTI_LOCATION_CONFIG.enabled && params.locationId ? await getLocation(params.locationId, true) : undefined;
+  const location = params.locationId && (MULTI_LOCATION_CONFIG.enabled || SINGLE_LOCATION_ADMIN_ENABLED)
+    ? await getLocation(params.locationId, true)
+    : undefined;
 
   const emailSent = await sendBookingConfirmation({
     customerName: params.customerName,
@@ -1512,7 +1515,9 @@ type BookingCancelledNotificationParams = {
 
 async function sendBookingCancelledNotification(params: BookingCancelledNotificationParams) {
   if (!params.customerEmail) return "none";
-  const location = MULTI_LOCATION_CONFIG.enabled && params.locationId ? await getLocation(params.locationId, true) : undefined;
+  const location = params.locationId && (MULTI_LOCATION_CONFIG.enabled || SINGLE_LOCATION_ADMIN_ENABLED)
+    ? await getLocation(params.locationId, true)
+    : undefined;
 
   const emailSent = await sendBookingCancellationConfirmation({
     customerName: params.customerName,
@@ -1945,6 +1950,7 @@ export async function registerRoutes(
       ...MULTI_LOCATION_CONFIG,
       bookingSlotIntervalMinutes,
       recurringExpensesEnabled,
+      ...(SINGLE_LOCATION_ADMIN_ENABLED ? { singleLocationManagementEnabled: true } : {}),
     });
   });
 
@@ -2621,10 +2627,13 @@ export async function registerRoutes(
   });
 
   app.get("/api/admin/locations", requireLocationsManage, async (_req, res) => {
-    if (!MULTI_LOCATION_CONFIG.enabled) {
+    if (!MULTI_LOCATION_CONFIG.enabled && !SINGLE_LOCATION_ADMIN_ENABLED) {
       return res.status(404).json({ message: "Gestão de localizações não disponível." });
     }
-    res.json(await listLocations(true));
+    const locations = await listLocations(true);
+    res.json(MULTI_LOCATION_CONFIG.enabled
+      ? locations
+      : locations.filter((location) => location.isDefault).slice(0, 1));
   });
 
   app.post("/api/admin/locations", requireLocationsManage, async (req, res) => {
@@ -2650,11 +2659,17 @@ export async function registerRoutes(
   });
 
   app.patch("/api/admin/locations/:id", requireLocationsManage, async (req, res) => {
-    if (!MULTI_LOCATION_CONFIG.enabled) {
+    if (!MULTI_LOCATION_CONFIG.enabled && !SINGLE_LOCATION_ADMIN_ENABLED) {
       return res.status(404).json({ message: "Gestão de localizações não disponível." });
     }
     const locationId = parsePositiveInteger(req.params.id);
     if (locationId === null) return res.status(400).json({ message: "Localização inválida." });
+    if (SINGLE_LOCATION_ADMIN_ENABLED) {
+      const location = await getLocation(locationId, true);
+      if (!location?.isDefault) {
+        return res.status(404).json({ message: "Localização principal não encontrada." });
+      }
+    }
     const parsed = locationUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ message: parsed.error.issues[0]?.message || "Localização inválida." });
@@ -2669,6 +2684,16 @@ export async function registerRoutes(
     try {
       const updated = await updateLocation(locationId, parsed.data);
       if (!updated) return res.status(404).json({ message: "Localização não encontrada." });
+      if (SINGLE_LOCATION_ADMIN_ENABLED) {
+        recordAuditLog(req, {
+          action: "location.updated",
+          entityType: "location",
+          entityId: updated.id,
+          locationId: updated.id,
+          summary: `Estabelecimento atualizado: ${updated.name}`,
+          metadata: { fields: Object.keys(parsed.data).sort() },
+        });
+      }
       res.json(updated);
     } catch (error) {
       if (error instanceof Error && error.message === "DEFAULT_LOCATION_CANNOT_BE_DEACTIVATED") {
