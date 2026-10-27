@@ -36,8 +36,13 @@ test("Beauty single-location permite gerir apenas o estabelecimento principal", 
   await expect(advancedOptions).not.toHaveAttribute("open", "");
   await expect(locationDialog.getByLabel("Logótipo da localização")).not.toBeVisible();
 
-  await locationDialog.getByText("Opções avançadas", { exact: false }).click();
+  await locationDialog.getByText("Opções avançadas (opcional)", { exact: true }).click();
   await locationDialog.getByLabel("Logótipo da localização").fill("/images/beauty-logo.svg");
+  const customMapSwitch = locationDialog.getByRole("switch", { name: "Utilizar localização personalizada" });
+  await expect(customMapSwitch).not.toBeChecked();
+  await expect(locationDialog.getByLabel("Link do Google Maps")).toHaveCount(0);
+  await customMapSwitch.click();
+  await expect(customMapSwitch).toBeChecked();
   await locationDialog.getByLabel("Link do Google Maps").fill("https://www.google.com/maps/search/?api=1&query=Ana+Isabel");
   await locationDialog.getByLabel("Link de incorporação do mapa").fill("https://www.google.com/maps?q=Ana+Isabel&output=embed");
   await expect(locationDialog.getByRole("status")).toHaveCount(0);
@@ -71,6 +76,7 @@ test("Beauty single-location permite gerir apenas o estabelecimento principal", 
   const reopenedDialog = page.getByRole("dialog");
   await expect(reopenedDialog.locator("details")).not.toHaveAttribute("open", "");
   await expect(reopenedDialog.getByRole("status")).toHaveCount(0);
+  expect(await reopenedDialog.locator("#location-custom-map-enabled").isChecked()).toBe(true);
   expect(await reopenedDialog.getByLabel("Logótipo da localização").inputValue()).toBe("/images/beauty-logo.svg");
   expect(await reopenedDialog.getByLabel("Link do Google Maps").inputValue()).toContain("query=Ana+Isabel");
   await reopenedDialog.getByLabel("Telefone").fill("+351 911 222 333");
@@ -88,10 +94,20 @@ test("Beauty single-location permite gerir apenas o estabelecimento principal", 
   await page.getByRole("button", { name: /Editar Ana Isabel — Principal/ }).click();
   const finalDialog = page.getByRole("dialog");
   await finalDialog.getByText("Opções avançadas", { exact: false }).click();
+  const finalCustomMapSwitch = finalDialog.getByRole("switch", { name: "Utilizar localização personalizada" });
+  await finalCustomMapSwitch.click();
+  const firstConfirmation = page.getByRole("alertdialog");
+  await expect(firstConfirmation).toContainText("Os dois links personalizados serão limpos");
+  await firstConfirmation.getByRole("button", { name: "Manter localização personalizada" }).click();
+  await expect(finalCustomMapSwitch).toBeChecked();
+  expect(await finalDialog.getByLabel("Link do Google Maps").inputValue()).toContain("query=Ana+Isabel");
+
   await finalDialog.getByRole("button", { name: "Usar mapa automático" }).click();
+  const finalConfirmation = page.getByRole("alertdialog");
+  await finalConfirmation.getByRole("button", { name: "Usar mapa automático" }).click();
   expect(await finalDialog.getByLabel("Logótipo da localização").inputValue()).toBe("/images/beauty-logo.svg");
-  expect(await finalDialog.getByLabel("Link do Google Maps").inputValue()).toBe("");
-  expect(await finalDialog.getByLabel("Link de incorporação do mapa").inputValue()).toBe("");
+  await expect(finalCustomMapSwitch).not.toBeChecked();
+  await expect(finalDialog.getByLabel("Link do Google Maps")).toHaveCount(0);
   await finalDialog.getByRole("button", { name: "Guardar localização" }).click();
   await expect(page.getByText("As informações da localização foram guardadas.", { exact: true })).toBeVisible();
 
