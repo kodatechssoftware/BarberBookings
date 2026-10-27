@@ -5,7 +5,12 @@ import { AlertTriangle, Calendar as CalendarIcon, ChevronDown, User } from "luci
 import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
 import { AvailabilityWindowTimePicker } from "@/components/admin/AvailabilityWindowTimePicker";
-import { rebaseAvailabilityWindows } from "@/lib/availability-window-time";
+import {
+  maxWindowClockTime,
+  minWindowClockTime,
+  rebaseAvailabilityWindows,
+  shiftWindowClockMinute,
+} from "@/lib/availability-window-time";
 import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
@@ -839,7 +844,10 @@ export function AppointmentBlockDialog({
                         label="Início"
                         value={window.startTime}
                         minTime={serviceWindowStart}
-                        maxTime={serviceWindowEnd}
+                        maxTime={minWindowClockTime(
+                          shiftWindowClockMinute(window.endTime, -1) ?? serviceWindowStart,
+                          serviceWindowEnd,
+                        )}
                         disabled={!canConfigureAvailabilityWindow}
                         onChange={(startTime) => onBlockDataChange((current) => ({
                           ...current,
@@ -855,7 +863,10 @@ export function AppointmentBlockDialog({
                         id={`availability-window-end-${index}`}
                         label="Fim"
                         value={window.endTime}
-                        minTime={serviceWindowStart}
+                        minTime={maxWindowClockTime(
+                          shiftWindowClockMinute(window.startTime, 1) ?? serviceWindowEnd,
+                          serviceWindowStart,
+                        )}
                         maxTime={serviceWindowEnd}
                         disabled={!canConfigureAvailabilityWindow}
                         onChange={(endTime) => onBlockDataChange((current) => ({

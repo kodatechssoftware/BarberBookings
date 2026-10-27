@@ -53,7 +53,12 @@ import { createAppointmentTimeOptions } from "@/lib/appointment-time-options";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
 import { AvailabilityWindowTimePicker } from "@/components/admin/AvailabilityWindowTimePicker";
-import { rebaseAvailabilityWindows } from "@/lib/availability-window-time";
+import {
+  maxWindowClockTime,
+  minWindowClockTime,
+  rebaseAvailabilityWindows,
+  shiftWindowClockMinute,
+} from "@/lib/availability-window-time";
 import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import {
   isClockTimeAligned,
@@ -795,7 +800,10 @@ function EditAppointmentDialog({
                       label="Início"
                       value={window.startTime}
                       minTime={timeValue}
-                      maxTime={serviceWindowEnd}
+                      maxTime={minWindowClockTime(
+                        shiftWindowClockMinute(window.endTime, -1) ?? timeValue,
+                        serviceWindowEnd,
+                      )}
                       onChange={(startTime) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
                         ? { ...value, startTime }
                         : value))}
@@ -807,7 +815,10 @@ function EditAppointmentDialog({
                       id={`edit-availability-end-${index}`}
                       label="Fim"
                       value={window.endTime}
-                      minTime={timeValue}
+                      minTime={maxWindowClockTime(
+                        shiftWindowClockMinute(window.startTime, 1) ?? serviceWindowEnd,
+                        timeValue,
+                      )}
                       maxTime={serviceWindowEnd}
                       onChange={(endTime) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
                         ? { ...value, endTime }

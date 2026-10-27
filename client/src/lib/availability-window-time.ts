@@ -7,6 +7,28 @@ function clockValue(minutes: number) {
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
+export function shiftWindowClockMinute(value: string, amount: number) {
+  const minutes = clockMinutes(value);
+  if (minutes === null) return null;
+  const shifted = minutes + amount;
+  if (shifted < 0 || shifted > 23 * 60 + 59) return null;
+  return clockValue(shifted);
+}
+
+export function minWindowClockTime(left: string, right: string) {
+  const leftMinutes = clockMinutes(left);
+  const rightMinutes = clockMinutes(right);
+  if (leftMinutes === null || rightMinutes === null) return left;
+  return leftMinutes <= rightMinutes ? left : right;
+}
+
+export function maxWindowClockTime(left: string, right: string) {
+  const leftMinutes = clockMinutes(left);
+  const rightMinutes = clockMinutes(right);
+  if (leftMinutes === null || rightMinutes === null) return left;
+  return leftMinutes >= rightMinutes ? left : right;
+}
+
 export type AvailabilityWindowTime = { startTime: string; endTime: string };
 
 export function rebaseAvailabilityWindows(

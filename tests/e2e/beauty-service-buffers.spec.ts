@@ -512,20 +512,16 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       expect(await minutes.evaluate((list) => list.scrollTop)).toBe(
         await minutes.evaluate((list) => list.scrollHeight - list.clientHeight),
       );
-      await minutes.getByRole("button", { name: "59 minutos" }).click();
-      await expect(startPicker).toContainText(`${selectedHour}:59`);
+      const [endHour, endMinute] = initialEnd.split(":").map(Number);
+      const latestStartTotal = endHour * 60 + endMinute - 1;
+      const latestStartHour = String(Math.floor(latestStartTotal / 60)).padStart(2, "0");
+      const latestStartMinute = String(latestStartTotal % 60).padStart(2, "0");
+      await minutes.getByRole("button", { name: `${latestStartMinute} minutos` }).click();
+      await expect(startPicker).toContainText(`${latestStartHour}:${latestStartMinute}`);
       await startPicker.click();
-      const serviceEndMinutes = Number(selectedHour) * 60 + Number(firstMinute) + service.duration;
-      const lastHour = String(Math.floor(serviceEndMinutes / 60)).padStart(2, "0");
-      const lastMinute = String(serviceEndMinutes % 60).padStart(2, "0");
-      await hours.getByRole("button", { name: `${lastHour} horas` }).click();
-      await expect(minutes.getByRole("button", { name: `${lastMinute} minutos` })).toBeVisible();
-      if (lastMinute !== "59") {
-        const nextMinute = String(Number(lastMinute) + 1).padStart(2, "0");
-        await expect(minutes.getByRole("button", { name: `${nextMinute} minutos` })).toHaveCount(0);
-      }
-      await minutes.getByRole("button", { name: `${lastMinute} minutos` }).click();
-      await expect(startPicker).toContainText(`${lastHour}:${lastMinute}`);
+      await expect(hours.getByRole("button", { name: `${latestStartHour} horas` })).toBeVisible();
+      await expect(minutes.getByRole("button", { name: `${String(Number(latestStartMinute) + 1).padStart(2, "0")} minutos` })).toHaveCount(0);
+      await page.keyboard.press("Escape");
       await section.getByRole("button", { name: "Adicionar janela" }).click();
       await expect(section.getByRole("button", { name: /^Início: / })).toHaveCount(2);
       await expect(section.getByRole("button", { name: /^Fim: / })).toHaveCount(2);

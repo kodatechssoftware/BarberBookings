@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   clampWindowTimeToHour,
   getWindowTimeOptions,
+  maxWindowClockTime,
+  minWindowClockTime,
   rebaseAvailabilityWindows,
+  shiftWindowClockMinute,
 } from "../../client/src/lib/availability-window-time";
 
 test("window picker only offers times inside the service", () => {
@@ -40,4 +43,11 @@ test("a shorter service keeps its window inside the new end time", () => {
     [{ startTime: "13:45", endTime: "14:30" }],
     "13:30", "13:30", "14:00",
   ), [{ startTime: "13:30", endTime: "14:00" }]);
+});
+
+test("window endpoints keep at least one minute between start and end", () => {
+  assert.equal(shiftWindowClockMinute("14:00", -1), "13:59");
+  assert.equal(shiftWindowClockMinute("14:00", 1), "14:01");
+  assert.equal(minWindowClockTime("13:59", "14:45"), "13:59");
+  assert.equal(maxWindowClockTime("14:01", "13:30"), "14:01");
 });
