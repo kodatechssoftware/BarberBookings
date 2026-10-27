@@ -52,6 +52,8 @@ import {
 import { createAppointmentTimeOptions } from "@/lib/appointment-time-options";
 import { getAppointmentContactLinks, getWeeklyAppointmentEnd } from "@/components/admin/WeeklyAgenda";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
+import { AvailabilityWindowTimePicker } from "@/components/admin/AvailabilityWindowTimePicker";
+import { rebaseAvailabilityWindows } from "@/lib/availability-window-time";
 import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import {
   isClockTimeAligned,
@@ -248,6 +250,26 @@ function EditAppointmentDialog({
   const selectedDuration = serviceId === "custom"
     ? Number.isInteger(parsedCustomDuration) && parsedCustomDuration > 0 ? parsedCustomDuration : 30
     : selectedService?.duration || appointment.durationMinutes || 30;
+  const serviceWindowEnd = addAppointmentClockMinutes(timeValue, selectedDuration);
+  const previousServiceWindowBounds = useRef<{ start: string; end: string } | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      previousServiceWindowBounds.current = null;
+      return;
+    }
+
+    const previous = previousServiceWindowBounds.current;
+    previousServiceWindowBounds.current = { start: timeValue, end: serviceWindowEnd };
+    if (!previous || (previous.start === timeValue && previous.end === serviceWindowEnd)) return;
+
+    setSelectedAvailabilityWindows((current) => current.length === 0 ? current : rebaseAvailabilityWindows(
+      current,
+      previous.start,
+      timeValue,
+      serviceWindowEnd,
+    ));
+  }, [open, timeValue, serviceWindowEnd]);
   const keepsAppointmentService = selectedService?.id === appointment.serviceId;
   const selectedBufferBefore = serviceId === "custom" || serviceId === "none"
     ? 0
@@ -763,27 +785,32 @@ function EditAppointmentDialog({
                   aria-label="Disponibilidade durante o serviço"
                 />
               </div>
+              <p className="text-xs text-gray-400">Escolha uma janela entre {timeValue} e {serviceWindowEnd}.</p>
               {selectedAvailabilityWindows.map((window, index) => (
                 <div key={index} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
                   <div className="space-y-1.5">
                     <Label htmlFor={`edit-availability-start-${index}`} className="text-xs">Início</Label>
-                    <Input
+                    <AvailabilityWindowTimePicker
                       id={`edit-availability-start-${index}`}
-                      type="time"
+                      label="Início"
                       value={window.startTime}
-                      onChange={(event) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
-                        ? { ...value, startTime: event.target.value }
+                      minTime={timeValue}
+                      maxTime={serviceWindowEnd}
+                      onChange={(startTime) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
+                        ? { ...value, startTime }
                         : value))}
                     />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor={`edit-availability-end-${index}`} className="text-xs">Fim</Label>
-                    <Input
+                    <AvailabilityWindowTimePicker
                       id={`edit-availability-end-${index}`}
-                      type="time"
+                      label="Fim"
                       value={window.endTime}
-                      onChange={(event) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
-                        ? { ...value, endTime: event.target.value }
+                      minTime={timeValue}
+                      maxTime={serviceWindowEnd}
+                      onChange={(endTime) => setSelectedAvailabilityWindows((current) => current.map((value, position) => position === index
+                        ? { ...value, endTime }
                         : value))}
                     />
                   </div>

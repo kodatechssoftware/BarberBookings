@@ -460,15 +460,80 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       const dialog = page.getByRole("dialog", { name: "Marcação manual" });
       const section = dialog.getByTestId("manual-booking-availability-windows");
       await expect(section).toBeVisible();
-      await section.getByRole("switch", { name: "Abrir disponibilidade durante o serviço" }).click();
-      await expect(section.locator('input[type="time"]')).toHaveCount(2);
+      const availabilitySwitch = section.getByRole("switch", { name: "Abrir disponibilidade durante o serviço" });
+      await expect(availabilitySwitch).toBeDisabled();
+      await dialog.getByTestId("manual-booking-barber").click();
+      await page.getByRole("option", { name: eligibleProfessional.name }).click();
+      await dialog.getByTestId("manual-booking-service").click();
+      await page.getByRole("option", { name: service.name }).click();
+      const firstAvailableTime = dialog.locator('button[data-availability="available"]').first();
+      await expect(firstAvailableTime).toBeEnabled();
+      const nextAvailableTime = dialog.locator('button[data-availability="available"]').nth(1);
+      await expect(nextAvailableTime).toBeEnabled();
+      const firstTime = (await firstAvailableTime.innerText()).trim();
+      const selectedTime = (await nextAvailableTime.innerText()).trim();
+      await firstAvailableTime.click();
+      await availabilitySwitch.click();
+      const startPicker = section.getByRole("button", { name: /^Início: / });
+      await expect(startPicker).toBeVisible();
+      const endPicker = section.getByRole("button", { name: /^Fim: / });
+      await expect(endPicker).toBeVisible();
+      const [initialStart, initialEnd] = await Promise.all([startPicker.innerText(), endPicker.innerText()]);
+      const shiftMinutes = (Number(selectedTime.slice(0, 2)) * 60 + Number(selectedTime.slice(3)))
+        - (Number(firstTime.slice(0, 2)) * 60 + Number(firstTime.slice(3)));
+      const shiftClock = (value: string) => {
+        const [hours, minutes] = value.split(":").map(Number);
+        const total = hours * 60 + minutes + shiftMinutes;
+        return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+      };
+      await nextAvailableTime.click();
+      await expect(startPicker).toContainText(shiftClock(initialStart));
+      await expect(endPicker).toContainText(shiftClock(initialEnd));
+      await startPicker.click();
+      const hours = page.getByRole("group", { name: "Horas" });
+      const minutes = page.getByRole("group", { name: "Minutos" });
+      const selectedHour = selectedTime.slice(0, 2);
+      const firstMinute = selectedTime.slice(3);
+      const secondMinute = String(Number(firstMinute) + 1).padStart(2, "0");
+      await expect(hours.getByRole("button", { name: `${selectedHour} horas` })).toBeVisible();
+      await expect(hours.getByRole("button", { name: `${String(Number(selectedHour) - 1).padStart(2, "0")} horas` })).toHaveCount(0);
+      await minutes.evaluate((list) => { list.scrollTop = 0; });
+      const firstMinuteBox = await minutes.getByRole("button", { name: `${firstMinute} minutos` }).boundingBox();
+      const secondMinuteBox = await minutes.getByRole("button", { name: `${secondMinute} minutos` }).boundingBox();
+      expect(firstMinuteBox).not.toBeNull();
+      expect(secondMinuteBox).not.toBeNull();
+      expect(secondMinuteBox!.y - firstMinuteBox!.y).toBeCloseTo(firstMinuteBox!.height, 1);
+      await minutes.hover();
+      await page.mouse.wheel(0, 10_000);
+      await expect.poll(() => minutes.evaluate((list) => list.scrollTop)).toBe(
+        await minutes.evaluate((list) => list.scrollHeight - list.clientHeight),
+      );
+      await page.mouse.wheel(0, 10_000);
+      expect(await minutes.evaluate((list) => list.scrollTop)).toBe(
+        await minutes.evaluate((list) => list.scrollHeight - list.clientHeight),
+      );
+      await minutes.getByRole("button", { name: "59 minutos" }).click();
+      await expect(startPicker).toContainText(`${selectedHour}:59`);
+      await startPicker.click();
+      const serviceEndMinutes = Number(selectedHour) * 60 + Number(firstMinute) + service.duration;
+      const lastHour = String(Math.floor(serviceEndMinutes / 60)).padStart(2, "0");
+      const lastMinute = String(serviceEndMinutes % 60).padStart(2, "0");
+      await hours.getByRole("button", { name: `${lastHour} horas` }).click();
+      await expect(minutes.getByRole("button", { name: `${lastMinute} minutos` })).toBeVisible();
+      if (lastMinute !== "59") {
+        const nextMinute = String(Number(lastMinute) + 1).padStart(2, "0");
+        await expect(minutes.getByRole("button", { name: `${nextMinute} minutos` })).toHaveCount(0);
+      }
+      await minutes.getByRole("button", { name: `${lastMinute} minutos` }).click();
+      await expect(startPicker).toContainText(`${lastHour}:${lastMinute}`);
       await section.getByRole("button", { name: "Adicionar janela" }).click();
-      await expect(section.locator('input[type="time"]')).toHaveCount(4);
+      await expect(section.getByRole("button", { name: /^Início: / })).toHaveCount(2);
+      await expect(section.getByRole("button", { name: /^Fim: / })).toHaveCount(2);
       await expect(section.getByRole("button", { name: "Remover janela 1" })).toBeVisible();
       expect(await dialog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
         Math.ceil(await dialog.evaluate((element) => element.clientWidth)) + 1,
       );
-      await page.keyboard.press("Escape");
+      await dialog.getByRole("button", { name: "Close" }).click();
       await expect(dialog).not.toBeVisible();
     }
   });

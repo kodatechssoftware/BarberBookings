@@ -1,9 +1,11 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { format, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
 import { AlertTriangle, Calendar as CalendarIcon, ChevronDown, User } from "lucide-react";
 import { blockTimeOptions, outsideHoursBlockTimeOptions, type AppointmentBlockData } from "@/components/admin/AppointmentsTab";
 import { AppointmentPaymentOptions } from "@/components/admin/AppointmentPaymentOptions";
+import { AvailabilityWindowTimePicker } from "@/components/admin/AvailabilityWindowTimePicker";
+import { rebaseAvailabilityWindows } from "@/lib/availability-window-time";
 import { MutationPendingOverlay } from "@/components/ui/mutation-pending-overlay";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
@@ -169,6 +171,40 @@ export function AppointmentBlockDialog({
   const selectedDuration = blockData.serviceMode === "custom"
     ? Number(blockData.customDurationMinutes) || 30
     : selectedService?.duration ?? 30;
+  const selectedAppointmentTime = blockData.times.length === 1 ? blockData.times[0] : null;
+  const customDuration = Number(blockData.customDurationMinutes);
+  const canConfigureAvailabilityWindow = Boolean(selectedAppointmentTime && (
+    blockData.serviceMode === "custom"
+      ? Number.isInteger(customDuration) && customDuration > 0 && customDuration <= 720
+      : selectedService
+  ));
+  const serviceWindowStart = selectedAppointmentTime ?? "00:00";
+  const serviceWindowEnd = selectedAppointmentTime
+    ? addClockMinutes(selectedAppointmentTime, selectedDuration)
+    : "00:00";
+  const previousServiceWindowBounds = useRef<{ start: string; end: string } | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      previousServiceWindowBounds.current = null;
+      return;
+    }
+    if (!canConfigureAvailabilityWindow) return;
+
+    const previous = previousServiceWindowBounds.current;
+    previousServiceWindowBounds.current = { start: serviceWindowStart, end: serviceWindowEnd };
+    if (!previous || (previous.start === serviceWindowStart && previous.end === serviceWindowEnd)) return;
+
+    onBlockDataChange((current) => current.availabilityWindows.length === 0 ? current : ({
+      ...current,
+      availabilityWindows: rebaseAvailabilityWindows(
+        current.availabilityWindows,
+        previous.start,
+        serviceWindowStart,
+        serviceWindowEnd,
+      ),
+    }));
+  }, [open, canConfigureAvailabilityWindow, serviceWindowStart, serviceWindowEnd]);
 
   useEffect(() => {
     if (!open) {
@@ -571,7 +607,7 @@ export function AppointmentBlockDialog({
                       type="button"
                       variant={blockData.times.includes(time) ? "gold" : "outline"}
                       size="sm"
-                      className="h-11 rounded-lg text-xs disabled:border-white/5 disabled:bg-black/20 disabled:text-gray-600 disabled:opacity-100 sm:h-10"
+                      className="h-11 rounded-lg text-xs disabled:!border-border disabled:!bg-muted disabled:!bg-none disabled:!text-muted-foreground disabled:!opacity-100 disabled:!shadow-none sm:h-10"
                       disabled={!isAvailable || isLoadingLocationData || hasLocationDataError}
                       aria-pressed={blockData.times.includes(time)}
                       data-availability={isAvailable ? "available" : "unavailable"}
@@ -776,6 +812,7 @@ export function AppointmentBlockDialog({
                   </span>
                   <Switch
                     checked={blockData.availabilityWindows.length > 0}
+                    disabled={!canConfigureAvailabilityWindow && blockData.availabilityWindows.length === 0}
                     onCheckedChange={(checked) => onBlockDataChange({
                       ...blockData,
                       availabilityWindows: checked
@@ -788,36 +825,45 @@ export function AppointmentBlockDialog({
                     aria-label="Abrir disponibilidade durante o serviço"
                   />
                 </div>
+                <p className="text-xs text-gray-400">
+                  {canConfigureAvailabilityWindow
+                    ? `Escolha uma janela entre ${serviceWindowStart} e ${serviceWindowEnd}.`
+                    : "Escolha primeiro um serviço e a hora da marcação."}
+                </p>
                 {blockData.availabilityWindows.map((window, index) => (
                   <div key={index} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
                     <div className="space-y-1.5">
                       <Label htmlFor={`availability-window-start-${index}`} className="text-xs text-gray-300">Início</Label>
-                      <Input
+                      <AvailabilityWindowTimePicker
                         id={`availability-window-start-${index}`}
-                        type="time"
+                        label="Início"
                         value={window.startTime}
-                        onChange={(event) => onBlockDataChange((current) => ({
+                        minTime={serviceWindowStart}
+                        maxTime={serviceWindowEnd}
+                        disabled={!canConfigureAvailabilityWindow}
+                        onChange={(startTime) => onBlockDataChange((current) => ({
                           ...current,
                           availabilityWindows: current.availabilityWindows.map((value, position) => position === index
-                            ? { ...value, startTime: event.target.value }
+                            ? { ...value, startTime }
                             : value),
                         }))}
-                        className="h-11 border-white/10 bg-background/50 text-white"
                       />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor={`availability-window-end-${index}`} className="text-xs text-gray-300">Fim</Label>
-                      <Input
+                      <AvailabilityWindowTimePicker
                         id={`availability-window-end-${index}`}
-                        type="time"
+                        label="Fim"
                         value={window.endTime}
-                        onChange={(event) => onBlockDataChange((current) => ({
+                        minTime={serviceWindowStart}
+                        maxTime={serviceWindowEnd}
+                        disabled={!canConfigureAvailabilityWindow}
+                        onChange={(endTime) => onBlockDataChange((current) => ({
                           ...current,
                           availabilityWindows: current.availabilityWindows.map((value, position) => position === index
-                            ? { ...value, endTime: event.target.value }
+                            ? { ...value, endTime }
                             : value),
                         }))}
-                        className="h-11 border-white/10 bg-background/50 text-white"
                       />
                     </div>
                     <Button
@@ -837,6 +883,7 @@ export function AppointmentBlockDialog({
                   <Button
                     type="button"
                     variant="outline"
+                    disabled={!canConfigureAvailabilityWindow}
                     onClick={() => onBlockDataChange((current) => ({
                       ...current,
                       availabilityWindows: [...current.availabilityWindows, {
