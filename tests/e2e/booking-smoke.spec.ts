@@ -23,6 +23,7 @@ test.describe("configuração multi-localização", () => {
       maxLocations: 1,
       bookingSlotIntervalMinutes: 30,
       recurringExpensesEnabled: false,
+      singleLocationManagementEnabled: true,
     });
   });
 });

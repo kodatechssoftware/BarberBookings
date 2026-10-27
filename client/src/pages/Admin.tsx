@@ -1705,6 +1705,8 @@ export default function Admin() {
     refetchInterval: 15000,
   });
   const { data: multiLocationConfig } = useRuntimeConfig({ enabled: user?.authorized === true });
+  const canManageSingleLocation = canManageLocations
+    && multiLocationConfig?.singleLocationManagementEnabled === true;
   const bookingSlotIntervalMinutes = multiLocationConfig?.bookingSlotIntervalMinutes
     ?? DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES;
   const { data: availableLocations = [] } = useQuery<ShopLocation[]>({
@@ -4228,8 +4230,10 @@ export default function Admin() {
             {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
             {canManageShopHours && <TabsTrigger value="settings" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Horário</TabsTrigger>}
-            {canManageLocations && multiLocationConfig?.enabled && (
-              <TabsTrigger value="locations" className={adminTabTriggerClass}><MapPin className="w-4 h-4" /> Localizações</TabsTrigger>
+            {canManageLocations && (multiLocationConfig?.enabled || canManageSingleLocation) && (
+              <TabsTrigger value="locations" className={adminTabTriggerClass}>
+                <MapPin className="w-4 h-4" /> {multiLocationConfig?.enabled ? "Localizações" : "Estabelecimento"}
+              </TabsTrigger>
             )}
             {usesCanonicalAuth && canManageUsers && (
               <TabsTrigger value="users" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Utilizadores</TabsTrigger>
@@ -5469,9 +5473,12 @@ export default function Admin() {
             </Card>
           </TabsContent>
 
-          {canManageLocations && multiLocationConfig?.enabled && (
+          {canManageLocations && (multiLocationConfig?.enabled || canManageSingleLocation) && (
             <TabsContent value="locations" className="outline-none">
-              <LocationsTab maxLocations={multiLocationConfig.maxLocations} />
+              <LocationsTab
+                maxLocations={multiLocationConfig?.maxLocations ?? 1}
+                mode={multiLocationConfig?.enabled ? "multiple" : "single"}
+              />
             </TabsContent>
           )}
 

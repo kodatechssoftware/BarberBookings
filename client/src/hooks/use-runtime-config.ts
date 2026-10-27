@@ -7,6 +7,7 @@ export type PublicRuntimeConfig = {
   maxLocations: number;
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   recurringExpensesEnabled: boolean;
+  singleLocationManagementEnabled?: boolean;
 };
 
 export function useRuntimeConfig(options?: { enabled?: boolean }) {
