@@ -7,6 +7,16 @@ import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button-custom";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,6 +60,8 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
   const [editing, setEditing] = useState<ShopLocation | null>(null);
   const [open, setOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [customMapEnabled, setCustomMapEnabled] = useState(false);
+  const [automaticMapConfirmationOpen, setAutomaticMapConfirmationOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [form, setForm] = useState<LocationForm>(emptyForm);
@@ -67,6 +79,8 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
   const openCreate = () => {
     setEditing(null);
     setAdvancedOpen(false);
+    setCustomMapEnabled(false);
+    setAutomaticMapConfirmationOpen(false);
     setForm({ ...emptyForm, timezone: locations.find((location) => location.isDefault)?.timezone ?? emptyForm.timezone });
     setOpen(true);
   };
@@ -74,6 +88,8 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
   const openEdit = (location: ShopLocation) => {
     setEditing(location);
     setAdvancedOpen(false);
+    setCustomMapEnabled(Boolean(location.mapUrl?.trim() || location.mapEmbedUrl?.trim()));
+    setAutomaticMapConfirmationOpen(false);
     setForm({
       name: location.name,
       address: location.address,
@@ -86,6 +102,20 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
       isActive: location.isActive,
     });
     setOpen(true);
+  };
+
+  const requestAutomaticMap = () => {
+    if (!hasCustomMapLinks) {
+      setCustomMapEnabled(false);
+      return;
+    }
+    setAutomaticMapConfirmationOpen(true);
+  };
+
+  const useAutomaticMap = () => {
+    setForm((current) => ({ ...current, mapUrl: "", mapEmbedUrl: "" }));
+    setCustomMapEnabled(false);
+    setAutomaticMapConfirmationOpen(false);
   };
 
   const save = async () => {
@@ -185,7 +215,10 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
 
       <Dialog open={open} onOpenChange={(nextOpen) => {
         if (!nextOpen && savingRef.current) return;
-        if (!nextOpen) setAdvancedOpen(false);
+        if (!nextOpen) {
+          setAdvancedOpen(false);
+          setAutomaticMapConfirmationOpen(false);
+        }
         setOpen(nextOpen);
       }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto border-white/10 bg-card text-white sm:max-w-2xl">
@@ -260,22 +293,68 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
                     Caminho local ou endereço HTTP(S).
                   </p>
                 </div>}
-                <p className="text-xs leading-relaxed text-gray-400">
-                  Se deixar os links vazios, o mapa é gerado automaticamente a partir da morada.
-                </p>
-                <div className="space-y-2">
-                  <Label htmlFor="location-map-url">Link do Google Maps</Label>
-                  <Input id="location-map-url" value={form.mapUrl} onChange={(event) => setForm({ ...form, mapUrl: event.target.value })} placeholder="Opcional — gerado a partir da morada" maxLength={1000} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="location-map-embed">Link de incorporação do mapa</Label>
-                  <Input id="location-map-embed" value={form.mapEmbedUrl} onChange={(event) => setForm({ ...form, mapEmbedUrl: event.target.value })} placeholder="Opcional — https://www.google.com/maps/embed?..." maxLength={1000} />
-                  <p className="text-xs leading-relaxed text-gray-500">Cole o endereço «src» obtido em Partilhar → Incorporar um mapa.</p>
-                </div>
-                {hasCustomMapLinks && (
-                  <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setForm({ ...form, mapUrl: "", mapEmbedUrl: "" })}>
-                    {isSingleLocation ? "Usar mapa automático" : "Usar apenas a morada"}
-                  </Button>
+                {isSingleLocation ? (
+                  <div className="space-y-4 rounded-lg border border-white/10 bg-white/[0.02] p-4">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Localização no Google Maps</p>
+                      <p className="mt-1 text-xs leading-relaxed text-gray-400">
+                        <strong className="font-semibold text-gray-300">Mapa automático (recomendado).</strong>{" "}
+                        O mapa é gerado a partir da morada do estabelecimento.
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <Label htmlFor="location-custom-map-enabled" className="cursor-pointer text-sm text-gray-300">
+                        Utilizar localização personalizada
+                      </Label>
+                      <Switch
+                        id="location-custom-map-enabled"
+                        checked={customMapEnabled}
+                        onCheckedChange={(checked) => {
+                          if (checked) setCustomMapEnabled(true);
+                          else requestAutomaticMap();
+                        }}
+                      />
+                    </div>
+                    {customMapEnabled && (
+                      <div className="space-y-4 border-t border-white/10 pt-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="location-map-url">Link do Google Maps</Label>
+                          <Input id="location-map-url" value={form.mapUrl} onChange={(event) => setForm({ ...form, mapUrl: event.target.value })} placeholder="Opcional — link para abrir o mapa" maxLength={1000} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="location-map-embed">Link de incorporação do mapa</Label>
+                          <Input id="location-map-embed" value={form.mapEmbedUrl} onChange={(event) => setForm({ ...form, mapEmbedUrl: event.target.value })} placeholder="Opcional — link para apresentar o mapa" maxLength={1000} />
+                          <p className="text-xs leading-relaxed text-gray-500">Cole o endereço «src» obtido em Partilhar → Incorporar um mapa.</p>
+                        </div>
+                        {hasCustomMapLinks && (
+                          <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={requestAutomaticMap}>
+                            Usar mapa automático
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs leading-relaxed text-gray-400">
+                      Só precisa destas ligações se o Google Maps não localizar corretamente a entrada.
+                      Cada campo vazio usa automaticamente a morada.
+                    </p>
+                    <div className="space-y-2">
+                      <Label htmlFor="location-map-url">Link do Google Maps</Label>
+                      <Input id="location-map-url" value={form.mapUrl} onChange={(event) => setForm({ ...form, mapUrl: event.target.value })} placeholder="Opcional — gerado a partir da morada" maxLength={1000} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="location-map-embed">Link de incorporação do mapa</Label>
+                      <Input id="location-map-embed" value={form.mapEmbedUrl} onChange={(event) => setForm({ ...form, mapEmbedUrl: event.target.value })} placeholder="Opcional — https://www.google.com/maps/embed?..." maxLength={1000} />
+                      <p className="text-xs leading-relaxed text-gray-500">No Google Maps, utilize Partilhar → Incorporar um mapa e copie apenas o endereço de «src».</p>
+                    </div>
+                    {hasCustomMapLinks && (
+                      <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => setForm({ ...form, mapUrl: "", mapEmbedUrl: "" })}>
+                        Usar apenas a morada
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </details>
@@ -298,6 +377,22 @@ export function LocationsTab({ maxLocations, mode = "multiple" }: LocationsTabPr
           </Button>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={automaticMapConfirmationOpen} onOpenChange={setAutomaticMapConfirmationOpen}>
+        <AlertDialogContent className="border-white/10 bg-card text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Usar mapa automático?</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              Os dois links personalizados serão limpos. O logótipo e os restantes dados do estabelecimento não serão alterados.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/10 bg-background text-white hover:bg-white/10">
+              Manter localização personalizada
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={useAutomaticMap}>Usar mapa automático</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
