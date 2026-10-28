@@ -11,7 +11,6 @@ export type AvailabilitySocialImageInput = {
   serviceName: string;
   professionalName: string;
   slots: string[];
-  bookingLabel: string;
 };
 
 export type AvailabilitySocialRect = { x: number; y: number; width: number; height: number };
@@ -22,8 +21,6 @@ export type AvailabilitySocialImageLayout = {
   title: AvailabilitySocialRect;
   meta: AvailabilitySocialRect;
   slots: AvailabilitySocialRect;
-  linkSticker?: AvailabilitySocialRect;
-  footer: AvailabilitySocialRect;
   slotRects: AvailabilitySocialRect[];
 };
 
@@ -52,19 +49,16 @@ const FORMAT_LAYOUTS: Record<AvailabilitySocialFormat, Omit<AvailabilitySocialIm
   story: {
     safeArea: { x: 60, y: 200, width: 960, height: 1460 },
     header: { x: 110, y: 220, width: 860, height: 180 },
-    title: { x: 110, y: 420, width: 860, height: 155 },
-    meta: { x: 120, y: 590, width: 840, height: 110 },
-    slots: { x: 110, y: 720, width: 860, height: 510 },
-    linkSticker: { x: 180, y: 1260, width: 720, height: 140 },
-    footer: { x: 110, y: 1430, width: 860, height: 210 },
+    title: { x: 110, y: 420, width: 860, height: 170 },
+    meta: { x: 120, y: 610, width: 840, height: 120 },
+    slots: { x: 110, y: 760, width: 860, height: 860 },
   },
   square: {
     safeArea: { x: 50, y: 50, width: 980, height: 980 },
     header: { x: 80, y: 65, width: 920, height: 145 },
     title: { x: 85, y: 225, width: 910, height: 145 },
     meta: { x: 95, y: 390, width: 890, height: 105 },
-    slots: { x: 95, y: 515, width: 890, height: 315 },
-    footer: { x: 95, y: 855, width: 890, height: 160 },
+    slots: { x: 95, y: 515, width: 890, height: 500 },
   },
 };
 
@@ -287,8 +281,8 @@ function getSlotRects(format: AvailabilitySocialFormat, slotCount: number, regio
   const naturalWidth = (grid.width - gapX * (columns - 1)) / columns;
   const slotWidth = columns === 1 ? Math.min(naturalWidth, isStory ? 650 : 570) : naturalWidth;
   const maxHeight = isStory
-    ? (count === 1 ? 240 : count === 2 ? 190 : 138)
-    : (count === 1 ? 150 : count === 2 ? 122 : 70);
+    ? (count === 1 ? 310 : count === 2 ? 250 : count <= 4 ? 205 : count <= 6 ? 165 : 145)
+    : (count === 1 ? 230 : count === 2 ? 190 : count <= 4 ? 135 : count <= 6 ? 105 : 88);
   const slotHeight = Math.min(maxHeight, (grid.height - gapY * (rows - 1)) / rows);
   const totalHeight = slotHeight * rows + gapY * (rows - 1);
   const firstY = grid.y + (grid.height - totalHeight) / 2;
@@ -307,8 +301,7 @@ export function getAvailabilitySocialImageLayout(format: AvailabilitySocialForma
   return {
     safeArea: { ...base.safeArea }, header: { ...base.header }, title: { ...base.title }, meta: { ...base.meta },
     slots: { ...base.slots },
-    ...(base.linkSticker ? { linkSticker: { ...base.linkSticker } } : {}),
-    footer: { ...base.footer }, slotRects: getSlotRects(format, slotCount, base.slots),
+    slotRects: getSlotRects(format, slotCount, base.slots),
   };
 }
 
@@ -433,61 +426,6 @@ function drawSlots(context: CanvasRenderingContext2D, input: AvailabilitySocialI
   }
 }
 
-function drawLinkStickerPlacement(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
-  const rect = layout.linkSticker;
-  if (input.format !== "story" || !rect) return;
-  context.save();
-  roundedRect(context, rect.x, rect.y, rect.width, rect.height, 28);
-  context.fillStyle = input.template === "modern"
-    ? "rgba(141, 30, 45, 0.3)"
-    : input.template === "premium"
-      ? "rgba(240, 214, 122, 0.08)"
-      : "rgba(212, 175, 55, 0.06)";
-  context.fill();
-  context.strokeStyle = input.template === "modern" ? "rgba(247, 242, 232, 0.8)" : "rgba(240, 214, 122, 0.72)";
-  context.lineWidth = 3;
-  context.setLineDash([16, 12]);
-  context.stroke();
-  context.setLineDash([]);
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillStyle = input.template === "modern" ? COLORS.cream : COLORS.goldLight;
-  context.font = '800 27px "DM Sans", Arial, sans-serif';
-  context.fillText("ZONA PARA O STICKER «LIGAÇÃO»", rect.x + rect.width / 2, rect.y + 52);
-  context.fillStyle = "rgba(247, 242, 232, 0.72)";
-  context.font = '500 21px "DM Sans", Arial, sans-serif';
-  context.fillText("Coloca aqui o sticker no Instagram", rect.x + rect.width / 2, rect.y + 96);
-  context.restore();
-}
-
-function drawFooter(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
-  const isStory = input.format === "story";
-  const centerX = layout.footer.x + layout.footer.width / 2;
-  if (input.template === "modern") {
-    roundedRect(context, layout.footer.x + 35, layout.footer.y + 8, layout.footer.width - 70, isStory ? 145 : 100, 24);
-    context.fillStyle = COLORS.red;
-    context.fill();
-  } else {
-    context.strokeStyle = input.template === "classic" ? "rgba(212, 175, 55, 0.55)" : "rgba(240, 214, 122, 0.72)";
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(layout.footer.x + 100, layout.footer.y + 8);
-    context.lineTo(layout.footer.x + layout.footer.width - 100, layout.footer.y + 8);
-    context.stroke();
-  }
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillStyle = COLORS.cream;
-  context.font = `800 ${isStory ? 48 : 35}px "DM Sans", Arial, sans-serif`;
-  context.fillText("MARCA JÁ", centerX, layout.footer.y + (isStory ? 63 : 43));
-  context.fillStyle = COLORS.goldLight;
-  context.font = `600 ${isStory ? 32 : 27}px "DM Sans", Arial, sans-serif`;
-  context.fillText(ellipsizeText(context, input.bookingLabel, layout.footer.width - 100), centerX, layout.footer.y + (isStory ? 125 : 83));
-  context.fillStyle = "rgba(247, 242, 232, 0.72)";
-  context.font = `500 ${isStory ? 23 : 19}px "DM Sans", Arial, sans-serif`;
-  context.fillText("Horários sujeitos a disponibilidade no momento da marcação.", centerX, layout.footer.y + (isStory ? 205 : 133));
-}
-
 export function getAvailabilitySocialImageDimensions(format: AvailabilitySocialFormat) {
   return AVAILABILITY_SOCIAL_FORMATS[format];
 }
@@ -515,8 +453,6 @@ export async function renderAvailabilitySocialImage(canvas: HTMLCanvasElement, i
   await drawHeader(context, input, layout);
   drawTitleAndMeta(context, input, layout);
   drawSlots(context, input, layout);
-  drawLinkStickerPlacement(context, input, layout);
-  drawFooter(context, input, layout);
   // Fonts and the logo make drawing asynchronous. Only the newest request commits.
   if (renderEpochs.get(canvas) !== epoch) return false;
   canvas.width = dimensions.width;

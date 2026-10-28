@@ -185,6 +185,17 @@ test("admin creates branded story and square PNGs from authoritative availabilit
 });
 
 test("all visual models render atomically across both formats and representative slot counts", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalFillText = CanvasRenderingContext2D.prototype.fillText;
+    const renderedText: string[] = [];
+    Object.defineProperty(window, "__availabilitySocialCanvasText", { configurable: true, value: renderedText });
+    CanvasRenderingContext2D.prototype.fillText = function fillText(text, x, y, maxWidth) {
+      renderedText.push(String(text));
+      return maxWidth === undefined
+        ? originalFillText.call(this, text, x, y)
+        : originalFillText.call(this, text, x, y, maxWidth);
+    };
+  });
   let delayedLogoRequests = 0;
   await page.route("**/images/logo.jpg", async (route) => {
     delayedLogoRequests += 1;
@@ -243,6 +254,13 @@ test("all visual models render atomically across both formats and representative
     expect(await pngDimensions(path!)).toEqual(sample.formatKey === "story" ? { width: 1080, height: 1920 } : { width: 1080, height: 1080 });
     if (artifactDir) await download.saveAs(join(artifactDir, sample.file));
   }
+
+  const renderedText = await page.evaluate(
+    () => (window as Window & { __availabilitySocialCanvasText: string[] }).__availabilitySocialCanvasText,
+  );
+  expect(renderedText.some((value) => value.includes("MARCA JÁ"))).toBe(false);
+  expect(renderedText.some((value) => value.toUpperCase().includes("STICKER"))).toBe(false);
+  expect(renderedText.some((value) => value.includes("/booking"))).toBe(false);
 });
 
 test("empty dates, mobile preview and download fallback remain safe", async ({ page }) => {
@@ -339,6 +357,9 @@ test("Instagram preparation keeps download and canonical booking-link copy as se
   await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();
   const dialog = page.getByRole("dialog", { name: "Preparar Story para Instagram" });
   await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("está pronto para personalizar no Instagram");
+  await expect(dialog).toContainText("Posicione o sticker onde preferir");
+  await expect(dialog).not.toContainText("zona marcada");
   await expect(page.locator("canvas[aria-label='Pré-visualização Story vertical']")).toHaveAttribute("data-format", "story");
 
   const expectedBookingUrl = `${new URL(page.url()).origin}/booking`;
