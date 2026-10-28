@@ -142,6 +142,10 @@ export default function Home() {
   const selectedMapLinks = resolveLocationMapLinks(selectedLocation);
   const selectedMapKey = `${selectedLocation.id}:${selectedMapLinks.mapEmbedUrl}`;
   const canLoadLocationMap = locations !== undefined || isLocationsError;
+  const isSelectedMapReady = shopBranding.showMap
+    && Boolean(selectedMapLinks.mapEmbedUrl)
+    && mapFrame.key === selectedMapKey
+    && mapFrame.loaded;
 
   useEffect(() => {
     const container = mapContainerRef.current;
@@ -513,11 +517,12 @@ export default function Home() {
                 </span>
               ))}
             </div>}
-            {selectedMapLinks.mapUrl && (
+            {selectedMapLinks.mapUrl && !isSelectedMapReady && (
               <a
                 href={selectedMapLinks.mapUrl}
                 target="_blank"
                 rel="noreferrer"
+                data-testid="location-directions-fallback"
                 className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-primary/40 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <MapPin className="h-4 w-4" /> Obter direções no Google Maps <ExternalLink className="h-3.5 w-3.5" />

@@ -17,11 +17,15 @@ test("applies environment-specific branding without leaking production identity"
   const hideMap = process.env.VITE_HIDE_SHOP_MAP === "true";
 
   await page.goto("/");
+  const locations = await (await page.request.get("/api/locations")).json();
+  const publicAddress = locations.find((location: { isDefault?: boolean }) => location.isDefault)?.address
+    || locations[0]?.address
+    || address;
 
   await expect(page).toHaveTitle(shopName);
   await expect(page.getByText(shopName, { exact: true }).first()).toBeVisible();
   await expect(page.getByText(shortName, { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(new RegExp(address.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).first()).toBeVisible();
+  await expect(page.getByText(new RegExp(publicAddress.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).first()).toBeVisible();
   await expect(page.locator(`img[src="${logoUrl}"]`).first()).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-brand-theme", brandTheme);
 
@@ -44,10 +48,14 @@ test("applies environment-specific branding without leaking production identity"
 
   if (hideMap) {
     await expect(page.locator('iframe[src*="google.com/maps"]')).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Obter direções no Google Maps" })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole("link", { name: "Obter direções no Google Maps" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   } else {
-    await expect(page.getByRole("link", { name: "Abrir no Google Maps" })).toHaveCount(0);
     await page.getByTestId("location-map-container").scrollIntoViewIfNeeded();
     await expect(page.locator('iframe[src*="google.com/maps"]')).toBeVisible();
+    await expect(page.getByRole("link", { name: "Obter direções no Google Maps" })).toHaveCount(0);
   }
 
   const barberImages = page.locator("#team img");
