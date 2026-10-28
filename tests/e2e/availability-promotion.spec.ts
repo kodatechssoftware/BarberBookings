@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 function addDaysToDateKey(value: string, days: number) {
   const [year, month, day] = value.split("-").map(Number);
@@ -85,6 +86,8 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   const storyPath = await storyDownload.path();
   expect(storyPath).not.toBeNull();
   expect(await pngDimensions(storyPath!)).toEqual({ width: 1080, height: 1920 });
+  const previewStory = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png").split(",")[1]);
+  expect((await readFile(storyPath!)).toString("base64")).toBe(previewStory);
 
   await page.getByRole("button", { name: /Publicação quadrada/ }).click();
   const squareCanvas = page.getByLabel("Pré-visualização Publicação quadrada");
@@ -105,7 +108,71 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   await expect(page.getByLabel("Vagas disponíveis").locator("label").first()).toBeVisible();
 
   await page.getByRole("button", { name: "Atualizar vagas" }).click();
-  await expect(page.getByText("Vagas atualizadas")).toBeVisible();
+  await expect(page.getByText("Vagas atualizadas", { exact: true }).first()).toBeVisible();
+});
+
+test("all visual models render atomically across both formats and representative slot counts", async ({ page }) => {
+  let delayedLogoRequests = 0;
+  await page.route("**/images/logo.jpg", async (route) => {
+    delayedLogoRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, delayedLogoRequests === 1 ? 350 : 40));
+    await route.continue();
+  });
+  await loginAdmin(page);
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  await page.getByLabel("Data específica").fill(futureOpenDate);
+  const slotCheckboxes = page.getByLabel("Vagas disponíveis").getByRole("checkbox");
+  await expect(slotCheckboxes.nth(7)).toBeVisible();
+
+  await page.getByRole("button", { name: /Moderno/ }).click();
+  await page.getByRole("button", { name: /Premium/ }).click();
+  const canvas = page.locator("canvas[aria-label^='Pré-visualização']");
+  await expect(canvas).toHaveAttribute("data-template", "premium");
+  await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
+  const rapidPremium = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
+  await page.getByRole("button", { name: /Clássico/ }).click();
+  await expect(canvas).toHaveAttribute("data-template", "classic");
+  await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
+  await page.getByRole("button", { name: /Premium/ }).click();
+  await expect(canvas).toHaveAttribute("data-template", "premium");
+  await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
+  const stablePremium = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
+  expect(rapidPremium).toBe(stablePremium);
+
+  const samples = [
+    { template: "Clássico", templateKey: "classic", format: "Story vertical", formatKey: "story", count: 8, file: "classic-story-8.png" },
+    { template: "Moderno", templateKey: "modern", format: "Story vertical", formatKey: "story", count: 6, file: "modern-story-6.png" },
+    { template: "Premium", templateKey: "premium", format: "Story vertical", formatKey: "story", count: 1, file: "premium-story-1.png" },
+    { template: "Clássico", templateKey: "classic", format: "Publicação quadrada", formatKey: "square", count: 4, file: "classic-square-4.png" },
+    { template: "Moderno", templateKey: "modern", format: "Publicação quadrada", formatKey: "square", count: 2, file: "modern-square-2.png" },
+    { template: "Premium", templateKey: "premium", format: "Publicação quadrada", formatKey: "square", count: 8, file: "premium-square-8.png" },
+  ] as const;
+  const artifactDir = process.env.AVAILABILITY_SOCIAL_ARTIFACT_DIR;
+  if (artifactDir) await mkdir(artifactDir, { recursive: true });
+
+  for (const sample of samples) {
+    for (let index = 0; index < await slotCheckboxes.count(); index += 1) {
+      const shouldBeChecked = index < sample.count;
+      if ((await slotCheckboxes.nth(index).isChecked()) !== shouldBeChecked) await slotCheckboxes.nth(index).click();
+    }
+    await page.getByRole("button", { name: new RegExp(sample.template) }).click();
+    await page.getByRole("button", { name: new RegExp(sample.format) }).click();
+    await expect(canvas).toHaveAttribute("data-template", sample.templateKey);
+    await expect(canvas).toHaveAttribute("data-format", sample.formatKey);
+    await expect(canvas).toHaveAttribute("data-slot-count", String(sample.count));
+    await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
+    const preview = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png").split(",")[1]);
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Descarregar PNG" }).click();
+    const download = await downloadPromise;
+    const path = await download.path();
+    expect(path).not.toBeNull();
+    expect((await readFile(path!)).toString("base64")).toBe(preview);
+    expect(await pngDimensions(path!)).toEqual(sample.formatKey === "story" ? { width: 1080, height: 1920 } : { width: 1080, height: 1080 });
+    if (artifactDir) await download.saveAs(join(artifactDir, sample.file));
+  }
 });
 
 test("empty dates, mobile preview and download fallback remain safe", async ({ page }) => {
