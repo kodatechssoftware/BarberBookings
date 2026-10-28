@@ -121,6 +121,9 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   const barberTrigger = page.locator("#promotion-barber");
   await expect(barberTrigger).toContainText("Todos os barbeiros");
   await expect(page.getByLabel("Vagas disponíveis").locator("label").first()).toBeVisible();
+  const imageDescription = page.locator('[aria-live="polite"].sr-only');
+  await expect(imageDescription).not.toContainText("Todos os profissionais");
+  await expect(imageDescription).not.toContainText("· .");
 
   const canvas = page.getByLabel("Pré-visualização Story vertical");
   await expect(canvas).toHaveAttribute("width", "1080");
@@ -174,6 +177,7 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   const individualName = (await individualOption.textContent())?.trim();
   await individualOption.click();
   await expect(barberTrigger).toContainText(individualName || "");
+  await expect(imageDescription).toContainText(individualName || "");
   await expect(page.getByLabel("Vagas disponíveis").locator("label").first()).toBeVisible();
 
   await page.getByRole("button", { name: "Atualizar vagas" }).click();
@@ -362,6 +366,9 @@ test("Instagram preparation exposes a manual copy fallback without mobile overfl
   await page.setViewportSize({ width: 390, height: 844 });
   await loginAdmin(page);
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
   await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();
   const dialog = page.getByRole("dialog", { name: "Preparar Story para Instagram" });
