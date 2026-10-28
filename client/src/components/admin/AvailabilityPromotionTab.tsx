@@ -39,7 +39,7 @@ import {
   type AvailabilitySocialTemplate,
 } from "@/lib/availability-social-image";
 import { resolveLocationLogoUrl, shopBranding } from "@/lib/branding";
-import { formatPublicBookingLabel, resolvePublicBookingUrl } from "@/lib/public-booking-link";
+import { resolvePublicBookingUrl } from "@/lib/public-booking-link";
 import { queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import type { ShopLocation } from "@shared/locations";
@@ -269,8 +269,7 @@ export default function AvailabilityPromotionTab({
     serviceName: selectedService?.name || "Serviço",
     professionalName: selectedBarber?.name || "",
     slots: selectedSlots,
-    bookingLabel: formatPublicBookingLabel(publicBookingUrl) || "Marcações online",
-  }), [businessName, dateLabel, imageFormat, logoUrl, publicBookingUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title]);
+  }), [businessName, dateLabel, imageFormat, logoUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title]);
 
   useEffect(() => setLinkCopied(false), [publicBookingUrl]);
 
@@ -640,7 +639,7 @@ export default function AvailabilityPromotionTab({
           <div className="space-y-3">
             <section className="rounded-xl border border-white/10 bg-background/50 p-4">
               <p className="font-semibold text-white">1. Descarregar a imagem</p>
-              <p className="mt-1 text-sm text-gray-400">O formato Story 1080 × 1920 já inclui a zona segura para o sticker.</p>
+              <p className="mt-1 text-sm text-gray-400">O formato Story 1080 × 1920 está pronto para personalizar no Instagram.</p>
               <Button className="mt-3 w-full" variant="gold" onClick={() => void downloadInstagramStory()} disabled={isRendering || isAvailabilitySelectionPending || selectedSlots.length === 0}>
                 {storyDownloaded ? <Check className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
                 {storyDownloaded ? "Story descarregado" : "Descarregar Story PNG"}
@@ -670,7 +669,7 @@ export default function AvailabilityPromotionTab({
                 <li>Abra o Instagram e crie um novo Story.</li>
                 <li>Escolha o PNG que acabou de descarregar.</li>
                 <li>Adicione o sticker «Ligação» e cole o link copiado.</li>
-                <li>Coloque o sticker sobre a zona marcada na imagem e publique.</li>
+                <li>Posicione o sticker onde preferir e publique.</li>
               </ol>
               <Button asChild className="mt-3 w-full" variant="outline">
                 <a href="https://www.instagram.com/" target="_blank" rel="noreferrer">

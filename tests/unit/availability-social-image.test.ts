@@ -92,8 +92,7 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
   for (const format of ["story", "square"] as const) {
     for (const slotCount of [1, 2, 4, 6, 8]) {
       const layout = getAvailabilitySocialImageLayout(format, slotCount);
-      const regions = [layout.header, layout.title, layout.meta, layout.slots, layout.linkSticker, layout.footer]
-        .filter((region): region is AvailabilitySocialRect => Boolean(region));
+      const regions = [layout.header, layout.title, layout.meta, layout.slots];
 
       for (const region of regions) assert.equal(contains(layout.safeArea, region), true, `${format}: region outside safe area`);
       for (let index = 0; index < regions.length; index += 1) {
@@ -109,7 +108,11 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
           assert.equal(intersects(layout.slotRects[index], layout.slotRects[other]), false, `${format}: slot cards overlap`);
         }
       }
-      assert.equal(Boolean(layout.linkSticker), format === "story", `${format}: unexpected sticker placement region`);
+      assert.deepEqual(
+        Object.keys(layout).sort(),
+        ["header", "meta", "safeArea", "slotRects", "slots", "title"],
+        `${format}: only essential image regions should remain`,
+      );
     }
   }
 });
