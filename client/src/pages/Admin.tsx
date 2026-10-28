@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
 import { type AppointmentPaymentMethod, type AppointmentStatus, useAppointments, useUpdateAppointmentStatus } from "@/hooks/use-appointments";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Scissors, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Megaphone } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -102,6 +102,8 @@ import {
 } from "@shared/appointment-service-terms";
 import type { EffectiveAccess } from "@shared/auth";
 import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
+
+const AvailabilityPromotionTab = lazy(() => import("@/components/admin/AvailabilityPromotionTab"));
 
 type AvailabilityPeriod = { startTime: string; endTime: string };
 type AvailabilityForm = Record<number, { isWorking: boolean; periods: AvailabilityPeriod[] }>;
@@ -1636,6 +1638,7 @@ export default function Admin() {
     activeLocationId,
     (role) => role === "admin",
   );
+  const canPromoteAvailability = user?.role === "admin";
   const canOpenTeamManagement = canViewTeam || canManageTeamGlobal || canAssignTeamLocation
     || canManageTeamHours || canManageOwnHours || canManageCompensation || canManageUsers;
   const canOpenCatalogManagement = canManageCatalogGlobal || canManageCatalogLocation;
@@ -4226,6 +4229,7 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
+            {canPromoteAvailability && <TabsTrigger value="promote-availability" className={adminTabTriggerClass}><Megaphone className="w-4 h-4" /> Divulgar vagas</TabsTrigger>}
             {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Equipa</TabsTrigger>}
             {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><Scissors className="w-4 h-4" /> Serviços</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> Extras</TabsTrigger>}
@@ -4357,6 +4361,21 @@ export default function Admin() {
               getStatusClass={getStatusClass}
             />
           </TabsContent>
+
+          {canPromoteAvailability && (
+            <TabsContent value="promote-availability" className="outline-none">
+              <Suspense fallback={<div className="flex min-h-[320px] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}>
+                <AvailabilityPromotionTab
+                  location={activeLocation}
+                  barbers={activeBarbers}
+                  services={services}
+                  availabilityRows={(allAvailabilityRows as AvailabilityRow[] | undefined) ?? []}
+                  shopAvailabilityRows={(shopAvailabilityRows as ShopAvailabilityRow[] | undefined) ?? []}
+                  bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
+                />
+              </Suspense>
+            </TabsContent>
+          )}
 
           <TabsContent value="barbers" className="outline-none">
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
