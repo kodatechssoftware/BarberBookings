@@ -10,11 +10,14 @@ import {
   Share2,
 } from "lucide-react";
 import { format } from "date-fns";
+import { pt } from "date-fns/locale";
 import { Button } from "@/components/ui/button-custom";
+import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { usePublicAppointments } from "@/hooks/use-appointments";
@@ -110,8 +113,11 @@ export default function AvailabilityPromotionTab({
 }: AvailabilityPromotionTabProps) {
   const { toast } = useToast();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastAvailabilitySelection = useRef<string | null>(null);
+  const hasInitializedSlots = useRef(false);
   const [selectedDateKey, setSelectedDateKey] = useState("");
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [visibleCalendarMonth, setVisibleCalendarMonth] = useState<Date>();
+  const [validatedAvailabilitySelectionKey, setValidatedAvailabilitySelectionKey] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedBarberId, setSelectedBarberId] = useState("all");
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
@@ -126,6 +132,8 @@ export default function AvailabilityPromotionTab({
     isLoading: isLoadingBookingWindow,
     isError: isBookingWindowError,
   } = usePublicBookingWindow();
+  const tomorrowDateKey = bookingWindow ? addCalendarDays(bookingWindow.today, 1) : "";
+  const canSelectTomorrow = Boolean(bookingWindow && tomorrowDateKey <= bookingWindow.maxDate);
 
   const visibleBarbers = useMemo(
     () => (barbers ?? []).filter((barber) => barber.isVisible !== false),
@@ -139,6 +147,7 @@ export default function AvailabilityPromotionTab({
   useEffect(() => {
     if (!bookingWindow || selectedDateKey) return;
     setSelectedDateKey(bookingWindow.today);
+    setVisibleCalendarMonth(dateKeyToCalendarDate(bookingWindow.today) ?? undefined);
     setTitle("Vagas de hoje");
   }, [bookingWindow, selectedDateKey]);
 
@@ -192,13 +201,19 @@ export default function AvailabilityPromotionTab({
   const availableSlotsKey = availableSlots.join(",");
   useEffect(() => {
     if (!canQueryAvailability || appointments === undefined) return;
-    if (lastAvailabilitySelection.current !== availabilitySelectionKey) {
-      lastAvailabilitySelection.current = availabilitySelectionKey;
-      setSelectedSlots(availableSlots.slice(0, Math.min(6, MAX_SELECTED_SLOTS)));
-      return;
-    }
-    setSelectedSlots((current) => current.filter((slot) => availableSlots.includes(slot)));
+    setSelectedSlots((current) => {
+      if (!hasInitializedSlots.current && availableSlots.length > 0) {
+        hasInitializedSlots.current = true;
+        return availableSlots.slice(0, Math.min(6, MAX_SELECTED_SLOTS));
+      }
+      const valid = current.filter((slot) => availableSlots.includes(slot));
+      return valid.length === current.length && valid.every((slot, index) => slot === current[index]) ? current : valid;
+    });
+    setValidatedAvailabilitySelectionKey(availabilitySelectionKey);
   }, [appointments, availabilitySelectionKey, availableSlotsKey, canQueryAvailability]);
+
+  const isAvailabilitySelectionPending = canQueryAvailability
+    && (appointments === undefined || validatedAvailabilitySelectionKey !== availabilitySelectionKey);
 
   const dateLabel = formatPromotionDate(selectedDateKey, timeZone);
   const businessName = location?.name?.trim() || shopBranding.name;
@@ -238,11 +253,22 @@ export default function AvailabilityPromotionTab({
     if (!bookingWindow) return;
     if (kind === "today") {
       setSelectedDateKey(bookingWindow.today);
+      setVisibleCalendarMonth(dateKeyToCalendarDate(bookingWindow.today) ?? undefined);
       setTitle("Vagas de hoje");
       return;
     }
-    setSelectedDateKey(addCalendarDays(bookingWindow.today, 1));
+    if (!canSelectTomorrow) return;
+    setSelectedDateKey(tomorrowDateKey);
+    setVisibleCalendarMonth(dateKeyToCalendarDate(tomorrowDateKey) ?? undefined);
     setTitle("Vagas de amanhã");
+  };
+
+  const selectCalendarDate = (date: Date | undefined) => {
+    if (!date) return;
+    setSelectedDateKey(format(date, "yyyy-MM-dd"));
+    setVisibleCalendarMonth(date);
+    setTitle("Vagas disponíveis");
+    setIsCalendarOpen(false);
   };
 
   const toggleSlot = (slot: string) => {
@@ -323,22 +349,54 @@ export default function AvailabilityPromotionTab({
             <CardContent className="space-y-5">
               <div className="space-y-2">
                 <Label>Data</Label>
-                <div className="grid gap-2 sm:grid-cols-[auto_auto_minmax(170px,1fr)]">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-[auto_auto_minmax(190px,1fr)]">
                   <Button type="button" variant={selectedDateKey === bookingWindow?.today ? "gold" : "outline"} onClick={() => setQuickDate("today")} disabled={!bookingWindow}>Hoje</Button>
-                  <Button type="button" variant={selectedDateKey === (bookingWindow ? addCalendarDays(bookingWindow.today, 1) : "") ? "gold" : "outline"} onClick={() => setQuickDate("tomorrow")} disabled={!bookingWindow}>Amanhã</Button>
-                  <Input
-                    aria-label="Data específica"
-                    type="date"
-                    value={selectedDateKey}
-                    min={bookingWindow?.today}
-                    max={bookingWindow?.maxDate}
-                    disabled={isLoadingBookingWindow || !bookingWindow}
-                    onChange={(event) => {
-                      setSelectedDateKey(event.target.value);
-                      setTitle("Vagas disponíveis");
-                    }}
-                  />
+                  <Button type="button" variant={selectedDateKey === tomorrowDateKey ? "gold" : "outline"} onClick={() => setQuickDate("tomorrow")} disabled={!canSelectTomorrow}>Amanhã</Button>
+                  <Popover open={isCalendarOpen} onOpenChange={(open) => {
+                    setIsCalendarOpen(open);
+                    if (open && selectedDate) setVisibleCalendarMonth(selectedDate);
+                  }}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="col-span-2 justify-start sm:col-span-1"
+                        disabled={isLoadingBookingWindow || !bookingWindow}
+                        aria-label="Escolher data"
+                      >
+                        <CalendarDays className="mr-2 h-4 w-4 text-primary" /> Escolher data
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-auto max-w-[calc(100vw-2rem)] p-0">
+                      <Calendar
+                        mode="single"
+                        selected={selectedDate ?? undefined}
+                        month={visibleCalendarMonth}
+                        onMonthChange={setVisibleCalendarMonth}
+                        onSelect={selectCalendarDate}
+                        fromMonth={bookingWindow ? dateKeyToCalendarDate(bookingWindow.today) ?? undefined : undefined}
+                        toMonth={bookingWindow ? dateKeyToCalendarDate(bookingWindow.maxDate) ?? undefined : undefined}
+                        disabled={(date) => {
+                          if (!bookingWindow) return true;
+                          const key = format(date, "yyyy-MM-dd");
+                          return key < bookingWindow.today || key > bookingWindow.maxDate;
+                        }}
+                        initialFocus
+                        locale={pt}
+                        className="w-full rounded-md p-3"
+                        classNames={{
+                          day_selected: "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+                          day_today: "border border-primary/60 text-primary",
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
+                {selectedDate && (
+                  <p className="text-sm text-gray-300" aria-live="polite" data-testid="promotion-selected-date">
+                    Data selecionada: <span className="font-semibold text-primary">{capitalize(format(selectedDate, "EEEE, d 'de' MMMM 'de' yyyy", { locale: pt }))}</span>
+                  </p>
+                )}
                 {isBookingWindowError && <p className="text-sm text-red-300">Não foi possível consultar as datas disponíveis para marcação.</p>}
               </div>
 
@@ -458,17 +516,22 @@ export default function AvailabilityPromotionTab({
                 data-slot-count={selectedSlots.length}
                 className="block h-auto w-full"
               />
-              {isRendering && <div className="absolute inset-0 flex items-center justify-center bg-black/40"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}
+              {(isRendering || isAvailabilitySelectionPending) && (
+                <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 text-sm font-medium text-white">
+                  <Loader2 className="h-7 w-7 animate-spin text-primary" />
+                  {isAvailabilitySelectionPending ? "A validar vagas…" : null}
+                </div>
+              )}
             </div>
             {renderError && <p className="text-sm text-red-300">{renderError}</p>}
             <div className="sr-only" aria-live="polite">
               {imageInput.title}. {imageInput.dateLabel}. {imageInput.serviceName}. {imageInput.professionalName}. Horários: {selectedSlots.join(", ") || "nenhum selecionado"}.
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-              <Button type="button" variant="gold" onClick={downloadImage} disabled={selectedSlots.length === 0 || isRendering || Boolean(renderError)}>
+              <Button type="button" variant="gold" onClick={downloadImage} disabled={selectedSlots.length === 0 || isRendering || isAvailabilitySelectionPending || Boolean(renderError)}>
                 <Download className="mr-2 h-4 w-4" /> Descarregar PNG
               </Button>
-              <Button type="button" variant="outline" onClick={shareImage} disabled={selectedSlots.length === 0 || isRendering || Boolean(renderError)}>
+              <Button type="button" variant="outline" onClick={shareImage} disabled={selectedSlots.length === 0 || isRendering || isAvailabilitySelectionPending || Boolean(renderError)}>
                 <Share2 className="mr-2 h-4 w-4" /> Partilhar
               </Button>
             </div>
