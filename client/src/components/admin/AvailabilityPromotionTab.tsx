@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useAvailabilitySocialCustomization } from "@/hooks/use-availability-social-customization";
 import { usePublicAppointments } from "@/hooks/use-appointments";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 import { getAvailableTimeSlots, type AvailabilityRow, type ShopAvailabilityRow } from "@/lib/availability";
@@ -44,6 +45,7 @@ import { queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import type { ShopLocation } from "@shared/locations";
 import type { BookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
+import AvailabilitySocialCustomizer from "@/components/admin/AvailabilitySocialCustomizer";
 
 type PromotionBarber = {
   id: number;
@@ -156,13 +158,28 @@ export default function AvailabilityPromotionTab({
   const [selectedBarberId, setSelectedBarberId] = useState("all");
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
   const [title, setTitle] = useState("Vagas disponíveis");
-  const [template, setTemplate] = useState<AvailabilitySocialTemplate>("classic");
   const [imageFormat, setImageFormat] = useState<AvailabilitySocialFormat>("story");
   const [isRendering, setIsRendering] = useState(false);
   const [renderError, setRenderError] = useState("");
   const [isInstagramPreparationOpen, setIsInstagramPreparationOpen] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [storyDownloaded, setStoryDownloaded] = useState(false);
+  const {
+    settings: visualSettings,
+    backgroundImageUrl,
+    presets,
+    selectedPresetId,
+    isBackgroundProcessing,
+    updateSettings: updateVisualSettings,
+    importBackground,
+    removeBackground,
+    savePreset,
+    selectPreset,
+    setDefaultPreset,
+    deletePreset,
+    resetToOriginal,
+  } = useAvailabilitySocialCustomization();
+  const template = visualSettings.template;
 
   const {
     data: bookingWindow,
@@ -269,7 +286,8 @@ export default function AvailabilityPromotionTab({
     serviceName: selectedService?.name || "Serviço",
     professionalName: selectedBarber?.name || "",
     slots: selectedSlots,
-  }), [businessName, dateLabel, imageFormat, logoUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title]);
+    visual: { ...visualSettings, backgroundImageUrl },
+  }), [backgroundImageUrl, businessName, dateLabel, imageFormat, logoUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title, visualSettings]);
 
   useEffect(() => setLinkCopied(false), [publicBookingUrl]);
 
@@ -394,6 +412,27 @@ export default function AvailabilityPromotionTab({
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       toast({ title: "Não foi possível partilhar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+    }
+  };
+
+  const importCustomBackground = async (file: File) => {
+    try {
+      const result = await importBackground(file);
+      toast({
+        title: "Imagem de fundo pronta",
+        description: `Otimizada de ${(result.originalBytes / 1024 / 1024).toFixed(1)} MB para ${Math.max(1, Math.round(result.optimizedBytes / 1024))} KB.`,
+      });
+    } catch (error) {
+      toast({ title: "Não foi possível importar a imagem", description: error instanceof Error ? error.message : "Tente outra imagem.", variant: "destructive" });
+    }
+  };
+
+  const saveCustomPreset = (name: string) => {
+    try {
+      const preset = savePreset(name);
+      toast({ title: "Modelo guardado", description: `«${preset.name}» fica disponível neste navegador.` });
+    } catch (error) {
+      toast({ title: "Não foi possível guardar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
     }
   };
 
@@ -543,7 +582,7 @@ export default function AvailabilityPromotionTab({
                     const option = AVAILABILITY_SOCIAL_TEMPLATES[value];
                     const active = template === value;
                     return (
-                      <button key={value} type="button" aria-pressed={active} onClick={() => setTemplate(value)} className={cn("relative min-h-24 rounded-xl border p-3 text-left transition-all", active ? "border-primary bg-primary/10" : "border-white/10 bg-background/50 hover:border-white/30")}>
+                      <button key={value} type="button" aria-pressed={active} onClick={() => updateVisualSettings({ template: value })} className={cn("relative min-h-24 rounded-xl border p-3 text-left transition-all", active ? "border-primary bg-primary/10" : "border-white/10 bg-background/50 hover:border-white/30")}>
                         {active && <Check className="absolute right-3 top-3 h-4 w-4 text-primary" />}
                         <span className="block font-semibold text-white">{option.label}</span>
                         <span className="mt-1 block text-xs text-gray-400">{option.description}</span>
@@ -568,6 +607,21 @@ export default function AvailabilityPromotionTab({
                   })}
                 </div>
               </fieldset>
+
+              <AvailabilitySocialCustomizer
+                settings={visualSettings}
+                presets={presets}
+                selectedPresetId={selectedPresetId}
+                isBackgroundProcessing={isBackgroundProcessing}
+                onChange={updateVisualSettings}
+                onImportBackground={importCustomBackground}
+                onRemoveBackground={removeBackground}
+                onSavePreset={saveCustomPreset}
+                onSelectPreset={selectPreset}
+                onSetDefaultPreset={setDefaultPreset}
+                onDeletePreset={deletePreset}
+                onReset={resetToOriginal}
+              />
             </CardContent>
           </Card>
         </div>
@@ -585,6 +639,8 @@ export default function AvailabilityPromotionTab({
                 data-format={imageFormat}
                 data-template={template}
                 data-slot-count={selectedSlots.length}
+                data-schedule-layout={visualSettings.scheduleLayout}
+                data-custom-background={Boolean(visualSettings.backgroundImageId)}
                 className="block h-auto w-full"
               />
               {(isRendering || isAvailabilitySelectionPending) && (

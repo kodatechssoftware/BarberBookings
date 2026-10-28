@@ -1,5 +1,19 @@
 export type AvailabilitySocialFormat = "story" | "square";
 export type AvailabilitySocialTemplate = "classic" | "modern" | "premium";
+export type AvailabilitySocialScheduleLayout = "balanced" | "compact" | "stacked";
+
+export type AvailabilitySocialVisualSettings = {
+  template: AvailabilitySocialTemplate;
+  accentColor: string;
+  secondaryColor: string;
+  overlayOpacity: number;
+  scheduleLayout: AvailabilitySocialScheduleLayout;
+  backgroundImageId: string | null;
+  backgroundImageName: string | null;
+  backgroundPositionX: number;
+  backgroundPositionY: number;
+  backgroundZoom: number;
+};
 
 export type AvailabilitySocialImageInput = {
   format: AvailabilitySocialFormat;
@@ -11,6 +25,7 @@ export type AvailabilitySocialImageInput = {
   serviceName: string;
   professionalName: string;
   slots: string[];
+  visual?: AvailabilitySocialVisualSettings & { backgroundImageUrl?: string };
 };
 
 export type AvailabilitySocialRect = { x: number; y: number; width: number; height: number };
@@ -44,6 +59,31 @@ const COLORS = {
   muted: "#C8C1B3",
   red: "#8D1E2D",
 };
+
+type AvailabilitySocialPalette = {
+  accent: string;
+  secondary: string;
+};
+
+function safeHexColor(value: string | undefined, fallback: string) {
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function colorLuminance(color: string) {
+  const channels = [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16) / 255)
+    .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function getPalette(input: AvailabilitySocialImageInput): AvailabilitySocialPalette {
+  const requestedAccent = safeHexColor(input.visual?.accentColor, COLORS.gold);
+  return {
+    // Accent copy is drawn over dark surfaces. Fall back rather than allowing an
+    // imported palette to make dates and labels unreadable.
+    accent: colorLuminance(requestedAccent) >= 0.32 ? requestedAccent : COLORS.gold,
+    secondary: safeHexColor(input.visual?.secondaryColor, COLORS.red),
+  };
+}
 
 const FORMAT_LAYOUTS: Record<AvailabilitySocialFormat, Omit<AvailabilitySocialImageLayout, "slotRects">> = {
   story: {
@@ -170,6 +210,7 @@ async function drawLogo(
   centerY: number,
   size: number,
   fallbackName: string,
+  accentColor: string,
 ) {
   context.save();
   context.beginPath();
@@ -193,7 +234,7 @@ async function drawLogo(
   }
   context.restore();
   context.save();
-  context.strokeStyle = COLORS.gold;
+  context.strokeStyle = accentColor;
   context.lineWidth = Math.max(4, size * 0.04);
   context.beginPath();
   context.arc(centerX, centerY, size / 2 + context.lineWidth / 2, 0, Math.PI * 2);
@@ -211,10 +252,10 @@ function drawNoisePattern(context: CanvasRenderingContext2D, width: number, heig
   context.restore();
 }
 
-function drawClassicBackground(context: CanvasRenderingContext2D, width: number, height: number) {
+function drawClassicBackground(context: CanvasRenderingContext2D, width: number, height: number, palette: AvailabilitySocialPalette) {
   context.fillStyle = COLORS.ink;
   context.fillRect(0, 0, width, height);
-  context.strokeStyle = COLORS.gold;
+  context.strokeStyle = palette.accent;
   context.lineWidth = 4;
   context.strokeRect(42, 42, width - 84, height - 84);
   context.strokeStyle = "rgba(212, 175, 55, 0.35)";
@@ -223,14 +264,14 @@ function drawClassicBackground(context: CanvasRenderingContext2D, width: number,
   drawNoisePattern(context, width, height);
 }
 
-function drawModernBackground(context: CanvasRenderingContext2D, width: number, height: number) {
+function drawModernBackground(context: CanvasRenderingContext2D, width: number, height: number, palette: AvailabilitySocialPalette) {
   const gradient = context.createLinearGradient(0, 0, width, height);
   gradient.addColorStop(0, "#080808");
   gradient.addColorStop(0.56, "#171717");
   gradient.addColorStop(1, "#241015");
   context.fillStyle = gradient;
   context.fillRect(0, 0, width, height);
-  context.fillStyle = COLORS.red;
+  context.fillStyle = palette.secondary;
   context.beginPath();
   context.moveTo(width * 0.7, 0);
   context.lineTo(width, 0);
@@ -263,7 +304,70 @@ function drawPremiumBackground(context: CanvasRenderingContext2D, width: number,
   drawNoisePattern(context, width, height);
 }
 
-function getSlotRects(format: AvailabilitySocialFormat, slotCount: number, region: AvailabilitySocialRect) {
+async function drawImportedBackground(
+  context: CanvasRenderingContext2D,
+  input: AvailabilitySocialImageInput,
+  width: number,
+  height: number,
+) {
+  const source = input.visual?.backgroundImageUrl;
+  if (!source) return;
+  const image = await loadImage(source);
+  const zoom = Math.min(1.8, Math.max(1, input.visual?.backgroundZoom ?? 1));
+  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight) * zoom;
+  const renderedWidth = image.naturalWidth * scale;
+  const renderedHeight = image.naturalHeight * scale;
+  const positionX = Math.min(100, Math.max(0, input.visual?.backgroundPositionX ?? 50)) / 100;
+  const positionY = Math.min(100, Math.max(0, input.visual?.backgroundPositionY ?? 50)) / 100;
+  const x = -(renderedWidth - width) * positionX;
+  const y = -(renderedHeight - height) * positionY;
+  context.drawImage(image, x, y, renderedWidth, renderedHeight);
+  context.fillStyle = `rgba(0, 0, 0, ${Math.min(0.85, Math.max(0.45, input.visual?.overlayOpacity ?? 0.62))})`;
+  context.fillRect(0, 0, width, height);
+}
+
+function drawImportedBackgroundDecoration(
+  context: CanvasRenderingContext2D,
+  input: AvailabilitySocialImageInput,
+  width: number,
+  height: number,
+  palette: AvailabilitySocialPalette,
+) {
+  if (!input.visual?.backgroundImageUrl) return;
+  if (input.template === "classic") {
+    context.strokeStyle = palette.accent;
+    context.lineWidth = 4;
+    context.strokeRect(42, 42, width - 84, height - 84);
+    context.globalAlpha = 0.45;
+    context.lineWidth = 1;
+    context.strokeRect(60, 60, width - 120, height - 120);
+    context.globalAlpha = 1;
+    return;
+  }
+  if (input.template === "modern") {
+    context.fillStyle = `${palette.secondary}66`;
+    context.beginPath();
+    context.moveTo(width * 0.73, 0);
+    context.lineTo(width, 0);
+    context.lineTo(width, height * 0.38);
+    context.closePath();
+    context.fill();
+    return;
+  }
+  context.strokeStyle = `${palette.accent}66`;
+  context.lineWidth = 2;
+  for (let inset = 44; inset <= 76; inset += 16) {
+    roundedRect(context, inset, inset, width - inset * 2, height - inset * 2, 28);
+    context.stroke();
+  }
+}
+
+function getSlotRects(
+  format: AvailabilitySocialFormat,
+  slotCount: number,
+  region: AvailabilitySocialRect,
+  scheduleLayout: AvailabilitySocialScheduleLayout,
+) {
   const count = Math.max(0, Math.min(8, slotCount));
   if (count === 0) return [];
   const isStory = format === "story";
@@ -274,7 +378,13 @@ function getSlotRects(format: AvailabilitySocialFormat, slotCount: number, regio
     width: region.width - (isStory ? 36 : 24),
     height: region.height - labelSpace,
   };
-  const columns = count === 1 ? 1 : 2;
+  const columns = count === 1
+    ? 1
+    : scheduleLayout === "stacked"
+      ? (count <= 4 ? 1 : 2)
+      : scheduleLayout === "compact"
+        ? (count <= 3 ? count : count <= 6 ? 3 : 4)
+        : 2;
   const rows = Math.ceil(count / columns);
   const gapX = isStory ? 28 : 20;
   const gapY = isStory ? 26 : 14;
@@ -296,12 +406,16 @@ function getSlotRects(format: AvailabilitySocialFormat, slotCount: number, regio
   });
 }
 
-export function getAvailabilitySocialImageLayout(format: AvailabilitySocialFormat, slotCount: number): AvailabilitySocialImageLayout {
+export function getAvailabilitySocialImageLayout(
+  format: AvailabilitySocialFormat,
+  slotCount: number,
+  scheduleLayout: AvailabilitySocialScheduleLayout = "balanced",
+): AvailabilitySocialImageLayout {
   const base = FORMAT_LAYOUTS[format];
   return {
     safeArea: { ...base.safeArea }, header: { ...base.header }, title: { ...base.title }, meta: { ...base.meta },
     slots: { ...base.slots },
-    slotRects: getSlotRects(format, slotCount, base.slots),
+    slotRects: getSlotRects(format, slotCount, base.slots, scheduleLayout),
   };
 }
 
@@ -311,14 +425,19 @@ export function formatAvailabilitySocialServiceLine(serviceName: string, profess
   return professional ? `${service} · ${professional}` : service;
 }
 
-function drawHeader(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+function drawHeader(
+  context: CanvasRenderingContext2D,
+  input: AvailabilitySocialImageInput,
+  layout: AvailabilitySocialImageLayout,
+  palette: AvailabilitySocialPalette,
+) {
   const isStory = input.format === "story";
   const modern = input.template === "modern";
   const logoSize = modern ? (isStory ? 128 : 88) : (isStory ? 125 : 98);
   const logoX = modern ? layout.header.x + logoSize / 2 + 8 : layout.header.x + layout.header.width / 2;
   const logoY = modern ? layout.header.y + layout.header.height / 2 : layout.header.y + logoSize / 2 + 4;
-  return drawLogo(context, input.logoUrl, logoX, logoY, logoSize, input.businessName).then(() => {
-    context.fillStyle = modern ? COLORS.cream : COLORS.goldLight;
+  return drawLogo(context, input.logoUrl, logoX, logoY, logoSize, input.businessName, palette.accent).then(() => {
+    context.fillStyle = modern ? COLORS.cream : palette.accent;
     if (modern) {
       context.font = `800 ${isStory ? 31 : 24}px "DM Sans", Arial, sans-serif`;
       drawWrappedTextInRect(context, input.businessName.toUpperCase(), {
@@ -335,7 +454,12 @@ function drawHeader(context: CanvasRenderingContext2D, input: AvailabilitySocial
   });
 }
 
-function drawTitleAndMeta(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+function drawTitleAndMeta(
+  context: CanvasRenderingContext2D,
+  input: AvailabilitySocialImageInput,
+  layout: AvailabilitySocialImageLayout,
+  palette: AvailabilitySocialPalette,
+) {
   const isStory = input.format === "story";
   const modern = input.template === "modern";
   context.fillStyle = COLORS.cream;
@@ -343,7 +467,7 @@ function drawTitleAndMeta(context: CanvasRenderingContext2D, input: Availability
   drawWrappedTextInRect(context, input.title, layout.title, isStory ? 88 : 62, 2, modern ? "left" : "center");
   if (input.template === "premium") {
     const centerX = layout.meta.x + layout.meta.width / 2;
-    context.strokeStyle = "rgba(240, 214, 122, 0.55)";
+    context.strokeStyle = `${palette.accent}8C`;
     context.lineWidth = 2;
     context.beginPath();
     context.moveTo(centerX - (isStory ? 310 : 330), layout.meta.y + 4);
@@ -351,7 +475,7 @@ function drawTitleAndMeta(context: CanvasRenderingContext2D, input: Availability
     context.moveTo(centerX + (isStory ? 80 : 70), layout.meta.y + 4);
     context.lineTo(centerX + (isStory ? 310 : 330), layout.meta.y + 4);
     context.stroke();
-    context.fillStyle = COLORS.gold;
+    context.fillStyle = palette.accent;
     context.beginPath();
     context.arc(centerX, layout.meta.y + 4, 5, 0, Math.PI * 2);
     context.fill();
@@ -359,7 +483,7 @@ function drawTitleAndMeta(context: CanvasRenderingContext2D, input: Availability
   const textX = modern ? layout.meta.x : layout.meta.x + layout.meta.width / 2;
   context.textAlign = modern ? "left" : "center";
   context.textBaseline = "middle";
-  context.fillStyle = COLORS.goldLight;
+  context.fillStyle = palette.accent;
   context.font = `800 ${isStory ? 32 : 25}px "DM Sans", Arial, sans-serif`;
   context.fillText(ellipsizeText(context, input.dateLabel.toUpperCase(), layout.meta.width), textX, layout.meta.y + (isStory ? 40 : 30));
   context.fillStyle = "rgba(247, 242, 232, 0.82)";
@@ -371,13 +495,18 @@ function drawTitleAndMeta(context: CanvasRenderingContext2D, input: Availability
   );
 }
 
-function drawSlots(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+function drawSlots(
+  context: CanvasRenderingContext2D,
+  input: AvailabilitySocialImageInput,
+  layout: AvailabilitySocialImageLayout,
+  palette: AvailabilitySocialPalette,
+) {
   const { width } = AVAILABILITY_SOCIAL_FORMATS[input.format];
   const isStory = input.format === "story";
   const slots = input.slots.slice(0, 8);
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillStyle = input.template === "modern" ? COLORS.cream : COLORS.goldLight;
+  context.fillStyle = input.template === "modern" ? COLORS.cream : palette.accent;
   context.font = `800 ${isStory ? 24 : 19}px "DM Sans", Arial, sans-serif`;
   drawTrackingText(context, slots.length === 1 ? "HORÁRIO EM DESTAQUE" : "HORÁRIOS DISPONÍVEIS", width / 2, layout.slots.y + (isStory ? 28 : 20), isStory ? 3.2 : 2.4);
   if (slots.length === 0) {
@@ -392,27 +521,31 @@ function drawSlots(context: CanvasRenderingContext2D, input: AvailabilitySocialI
     roundedRect(context, rect.x, rect.y, rect.width, rect.height, input.template === "modern" ? 20 : rect.height / 2);
     if (input.template === "classic") {
       context.fillStyle = "rgba(255,255,255,0.025)";
-      context.strokeStyle = COLORS.gold;
+      context.strokeStyle = palette.accent;
       context.lineWidth = 3;
       context.fill(); context.stroke();
     } else if (input.template === "modern") {
-      context.fillStyle = index % 2 === 0 ? COLORS.cream : COLORS.gold;
+      context.fillStyle = index % 2 === 0 ? COLORS.cream : palette.accent;
       context.fill();
       context.fillStyle = "rgba(0,0,0,0.08)";
       context.fillRect(rect.x, rect.y + rect.height - 7, rect.width, 7);
     } else {
       const gradient = context.createLinearGradient(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
-      gradient.addColorStop(0, "rgba(240, 214, 122, 0.22)");
+      gradient.addColorStop(0, `${palette.accent}38`);
       gradient.addColorStop(1, "rgba(255,255,255,0.035)");
       context.fillStyle = gradient;
-      context.strokeStyle = "rgba(240, 214, 122, 0.68)";
+      context.strokeStyle = `${palette.accent}AD`;
       context.lineWidth = 2;
       context.fill(); context.stroke();
     }
     context.fillStyle = input.template === "modern" ? COLORS.ink : COLORS.cream;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.font = `800 ${Math.min(isStory ? 72 : 48, Math.round(rect.height * (isStory ? 0.52 : 0.64)))}px "DM Sans", Arial, sans-serif`;
+    context.font = `800 ${Math.min(
+      isStory ? 72 : 48,
+      Math.round(rect.height * (isStory ? 0.52 : 0.64)),
+      Math.round(rect.width / 3.25),
+    )}px "DM Sans", Arial, sans-serif`;
     context.fillText(slot, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
     context.restore();
   });
@@ -446,13 +579,16 @@ export async function renderAvailabilitySocialImage(canvas: HTMLCanvasElement, i
   // Intrinsic dimensions are the final export pixels. CSS alone scales the preview.
   await ensureCanvasFonts();
   context.clearRect(0, 0, dimensions.width, dimensions.height);
-  if (input.template === "classic") drawClassicBackground(context, dimensions.width, dimensions.height);
-  if (input.template === "modern") drawModernBackground(context, dimensions.width, dimensions.height);
+  const palette = getPalette(input);
+  if (input.template === "classic") drawClassicBackground(context, dimensions.width, dimensions.height, palette);
+  if (input.template === "modern") drawModernBackground(context, dimensions.width, dimensions.height, palette);
   if (input.template === "premium") drawPremiumBackground(context, dimensions.width, dimensions.height);
-  const layout = getAvailabilitySocialImageLayout(input.format, input.slots.length);
-  await drawHeader(context, input, layout);
-  drawTitleAndMeta(context, input, layout);
-  drawSlots(context, input, layout);
+  await drawImportedBackground(context, input, dimensions.width, dimensions.height);
+  drawImportedBackgroundDecoration(context, input, dimensions.width, dimensions.height, palette);
+  const layout = getAvailabilitySocialImageLayout(input.format, input.slots.length, input.visual?.scheduleLayout);
+  await drawHeader(context, input, layout, palette);
+  drawTitleAndMeta(context, input, layout, palette);
+  drawSlots(context, input, layout, palette);
   // Fonts and the logo make drawing asynchronous. Only the newest request commits.
   if (renderEpochs.get(canvas) !== epoch) return false;
   canvas.width = dimensions.width;

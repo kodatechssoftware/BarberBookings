@@ -9,6 +9,10 @@ import {
   type AvailabilitySocialRect,
 } from "../../client/src/lib/availability-social-image";
 import { formatPublicBookingLabel, resolvePublicBookingUrl } from "../../client/src/lib/public-booking-link";
+import {
+  createDefaultAvailabilitySocialSettings,
+  normalizeAvailabilitySocialSettings,
+} from "../../client/src/lib/availability-social-presets";
 
 const barbers = [
   { id: 1, serviceIds: [10] },
@@ -90,8 +94,9 @@ function intersects(first: AvailabilitySocialRect, second: AvailabilitySocialRec
 
 test("story and square layouts keep content regions and 1/2/4/6/8 slots separated", () => {
   for (const format of ["story", "square"] as const) {
-    for (const slotCount of [1, 2, 4, 6, 8]) {
-      const layout = getAvailabilitySocialImageLayout(format, slotCount);
+    for (const scheduleLayout of ["balanced", "compact", "stacked"] as const) {
+      for (const slotCount of [1, 2, 4, 6, 8]) {
+      const layout = getAvailabilitySocialImageLayout(format, slotCount, scheduleLayout);
       const regions = [layout.header, layout.title, layout.meta, layout.slots];
 
       for (const region of regions) assert.equal(contains(layout.safeArea, region), true, `${format}: region outside safe area`);
@@ -113,8 +118,41 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
         ["header", "meta", "safeArea", "slotRects", "slots", "title"],
         `${format}: only essential image regions should remain`,
       );
+      }
     }
   }
+});
+
+test("saved visual settings are bounded and reject unsafe persisted values", () => {
+  const defaults = createDefaultAvailabilitySocialSettings("premium");
+  assert.equal(defaults.template, "premium");
+  assert.equal(defaults.backgroundImageId, null);
+  assert.deepEqual(normalizeAvailabilitySocialSettings({
+    template: "modern",
+    accentColor: "#abcdef",
+    secondaryColor: "#123456",
+    overlayOpacity: 4,
+    scheduleLayout: "compact",
+    backgroundImageId: "asset-1",
+    backgroundImageName: "photo.jpg",
+    backgroundPositionX: -10,
+    backgroundPositionY: 110,
+    backgroundZoom: 9,
+  }), {
+    template: "modern",
+    accentColor: "#ABCDEF",
+    secondaryColor: "#123456",
+    overlayOpacity: 0.85,
+    scheduleLayout: "compact",
+    backgroundImageId: "asset-1",
+    backgroundImageName: "photo.jpg",
+    backgroundPositionX: 0,
+    backgroundPositionY: 100,
+    backgroundZoom: 1.8,
+  });
+  const invalid = normalizeAvailabilitySocialSettings({ accentColor: "javascript:alert(1)", scheduleLayout: "free" });
+  assert.equal(invalid.accentColor, "#D4AF37");
+  assert.equal(invalid.scheduleLayout, "balanced");
 });
 
 test("promotion availability respects service duration and never announces a slot that does not fit", () => {
