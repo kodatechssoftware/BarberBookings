@@ -1948,6 +1948,7 @@ export async function registerRoutes(
   app.get("/api/multi-location/config", (_req, res) => {
     res.json({
       ...MULTI_LOCATION_CONFIG,
+      publicUrl: getPublicBaseUrl(),
       bookingSlotIntervalMinutes,
       recurringExpensesEnabled,
       ...(SINGLE_LOCATION_ADMIN_ENABLED ? { singleLocationManagementEnabled: true } : {}),

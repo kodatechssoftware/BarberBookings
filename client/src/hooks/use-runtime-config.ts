@@ -5,6 +5,7 @@ import type { BookingSlotIntervalMinutes } from "@shared/booking-slot-interval";
 export type PublicRuntimeConfig = {
   enabled: boolean;
   maxLocations: number;
+  publicUrl?: string;
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   recurringExpensesEnabled: boolean;
   singleLocationManagementEnabled?: boolean;

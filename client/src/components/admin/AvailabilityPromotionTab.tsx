@@ -3,8 +3,11 @@ import {
   AlertCircle,
   CalendarDays,
   Check,
+  Copy,
   Download,
+  ExternalLink,
   Image as ImageIcon,
+  Instagram,
   Loader2,
   RefreshCw,
   Share2,
@@ -15,6 +18,7 @@ import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -34,6 +38,7 @@ import {
   type AvailabilitySocialTemplate,
 } from "@/lib/availability-social-image";
 import { resolveLocationLogoUrl, shopBranding } from "@/lib/branding";
+import { formatPublicBookingLabel, resolvePublicBookingUrl } from "@/lib/public-booking-link";
 import { queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import type { ShopLocation } from "@shared/locations";
@@ -56,6 +61,7 @@ type PromotionService = {
 
 type AvailabilityPromotionTabProps = {
   location?: ShopLocation;
+  publicBaseUrl?: string;
   barbers?: PromotionBarber[];
   services?: PromotionService[];
   availabilityRows: AvailabilityRow[];
@@ -103,8 +109,34 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+async function copyTextWithFallback(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall through to the selection-based browser fallback.
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+  }
+}
+
 export default function AvailabilityPromotionTab({
   location,
+  publicBaseUrl,
   barbers,
   services,
   availabilityRows,
@@ -113,6 +145,7 @@ export default function AvailabilityPromotionTab({
 }: AvailabilityPromotionTabProps) {
   const { toast } = useToast();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bookingLinkRef = useRef<HTMLInputElement>(null);
   const hasInitializedSlots = useRef(false);
   const [selectedDateKey, setSelectedDateKey] = useState("");
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -126,6 +159,9 @@ export default function AvailabilityPromotionTab({
   const [imageFormat, setImageFormat] = useState<AvailabilitySocialFormat>("story");
   const [isRendering, setIsRendering] = useState(false);
   const [renderError, setRenderError] = useState("");
+  const [isInstagramPreparationOpen, setIsInstagramPreparationOpen] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [storyDownloaded, setStoryDownloaded] = useState(false);
 
   const {
     data: bookingWindow,
@@ -218,6 +254,10 @@ export default function AvailabilityPromotionTab({
   const dateLabel = formatPromotionDate(selectedDateKey, timeZone);
   const businessName = location?.name?.trim() || shopBranding.name;
   const logoUrl = resolveLocationLogoUrl(location?.logoUrl);
+  const publicBookingUrl = useMemo(
+    () => resolvePublicBookingUrl(publicBaseUrl, typeof window === "undefined" ? "" : window.location.origin),
+    [publicBaseUrl],
+  );
   const imageInput = useMemo<AvailabilitySocialImageInput>(() => ({
     format: imageFormat,
     template,
@@ -228,8 +268,10 @@ export default function AvailabilityPromotionTab({
     serviceName: selectedService?.name || "Serviço",
     professionalName: selectedBarber?.name || "Todos os profissionais",
     slots: selectedSlots,
-    bookingLabel: typeof window === "undefined" ? "Marcações online" : window.location.host,
-  }), [businessName, dateLabel, imageFormat, logoUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title]);
+    bookingLabel: formatPublicBookingLabel(publicBookingUrl) || "Marcações online",
+  }), [businessName, dateLabel, imageFormat, logoUrl, publicBookingUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title]);
+
+  useEffect(() => setLinkCopied(false), [publicBookingUrl]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -305,9 +347,38 @@ export default function AvailabilityPromotionTab({
     try {
       downloadBlob(await getPng(), fileName);
       toast({ title: "Imagem descarregada", description: "O PNG está pronto para publicar." });
+      return true;
     } catch (error) {
       toast({ title: "Não foi possível descarregar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+      return false;
     }
+  };
+
+  const copyBookingLink = async () => {
+    const copied = Boolean(publicBookingUrl) && await copyTextWithFallback(publicBookingUrl);
+    setLinkCopied(copied);
+    if (copied) {
+      toast({ title: "Link copiado", description: "Cole-o no sticker «Ligação» do Instagram." });
+      return;
+    }
+    bookingLinkRef.current?.focus();
+    bookingLinkRef.current?.select();
+    toast({
+      title: "Copie o link manualmente",
+      description: "O navegador bloqueou a cópia automática. O link ficou selecionado.",
+      variant: "destructive",
+    });
+  };
+
+  const prepareInstagramStory = () => {
+    setImageFormat("story");
+    setLinkCopied(false);
+    setStoryDownloaded(false);
+    setIsInstagramPreparationOpen(true);
+  };
+
+  const downloadInstagramStory = async () => {
+    setStoryDownloaded(await downloadImage());
   };
 
   const shareImage = async () => {
@@ -527,6 +598,16 @@ export default function AvailabilityPromotionTab({
             <div className="sr-only" aria-live="polite">
               {imageInput.title}. {imageInput.dateLabel}. {imageInput.serviceName}. {imageInput.professionalName}. Horários: {selectedSlots.join(", ") || "nenhum selecionado"}.
             </div>
+            <Button
+              type="button"
+              variant="gold"
+              size="lg"
+              className="w-full"
+              onClick={prepareInstagramStory}
+              disabled={selectedSlots.length === 0 || isAvailabilitySelectionPending || Boolean(renderError)}
+            >
+              <Instagram className="mr-2 h-5 w-5" /> Preparar Story para Instagram
+            </Button>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
               <Button type="button" variant="gold" onClick={downloadImage} disabled={selectedSlots.length === 0 || isRendering || isAvailabilitySelectionPending || Boolean(renderError)}>
                 <Download className="mr-2 h-4 w-4" /> Descarregar PNG
@@ -535,12 +616,70 @@ export default function AvailabilityPromotionTab({
                 <Share2 className="mr-2 h-4 w-4" /> Partilhar
               </Button>
             </div>
+            <Button type="button" variant="outline" className="w-full" onClick={() => void copyBookingLink()} disabled={!publicBookingUrl}>
+              {linkCopied ? <Check className="mr-2 h-4 w-4 text-emerald-400" /> : <Copy className="mr-2 h-4 w-4" />}
+              {linkCopied ? "Link copiado" : "Copiar link de marcação"}
+            </Button>
             <p className="text-xs leading-relaxed text-gray-500">
               A partilha nativa depende do dispositivo. Quando não estiver disponível, a imagem é descarregada. A publicação nas redes sociais continua a ser manual.
             </p>
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={isInstagramPreparationOpen} onOpenChange={setIsInstagramPreparationOpen}>
+        <DialogContent mobileViewportAware className="max-w-xl overflow-y-auto border-white/10 bg-card text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl"><Instagram className="h-5 w-5 text-primary" /> Preparar Story para Instagram</DialogTitle>
+            <DialogDescription className="text-left text-gray-400">
+              Faça cada passo separadamente. O Instagram não permite adicionar automaticamente o link ao PNG.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <section className="rounded-xl border border-white/10 bg-background/50 p-4">
+              <p className="font-semibold text-white">1. Descarregar a imagem</p>
+              <p className="mt-1 text-sm text-gray-400">O formato Story 1080 × 1920 já inclui a zona segura para o sticker.</p>
+              <Button className="mt-3 w-full" variant="gold" onClick={() => void downloadInstagramStory()} disabled={isRendering || isAvailabilitySelectionPending || selectedSlots.length === 0}>
+                {storyDownloaded ? <Check className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
+                {storyDownloaded ? "Story descarregado" : "Descarregar Story PNG"}
+              </Button>
+            </section>
+
+            <section className="rounded-xl border border-white/10 bg-background/50 p-4">
+              <p className="font-semibold text-white">2. Copiar o link de marcação</p>
+              <p className="mt-1 text-sm text-gray-400">Este é o endereço público que os clientes devem abrir.</p>
+              <Input
+                ref={bookingLinkRef}
+                aria-label="Link público de marcação"
+                className="mt-3 text-sm"
+                readOnly
+                value={publicBookingUrl}
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <Button className="mt-3 w-full" variant="outline" onClick={() => void copyBookingLink()} disabled={!publicBookingUrl}>
+                {linkCopied ? <Check className="mr-2 h-4 w-4 text-emerald-400" /> : <Copy className="mr-2 h-4 w-4" />}
+                {linkCopied ? "Link copiado" : "Copiar link de marcação"}
+              </Button>
+            </section>
+
+            <section className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+              <p className="font-semibold text-white">3. Publicar no Instagram</p>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-relaxed text-gray-300">
+                <li>Abra o Instagram e crie um novo Story.</li>
+                <li>Escolha o PNG que acabou de descarregar.</li>
+                <li>Adicione o sticker «Ligação» e cole o link copiado.</li>
+                <li>Coloque o sticker sobre a zona marcada na imagem e publique.</li>
+              </ol>
+              <Button asChild className="mt-3 w-full" variant="outline">
+                <a href="https://www.instagram.com/" target="_blank" rel="noreferrer">
+                  <ExternalLink className="mr-2 h-4 w-4" /> Abrir Instagram
+                </a>
+              </Button>
+            </section>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

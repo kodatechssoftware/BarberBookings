@@ -21,6 +21,7 @@ test.describe("configuração multi-localização", () => {
     expect(await response.json()).toEqual({
       enabled: false,
       maxLocations: 1,
+      publicUrl: new URL(response.url()).origin,
       bookingSlotIntervalMinutes: 30,
       recurringExpensesEnabled: false,
       singleLocationManagementEnabled: true,
