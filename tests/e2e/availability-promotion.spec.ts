@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -16,6 +16,79 @@ function nextDateMatching(value: string, predicate: (date: Date) => boolean) {
     if (predicate(new Date(year, month - 1, day, 12, 0, 0, 0))) return candidate;
   }
   throw new Error("No matching date in test range");
+}
+
+function calendarDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day, 12, 0, 0, 0);
+}
+
+function formatCalendarMonth(value: string) {
+  return new Intl.DateTimeFormat("pt-PT", { month: "long", year: "numeric" })
+    .format(calendarDate(value))
+    .replace(" de ", " ");
+}
+
+function calendarDay(calendar: Locator, value: string, enabled = true) {
+  const dayNumber = String(Number(value.slice(-2)));
+  return calendar
+    .locator(`button[role="gridcell"]:not(.day-outside)${enabled ? ":not([disabled])" : "[disabled]"}`)
+    .filter({ hasText: new RegExp(`^${dayNumber}$`) });
+}
+
+async function showCalendarMonth(calendar: Locator, value: string) {
+  const targetDate = calendarDate(value);
+  const targetIndex = targetDate.getFullYear() * 12 + targetDate.getMonth();
+  const monthNames = Array.from({ length: 12 }, (_, month) =>
+    new Intl.DateTimeFormat("pt-PT", { month: "long" }).format(new Date(2026, month, 1)),
+  );
+  for (let attempts = 0; attempts < 24; attempts += 1) {
+    const label = (await calendar.locator('[role="presentation"]').first().textContent())?.trim().toLocaleLowerCase("pt-PT") ?? "";
+    const year = Number(label.match(/\d{4}/)?.[0]);
+    const month = monthNames.findIndex((name) => label.startsWith(name));
+    if (!Number.isFinite(year) || month < 0) throw new Error(`Unrecognized calendar month: ${label}`);
+    const currentIndex = year * 12 + month;
+    if (currentIndex === targetIndex) return;
+    const navigation = calendar.getByRole("button", { name: currentIndex < targetIndex ? /next month/i : /previous month/i });
+    if (await navigation.isDisabled()) {
+      throw new Error(`Calendar navigation is disabled: ${label} -> ${value} (${currentIndex} -> ${targetIndex})`);
+    }
+    await navigation.click();
+  }
+  throw new Error(`Could not navigate the calendar to ${value}`);
+}
+
+async function selectPromotionDate(page: Page, value: string) {
+  await page.getByRole("button", { name: "Escolher data" }).click();
+  const calendar = page.locator(".rdp").last();
+  await expect(calendar).toBeVisible();
+  await showCalendarMonth(calendar, value);
+  const day = calendarDay(calendar, value);
+  await expect(day).toBeVisible();
+  await day.click();
+  await expect(calendar).toBeHidden();
+  await expect(page.getByTestId("promotion-selected-date")).toContainText(
+    new Intl.DateTimeFormat("pt-PT", { day: "numeric", month: "long", year: "numeric" }).format(calendarDate(value)),
+  );
+}
+
+async function selectFirstSlots(slotCheckboxes: Locator, count: number) {
+  const total = await slotCheckboxes.count();
+  for (let index = count; index < total; index += 1) {
+    if (await slotCheckboxes.nth(index).isChecked()) await slotCheckboxes.nth(index).click();
+  }
+  for (let index = 0; index < Math.min(count, total); index += 1) {
+    if (!(await slotCheckboxes.nth(index).isChecked())) await slotCheckboxes.nth(index).click();
+  }
+}
+
+async function selectedSlotLabels(slotCheckboxes: Locator) {
+  const selected: string[] = [];
+  for (let index = 0; index < await slotCheckboxes.count(); index += 1) {
+    const checkbox = slotCheckboxes.nth(index);
+    if (await checkbox.isChecked()) selected.push((await checkbox.getAttribute("aria-label")) ?? "");
+  }
+  return selected;
 }
 
 async function loginAdmin(page: Page) {
@@ -39,7 +112,7 @@ test("admin creates branded story and square PNGs from authoritative availabilit
 
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
-  await page.getByLabel("Data específica").fill(futureOpenDate);
+  await selectPromotionDate(page, futureOpenDate);
 
   const serviceTrigger = page.locator("#promotion-service");
   await expect(serviceTrigger).not.toContainText("Escolher serviço");
@@ -57,13 +130,9 @@ test("admin creates branded story and square PNGs from authoritative availabilit
 
   const slotCheckboxes = page.getByLabel("Vagas disponíveis").getByRole("checkbox");
   expect(await slotCheckboxes.count()).toBeGreaterThanOrEqual(8);
-  for (let index = 0; index < 8; index += 1) {
-    if (!(await slotCheckboxes.nth(index).isChecked())) await slotCheckboxes.nth(index).click();
-  }
+  await selectFirstSlots(slotCheckboxes, 8);
   await expect(canvas).toHaveAttribute("data-slot-count", "8");
-  for (let index = 1; index < 8; index += 1) {
-    if (await slotCheckboxes.nth(index).isChecked()) await slotCheckboxes.nth(index).click();
-  }
+  await selectFirstSlots(slotCheckboxes, 1);
   await expect(canvas).toHaveAttribute("data-slot-count", "1");
 
   const classicImage = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
@@ -122,7 +191,7 @@ test("all visual models render atomically across both formats and representative
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
-  await page.getByLabel("Data específica").fill(futureOpenDate);
+  await selectPromotionDate(page, futureOpenDate);
   const slotCheckboxes = page.getByLabel("Vagas disponíveis").getByRole("checkbox");
   await expect(slotCheckboxes.nth(7)).toBeVisible();
 
@@ -153,10 +222,7 @@ test("all visual models render atomically across both formats and representative
   if (artifactDir) await mkdir(artifactDir, { recursive: true });
 
   for (const sample of samples) {
-    for (let index = 0; index < await slotCheckboxes.count(); index += 1) {
-      const shouldBeChecked = index < sample.count;
-      if ((await slotCheckboxes.nth(index).isChecked()) !== shouldBeChecked) await slotCheckboxes.nth(index).click();
-    }
+    await selectFirstSlots(slotCheckboxes, sample.count);
     await page.getByRole("button", { name: new RegExp(sample.template) }).click();
     await page.getByRole("button", { name: new RegExp(sample.format) }).click();
     await expect(canvas).toHaveAttribute("data-template", sample.templateKey);
@@ -183,7 +249,7 @@ test("empty dates, mobile preview and download fallback remain safe", async ({ p
   const futureSunday = nextDateMatching(bookingWindow.today, (date) => date.getDay() === 0);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("Data específica").fill(futureOpenDate);
+  await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").locator("label").first()).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 
@@ -192,10 +258,68 @@ test("empty dates, mobile preview and download fallback remain safe", async ({ p
   const shareDownload = await shareDownloadPromise;
   expect(shareDownload.suggestedFilename()).toContain("-story.png");
 
-  await page.getByLabel("Data específica").fill(futureSunday);
+  await selectPromotionDate(page, futureSunday);
   await expect(page.getByText("Não existem vagas para esta combinação de data, serviço e profissional.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Partilhar" })).toBeDisabled();
+});
+
+test("visual date picker is localized, mobile safe and preserves only valid selected slots", async ({ page }) => {
+  const appointmentRequests = new Map<string, number>();
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname !== "/api/appointments/public") return;
+    const date = url.searchParams.get("date");
+    if (date) appointmentRequests.set(date, (appointmentRequests.get(date) ?? 0) + 1);
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loginAdmin(page);
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+
+  const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
+  const yesterday = addDaysToDateKey(bookingWindow.today, -1);
+  const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureSunday = nextDateMatching(secondOpenDate, (date) => date.getDay() === 0);
+
+  await expect(page.getByRole("button", { name: "Hoje", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Amanhã", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Escolher data" }).click();
+  const calendar = page.locator(".rdp").last();
+  await expect(calendar).toBeVisible();
+  await expect(calendar.getByText(formatCalendarMonth(bookingWindow.today), { exact: true })).toBeVisible();
+  await expect(calendarDay(calendar, yesterday, false)).toBeDisabled();
+  const calendarBox = await calendar.boundingBox();
+  expect(calendarBox).not.toBeNull();
+  expect(calendarBox!.x).toBeGreaterThanOrEqual(0);
+  expect(calendarBox!.x + calendarBox!.width).toBeLessThanOrEqual(390);
+
+  await calendarDay(calendar, firstOpenDate).click();
+  await expect(calendar).toBeHidden();
+  await expect(page.getByTestId("promotion-selected-date")).toContainText(
+    new Intl.DateTimeFormat("pt-PT", { day: "numeric", month: "long", year: "numeric" }).format(calendarDate(firstOpenDate)),
+  );
+  const slotCheckboxes = page.getByLabel("Vagas disponíveis").getByRole("checkbox");
+  await expect(slotCheckboxes.nth(1)).toBeVisible();
+  await selectFirstSlots(slotCheckboxes, 2);
+  const firstSelection = await selectedSlotLabels(slotCheckboxes);
+  expect(firstSelection).toHaveLength(2);
+
+  await page.getByRole("button", { name: "Escolher data" }).click();
+  await expect(calendarDay(calendar, firstOpenDate)).toHaveAttribute("aria-selected", "true");
+  await calendarDay(calendar, secondOpenDate).click();
+  await expect(slotCheckboxes.nth(1)).toBeVisible();
+  await expect.poll(() => selectedSlotLabels(slotCheckboxes)).toEqual(firstSelection);
+
+  await selectPromotionDate(page, futureSunday);
+  await expect(page.getByText("Não existem vagas para esta combinação de data, serviço e profissional.")).toBeVisible();
+  await expect.poll(() => selectedSlotLabels(slotCheckboxes)).toEqual([]);
+
+  await selectPromotionDate(page, firstOpenDate);
+  await expect(slotCheckboxes.first()).toBeVisible();
+  await expect.poll(() => appointmentRequests.get(firstOpenDate) ?? 0).toBe(1);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 });
 
 test("the availability promotion tab is restricted to administrators", async ({ page }) => {
