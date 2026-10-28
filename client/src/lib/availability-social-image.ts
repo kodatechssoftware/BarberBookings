@@ -14,6 +14,18 @@ export type AvailabilitySocialImageInput = {
   bookingLabel: string;
 };
 
+export type AvailabilitySocialRect = { x: number; y: number; width: number; height: number };
+
+export type AvailabilitySocialImageLayout = {
+  safeArea: AvailabilitySocialRect;
+  header: AvailabilitySocialRect;
+  title: AvailabilitySocialRect;
+  meta: AvailabilitySocialRect;
+  slots: AvailabilitySocialRect;
+  footer: AvailabilitySocialRect;
+  slotRects: AvailabilitySocialRect[];
+};
+
 export const AVAILABILITY_SOCIAL_FORMATS = {
   story: { width: 1080, height: 1920, label: "Story vertical", detail: "1080 × 1920 px" },
   square: { width: 1080, height: 1080, label: "Publicação quadrada", detail: "1080 × 1080 px" },
@@ -35,14 +47,29 @@ const COLORS = {
   red: "#8D1E2D",
 };
 
-function roundedRect(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-) {
+const FORMAT_LAYOUTS: Record<AvailabilitySocialFormat, Omit<AvailabilitySocialImageLayout, "slotRects">> = {
+  story: {
+    safeArea: { x: 60, y: 80, width: 960, height: 1760 },
+    header: { x: 110, y: 120, width: 860, height: 240 },
+    title: { x: 110, y: 395, width: 860, height: 215 },
+    meta: { x: 120, y: 635, width: 840, height: 130 },
+    slots: { x: 110, y: 805, width: 860, height: 655 },
+    footer: { x: 110, y: 1515, width: 860, height: 265 },
+  },
+  square: {
+    safeArea: { x: 50, y: 50, width: 980, height: 980 },
+    header: { x: 80, y: 65, width: 920, height: 145 },
+    title: { x: 85, y: 225, width: 910, height: 145 },
+    meta: { x: 95, y: 390, width: 890, height: 105 },
+    slots: { x: 95, y: 515, width: 890, height: 315 },
+    footer: { x: 95, y: 855, width: 890, height: 160 },
+  },
+};
+
+const renderEpochs = new WeakMap<HTMLCanvasElement, number>();
+const imageCache = new Map<string, Promise<HTMLImageElement>>();
+
+function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
   const safeRadius = Math.min(radius, width / 2, height / 2);
   context.beginPath();
   context.moveTo(x + safeRadius, y);
@@ -53,13 +80,7 @@ function roundedRect(
   context.closePath();
 }
 
-function drawTrackingText(
-  context: CanvasRenderingContext2D,
-  value: string,
-  x: number,
-  y: number,
-  tracking: number,
-) {
+function drawTrackingText(context: CanvasRenderingContext2D, value: string, x: number, y: number, tracking: number) {
   const characters = Array.from(value);
   const widths = characters.map((character) => context.measureText(character).width);
   const totalWidth = widths.reduce((total, width) => total + width, 0) + tracking * Math.max(0, characters.length - 1);
@@ -70,61 +91,80 @@ function drawTrackingText(
   });
 }
 
-function wrapText(
-  context: CanvasRenderingContext2D,
-  value: string,
-  maxWidth: number,
-  maxLines: number,
-) {
+function ellipsizeText(context: CanvasRenderingContext2D, value: string, maxWidth: number) {
+  if (context.measureText(value).width <= maxWidth) return value;
+  let candidate = value.trim();
+  while (candidate.length > 1 && context.measureText(`${candidate}…`).width > maxWidth) candidate = candidate.slice(0, -1).trimEnd();
+  return `${candidate}…`;
+}
+
+function wrapText(context: CanvasRenderingContext2D, value: string, maxWidth: number, maxLines: number) {
   const words = value.trim().split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let current = "";
-
+  let consumedWords = 0;
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
     if (context.measureText(next).width <= maxWidth || !current) {
       current = next;
+      consumedWords += 1;
       continue;
     }
-    lines.push(current);
+    lines.push(ellipsizeText(context, current, maxWidth));
+    if (lines.length === maxLines) break;
     current = word;
-    if (lines.length === maxLines - 1) break;
+    consumedWords += 1;
   }
-
-  if (current && lines.length < maxLines) lines.push(current);
-  const consumed = lines.join(" ").split(/\s+/).length;
-  if (consumed < words.length && lines.length > 0) {
-    let last = lines[lines.length - 1];
-    while (last.length > 1 && context.measureText(`${last}…`).width > maxWidth) {
-      last = last.slice(0, -1);
-    }
-    lines[lines.length - 1] = `${last.trim()}…`;
+  if (current && lines.length < maxLines) lines.push(ellipsizeText(context, current, maxWidth));
+  if (consumedWords < words.length && lines.length > 0) {
+    lines[lines.length - 1] = ellipsizeText(context, `${lines[lines.length - 1].replace(/…$/, "")}…`, maxWidth);
   }
-  return lines;
+  return lines.slice(0, maxLines);
 }
 
-function drawWrappedCenteredText(
+function drawWrappedTextInRect(
   context: CanvasRenderingContext2D,
   value: string,
-  x: number,
-  y: number,
-  maxWidth: number,
+  rect: AvailabilitySocialRect,
   lineHeight: number,
-  maxLines = 2,
+  maxLines: number,
+  align: CanvasTextAlign,
 ) {
-  const lines = wrapText(context, value, maxWidth, maxLines);
-  lines.forEach((line, index) => context.fillText(line, x, y + index * lineHeight));
+  const lines = wrapText(context, value, rect.width, maxLines);
+  const firstBaseline = rect.y + rect.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+  context.textAlign = align;
+  context.textBaseline = "middle";
+  const x = align === "left" ? rect.x : align === "right" ? rect.x + rect.width : rect.x + rect.width / 2;
+  lines.forEach((line, index) => context.fillText(line, x, firstBaseline + index * lineHeight));
   return lines.length;
 }
 
 function loadImage(source: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
+  if (!source) return Promise.reject(new Error("Sem logótipo configurado."));
+  const cached = imageCache.get(source);
+  if (cached) return cached;
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
     image.crossOrigin = "anonymous";
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error("Não foi possível carregar o logótipo."));
     image.src = source;
+  }).catch((error) => {
+    imageCache.delete(source);
+    throw error;
   });
+  imageCache.set(source, promise);
+  return promise;
+}
+
+async function ensureCanvasFonts() {
+  if (!document.fonts) return;
+  await Promise.allSettled([
+    document.fonts.load('800 96px "DM Sans"'),
+    document.fonts.load('700 82px "Playfair Display"'),
+    document.fonts.load('500 32px "DM Sans"'),
+  ]);
+  await document.fonts.ready;
 }
 
 async function drawLogo(
@@ -156,10 +196,9 @@ async function drawLogo(
     context.fillText(fallbackName.trim().charAt(0).toUpperCase() || "B", centerX, centerY + size * 0.02);
   }
   context.restore();
-
   context.save();
   context.strokeStyle = COLORS.gold;
-  context.lineWidth = Math.max(5, size * 0.045);
+  context.lineWidth = Math.max(4, size * 0.04);
   context.beginPath();
   context.arc(centerX, centerY, size / 2 + context.lineWidth / 2, 0, Math.PI * 2);
   context.stroke();
@@ -171,9 +210,7 @@ function drawNoisePattern(context: CanvasRenderingContext2D, width: number, heig
   context.globalAlpha = 0.045;
   context.fillStyle = COLORS.cream;
   for (let y = 0; y < height; y += 34) {
-    for (let x = (y / 34) % 2 === 0 ? 0 : 17; x < width; x += 34) {
-      context.fillRect(x, y, 2, 2);
-    }
+    for (let x = (y / 34) % 2 === 0 ? 0 : 17; x < width; x += 34) context.fillRect(x, y, 2, 2);
   }
   context.restore();
 }
@@ -192,22 +229,22 @@ function drawClassicBackground(context: CanvasRenderingContext2D, width: number,
 
 function drawModernBackground(context: CanvasRenderingContext2D, width: number, height: number) {
   const gradient = context.createLinearGradient(0, 0, width, height);
-  gradient.addColorStop(0, "#0A0A0A");
-  gradient.addColorStop(0.58, "#151515");
-  gradient.addColorStop(1, "#221116");
+  gradient.addColorStop(0, "#080808");
+  gradient.addColorStop(0.56, "#171717");
+  gradient.addColorStop(1, "#241015");
   context.fillStyle = gradient;
   context.fillRect(0, 0, width, height);
   context.fillStyle = COLORS.red;
   context.beginPath();
-  context.moveTo(width * 0.72, 0);
+  context.moveTo(width * 0.7, 0);
   context.lineTo(width, 0);
-  context.lineTo(width, height * 0.48);
+  context.lineTo(width, height * 0.43);
   context.closePath();
   context.fill();
   context.fillStyle = "rgba(212, 175, 55, 0.12)";
   context.beginPath();
-  context.moveTo(0, height * 0.78);
-  context.lineTo(width, height * 0.58);
+  context.moveTo(0, height * 0.82);
+  context.lineTo(width, height * 0.61);
   context.lineTo(width, height);
   context.lineTo(0, height);
   context.closePath();
@@ -230,82 +267,184 @@ function drawPremiumBackground(context: CanvasRenderingContext2D, width: number,
   drawNoisePattern(context, width, height);
 }
 
-function drawSlots(
-  context: CanvasRenderingContext2D,
-  input: AvailabilitySocialImageInput,
-  startY: number,
-  availableHeight: number,
-) {
-  const { width } = AVAILABILITY_SOCIAL_FORMATS[input.format];
-  const slots = input.slots.slice(0, 8);
-  const columnCount = slots.length <= 3 ? 1 : 2;
-  const rowCount = Math.max(1, Math.ceil(slots.length / columnCount));
-  const gap = input.format === "story" ? 30 : 22;
-  const outerMargin = input.format === "story" ? 150 : 130;
-  const slotWidth = columnCount === 1
-    ? Math.min(620, width - outerMargin * 2)
-    : (width - outerMargin * 2 - gap) / 2;
-  const slotHeight = Math.min(input.format === "story" ? 132 : 96, (availableHeight - gap * (rowCount - 1)) / rowCount);
-  const totalWidth = slotWidth * columnCount + gap * (columnCount - 1);
-  const firstX = (width - totalWidth) / 2;
+function getSlotRects(format: AvailabilitySocialFormat, slotCount: number, region: AvailabilitySocialRect) {
+  const count = Math.max(0, Math.min(8, slotCount));
+  if (count === 0) return [];
+  const isStory = format === "story";
+  const labelSpace = isStory ? 72 : 48;
+  const grid: AvailabilitySocialRect = {
+    x: region.x + (isStory ? 18 : 12),
+    y: region.y + labelSpace,
+    width: region.width - (isStory ? 36 : 24),
+    height: region.height - labelSpace,
+  };
+  const columns = count === 1 ? 1 : 2;
+  const rows = Math.ceil(count / columns);
+  const gapX = isStory ? 28 : 20;
+  const gapY = isStory ? 26 : 14;
+  const naturalWidth = (grid.width - gapX * (columns - 1)) / columns;
+  const slotWidth = columns === 1 ? Math.min(naturalWidth, isStory ? 650 : 570) : naturalWidth;
+  const maxHeight = isStory
+    ? (count === 1 ? 240 : count === 2 ? 190 : 138)
+    : (count === 1 ? 150 : count === 2 ? 122 : 70);
+  const slotHeight = Math.min(maxHeight, (grid.height - gapY * (rows - 1)) / rows);
+  const totalHeight = slotHeight * rows + gapY * (rows - 1);
+  const firstY = grid.y + (grid.height - totalHeight) / 2;
+  return Array.from({ length: count }, (_, index) => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const itemsInRow = Math.min(columns, count - row * columns);
+    const rowWidth = slotWidth * itemsInRow + gapX * Math.max(0, itemsInRow - 1);
+    const rowX = grid.x + (grid.width - rowWidth) / 2;
+    return { x: rowX + column * (slotWidth + gapX), y: firstY + row * (slotHeight + gapY), width: slotWidth, height: slotHeight };
+  });
+}
 
-  if (slots.length === 0) {
+export function getAvailabilitySocialImageLayout(format: AvailabilitySocialFormat, slotCount: number): AvailabilitySocialImageLayout {
+  const base = FORMAT_LAYOUTS[format];
+  return {
+    safeArea: { ...base.safeArea }, header: { ...base.header }, title: { ...base.title }, meta: { ...base.meta },
+    slots: { ...base.slots }, footer: { ...base.footer }, slotRects: getSlotRects(format, slotCount, base.slots),
+  };
+}
+
+function drawHeader(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+  const isStory = input.format === "story";
+  const modern = input.template === "modern";
+  const logoSize = modern ? (isStory ? 128 : 88) : (isStory ? 150 : 98);
+  const logoX = modern ? layout.header.x + logoSize / 2 + 8 : layout.header.x + layout.header.width / 2;
+  const logoY = modern ? layout.header.y + layout.header.height / 2 : layout.header.y + logoSize / 2 + 4;
+  return drawLogo(context, input.logoUrl, logoX, logoY, logoSize, input.businessName).then(() => {
+    context.fillStyle = modern ? COLORS.cream : COLORS.goldLight;
+    if (modern) {
+      context.font = `800 ${isStory ? 31 : 24}px "DM Sans", Arial, sans-serif`;
+      drawWrappedTextInRect(context, input.businessName.toUpperCase(), {
+        x: layout.header.x + logoSize + 38, y: layout.header.y + 20,
+        width: layout.header.width - logoSize - 54, height: layout.header.height - 40,
+      }, isStory ? 40 : 31, 2, "left");
+      return;
+    }
+    context.font = `700 ${isStory ? 25 : 20}px "DM Sans", Arial, sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
+    const brand = ellipsizeText(context, input.businessName.toUpperCase(), layout.header.width - 80);
+    drawTrackingText(context, brand, layout.header.x + layout.header.width / 2, layout.header.y + layout.header.height - (isStory ? 20 : 12), isStory ? 4.5 : 3.2);
+  });
+}
+
+function drawTitleAndMeta(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+  const isStory = input.format === "story";
+  const modern = input.template === "modern";
+  context.fillStyle = COLORS.cream;
+  context.font = `700 ${isStory ? 78 : 54}px "Playfair Display", Georgia, serif`;
+  drawWrappedTextInRect(context, input.title, layout.title, isStory ? 88 : 62, 2, modern ? "left" : "center");
+  if (input.template === "premium") {
+    const centerX = layout.meta.x + layout.meta.width / 2;
+    context.strokeStyle = "rgba(240, 214, 122, 0.55)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(centerX - (isStory ? 310 : 330), layout.meta.y + 4);
+    context.lineTo(centerX - (isStory ? 80 : 70), layout.meta.y + 4);
+    context.moveTo(centerX + (isStory ? 80 : 70), layout.meta.y + 4);
+    context.lineTo(centerX + (isStory ? 310 : 330), layout.meta.y + 4);
+    context.stroke();
+    context.fillStyle = COLORS.gold;
+    context.beginPath();
+    context.arc(centerX, layout.meta.y + 4, 5, 0, Math.PI * 2);
+    context.fill();
+  }
+  const textX = modern ? layout.meta.x : layout.meta.x + layout.meta.width / 2;
+  context.textAlign = modern ? "left" : "center";
+  context.textBaseline = "middle";
+  context.fillStyle = COLORS.goldLight;
+  context.font = `800 ${isStory ? 32 : 25}px "DM Sans", Arial, sans-serif`;
+  context.fillText(ellipsizeText(context, input.dateLabel.toUpperCase(), layout.meta.width), textX, layout.meta.y + (isStory ? 40 : 30));
+  context.fillStyle = "rgba(247, 242, 232, 0.82)";
+  context.font = `500 ${isStory ? 27 : 22}px "DM Sans", Arial, sans-serif`;
+  context.fillText(ellipsizeText(context, `${input.serviceName} · ${input.professionalName}`, layout.meta.width), textX, layout.meta.y + (isStory ? 94 : 75));
+}
+
+function drawSlots(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+  const { width } = AVAILABILITY_SOCIAL_FORMATS[input.format];
+  const isStory = input.format === "story";
+  const slots = input.slots.slice(0, 8);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = input.template === "modern" ? COLORS.cream : COLORS.goldLight;
+  context.font = `800 ${isStory ? 24 : 19}px "DM Sans", Arial, sans-serif`;
+  drawTrackingText(context, slots.length === 1 ? "HORÁRIO EM DESTAQUE" : "HORÁRIOS DISPONÍVEIS", width / 2, layout.slots.y + (isStory ? 28 : 20), isStory ? 3.2 : 2.4);
+  if (slots.length === 0) {
     context.fillStyle = COLORS.muted;
-    context.font = `600 ${input.format === "story" ? 42 : 34}px "DM Sans", Arial, sans-serif`;
-    context.fillText("Selecione os horários a divulgar", width / 2, startY + availableHeight / 2);
+    context.font = `600 ${isStory ? 42 : 34}px "DM Sans", Arial, sans-serif`;
+    context.fillText("Selecione os horários a divulgar", width / 2, layout.slots.y + layout.slots.height / 2);
     return;
   }
-
-  slots.forEach((slot, index) => {
-    const row = Math.floor(index / columnCount);
-    const column = index % columnCount;
-    const x = firstX + column * (slotWidth + gap);
-    const y = startY + row * (slotHeight + gap);
-
+  layout.slotRects.forEach((rect, index) => {
+    const slot = slots[index];
     context.save();
-    roundedRect(context, x, y, slotWidth, slotHeight, input.template === "modern" ? 20 : slotHeight / 2);
+    roundedRect(context, rect.x, rect.y, rect.width, rect.height, input.template === "modern" ? 20 : rect.height / 2);
     if (input.template === "classic") {
       context.fillStyle = "rgba(255,255,255,0.025)";
       context.strokeStyle = COLORS.gold;
       context.lineWidth = 3;
-      context.fill();
-      context.stroke();
+      context.fill(); context.stroke();
     } else if (input.template === "modern") {
       context.fillStyle = index % 2 === 0 ? COLORS.cream : COLORS.gold;
       context.fill();
+      context.fillStyle = "rgba(0,0,0,0.08)";
+      context.fillRect(rect.x, rect.y + rect.height - 7, rect.width, 7);
     } else {
-      const slotGradient = context.createLinearGradient(x, y, x + slotWidth, y + slotHeight);
-      slotGradient.addColorStop(0, "rgba(240, 214, 122, 0.2)");
-      slotGradient.addColorStop(1, "rgba(255,255,255,0.035)");
-      context.fillStyle = slotGradient;
-      context.strokeStyle = "rgba(240, 214, 122, 0.62)";
+      const gradient = context.createLinearGradient(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
+      gradient.addColorStop(0, "rgba(240, 214, 122, 0.22)");
+      gradient.addColorStop(1, "rgba(255,255,255,0.035)");
+      context.fillStyle = gradient;
+      context.strokeStyle = "rgba(240, 214, 122, 0.68)";
       context.lineWidth = 2;
-      context.fill();
-      context.stroke();
+      context.fill(); context.stroke();
     }
     context.fillStyle = input.template === "modern" ? COLORS.ink : COLORS.cream;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.font = `800 ${Math.round(slotHeight * 0.49)}px "DM Sans", Arial, sans-serif`;
-    context.fillText(slot, x + slotWidth / 2, y + slotHeight / 2 + 2);
+    context.font = `800 ${Math.min(isStory ? 72 : 48, Math.round(rect.height * (isStory ? 0.52 : 0.64)))}px "DM Sans", Arial, sans-serif`;
+    context.fillText(slot, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
     context.restore();
   });
+  if (slots.length === 1) {
+    const rect = layout.slotRects[0];
+    context.fillStyle = "rgba(247, 242, 232, 0.68)";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = `600 ${isStory ? 22 : 17}px "DM Sans", Arial, sans-serif`;
+    context.fillText("RESERVA ESTE HORÁRIO ANTES QUE FIQUE INDISPONÍVEL", width / 2, rect.y + rect.height + (isStory ? 55 : 30));
+  }
 }
 
-function drawFooter(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, y: number) {
-  const { width } = AVAILABILITY_SOCIAL_FORMATS[input.format];
+function drawFooter(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+  const isStory = input.format === "story";
+  const centerX = layout.footer.x + layout.footer.width / 2;
+  if (input.template === "modern") {
+    roundedRect(context, layout.footer.x + 35, layout.footer.y + 8, layout.footer.width - 70, isStory ? 145 : 100, 24);
+    context.fillStyle = COLORS.red;
+    context.fill();
+  } else {
+    context.strokeStyle = input.template === "classic" ? "rgba(212, 175, 55, 0.55)" : "rgba(240, 214, 122, 0.72)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(layout.footer.x + 100, layout.footer.y + 8);
+    context.lineTo(layout.footer.x + layout.footer.width - 100, layout.footer.y + 8);
+    context.stroke();
+  }
   context.textAlign = "center";
+  context.textBaseline = "middle";
   context.fillStyle = COLORS.cream;
-  context.font = `700 ${input.format === "story" ? 36 : 30}px "DM Sans", Arial, sans-serif`;
-  context.fillText("MARCA JÁ", width / 2, y);
+  context.font = `800 ${isStory ? 48 : 35}px "DM Sans", Arial, sans-serif`;
+  context.fillText("MARCA JÁ", centerX, layout.footer.y + (isStory ? 63 : 43));
   context.fillStyle = COLORS.goldLight;
-  context.font = `500 ${input.format === "story" ? 29 : 25}px "DM Sans", Arial, sans-serif`;
-  context.fillText(input.bookingLabel, width / 2, y + (input.format === "story" ? 52 : 43));
-  context.fillStyle = "rgba(247, 242, 232, 0.68)";
-  context.font = `400 ${input.format === "story" ? 23 : 20}px "DM Sans", Arial, sans-serif`;
-  context.fillText("Horários sujeitos a disponibilidade no momento da marcação.", width / 2, y + (input.format === "story" ? 112 : 91));
+  context.font = `600 ${isStory ? 32 : 27}px "DM Sans", Arial, sans-serif`;
+  context.fillText(ellipsizeText(context, input.bookingLabel, layout.footer.width - 100), centerX, layout.footer.y + (isStory ? 125 : 83));
+  context.fillStyle = "rgba(247, 242, 232, 0.72)";
+  context.font = `500 ${isStory ? 23 : 19}px "DM Sans", Arial, sans-serif`;
+  context.fillText("Horários sujeitos a disponibilidade no momento da marcação.", centerX, layout.footer.y + (isStory ? 205 : 133));
 }
 
 export function getAvailabilitySocialImageDimensions(format: AvailabilitySocialFormat) {
@@ -313,69 +452,42 @@ export function getAvailabilitySocialImageDimensions(format: AvailabilitySocialF
 }
 
 export function sanitizeAvailabilitySocialFileName(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || "estabelecimento";
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "estabelecimento";
 }
 
-export async function renderAvailabilitySocialImage(
-  canvas: HTMLCanvasElement,
-  input: AvailabilitySocialImageInput,
-) {
+export async function renderAvailabilitySocialImage(canvas: HTMLCanvasElement, input: AvailabilitySocialImageInput) {
+  const epoch = (renderEpochs.get(canvas) ?? 0) + 1;
+  renderEpochs.set(canvas, epoch);
   const dimensions = AVAILABILITY_SOCIAL_FORMATS[input.format];
-  canvas.width = dimensions.width;
-  canvas.height = dimensions.height;
-  const context = canvas.getContext("2d");
+  const surface = document.createElement("canvas");
+  surface.width = dimensions.width;
+  surface.height = dimensions.height;
+  const context = surface.getContext("2d");
   if (!context) throw new Error("O navegador não permite gerar esta imagem.");
-
-  await document.fonts?.ready;
+  // Intrinsic dimensions are the final export pixels. CSS alone scales the preview.
+  await ensureCanvasFonts();
   context.clearRect(0, 0, dimensions.width, dimensions.height);
   if (input.template === "classic") drawClassicBackground(context, dimensions.width, dimensions.height);
   if (input.template === "modern") drawModernBackground(context, dimensions.width, dimensions.height);
   if (input.template === "premium") drawPremiumBackground(context, dimensions.width, dimensions.height);
-
-  const isStory = input.format === "story";
-  const logoSize = isStory ? 178 : 126;
-  const logoY = isStory ? 240 : 125;
-  const titleY = isStory ? 450 : 255;
-  await drawLogo(context, input.logoUrl, dimensions.width / 2, logoY, logoSize, input.businessName);
-
-  context.textAlign = "center";
-  context.textBaseline = "alphabetic";
-  context.fillStyle = input.template === "modern" ? COLORS.cream : COLORS.goldLight;
-  context.font = `700 ${isStory ? 25 : 21}px "DM Sans", Arial, sans-serif`;
-  drawTrackingText(context, input.businessName.toUpperCase(), dimensions.width / 2, logoY + logoSize / 2 + (isStory ? 72 : 55), isStory ? 5 : 4);
-
-  context.fillStyle = COLORS.cream;
-  context.font = `700 ${isStory ? 82 : 58}px "Playfair Display", Georgia, serif`;
-  const titleLines = drawWrappedCenteredText(context, input.title, dimensions.width / 2, titleY, dimensions.width - (isStory ? 190 : 170), isStory ? 92 : 66, 2);
-  const titleBottom = titleY + Math.max(0, titleLines - 1) * (isStory ? 92 : 66);
-
-  context.fillStyle = COLORS.goldLight;
-  context.font = `700 ${isStory ? 32 : 27}px "DM Sans", Arial, sans-serif`;
-  const dateY = titleBottom + (isStory ? 92 : 60);
-  context.fillText(input.dateLabel.toUpperCase(), dimensions.width / 2, dateY);
-
-  context.fillStyle = "rgba(247, 242, 232, 0.78)";
-  context.font = `500 ${isStory ? 28 : 23}px "DM Sans", Arial, sans-serif`;
-  const detailY = dateY + (isStory ? 62 : 45);
-  context.fillText(`${input.serviceName} · ${input.professionalName}`, dimensions.width / 2, detailY);
-
-  const slotsStart = detailY + (isStory ? 95 : 64);
-  const footerY = isStory ? dimensions.height - 265 : dimensions.height - 152;
-  drawSlots(context, input, slotsStart, footerY - slotsStart - (isStory ? 80 : 55));
-  drawFooter(context, input, footerY);
+  const layout = getAvailabilitySocialImageLayout(input.format, input.slots.length);
+  await drawHeader(context, input, layout);
+  drawTitleAndMeta(context, input, layout);
+  drawSlots(context, input, layout);
+  drawFooter(context, input, layout);
+  // Fonts and the logo make drawing asynchronous. Only the newest request commits.
+  if (renderEpochs.get(canvas) !== epoch) return false;
+  canvas.width = dimensions.width;
+  canvas.height = dimensions.height;
+  const output = canvas.getContext("2d");
+  if (!output) throw new Error("O navegador não permite apresentar esta imagem.");
+  output.clearRect(0, 0, dimensions.width, dimensions.height);
+  output.drawImage(surface, 0, 0);
+  return true;
 }
 
 export function availabilityCanvasToPng(canvas: HTMLCanvasElement) {
   return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new Error("Não foi possível exportar a imagem."));
-    }, "image/png", 1);
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Não foi possível exportar a imagem.")), "image/png", 1);
   });
 }

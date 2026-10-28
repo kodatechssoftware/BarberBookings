@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getAvailableTimeSlots, calendarTimeInTimeZone } from "../../client/src/lib/availability";
 import {
+  getAvailabilitySocialImageLayout,
   getAvailabilitySocialImageDimensions,
   sanitizeAvailabilitySocialFileName,
+  type AvailabilitySocialRect,
 } from "../../client/src/lib/availability-social-image";
 
 const barbers = [
@@ -34,6 +36,44 @@ test("social image formats keep the exact Instagram dimensions and safe filename
     detail: "1080 × 1080 px",
   });
   assert.equal(sanitizeAvailabilitySocialFileName("Baptista Barber Shop — Baião"), "baptista-barber-shop-baiao");
+});
+
+function contains(outer: AvailabilitySocialRect, inner: AvailabilitySocialRect) {
+  return inner.x >= outer.x
+    && inner.y >= outer.y
+    && inner.x + inner.width <= outer.x + outer.width
+    && inner.y + inner.height <= outer.y + outer.height;
+}
+
+function intersects(first: AvailabilitySocialRect, second: AvailabilitySocialRect) {
+  return first.x < second.x + second.width
+    && first.x + first.width > second.x
+    && first.y < second.y + second.height
+    && first.y + first.height > second.y;
+}
+
+test("story and square layouts keep content regions and 1/2/4/6/8 slots separated", () => {
+  for (const format of ["story", "square"] as const) {
+    for (const slotCount of [1, 2, 4, 6, 8]) {
+      const layout = getAvailabilitySocialImageLayout(format, slotCount);
+      const regions = [layout.header, layout.title, layout.meta, layout.slots, layout.footer];
+
+      for (const region of regions) assert.equal(contains(layout.safeArea, region), true, `${format}: region outside safe area`);
+      for (let index = 0; index < regions.length; index += 1) {
+        for (let other = index + 1; other < regions.length; other += 1) {
+          assert.equal(intersects(regions[index], regions[other]), false, `${format}: content regions overlap`);
+        }
+      }
+
+      assert.equal(layout.slotRects.length, slotCount);
+      for (const slot of layout.slotRects) assert.equal(contains(layout.slots, slot), true, `${format}: slot outside slot region`);
+      for (let index = 0; index < layout.slotRects.length; index += 1) {
+        for (let other = index + 1; other < layout.slotRects.length; other += 1) {
+          assert.equal(intersects(layout.slotRects[index], layout.slotRects[other]), false, `${format}: slot cards overlap`);
+        }
+      }
+    }
+  }
 });
 
 test("promotion availability respects service duration and never announces a slot that does not fit", () => {
