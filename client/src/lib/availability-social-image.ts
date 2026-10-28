@@ -312,6 +312,12 @@ export function getAvailabilitySocialImageLayout(format: AvailabilitySocialForma
   };
 }
 
+export function formatAvailabilitySocialServiceLine(serviceName: string, professionalName: string) {
+  const service = serviceName.trim();
+  const professional = professionalName.trim();
+  return professional ? `${service} · ${professional}` : service;
+}
+
 function drawHeader(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
   const isStory = input.format === "story";
   const modern = input.template === "modern";
@@ -365,7 +371,11 @@ function drawTitleAndMeta(context: CanvasRenderingContext2D, input: Availability
   context.fillText(ellipsizeText(context, input.dateLabel.toUpperCase(), layout.meta.width), textX, layout.meta.y + (isStory ? 40 : 30));
   context.fillStyle = "rgba(247, 242, 232, 0.82)";
   context.font = `500 ${isStory ? 27 : 22}px "DM Sans", Arial, sans-serif`;
-  context.fillText(ellipsizeText(context, `${input.serviceName} · ${input.professionalName}`, layout.meta.width), textX, layout.meta.y + (isStory ? 94 : 75));
+  context.fillText(
+    ellipsizeText(context, formatAvailabilitySocialServiceLine(input.serviceName, input.professionalName), layout.meta.width),
+    textX,
+    layout.meta.y + (isStory ? 94 : 75),
+  );
 }
 
 function drawSlots(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {

@@ -31,6 +31,7 @@ import {
   AVAILABILITY_SOCIAL_FORMATS,
   AVAILABILITY_SOCIAL_TEMPLATES,
   availabilityCanvasToPng,
+  formatAvailabilitySocialServiceLine,
   renderAvailabilitySocialImage,
   sanitizeAvailabilitySocialFileName,
   type AvailabilitySocialFormat,
@@ -266,7 +267,7 @@ export default function AvailabilityPromotionTab({
     title: title.trim() || "Vagas disponíveis",
     dateLabel,
     serviceName: selectedService?.name || "Serviço",
-    professionalName: selectedBarber?.name || "Todos os profissionais",
+    professionalName: selectedBarber?.name || "",
     slots: selectedSlots,
     bookingLabel: formatPublicBookingLabel(publicBookingUrl) || "Marcações online",
   }), [businessName, dateLabel, imageFormat, logoUrl, publicBookingUrl, selectedBarber?.name, selectedService?.name, selectedSlots, template, title]);
@@ -596,7 +597,7 @@ export default function AvailabilityPromotionTab({
             </div>
             {renderError && <p className="text-sm text-red-300">{renderError}</p>}
             <div className="sr-only" aria-live="polite">
-              {imageInput.title}. {imageInput.dateLabel}. {imageInput.serviceName}. {imageInput.professionalName}. Horários: {selectedSlots.join(", ") || "nenhum selecionado"}.
+              {imageInput.title}. {imageInput.dateLabel}. {formatAvailabilitySocialServiceLine(imageInput.serviceName, imageInput.professionalName)}. Horários: {selectedSlots.join(", ") || "nenhum selecionado"}.
             </div>
             <Button
               type="button"

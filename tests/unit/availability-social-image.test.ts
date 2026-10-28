@@ -4,6 +4,7 @@ import { getAvailableTimeSlots, calendarTimeInTimeZone } from "../../client/src/
 import {
   getAvailabilitySocialImageLayout,
   getAvailabilitySocialImageDimensions,
+  formatAvailabilitySocialServiceLine,
   sanitizeAvailabilitySocialFileName,
   type AvailabilitySocialRect,
 } from "../../client/src/lib/availability-social-image";
@@ -54,6 +55,23 @@ test("public booking links prefer the configured deployment URL and fail over sa
   );
   assert.equal(resolvePublicBookingUrl("javascript:alert(1)", ""), "");
   assert.equal(formatPublicBookingLabel("https://baptista.kodatechs.com/booking"), "baptista.kodatechs.com/booking");
+});
+
+test("social images omit the aggregate professional label without leaving a separator", () => {
+  for (const template of ["classic", "modern", "premium"] as const) {
+    for (const format of ["story", "square"] as const) {
+      assert.equal(
+        formatAvailabilitySocialServiceLine("Corte de cabelo", ""),
+        "Corte de cabelo",
+        `${template}/${format}: aggregate selection should only show the service`,
+      );
+      assert.equal(
+        formatAvailabilitySocialServiceLine("Corte de cabelo", "Bruno Santos"),
+        "Corte de cabelo · Bruno Santos",
+        `${template}/${format}: individual selection should show service and professional`,
+      );
+    }
+  }
 });
 
 function contains(outer: AvailabilitySocialRect, inner: AvailabilitySocialRect) {
