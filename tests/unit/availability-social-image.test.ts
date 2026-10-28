@@ -7,6 +7,7 @@ import {
   sanitizeAvailabilitySocialFileName,
   type AvailabilitySocialRect,
 } from "../../client/src/lib/availability-social-image";
+import { formatPublicBookingLabel, resolvePublicBookingUrl } from "../../client/src/lib/public-booking-link";
 
 const barbers = [
   { id: 1, serviceIds: [10] },
@@ -38,6 +39,23 @@ test("social image formats keep the exact Instagram dimensions and safe filename
   assert.equal(sanitizeAvailabilitySocialFileName("Baptista Barber Shop — Baião"), "baptista-barber-shop-baiao");
 });
 
+test("public booking links prefer the configured deployment URL and fail over safely", () => {
+  assert.equal(
+    resolvePublicBookingUrl("https://baptista.kodatechs.com/", "https://barberbookings-dev.onrender.com"),
+    "https://baptista.kodatechs.com/booking",
+  );
+  assert.equal(
+    resolvePublicBookingUrl("not-a-url", "https://barberbookings-dev.onrender.com"),
+    "https://barberbookings-dev.onrender.com/booking",
+  );
+  assert.equal(
+    resolvePublicBookingUrl("http://localhost:5000", "https://barberbookings-dev.onrender.com"),
+    "https://barberbookings-dev.onrender.com/booking",
+  );
+  assert.equal(resolvePublicBookingUrl("javascript:alert(1)", ""), "");
+  assert.equal(formatPublicBookingLabel("https://baptista.kodatechs.com/booking"), "baptista.kodatechs.com/booking");
+});
+
 function contains(outer: AvailabilitySocialRect, inner: AvailabilitySocialRect) {
   return inner.x >= outer.x
     && inner.y >= outer.y
@@ -56,7 +74,8 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
   for (const format of ["story", "square"] as const) {
     for (const slotCount of [1, 2, 4, 6, 8]) {
       const layout = getAvailabilitySocialImageLayout(format, slotCount);
-      const regions = [layout.header, layout.title, layout.meta, layout.slots, layout.footer];
+      const regions = [layout.header, layout.title, layout.meta, layout.slots, layout.linkSticker, layout.footer]
+        .filter((region): region is AvailabilitySocialRect => Boolean(region));
 
       for (const region of regions) assert.equal(contains(layout.safeArea, region), true, `${format}: region outside safe area`);
       for (let index = 0; index < regions.length; index += 1) {
@@ -72,6 +91,7 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
           assert.equal(intersects(layout.slotRects[index], layout.slotRects[other]), false, `${format}: slot cards overlap`);
         }
       }
+      assert.equal(Boolean(layout.linkSticker), format === "story", `${format}: unexpected sticker placement region`);
     }
   }
 });

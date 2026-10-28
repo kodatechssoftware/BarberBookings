@@ -27,6 +27,7 @@ test("Production-equivalent runtime remains single-location and keeps external f
   expect(await config.json()).toEqual({
     enabled: false,
     maxLocations: 1,
+    publicUrl: "https://bookings.example.test",
     bookingSlotIntervalMinutes: Number(process.env.BOOKING_SLOT_INTERVAL_MINUTES || 30),
     recurringExpensesEnabled: false,
   });

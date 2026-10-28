@@ -322,6 +322,56 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 });
 
+test("Instagram preparation keeps download and canonical booking-link copy as separate mobile-safe actions", async ({ page, context }) => {
+  await loginAdmin(page);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  await selectPromotionDate(page, futureOpenDate);
+  await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Publicação quadrada/ }).click();
+  await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();
+  const dialog = page.getByRole("dialog", { name: "Preparar Story para Instagram" });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator("canvas[aria-label='Pré-visualização Story vertical']")).toHaveAttribute("data-format", "story");
+
+  const expectedBookingUrl = `${new URL(page.url()).origin}/booking`;
+  await expect(dialog.getByLabel("Link público de marcação")).toHaveValue(expectedBookingUrl);
+  await dialog.getByRole("button", { name: "Copiar link de marcação" }).click();
+  await expect(dialog.getByRole("button", { name: "Link copiado" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expectedBookingUrl);
+
+  const downloadPromise = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "Descarregar Story PNG" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toContain("-story.png");
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  expect(await pngDimensions(path!)).toEqual({ width: 1080, height: 1920 });
+  await expect(dialog.getByRole("button", { name: "Story descarregado" })).toBeVisible();
+  await expect(dialog.getByRole("link", { name: "Abrir Instagram" })).toHaveAttribute("href", "https://www.instagram.com/");
+});
+
+test("Instagram preparation exposes a manual copy fallback without mobile overflow", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    Document.prototype.execCommand = () => false;
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await loginAdmin(page);
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
+  await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();
+  const dialog = page.getByRole("dialog", { name: "Preparar Story para Instagram" });
+  const bookingLink = dialog.getByLabel("Link público de marcação");
+  await dialog.getByRole("button", { name: "Copiar link de marcação" }).click();
+  await expect(page.getByText("Copie o link manualmente", { exact: true })).toBeVisible();
+  await expect(bookingLink).toBeFocused();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+});
+
 test("the availability promotion tab is restricted to administrators", async ({ page }) => {
   await loginAdmin(page);
   await expect(page.getByRole("tab", { name: "Divulgar vagas" })).toBeVisible();

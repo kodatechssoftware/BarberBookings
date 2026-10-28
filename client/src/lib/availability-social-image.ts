@@ -22,6 +22,7 @@ export type AvailabilitySocialImageLayout = {
   title: AvailabilitySocialRect;
   meta: AvailabilitySocialRect;
   slots: AvailabilitySocialRect;
+  linkSticker?: AvailabilitySocialRect;
   footer: AvailabilitySocialRect;
   slotRects: AvailabilitySocialRect[];
 };
@@ -49,12 +50,13 @@ const COLORS = {
 
 const FORMAT_LAYOUTS: Record<AvailabilitySocialFormat, Omit<AvailabilitySocialImageLayout, "slotRects">> = {
   story: {
-    safeArea: { x: 60, y: 80, width: 960, height: 1760 },
-    header: { x: 110, y: 120, width: 860, height: 240 },
-    title: { x: 110, y: 395, width: 860, height: 215 },
-    meta: { x: 120, y: 635, width: 840, height: 130 },
-    slots: { x: 110, y: 805, width: 860, height: 655 },
-    footer: { x: 110, y: 1515, width: 860, height: 265 },
+    safeArea: { x: 60, y: 200, width: 960, height: 1460 },
+    header: { x: 110, y: 220, width: 860, height: 180 },
+    title: { x: 110, y: 420, width: 860, height: 155 },
+    meta: { x: 120, y: 590, width: 840, height: 110 },
+    slots: { x: 110, y: 720, width: 860, height: 510 },
+    linkSticker: { x: 180, y: 1260, width: 720, height: 140 },
+    footer: { x: 110, y: 1430, width: 860, height: 210 },
   },
   square: {
     safeArea: { x: 50, y: 50, width: 980, height: 980 },
@@ -304,14 +306,16 @@ export function getAvailabilitySocialImageLayout(format: AvailabilitySocialForma
   const base = FORMAT_LAYOUTS[format];
   return {
     safeArea: { ...base.safeArea }, header: { ...base.header }, title: { ...base.title }, meta: { ...base.meta },
-    slots: { ...base.slots }, footer: { ...base.footer }, slotRects: getSlotRects(format, slotCount, base.slots),
+    slots: { ...base.slots },
+    ...(base.linkSticker ? { linkSticker: { ...base.linkSticker } } : {}),
+    footer: { ...base.footer }, slotRects: getSlotRects(format, slotCount, base.slots),
   };
 }
 
 function drawHeader(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
   const isStory = input.format === "story";
   const modern = input.template === "modern";
-  const logoSize = modern ? (isStory ? 128 : 88) : (isStory ? 150 : 98);
+  const logoSize = modern ? (isStory ? 128 : 88) : (isStory ? 125 : 98);
   const logoX = modern ? layout.header.x + logoSize / 2 + 8 : layout.header.x + layout.header.width / 2;
   const logoY = modern ? layout.header.y + layout.header.height / 2 : layout.header.y + logoSize / 2 + 4;
   return drawLogo(context, input.logoUrl, logoX, logoY, logoSize, input.businessName).then(() => {
@@ -328,7 +332,7 @@ function drawHeader(context: CanvasRenderingContext2D, input: AvailabilitySocial
     context.textAlign = "center";
     context.textBaseline = "middle";
     const brand = ellipsizeText(context, input.businessName.toUpperCase(), layout.header.width - 80);
-    drawTrackingText(context, brand, layout.header.x + layout.header.width / 2, layout.header.y + layout.header.height - (isStory ? 20 : 12), isStory ? 4.5 : 3.2);
+    drawTrackingText(context, brand, layout.header.x + layout.header.width / 2, layout.header.y + layout.header.height - (isStory ? 10 : 12), isStory ? 4.5 : 3.2);
   });
 }
 
@@ -419,6 +423,33 @@ function drawSlots(context: CanvasRenderingContext2D, input: AvailabilitySocialI
   }
 }
 
+function drawLinkStickerPlacement(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
+  const rect = layout.linkSticker;
+  if (input.format !== "story" || !rect) return;
+  context.save();
+  roundedRect(context, rect.x, rect.y, rect.width, rect.height, 28);
+  context.fillStyle = input.template === "modern"
+    ? "rgba(141, 30, 45, 0.3)"
+    : input.template === "premium"
+      ? "rgba(240, 214, 122, 0.08)"
+      : "rgba(212, 175, 55, 0.06)";
+  context.fill();
+  context.strokeStyle = input.template === "modern" ? "rgba(247, 242, 232, 0.8)" : "rgba(240, 214, 122, 0.72)";
+  context.lineWidth = 3;
+  context.setLineDash([16, 12]);
+  context.stroke();
+  context.setLineDash([]);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = input.template === "modern" ? COLORS.cream : COLORS.goldLight;
+  context.font = '800 27px "DM Sans", Arial, sans-serif';
+  context.fillText("ZONA PARA O STICKER «LIGAÇÃO»", rect.x + rect.width / 2, rect.y + 52);
+  context.fillStyle = "rgba(247, 242, 232, 0.72)";
+  context.font = '500 21px "DM Sans", Arial, sans-serif';
+  context.fillText("Coloca aqui o sticker no Instagram", rect.x + rect.width / 2, rect.y + 96);
+  context.restore();
+}
+
 function drawFooter(context: CanvasRenderingContext2D, input: AvailabilitySocialImageInput, layout: AvailabilitySocialImageLayout) {
   const isStory = input.format === "story";
   const centerX = layout.footer.x + layout.footer.width / 2;
@@ -474,6 +505,7 @@ export async function renderAvailabilitySocialImage(canvas: HTMLCanvasElement, i
   await drawHeader(context, input, layout);
   drawTitleAndMeta(context, input, layout);
   drawSlots(context, input, layout);
+  drawLinkStickerPlacement(context, input, layout);
   drawFooter(context, input, layout);
   // Fonts and the logo make drawing asynchronous. Only the newest request commits.
   if (renderEpochs.get(canvas) !== epoch) return false;

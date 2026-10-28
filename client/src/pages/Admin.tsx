@@ -4367,6 +4367,7 @@ export default function Admin() {
               <Suspense fallback={<div className="flex min-h-[320px] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}>
                 <AvailabilityPromotionTab
                   location={activeLocation}
+                  publicBaseUrl={multiLocationConfig?.publicUrl}
                   barbers={activeBarbers}
                   services={services}
                   availabilityRows={(allAvailabilityRows as AvailabilityRow[] | undefined) ?? []}
