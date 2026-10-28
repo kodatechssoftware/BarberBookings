@@ -119,6 +119,7 @@ test("Baptista single-location permite gerir apenas o estabelecimento principal"
   await expect(mapFrame).toBeVisible();
   expect(new URL((await mapFrame.getAttribute("src"))!).searchParams.get("q"))
     .toBe("Baptista Barber Shop — Principal, Rua de Camões, 100, 4000-143 Porto");
+  await expect(directions).toHaveCount(0);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/admin");
