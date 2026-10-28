@@ -97,9 +97,11 @@ for (const viewport of [
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const container = page.getByTestId("location-map-container");
       const placeholder = page.getByTestId("location-map-placeholder");
+      const directionsFallback = page.getByTestId("location-directions-fallback");
       await expect(container).toBeAttached();
       await expect(placeholder).toBeVisible();
       await expect(placeholder).toContainText("A preparar o mapa");
+      await expect(directionsFallback).toBeVisible();
 
       const before = await container.boundingBox();
       expect(before).toBeTruthy();
@@ -128,6 +130,7 @@ for (const viewport of [
       releaseMap();
       await expect(placeholder).toHaveCount(0);
       await expect(frame).toBeVisible();
+      await expect(directionsFallback).toHaveCount(0);
       expect(await frame.evaluate((element) => getComputedStyle(element).position)).toBe("absolute");
 
       const after = await container.boundingBox();
