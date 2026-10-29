@@ -416,6 +416,7 @@ function getSlotRects(
   slotCount: number,
   region: AvailabilitySocialRect,
   scheduleLayout: AvailabilitySocialScheduleLayout,
+  template: AvailabilitySocialTemplate,
 ) {
   const count = Math.max(0, Math.min(8, slotCount));
   if (count === 0) return [];
@@ -445,7 +446,10 @@ function getSlotRects(
   const singleColumnWidth = isStory
     ? scheduleLayout === "compact" ? 360 : scheduleLayout === "stacked" ? 540 : 430
     : scheduleLayout === "compact" ? 340 : scheduleLayout === "stacked" ? 500 : 380;
-  const slotWidth = columns === 1 ? Math.min(naturalWidth, singleColumnWidth) : naturalWidth;
+  const premiumSingleWidth = isStory ? 460 : 410;
+  const slotWidth = columns === 1
+    ? Math.min(naturalWidth, singleColumnWidth, template === "premium" && count === 1 ? premiumSingleWidth : Number.POSITIVE_INFINITY)
+    : naturalWidth;
   const maxHeight = isStory
     ? scheduleLayout === "compact"
       ? (count === 1 ? 145 : count === 2 ? 140 : count === 3 ? 130 : count <= 4 ? 120 : count <= 6 ? 105 : 92)
@@ -457,9 +461,16 @@ function getSlotRects(
       : scheduleLayout === "stacked"
         ? (count === 1 ? 130 : count === 2 ? 92 : count === 3 ? 82 : count <= 4 ? 94 : count <= 6 ? 78 : 66)
         : (count === 1 ? 125 : count === 2 ? 120 : count === 3 ? 108 : count <= 4 ? 98 : count <= 6 ? 82 : 70);
-  const slotHeight = Math.min(maxHeight, (grid.height - gapY * (rows - 1)) / rows);
+  const premiumSingleHeight = isStory ? 145 : 108;
+  const slotHeight = Math.min(
+    maxHeight,
+    template === "premium" && count === 1 ? premiumSingleHeight : Number.POSITIVE_INFINITY,
+    (grid.height - gapY * (rows - 1)) / rows,
+  );
   const totalHeight = slotHeight * rows + gapY * (rows - 1);
-  const verticalBias = count <= 3 ? (isStory ? 0.44 : 0.43) : 0.5;
+  const verticalBias = template === "premium" && count === 1
+    ? (isStory ? 0.28 : 0.3)
+    : count <= 3 ? (isStory ? 0.44 : 0.43) : 0.5;
   const firstY = grid.y + (grid.height - totalHeight) * verticalBias;
   return Array.from({ length: count }, (_, index) => {
     const row = Math.floor(index / columns);
@@ -475,12 +486,13 @@ export function getAvailabilitySocialImageLayout(
   format: AvailabilitySocialFormat,
   slotCount: number,
   scheduleLayout: AvailabilitySocialScheduleLayout = "balanced",
+  template: AvailabilitySocialTemplate = "classic",
 ): AvailabilitySocialImageLayout {
   const base = FORMAT_LAYOUTS[format];
   return {
     safeArea: { ...base.safeArea }, header: { ...base.header }, title: { ...base.title }, meta: { ...base.meta },
     slots: { ...base.slots },
-    slotRects: getSlotRects(format, slotCount, base.slots, scheduleLayout),
+    slotRects: getSlotRects(format, slotCount, base.slots, scheduleLayout, template),
   };
 }
 
@@ -663,7 +675,7 @@ export async function renderAvailabilitySocialImage(canvas: HTMLCanvasElement, i
   if (input.template === "premium") drawPremiumBackground(context, dimensions.width, dimensions.height);
   await drawImportedBackground(context, input, dimensions.width, dimensions.height);
   drawImportedBackgroundDecoration(context, input, dimensions.width, dimensions.height, palette);
-  const layout = getAvailabilitySocialImageLayout(input.format, input.slots.length, input.visual?.scheduleLayout);
+  const layout = getAvailabilitySocialImageLayout(input.format, input.slots.length, input.visual?.scheduleLayout, input.template);
   await drawHeader(context, input, layout, palette);
   drawTitleAndMeta(context, input, layout, palette);
   drawSlots(context, input, layout, palette);

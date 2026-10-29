@@ -171,6 +171,17 @@ test("slot compositions stay moderate and adapt their rows to the selected amoun
   assert.equal(new Set(stackedThree.map((rect) => rect.y)).size, 3);
 });
 
+test("premium single-slot composition is discreetly smaller and closer to its heading", () => {
+  for (const [format, maximum] of [["story", { width: 460, height: 145 }], ["square", { width: 410, height: 108 }]] as const) {
+    const classic = getAvailabilitySocialImageLayout(format, 1, "stacked", "classic");
+    const premium = getAvailabilitySocialImageLayout(format, 1, "stacked", "premium");
+    assert.ok(premium.slotRects[0].width <= maximum.width);
+    assert.ok(premium.slotRects[0].height <= maximum.height);
+    assert.ok(premium.slotRects[0].width < classic.slotRects[0].width);
+    assert.ok(premium.slotRects[0].y < classic.slotRects[0].y);
+  }
+});
+
 test("saved visual settings are bounded and reject unsafe persisted values", () => {
   assert.equal(
     availabilitySocialPresetStorageKey("location-1"),

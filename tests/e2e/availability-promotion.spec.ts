@@ -99,6 +99,20 @@ async function loginAdmin(page: Page) {
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
 }
 
+async function configureActiveLocationBranding(page: Page, name: string, logoUrl: string) {
+  const locationsResponse = await page.request.get("/api/admin/locations");
+  expect(locationsResponse.ok(), await locationsResponse.text()).toBe(true);
+  const locations = await locationsResponse.json() as Array<{ id: number; isDefault?: boolean }>;
+  const location = locations.find((candidate) => candidate.isDefault) ?? locations[0];
+  expect(location).toBeTruthy();
+  const updateResponse = await page.request.patch(`/api/admin/locations/${location.id}`, {
+    data: { name, logoUrl },
+  });
+  expect(updateResponse.ok(), await updateResponse.text()).toBe(true);
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+}
+
 async function pngDimensions(path: string) {
   const data = await readFile(path);
   expect(data.subarray(1, 4).toString("ascii")).toBe("PNG");
@@ -197,12 +211,13 @@ test("all visual models render atomically across both formats and representative
     };
   });
   let delayedLogoRequests = 0;
-  await page.route("**/images/logo.jpg", async (route) => {
+  await page.route(/\/images\/(?:logo\.jpg|demo-logo\.svg)$/, async (route) => {
     delayedLogoRequests += 1;
     await new Promise((resolve) => setTimeout(resolve, delayedLogoRequests === 1 ? 350 : 40));
     await route.continue();
   });
   await loginAdmin(page);
+  await configureActiveLocationBranding(page, "POWERHOUSE BARBERSHOP", "/images/demo-logo.svg");
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
@@ -213,6 +228,8 @@ test("all visual models render atomically across both formats and representative
   await page.getByRole("button", { name: /Moderno/ }).click();
   await page.getByRole("button", { name: /Premium/ }).click();
   const canvas = page.locator("canvas[aria-label^='Pré-visualização']");
+  await expect(canvas).toHaveAttribute("data-business-name", "POWERHOUSE BARBERSHOP");
+  await expect(canvas).toHaveAttribute("data-location-logo-url", "/images/demo-logo.svg");
   await expect(canvas).toHaveAttribute("data-template", "premium");
   await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
   const rapidPremium = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
@@ -235,6 +252,7 @@ test("all visual models render atomically across both formats and representative
     { template: "Clássico", templateKey: "classic", layout: "Equilibrado", layoutKey: "balanced", format: "Story vertical", formatKey: "story", count: 8, file: "classic-custom-story-8.png" },
     { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Story vertical", formatKey: "story", count: 3, file: "modern-custom-story-3.png" },
     { template: "Premium", templateKey: "premium", layout: "Em lista", layoutKey: "stacked", format: "Story vertical", formatKey: "story", count: 1, file: "premium-custom-story-1.png" },
+    { template: "Premium", templateKey: "premium", layout: "Em lista", layoutKey: "stacked", format: "Publicação quadrada", formatKey: "square", count: 1, file: "premium-custom-square-1.png" },
     { template: "Clássico", templateKey: "classic", layout: "Em lista", layoutKey: "stacked", format: "Publicação quadrada", formatKey: "square", count: 4, file: "classic-custom-square-4.png" },
     { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Publicação quadrada", formatKey: "square", count: 2, file: "modern-custom-square-2.png" },
     { template: "Premium", templateKey: "premium", layout: "Equilibrado", layoutKey: "balanced", format: "Publicação quadrada", formatKey: "square", count: 8, file: "premium-custom-square-8.png" },

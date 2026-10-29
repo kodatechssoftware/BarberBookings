@@ -670,6 +670,8 @@ export default function AvailabilityPromotionTab({
                 data-slot-count={selectedSlots.length}
                 data-schedule-layout={visualSettings.scheduleLayout}
                 data-custom-background={Boolean(visualSettings.backgroundImageId)}
+                data-business-name={businessName}
+                data-location-logo-url={logoUrl}
                 className="block h-auto w-full"
               />
               {(isRendering || isAvailabilitySelectionPending) && (
