@@ -116,15 +116,64 @@ function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, wi
   context.closePath();
 }
 
-function drawTrackingText(context: CanvasRenderingContext2D, value: string, x: number, y: number, tracking: number) {
+export function getAvailabilitySocialTrackedGlyphLayout(
+  value: string,
+  glyphWidths: number[],
+  centerX: number,
+  tracking: number,
+) {
   const characters = Array.from(value);
-  const widths = characters.map((character) => context.measureText(character).width);
-  const totalWidth = widths.reduce((total, width) => total + width, 0) + tracking * Math.max(0, characters.length - 1);
-  let cursor = x - totalWidth / 2;
-  characters.forEach((character, index) => {
-    context.fillText(character, cursor, y);
-    cursor += widths[index] + tracking;
+  const totalWidth = glyphWidths.reduce((total, width) => total + width, 0)
+    + tracking * Math.max(0, characters.length - 1);
+  let cursor = centerX - totalWidth / 2;
+  return characters.map((character, index) => {
+    const glyph = { character, x: cursor, width: glyphWidths[index] ?? 0 };
+    cursor += glyph.width + tracking;
+    return glyph;
   });
+}
+
+function measureTrackingText(context: CanvasRenderingContext2D, value: string, tracking: number) {
+  const characters = Array.from(value);
+  return characters.reduce((total, character) => total + context.measureText(character).width, 0)
+    + tracking * Math.max(0, characters.length - 1);
+}
+
+function ellipsizeTrackingText(
+  context: CanvasRenderingContext2D,
+  value: string,
+  maxWidth: number,
+  tracking: number,
+) {
+  if (measureTrackingText(context, value, tracking) <= maxWidth) return value;
+  let candidate = value.trim();
+  while (candidate.length > 1 && measureTrackingText(context, `${candidate}…`, tracking) > maxWidth) {
+    candidate = candidate.slice(0, -1).trimEnd();
+  }
+  return `${candidate}…`;
+}
+
+function drawTrackingText(
+  context: CanvasRenderingContext2D,
+  value: string,
+  x: number,
+  y: number,
+  tracking: number,
+  maxWidth = Number.POSITIVE_INFINITY,
+) {
+  const fittedValue = Number.isFinite(maxWidth)
+    ? ellipsizeTrackingText(context, value, maxWidth, tracking)
+    : value;
+  const characters = Array.from(fittedValue);
+  const widths = characters.map((character) => context.measureText(character).width);
+  const glyphs = getAvailabilitySocialTrackedGlyphLayout(fittedValue, widths, x, tracking);
+  context.save();
+  // Each glyph is positioned from its left edge. Inheriting `center` here shifts
+  // every character by a different amount and creates apparently random gaps.
+  context.textAlign = "left";
+  glyphs.forEach((glyph) => context.fillText(glyph.character, glyph.x, y));
+  context.restore();
+  return fittedValue;
 }
 
 function ellipsizeText(context: CanvasRenderingContext2D, value: string, maxWidth: number) {
@@ -381,21 +430,37 @@ function getSlotRects(
   const columns = count === 1
     ? 1
     : scheduleLayout === "stacked"
-      ? (count <= 4 ? 1 : 2)
-      : scheduleLayout === "compact"
-        ? (count <= 3 ? count : count <= 6 ? 3 : 4)
+      ? (count <= 3 ? 1 : 2)
+      : scheduleLayout === "compact" && count === 3
+        ? 3
         : 2;
   const rows = Math.ceil(count / columns);
-  const gapX = isStory ? 28 : 20;
-  const gapY = isStory ? 26 : 14;
+  const gapX = isStory
+    ? scheduleLayout === "compact" ? 22 : 28
+    : scheduleLayout === "compact" ? 16 : 20;
+  const gapY = isStory
+    ? scheduleLayout === "compact" ? 18 : scheduleLayout === "stacked" ? 22 : 26
+    : scheduleLayout === "compact" ? 10 : 14;
   const naturalWidth = (grid.width - gapX * (columns - 1)) / columns;
-  const slotWidth = columns === 1 ? Math.min(naturalWidth, isStory ? 650 : 570) : naturalWidth;
+  const singleColumnWidth = isStory
+    ? scheduleLayout === "compact" ? 360 : scheduleLayout === "stacked" ? 540 : 430
+    : scheduleLayout === "compact" ? 340 : scheduleLayout === "stacked" ? 500 : 380;
+  const slotWidth = columns === 1 ? Math.min(naturalWidth, singleColumnWidth) : naturalWidth;
   const maxHeight = isStory
-    ? (count === 1 ? 310 : count === 2 ? 250 : count <= 4 ? 205 : count <= 6 ? 165 : 145)
-    : (count === 1 ? 230 : count === 2 ? 190 : count <= 4 ? 135 : count <= 6 ? 105 : 88);
+    ? scheduleLayout === "compact"
+      ? (count === 1 ? 145 : count === 2 ? 140 : count === 3 ? 130 : count <= 4 ? 120 : count <= 6 ? 105 : 92)
+      : scheduleLayout === "stacked"
+        ? (count === 1 ? 175 : count === 2 ? 130 : count === 3 ? 115 : count <= 4 ? 145 : count <= 6 ? 125 : 108)
+        : (count === 1 ? 170 : count === 2 ? 175 : count === 3 ? 160 : count <= 4 ? 155 : count <= 6 ? 138 : 120)
+    : scheduleLayout === "compact"
+      ? (count === 1 ? 110 : count === 2 ? 100 : count === 3 ? 95 : count <= 4 ? 82 : count <= 6 ? 68 : 58)
+      : scheduleLayout === "stacked"
+        ? (count === 1 ? 130 : count === 2 ? 92 : count === 3 ? 82 : count <= 4 ? 94 : count <= 6 ? 78 : 66)
+        : (count === 1 ? 125 : count === 2 ? 120 : count === 3 ? 108 : count <= 4 ? 98 : count <= 6 ? 82 : 70);
   const slotHeight = Math.min(maxHeight, (grid.height - gapY * (rows - 1)) / rows);
   const totalHeight = slotHeight * rows + gapY * (rows - 1);
-  const firstY = grid.y + (grid.height - totalHeight) / 2;
+  const verticalBias = count <= 3 ? (isStory ? 0.44 : 0.43) : 0.5;
+  const firstY = grid.y + (grid.height - totalHeight) * verticalBias;
   return Array.from({ length: count }, (_, index) => {
     const row = Math.floor(index / columns);
     const column = index % columns;
@@ -449,8 +514,14 @@ function drawHeader(
     context.font = `700 ${isStory ? 25 : 20}px "DM Sans", Arial, sans-serif`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    const brand = ellipsizeText(context, input.businessName.toUpperCase(), layout.header.width - 80);
-    drawTrackingText(context, brand, layout.header.x + layout.header.width / 2, layout.header.y + layout.header.height - (isStory ? 10 : 12), isStory ? 4.5 : 3.2);
+    drawTrackingText(
+      context,
+      input.businessName.toUpperCase(),
+      layout.header.x + layout.header.width / 2,
+      layout.header.y + layout.header.height - (isStory ? 10 : 12),
+      isStory ? 4.5 : 3.2,
+      layout.header.width - 80,
+    );
   });
 }
 
@@ -508,7 +579,14 @@ function drawSlots(
   context.textBaseline = "middle";
   context.fillStyle = input.template === "modern" ? COLORS.cream : palette.accent;
   context.font = `800 ${isStory ? 24 : 19}px "DM Sans", Arial, sans-serif`;
-  drawTrackingText(context, slots.length === 1 ? "HORÁRIO EM DESTAQUE" : "HORÁRIOS DISPONÍVEIS", width / 2, layout.slots.y + (isStory ? 28 : 20), isStory ? 3.2 : 2.4);
+  drawTrackingText(
+    context,
+    slots.length === 1 ? "HORÁRIO EM DESTAQUE" : "HORÁRIOS DISPONÍVEIS",
+    width / 2,
+    layout.slots.y + (isStory ? 28 : 20),
+    isStory ? 3.2 : 2.4,
+    layout.slots.width - 40,
+  );
   if (slots.length === 0) {
     context.fillStyle = COLORS.muted;
     context.font = `600 ${isStory ? 42 : 34}px "DM Sans", Arial, sans-serif`;

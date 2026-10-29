@@ -4,6 +4,7 @@ import { getAvailableTimeSlots, calendarTimeInTimeZone } from "../../client/src/
 import {
   getAvailabilitySocialImageLayout,
   getAvailabilitySocialImageDimensions,
+  getAvailabilitySocialTrackedGlyphLayout,
   formatAvailabilitySocialServiceLine,
   sanitizeAvailabilitySocialFileName,
   type AvailabilitySocialRect,
@@ -93,10 +94,27 @@ function intersects(first: AvailabilitySocialRect, second: AvailabilitySocialRec
     && first.y + first.height > second.y;
 }
 
-test("story and square layouts keep content regions and 1/2/4/6/8 slots separated", () => {
+test("tracked headings keep variable-width and accented glyphs uniformly positioned around the center", () => {
+  const value = "POWERHOUSE BARBERSHOP 24/7 — Ç";
+  const characters = Array.from(value);
+  const widths = characters.map((character) => character === " " ? 9 : "MW".includes(character) ? 22 : 14);
+  const tracking = 4;
+  const centerX = 540;
+  const glyphs = getAvailabilitySocialTrackedGlyphLayout(value, widths, centerX, tracking);
+
+  assert.equal(glyphs.length, characters.length);
+  for (let index = 1; index < glyphs.length; index += 1) {
+    assert.equal(glyphs[index].x - glyphs[index - 1].x, widths[index - 1] + tracking);
+  }
+  const firstEdge = glyphs[0].x;
+  const lastEdge = glyphs.at(-1)!.x + glyphs.at(-1)!.width;
+  assert.equal((firstEdge + lastEdge) / 2, centerX);
+});
+
+test("story and square layouts keep content regions and 1/2/3/4/6/8 slots separated", () => {
   for (const format of ["story", "square"] as const) {
     for (const scheduleLayout of ["balanced", "compact", "stacked"] as const) {
-      for (const slotCount of [1, 2, 4, 6, 8]) {
+      for (const slotCount of [1, 2, 3, 4, 6, 8]) {
       const layout = getAvailabilitySocialImageLayout(format, slotCount, scheduleLayout);
       const regions = [layout.header, layout.title, layout.meta, layout.slots];
 
@@ -122,6 +140,35 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
       }
     }
   }
+});
+
+test("slot compositions stay moderate and adapt their rows to the selected amount", () => {
+  const storySingle = getAvailabilitySocialImageLayout("story", 1, "balanced").slotRects[0];
+  const squareSingle = getAvailabilitySocialImageLayout("square", 1, "balanced").slotRects[0];
+  assert.ok(storySingle.width <= 430 && storySingle.height <= 170);
+  assert.ok(squareSingle.width <= 380 && squareSingle.height <= 125);
+
+  for (const format of ["story", "square"] as const) {
+    const two = getAvailabilitySocialImageLayout(format, 2, "balanced").slotRects;
+    assert.equal(two[0].y, two[1].y, `${format}: two slots should sit side by side`);
+
+    const three = getAvailabilitySocialImageLayout(format, 3, "balanced").slotRects;
+    assert.equal(three[0].y, three[1].y, `${format}: first row should contain two slots`);
+    assert.ok(three[2].y > three[0].y, `${format}: third slot should form a centered second row`);
+
+    for (const count of [4, 6, 8]) {
+      const rects = getAvailabilitySocialImageLayout(format, count, "balanced").slotRects;
+      assert.equal(new Set(rects.map((rect) => rect.x)).size, 2, `${format}/${count}: expected two columns`);
+    }
+  }
+
+  const compactThree = getAvailabilitySocialImageLayout("story", 3, "compact").slotRects;
+  assert.equal(new Set(compactThree.map((rect) => rect.x)).size, 3);
+  assert.equal(new Set(compactThree.map((rect) => rect.y)).size, 1);
+
+  const stackedThree = getAvailabilitySocialImageLayout("story", 3, "stacked").slotRects;
+  assert.equal(new Set(stackedThree.map((rect) => rect.x)).size, 1);
+  assert.equal(new Set(stackedThree.map((rect) => rect.y)).size, 3);
 });
 
 test("saved visual settings are bounded and reject unsafe persisted values", () => {

@@ -154,7 +154,7 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   const storyDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Descarregar PNG" }).click();
   const storyDownload = await storyDownloadPromise;
-  expect(storyDownload.suggestedFilename()).toMatch(/^baptista-barber-shop-vagas-.*-story\.png$/);
+  expect(storyDownload.suggestedFilename()).toMatch(/^[a-z0-9-]+-vagas-.*-story\.png$/);
   const storyPath = await storyDownload.path();
   expect(storyPath).not.toBeNull();
   expect(await pngDimensions(storyPath!)).toEqual({ width: 1080, height: 1920 });
@@ -233,7 +233,7 @@ test("all visual models render atomically across both formats and representative
 
   const samples = [
     { template: "Clássico", templateKey: "classic", layout: "Equilibrado", layoutKey: "balanced", format: "Story vertical", formatKey: "story", count: 8, file: "classic-custom-story-8.png" },
-    { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Story vertical", formatKey: "story", count: 6, file: "modern-custom-story-6.png" },
+    { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Story vertical", formatKey: "story", count: 3, file: "modern-custom-story-3.png" },
     { template: "Premium", templateKey: "premium", layout: "Em lista", layoutKey: "stacked", format: "Story vertical", formatKey: "story", count: 1, file: "premium-custom-story-1.png" },
     { template: "Clássico", templateKey: "classic", layout: "Em lista", layoutKey: "stacked", format: "Publicação quadrada", formatKey: "square", count: 4, file: "classic-custom-square-4.png" },
     { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Publicação quadrada", formatKey: "square", count: 2, file: "modern-custom-square-2.png" },

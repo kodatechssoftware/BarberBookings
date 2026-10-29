@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 const port = Number(process.env.E2E_AVAILABILITY_PROMOTION_PORT || 5036);
 const baseURL = `http://127.0.0.1:${port}`;
+const shopName = process.env.AVAILABILITY_PROMOTION_SHOP_NAME || "Baptista Barber Shop";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -20,10 +21,10 @@ export default defineConfig({
     env: {
       TZ: "UTC",
       APP_ENV: "development",
-      SHOP_NAME: "Baptista Barber Shop",
+      SHOP_NAME: shopName,
       SHOP_ADDRESS: "R. Cmte. Agatão Lança 28, 4640-142 Baião",
       SHOP_TIME_ZONE: "Europe/Lisbon",
-      VITE_SHOP_NAME: "Baptista Barber Shop",
+      VITE_SHOP_NAME: shopName,
       VITE_SHOP_SHORT_NAME: "Baptista",
       VITE_SHOP_LOGO_URL: "/images/logo.jpg",
       USE_MEMORY_STORAGE: "true",
