@@ -225,13 +225,19 @@ test("all visual models render atomically across both formats and representative
   const stablePremium = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
   expect(rapidPremium).toBe(stablePremium);
 
+  await page.getByTestId("availability-social-customizer").locator("summary").click();
+  await page.getByLabel("Importar imagem de fundo").setInputFiles(join(process.cwd(), "client/public/images/powerhouse-hero.jpg"));
+  await expect(canvas).toHaveAttribute("data-custom-background", "true");
+  await page.getByLabel("Cor de destaque").fill("#E5C15A");
+  await page.getByLabel("Cor secundária").fill("#7A2030");
+
   const samples = [
-    { template: "Clássico", templateKey: "classic", format: "Story vertical", formatKey: "story", count: 8, file: "classic-story-8.png" },
-    { template: "Moderno", templateKey: "modern", format: "Story vertical", formatKey: "story", count: 6, file: "modern-story-6.png" },
-    { template: "Premium", templateKey: "premium", format: "Story vertical", formatKey: "story", count: 1, file: "premium-story-1.png" },
-    { template: "Clássico", templateKey: "classic", format: "Publicação quadrada", formatKey: "square", count: 4, file: "classic-square-4.png" },
-    { template: "Moderno", templateKey: "modern", format: "Publicação quadrada", formatKey: "square", count: 2, file: "modern-square-2.png" },
-    { template: "Premium", templateKey: "premium", format: "Publicação quadrada", formatKey: "square", count: 8, file: "premium-square-8.png" },
+    { template: "Clássico", templateKey: "classic", layout: "Equilibrado", layoutKey: "balanced", format: "Story vertical", formatKey: "story", count: 8, file: "classic-custom-story-8.png" },
+    { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Story vertical", formatKey: "story", count: 6, file: "modern-custom-story-6.png" },
+    { template: "Premium", templateKey: "premium", layout: "Em lista", layoutKey: "stacked", format: "Story vertical", formatKey: "story", count: 1, file: "premium-custom-story-1.png" },
+    { template: "Clássico", templateKey: "classic", layout: "Em lista", layoutKey: "stacked", format: "Publicação quadrada", formatKey: "square", count: 4, file: "classic-custom-square-4.png" },
+    { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Publicação quadrada", formatKey: "square", count: 2, file: "modern-custom-square-2.png" },
+    { template: "Premium", templateKey: "premium", layout: "Equilibrado", layoutKey: "balanced", format: "Publicação quadrada", formatKey: "square", count: 8, file: "premium-custom-square-8.png" },
   ] as const;
   const artifactDir = process.env.AVAILABILITY_SOCIAL_ARTIFACT_DIR;
   if (artifactDir) await mkdir(artifactDir, { recursive: true });
@@ -239,9 +245,11 @@ test("all visual models render atomically across both formats and representative
   for (const sample of samples) {
     await selectFirstSlots(slotCheckboxes, sample.count);
     await page.getByRole("button", { name: new RegExp(sample.template) }).click();
+    await page.getByRole("button", { name: new RegExp(sample.layout) }).click();
     await page.getByRole("button", { name: new RegExp(sample.format) }).click();
     await expect(canvas).toHaveAttribute("data-template", sample.templateKey);
     await expect(canvas).toHaveAttribute("data-format", sample.formatKey);
+    await expect(canvas).toHaveAttribute("data-schedule-layout", sample.layoutKey);
     await expect(canvas).toHaveAttribute("data-slot-count", String(sample.count));
     await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
     const preview = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png").split(",")[1]);
@@ -266,6 +274,8 @@ test("all visual models render atomically across both formats and representative
 test("empty dates, mobile preview and download fallback remain safe", async ({ page }) => {
   await loginAdmin(page);
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const customizer = page.getByTestId("availability-social-customizer");
+  await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
   const futureSunday = nextDateMatching(bookingWindow.today, (date) => date.getDay() === 0);
@@ -302,7 +312,8 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const yesterday = addDaysToDateKey(bookingWindow.today, -1);
   const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
-  const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const firstOpenWeekday = calendarDate(firstOpenDate).getDay();
+  const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() === firstOpenWeekday);
   const futureSunday = nextDateMatching(secondOpenDate, (date) => date.getDay() === 0);
 
   await expect(page.getByRole("button", { name: "Hoje", exact: true })).toBeVisible();
@@ -330,6 +341,7 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
 
   await page.getByRole("button", { name: "Escolher data" }).click();
   await expect(calendarDay(calendar, firstOpenDate)).toHaveAttribute("aria-selected", "true");
+  await showCalendarMonth(calendar, secondOpenDate);
   await calendarDay(calendar, secondOpenDate).click();
   await expect(slotCheckboxes.nth(1)).toBeVisible();
   await expect.poll(() => selectedSlotLabels(slotCheckboxes)).toEqual(firstSelection);
@@ -342,6 +354,115 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
   await expect(slotCheckboxes.first()).toBeVisible();
   await expect.poll(() => appointmentRequests.get(firstOpenDate) ?? 0).toBe(1);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+});
+
+test("visual customization imports an optimized background and reuses a named local preset", async ({ page }) => {
+  await loginAdmin(page);
+  const unexpectedWrites: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "GET" && request.url().includes("/api/")) unexpectedWrites.push(`${request.method()} ${request.url()}`);
+  });
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const customizer = page.getByTestId("availability-social-customizer");
+  await expect(customizer).not.toHaveAttribute("open", "");
+  const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  await selectPromotionDate(page, futureOpenDate);
+  await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
+
+  const canvas = page.locator("canvas[aria-label^='Pré-visualização']");
+  const originalPreview = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
+  await customizer.locator("summary").click();
+  const backgroundInput = page.getByLabel("Importar imagem de fundo");
+  await backgroundInput.setInputFiles({
+    name: "unsafe.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"),
+  });
+  await expect(page.getByText("Escolha uma imagem JPG, PNG ou WebP.", { exact: true })).toBeVisible();
+
+  await backgroundInput.setInputFiles(join(process.cwd(), "client/public/images/powerhouse-hero.jpg"));
+  await expect(page.getByText("powerhouse-hero.jpg", { exact: true })).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-custom-background", "true");
+  await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"))).not.toBe(originalPreview);
+
+  await page.getByRole("button", { name: /Compacto/ }).click();
+  await expect(canvas).toHaveAttribute("data-schedule-layout", "compact");
+  await page.getByLabel("Cor de destaque").fill("#6ED5C2");
+  await page.getByLabel("Escurecimento").press("ArrowRight");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+  await page.getByLabel("Nome do modelo").fill("Modelo QA personalizado");
+  await page.getByRole("button", { name: "Guardar novo" }).click();
+  await expect(page.getByText("Modelo QA personalizado", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Predefinido/)).toBeVisible();
+
+  await page.getByLabel("Cor secundária").fill("#315A7D");
+  await page.getByLabel("Nome do modelo").fill("Modelo QA atualizado");
+  await page.getByRole("button", { name: "Atualizar selecionado" }).click();
+  await expect(page.getByText("Modelo QA atualizado", { exact: true })).toBeVisible();
+  const [activeLocation] = await (await page.request.get("/api/account/locations")).json();
+  const presetStorageKeys = await page.evaluate(() => Object.keys(localStorage)
+    .filter((key) => key.startsWith("barberbookings:availability-social-presets:")));
+  expect(presetStorageKeys).toEqual([`barberbookings:availability-social-presets:v2:location-${activeLocation.id}`]);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Descarregar PNG" }).click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  const preview = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png").split(",")[1]);
+  expect((await readFile(path!)).toString("base64")).toBe(preview);
+
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  await expect(page.getByText("Modelo QA atualizado", { exact: true })).toBeVisible();
+  await expect(customizer).not.toHaveAttribute("open", "");
+  await customizer.locator("summary").click();
+  await expect(page.getByText("powerhouse-hero.jpg", { exact: true })).toBeVisible();
+  await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-custom-background", "true");
+  await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-schedule-layout", "compact");
+
+  await page.getByRole("button", { name: "Repor modelo original" }).click();
+  await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-custom-background", "false");
+  await page.getByLabel("Eliminar modelo Modelo QA atualizado").click();
+  await expect(page.getByRole("alertdialog")).toContainText("Modelo QA atualizado");
+  await page.getByRole("button", { name: "Eliminar modelo", exact: true }).click();
+  await expect(page.getByText("Modelo QA atualizado", { exact: true })).toHaveCount(0);
+  expect(unexpectedWrites).toEqual([]);
+});
+
+test("visual presets fail closed when browser image or settings storage is unavailable", async ({ page }) => {
+  await loginAdmin(page);
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  await page.getByTestId("availability-social-customizer").locator("summary").click();
+
+  await page.evaluate(() => {
+    Object.defineProperty(window, "indexedDB", { configurable: true, value: undefined });
+  });
+  await page.getByLabel("Importar imagem de fundo").setInputFiles(join(process.cwd(), "client/public/images/powerhouse-hero.jpg"));
+  await expect(page.getByText("Não foi possível importar a imagem", { exact: true })).toBeVisible();
+  await expect(page.getByText("Não foi possível guardar a imagem neste navegador. Verifique o espaço e as permissões de armazenamento.", { exact: true })).toBeVisible();
+  await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-custom-background", "false");
+
+  await page.evaluate(() => {
+    const originalSetItem = Storage.prototype.setItem;
+    Object.defineProperty(Storage.prototype, "setItem", {
+      configurable: true,
+      value(key: string, value: string) {
+        if (key.startsWith("barberbookings:availability-social-presets:")) {
+          throw new DOMException("Storage unavailable", "QuotaExceededError");
+        }
+        return originalSetItem.call(this, key, value);
+      },
+    });
+  });
+  await page.getByLabel("Nome do modelo").fill("Modelo sem armazenamento");
+  await page.getByRole("button", { name: "Guardar novo" }).click();
+  await expect(page.getByText("Não foi possível guardar", { exact: true })).toBeVisible();
+  await expect(page.getByText("Não foi possível guardar o modelo neste navegador. Verifique o espaço e as permissões de armazenamento.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Modelo sem armazenamento", { exact: true })).toHaveCount(0);
 });
 
 test("Instagram preparation keeps download and canonical booking-link copy as separate mobile-safe actions", async ({ page, context }) => {
