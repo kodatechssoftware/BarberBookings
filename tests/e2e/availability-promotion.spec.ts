@@ -225,6 +225,7 @@ test("all visual models render atomically across both formats and representative
   const stablePremium = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
   expect(rapidPremium).toBe(stablePremium);
 
+  await page.getByTestId("availability-social-customizer").locator("summary").click();
   await page.getByLabel("Importar imagem de fundo").setInputFiles(join(process.cwd(), "client/public/images/powerhouse-hero.jpg"));
   await expect(canvas).toHaveAttribute("data-custom-background", "true");
   await page.getByLabel("Cor de destaque").fill("#E5C15A");
@@ -273,6 +274,8 @@ test("all visual models render atomically across both formats and representative
 test("empty dates, mobile preview and download fallback remain safe", async ({ page }) => {
   await loginAdmin(page);
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const customizer = page.getByTestId("availability-social-customizer");
+  await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
   const futureSunday = nextDateMatching(bookingWindow.today, (date) => date.getDay() === 0);
@@ -309,7 +312,8 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const yesterday = addDaysToDateKey(bookingWindow.today, -1);
   const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
-  const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const firstOpenWeekday = calendarDate(firstOpenDate).getDay();
+  const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() === firstOpenWeekday);
   const futureSunday = nextDateMatching(secondOpenDate, (date) => date.getDay() === 0);
 
   await expect(page.getByRole("button", { name: "Hoje", exact: true })).toBeVisible();
@@ -337,6 +341,7 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
 
   await page.getByRole("button", { name: "Escolher data" }).click();
   await expect(calendarDay(calendar, firstOpenDate)).toHaveAttribute("aria-selected", "true");
+  await showCalendarMonth(calendar, secondOpenDate);
   await calendarDay(calendar, secondOpenDate).click();
   await expect(slotCheckboxes.nth(1)).toBeVisible();
   await expect.poll(() => selectedSlotLabels(slotCheckboxes)).toEqual(firstSelection);
@@ -358,6 +363,8 @@ test("visual customization imports an optimized background and reuses a named lo
     if (request.method() !== "GET" && request.url().includes("/api/")) unexpectedWrites.push(`${request.method()} ${request.url()}`);
   });
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  const customizer = page.getByTestId("availability-social-customizer");
+  await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
@@ -365,6 +372,7 @@ test("visual customization imports an optimized background and reuses a named lo
 
   const canvas = page.locator("canvas[aria-label^='Pré-visualização']");
   const originalPreview = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
+  await customizer.locator("summary").click();
   const backgroundInput = page.getByLabel("Importar imagem de fundo");
   await backgroundInput.setInputFiles({
     name: "unsafe.svg",
@@ -385,9 +393,18 @@ test("visual customization imports an optimized background and reuses a named lo
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   await page.getByLabel("Nome do modelo").fill("Modelo QA personalizado");
-  await page.getByRole("button", { name: "Guardar modelo" }).click();
+  await page.getByRole("button", { name: "Guardar novo" }).click();
   await expect(page.getByText("Modelo QA personalizado", { exact: true })).toBeVisible();
   await expect(page.getByText(/Predefinido/)).toBeVisible();
+
+  await page.getByLabel("Cor secundária").fill("#315A7D");
+  await page.getByLabel("Nome do modelo").fill("Modelo QA atualizado");
+  await page.getByRole("button", { name: "Atualizar selecionado" }).click();
+  await expect(page.getByText("Modelo QA atualizado", { exact: true })).toBeVisible();
+  const [activeLocation] = await (await page.request.get("/api/account/locations")).json();
+  const presetStorageKeys = await page.evaluate(() => Object.keys(localStorage)
+    .filter((key) => key.startsWith("barberbookings:availability-social-presets:")));
+  expect(presetStorageKeys).toEqual([`barberbookings:availability-social-presets:v2:location-${activeLocation.id}`]);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Descarregar PNG" }).click();
@@ -400,17 +417,52 @@ test("visual customization imports an optimized background and reuses a named lo
   await page.reload();
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  await expect(page.getByText("Modelo QA atualizado", { exact: true })).toBeVisible();
+  await expect(customizer).not.toHaveAttribute("open", "");
+  await customizer.locator("summary").click();
   await expect(page.getByText("powerhouse-hero.jpg", { exact: true })).toBeVisible();
   await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-custom-background", "true");
   await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-schedule-layout", "compact");
 
   await page.getByRole("button", { name: "Repor modelo original" }).click();
   await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-custom-background", "false");
-  await page.getByLabel("Eliminar modelo Modelo QA personalizado").click();
-  await expect(page.getByRole("alertdialog")).toContainText("Modelo QA personalizado");
+  await page.getByLabel("Eliminar modelo Modelo QA atualizado").click();
+  await expect(page.getByRole("alertdialog")).toContainText("Modelo QA atualizado");
   await page.getByRole("button", { name: "Eliminar modelo", exact: true }).click();
-  await expect(page.getByText("Modelo QA personalizado", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Modelo QA atualizado", { exact: true })).toHaveCount(0);
   expect(unexpectedWrites).toEqual([]);
+});
+
+test("visual presets fail closed when browser image or settings storage is unavailable", async ({ page }) => {
+  await loginAdmin(page);
+  await page.getByRole("tab", { name: "Divulgar vagas" }).click();
+  await page.getByTestId("availability-social-customizer").locator("summary").click();
+
+  await page.evaluate(() => {
+    Object.defineProperty(window, "indexedDB", { configurable: true, value: undefined });
+  });
+  await page.getByLabel("Importar imagem de fundo").setInputFiles(join(process.cwd(), "client/public/images/powerhouse-hero.jpg"));
+  await expect(page.getByText("Não foi possível importar a imagem", { exact: true })).toBeVisible();
+  await expect(page.getByText("Não foi possível guardar a imagem neste navegador. Verifique o espaço e as permissões de armazenamento.", { exact: true })).toBeVisible();
+  await expect(page.locator("canvas[aria-label^='Pré-visualização']")).toHaveAttribute("data-custom-background", "false");
+
+  await page.evaluate(() => {
+    const originalSetItem = Storage.prototype.setItem;
+    Object.defineProperty(Storage.prototype, "setItem", {
+      configurable: true,
+      value(key: string, value: string) {
+        if (key.startsWith("barberbookings:availability-social-presets:")) {
+          throw new DOMException("Storage unavailable", "QuotaExceededError");
+        }
+        return originalSetItem.call(this, key, value);
+      },
+    });
+  });
+  await page.getByLabel("Nome do modelo").fill("Modelo sem armazenamento");
+  await page.getByRole("button", { name: "Guardar novo" }).click();
+  await expect(page.getByText("Não foi possível guardar", { exact: true })).toBeVisible();
+  await expect(page.getByText("Não foi possível guardar o modelo neste navegador. Verifique o espaço e as permissões de armazenamento.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Modelo sem armazenamento", { exact: true })).toHaveCount(0);
 });
 
 test("Instagram preparation keeps download and canonical booking-link copy as separate mobile-safe actions", async ({ page, context }) => {

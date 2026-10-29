@@ -13,7 +13,7 @@ export type AvailabilitySocialPreset = {
   settings: AvailabilitySocialVisualSettings;
 };
 
-const STORAGE_KEY = "barberbookings:availability-social-presets:v1";
+const STORAGE_KEY_PREFIX = "barberbookings:availability-social-presets:v2";
 const DATABASE_NAME = "barberbookings-availability-social-assets";
 const DATABASE_VERSION = 1;
 const OBJECT_STORE = "backgrounds";
@@ -23,6 +23,15 @@ export const MAX_OPTIMIZED_BACKGROUND_BYTES = 2.5 * 1024 * 1024;
 
 const validTemplates = new Set<AvailabilitySocialTemplate>(["classic", "modern", "premium"]);
 const validLayouts = new Set<AvailabilitySocialScheduleLayout>(["balanced", "compact", "stacked"]);
+
+function normalizeStorageScope(value: string | number | null | undefined) {
+  const normalized = String(value ?? "default").trim().replace(/[^a-z0-9_-]+/gi, "-").slice(0, 80);
+  return normalized || "default";
+}
+
+export function availabilitySocialPresetStorageKey(scope?: string | number | null) {
+  return `${STORAGE_KEY_PREFIX}:${normalizeStorageScope(scope)}`;
+}
 
 function isHexColor(value: unknown): value is string {
   return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
@@ -73,10 +82,10 @@ export function normalizeAvailabilitySocialSettings(value: unknown): Availabilit
   };
 }
 
-export function loadAvailabilitySocialPresets(): AvailabilitySocialPreset[] {
+export function loadAvailabilitySocialPresets(scope?: string | number | null): AvailabilitySocialPreset[] {
   if (typeof window === "undefined") return [];
   try {
-    const value = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]");
+    const value = JSON.parse(window.localStorage.getItem(availabilitySocialPresetStorageKey(scope)) || "[]");
     if (!Array.isArray(value)) return [];
     return value.slice(0, MAX_PRESETS).flatMap((item): AvailabilitySocialPreset[] => {
       if (!item || typeof item !== "object") return [];
@@ -96,9 +105,19 @@ export function loadAvailabilitySocialPresets(): AvailabilitySocialPreset[] {
   }
 }
 
-export function persistAvailabilitySocialPresets(presets: AvailabilitySocialPreset[]) {
+export function persistAvailabilitySocialPresets(
+  presets: AvailabilitySocialPreset[],
+  scope?: string | number | null,
+) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(presets.slice(0, MAX_PRESETS)));
+  try {
+    window.localStorage.setItem(
+      availabilitySocialPresetStorageKey(scope),
+      JSON.stringify(presets.slice(0, MAX_PRESETS)),
+    );
+  } catch {
+    throw new Error("Não foi possível guardar o modelo neste navegador. Verifique o espaço e as permissões de armazenamento.");
+  }
 }
 
 export function createAvailabilitySocialPreset(
@@ -152,7 +171,11 @@ async function runBackgroundTransaction<T>(
 }
 
 export async function saveAvailabilitySocialBackground(id: string, blob: Blob) {
-  await runBackgroundTransaction("readwrite", (store) => store.put(blob, id));
+  try {
+    await runBackgroundTransaction("readwrite", (store) => store.put(blob, id));
+  } catch {
+    throw new Error("Não foi possível guardar a imagem neste navegador. Verifique o espaço e as permissões de armazenamento.");
+  }
 }
 
 export async function loadAvailabilitySocialBackground(id: string) {

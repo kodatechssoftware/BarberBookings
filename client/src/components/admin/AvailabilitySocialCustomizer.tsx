@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ImagePlus, RotateCcw, Save, Star, Trash2, X } from "lucide-react";
 import {
   AlertDialog,
@@ -27,6 +27,7 @@ type AvailabilitySocialCustomizerProps = {
   onImportBackground: (file: File) => Promise<void>;
   onRemoveBackground: () => Promise<void>;
   onSavePreset: (name: string) => void;
+  onUpdatePreset: (id: string, name: string) => Promise<void>;
   onSelectPreset: (preset: AvailabilitySocialPreset) => Promise<void>;
   onSetDefaultPreset: (id: string) => void;
   onDeletePreset: (id: string) => Promise<void>;
@@ -48,6 +49,7 @@ export default function AvailabilitySocialCustomizer({
   onImportBackground,
   onRemoveBackground,
   onSavePreset,
+  onUpdatePreset,
   onSelectPreset,
   onSetDefaultPreset,
   onDeletePreset,
@@ -56,10 +58,25 @@ export default function AvailabilitySocialCustomizer({
   const [presetName, setPresetName] = useState("");
   const [deletePresetId, setDeletePresetId] = useState<string | null>(null);
   const presetToDelete = presets.find((preset) => preset.id === deletePresetId);
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
+
+  useEffect(() => {
+    if (selectedPreset) setPresetName(selectedPreset.name);
+  }, [selectedPreset]);
 
   return (
     <div className="space-y-6">
-      <section className="space-y-3 rounded-xl border border-white/10 bg-background/35 p-4">
+      <details data-testid="availability-social-customizer" className="group rounded-xl border border-white/10 bg-background/35">
+        <summary className="cursor-pointer list-none px-4 py-3 font-semibold text-white marker:hidden">
+          <span className="flex items-center justify-between gap-3">
+            Personalizar modelo
+            <span className="text-xs font-normal text-gray-400">
+              Opcional · <span className="group-open:hidden">abrir</span><span className="hidden group-open:inline">fechar</span>
+            </span>
+          </span>
+        </summary>
+        <div className="space-y-6 border-t border-white/10 p-4">
+      <section className="space-y-3">
         <div>
           <p className="font-semibold text-white">Imagem de fundo</p>
           <p className="mt-1 text-xs leading-relaxed text-gray-400">JPG, PNG ou WebP até 10 MB. A imagem é otimizada antes de ser guardada neste dispositivo.</p>
@@ -131,17 +148,24 @@ export default function AvailabilitySocialCustomizer({
           })}
         </div>
       </fieldset>
+        </div>
+      </details>
 
       <section className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
         <div>
           <p className="font-semibold text-white">Modelos guardados</p>
           <p className="mt-1 text-xs leading-relaxed text-gray-400">Disponíveis apenas neste navegador nesta fase. Não incluem data, serviço, profissional ou horários.</p>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
           <Input aria-label="Nome do modelo" maxLength={50} value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder="Ex.: Sextas premium" />
           <Button type="button" variant="gold" onClick={() => { onSavePreset(presetName); setPresetName(""); }}>
-            <Save className="mr-2 h-4 w-4" /> Guardar modelo
+            <Save className="mr-2 h-4 w-4" /> Guardar novo
           </Button>
+          {selectedPresetId && (
+            <Button type="button" variant="outline" onClick={() => void onUpdatePreset(selectedPresetId, presetName)}>
+              <Save className="mr-2 h-4 w-4" /> Atualizar selecionado
+            </Button>
+          )}
         </div>
         {presets.length === 0 ? (
           <p className="text-xs text-gray-500">Ainda não existem modelos personalizados.</p>

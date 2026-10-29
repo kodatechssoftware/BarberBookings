@@ -174,11 +174,12 @@ export default function AvailabilityPromotionTab({
     importBackground,
     removeBackground,
     savePreset,
+    updatePreset,
     selectPreset,
     setDefaultPreset,
     deletePreset,
     resetToOriginal,
-  } = useAvailabilitySocialCustomization();
+  } = useAvailabilitySocialCustomization(location?.id ? `location-${location.id}` : "no-location");
   const template = visualSettings.template;
 
   const {
@@ -436,6 +437,33 @@ export default function AvailabilityPromotionTab({
     }
   };
 
+  const updateCustomPreset = async (id: string, name: string) => {
+    try {
+      const preset = await updatePreset(id, name);
+      toast({ title: "Modelo atualizado", description: `As alterações a «${preset.name}» ficaram guardadas neste navegador.` });
+    } catch (error) {
+      toast({ title: "Não foi possível atualizar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+    }
+  };
+
+  const setDefaultCustomPreset = (id: string) => {
+    try {
+      setDefaultPreset(id);
+      toast({ title: "Modelo predefinido atualizado" });
+    } catch (error) {
+      toast({ title: "Não foi possível guardar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+    }
+  };
+
+  const deleteCustomPreset = async (id: string) => {
+    try {
+      await deletePreset(id);
+      toast({ title: "Modelo eliminado" });
+    } catch (error) {
+      toast({ title: "Não foi possível eliminar", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+    }
+  };
+
   const noAvailability = canQueryAvailability && !isLoadingAppointments && appointments !== undefined && availableSlots.length === 0;
   const updatedAtLabel = dataUpdatedAt
     ? new Intl.DateTimeFormat("pt-PT", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone }).format(new Date(dataUpdatedAt))
@@ -617,9 +645,10 @@ export default function AvailabilityPromotionTab({
                 onImportBackground={importCustomBackground}
                 onRemoveBackground={removeBackground}
                 onSavePreset={saveCustomPreset}
+                onUpdatePreset={updateCustomPreset}
                 onSelectPreset={selectPreset}
-                onSetDefaultPreset={setDefaultPreset}
-                onDeletePreset={deletePreset}
+                onSetDefaultPreset={setDefaultCustomPreset}
+                onDeletePreset={deleteCustomPreset}
                 onReset={resetToOriginal}
               />
             </CardContent>

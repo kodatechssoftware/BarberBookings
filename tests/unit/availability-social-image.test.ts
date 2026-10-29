@@ -10,6 +10,7 @@ import {
 } from "../../client/src/lib/availability-social-image";
 import { formatPublicBookingLabel, resolvePublicBookingUrl } from "../../client/src/lib/public-booking-link";
 import {
+  availabilitySocialPresetStorageKey,
   createDefaultAvailabilitySocialSettings,
   normalizeAvailabilitySocialSettings,
 } from "../../client/src/lib/availability-social-presets";
@@ -124,6 +125,14 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
 });
 
 test("saved visual settings are bounded and reject unsafe persisted values", () => {
+  assert.equal(
+    availabilitySocialPresetStorageKey("location-1"),
+    "barberbookings:availability-social-presets:v2:location-1",
+  );
+  assert.notEqual(
+    availabilitySocialPresetStorageKey("location-1"),
+    availabilitySocialPresetStorageKey("location-2"),
+  );
   const defaults = createDefaultAvailabilitySocialSettings("premium");
   assert.equal(defaults.template, "premium");
   assert.equal(defaults.backgroundImageId, null);
