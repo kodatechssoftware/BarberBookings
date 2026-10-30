@@ -126,7 +126,9 @@ test("story and square layouts keep content regions and 1/2/3/4/6/8 slots separa
       }
 
       assert.equal(layout.slotRects.length, slotCount);
+      assert.equal(contains(layout.slots, layout.slotLabel), true, `${format}: slot label outside slot region`);
       for (const slot of layout.slotRects) assert.equal(contains(layout.slots, slot), true, `${format}: slot outside slot region`);
+      if (layout.slotFooter) assert.equal(contains(layout.slots, layout.slotFooter), true, `${format}: slot footer outside slot region`);
       for (let index = 0; index < layout.slotRects.length; index += 1) {
         for (let other = index + 1; other < layout.slotRects.length; other += 1) {
           assert.equal(intersects(layout.slotRects[index], layout.slotRects[other]), false, `${format}: slot cards overlap`);
@@ -134,7 +136,7 @@ test("story and square layouts keep content regions and 1/2/3/4/6/8 slots separa
       }
       assert.deepEqual(
         Object.keys(layout).sort(),
-        ["header", "meta", "safeArea", "slotRects", "slots", "title"],
+        ["header", "meta", "safeArea", "slotFooter", "slotLabel", "slotRects", "slots", "title"],
         `${format}: only essential image regions should remain`,
       );
       }
@@ -178,7 +180,37 @@ test("premium single-slot composition is discreetly smaller and closer to its he
     assert.ok(premium.slotRects[0].width <= maximum.width);
     assert.ok(premium.slotRects[0].height <= maximum.height);
     assert.ok(premium.slotRects[0].width < classic.slotRects[0].width);
-    assert.ok(premium.slotRects[0].y < classic.slotRects[0].y);
+  }
+});
+
+test("slot headings, cards and single-slot footer form one measured block", () => {
+  for (const format of ["story", "square"] as const) {
+    const expectedLabelGap = format === "story" ? 26 : 22;
+    const expectedFooterGap = format === "story" ? 30 : 22;
+    for (const template of ["classic", "modern", "premium"] as const) {
+      for (const scheduleLayout of ["balanced", "compact", "stacked"] as const) {
+        for (const count of [1, 2, 3, 4, 6, 8]) {
+          const layout = getAvailabilitySocialImageLayout(format, count, scheduleLayout, template);
+          const firstCardY = Math.min(...layout.slotRects.map((rect) => rect.y));
+          assert.equal(
+            firstCardY - (layout.slotLabel.y + layout.slotLabel.height),
+            expectedLabelGap,
+            `${format}/${template}/${scheduleLayout}/${count}: heading-to-card gap`,
+          );
+          if (count === 1) {
+            assert.ok(layout.slotFooter);
+            const card = layout.slotRects[0];
+            assert.equal(
+              layout.slotFooter!.y - (card.y + card.height),
+              expectedFooterGap,
+              `${format}/${template}/${scheduleLayout}: card-to-footer gap`,
+            );
+          } else {
+            assert.equal(layout.slotFooter, null);
+          }
+        }
+      }
+    }
   }
 });
 

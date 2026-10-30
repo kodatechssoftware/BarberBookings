@@ -125,7 +125,7 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   await expect(page.getByRole("heading", { name: "Divulgar vagas" })).toBeVisible();
 
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
 
   const serviceTrigger = page.locator("#promotion-service");
@@ -220,7 +220,7 @@ test("all visual models render atomically across both formats and representative
   await configureActiveLocationBranding(page, "POWERHOUSE BARBERSHOP", "/images/demo-logo.svg");
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   const slotCheckboxes = page.getByLabel("Vagas disponíveis").getByRole("checkbox");
   await expect(slotCheckboxes.nth(7)).toBeVisible();
@@ -295,7 +295,7 @@ test("empty dates, mobile preview and download fallback remain safe", async ({ p
   const customizer = page.getByTestId("availability-social-customizer");
   await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   const futureSunday = nextDateMatching(bookingWindow.today, (date) => date.getDay() === 0);
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -329,7 +329,7 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
 
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const yesterday = addDaysToDateKey(bookingWindow.today, -1);
-  const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   const firstOpenWeekday = calendarDate(firstOpenDate).getDay();
   const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() === firstOpenWeekday);
   const futureSunday = nextDateMatching(secondOpenDate, (date) => date.getDay() === 0);
@@ -346,6 +346,7 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
   expect(calendarBox!.x).toBeGreaterThanOrEqual(0);
   expect(calendarBox!.x + calendarBox!.width).toBeLessThanOrEqual(390);
 
+  await showCalendarMonth(calendar, firstOpenDate);
   await calendarDay(calendar, firstOpenDate).click();
   await expect(calendar).toBeHidden();
   await expect(page.getByTestId("promotion-selected-date")).toContainText(
@@ -384,7 +385,7 @@ test("visual customization imports an optimized background and reuses a named lo
   const customizer = page.getByTestId("availability-social-customizer");
   await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
 
@@ -488,7 +489,7 @@ test("Instagram preparation keeps download and canonical booking-link copy as se
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
 
@@ -527,7 +528,7 @@ test("Instagram preparation exposes a manual copy fallback without mobile overfl
   await loginAdmin(page);
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
   await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();

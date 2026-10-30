@@ -36,7 +36,9 @@ export type AvailabilitySocialImageLayout = {
   title: AvailabilitySocialRect;
   meta: AvailabilitySocialRect;
   slots: AvailabilitySocialRect;
+  slotLabel: AvailabilitySocialRect;
   slotRects: AvailabilitySocialRect[];
+  slotFooter: AvailabilitySocialRect | null;
 };
 
 export const AVAILABILITY_SOCIAL_FORMATS = {
@@ -85,7 +87,10 @@ function getPalette(input: AvailabilitySocialImageInput): AvailabilitySocialPale
   };
 }
 
-const FORMAT_LAYOUTS: Record<AvailabilitySocialFormat, Omit<AvailabilitySocialImageLayout, "slotRects">> = {
+const FORMAT_LAYOUTS: Record<
+  AvailabilitySocialFormat,
+  Omit<AvailabilitySocialImageLayout, "slotLabel" | "slotRects" | "slotFooter">
+> = {
   story: {
     safeArea: { x: 60, y: 200, width: 960, height: 1460 },
     header: { x: 110, y: 220, width: 860, height: 180 },
@@ -411,7 +416,7 @@ function drawImportedBackgroundDecoration(
   }
 }
 
-function getSlotRects(
+function getSlotComposition(
   format: AvailabilitySocialFormat,
   slotCount: number,
   region: AvailabilitySocialRect,
@@ -419,14 +424,23 @@ function getSlotRects(
   template: AvailabilitySocialTemplate,
 ) {
   const count = Math.max(0, Math.min(8, slotCount));
-  if (count === 0) return [];
   const isStory = format === "story";
-  const labelSpace = isStory ? 72 : 48;
+  const labelHeight = isStory ? 32 : 26;
+  const labelGap = isStory ? 26 : 22;
+  const footerHeight = count === 1 ? (isStory ? 26 : 20) : 0;
+  const footerGap = count === 1 ? (isStory ? 30 : 22) : 0;
+  if (count === 0) {
+    return {
+      slotLabel: { x: region.x, y: region.y, width: region.width, height: labelHeight },
+      slotRects: [],
+      slotFooter: null,
+    };
+  }
   const grid: AvailabilitySocialRect = {
     x: region.x + (isStory ? 18 : 12),
-    y: region.y + labelSpace,
+    y: region.y,
     width: region.width - (isStory ? 36 : 24),
-    height: region.height - labelSpace,
+    height: region.height,
   };
   const columns = count === 1
     ? 1
@@ -462,17 +476,17 @@ function getSlotRects(
         ? (count === 1 ? 130 : count === 2 ? 92 : count === 3 ? 82 : count <= 4 ? 94 : count <= 6 ? 78 : 66)
         : (count === 1 ? 125 : count === 2 ? 120 : count === 3 ? 108 : count <= 4 ? 98 : count <= 6 ? 82 : 70);
   const premiumSingleHeight = isStory ? 145 : 108;
+  const availableCardHeight = grid.height - labelHeight - labelGap - footerGap - footerHeight;
   const slotHeight = Math.min(
     maxHeight,
     template === "premium" && count === 1 ? premiumSingleHeight : Number.POSITIVE_INFINITY,
-    (grid.height - gapY * (rows - 1)) / rows,
+    (availableCardHeight - gapY * (rows - 1)) / rows,
   );
-  const totalHeight = slotHeight * rows + gapY * (rows - 1);
-  const verticalBias = template === "premium" && count === 1
-    ? (isStory ? 0.28 : 0.3)
-    : count <= 3 ? (isStory ? 0.44 : 0.43) : 0.5;
-  const firstY = grid.y + (grid.height - totalHeight) * verticalBias;
-  return Array.from({ length: count }, (_, index) => {
+  const cardsHeight = slotHeight * rows + gapY * (rows - 1);
+  const blockHeight = labelHeight + labelGap + cardsHeight + footerGap + footerHeight;
+  const blockY = grid.y + (grid.height - blockHeight) / 2;
+  const firstY = blockY + labelHeight + labelGap;
+  const slotRects = Array.from({ length: count }, (_, index) => {
     const row = Math.floor(index / columns);
     const column = index % columns;
     const itemsInRow = Math.min(columns, count - row * columns);
@@ -480,6 +494,13 @@ function getSlotRects(
     const rowX = grid.x + (grid.width - rowWidth) / 2;
     return { x: rowX + column * (slotWidth + gapX), y: firstY + row * (slotHeight + gapY), width: slotWidth, height: slotHeight };
   });
+  return {
+    slotLabel: { x: region.x, y: blockY, width: region.width, height: labelHeight },
+    slotRects,
+    slotFooter: count === 1
+      ? { x: region.x, y: firstY + cardsHeight + footerGap, width: region.width, height: footerHeight }
+      : null,
+  };
 }
 
 export function getAvailabilitySocialImageLayout(
@@ -489,10 +510,11 @@ export function getAvailabilitySocialImageLayout(
   template: AvailabilitySocialTemplate = "classic",
 ): AvailabilitySocialImageLayout {
   const base = FORMAT_LAYOUTS[format];
+  const slotComposition = getSlotComposition(format, slotCount, base.slots, scheduleLayout, template);
   return {
     safeArea: { ...base.safeArea }, header: { ...base.header }, title: { ...base.title }, meta: { ...base.meta },
     slots: { ...base.slots },
-    slotRects: getSlotRects(format, slotCount, base.slots, scheduleLayout, template),
+    ...slotComposition,
   };
 }
 
@@ -595,7 +617,7 @@ function drawSlots(
     context,
     slots.length === 1 ? "HORÁRIO EM DESTAQUE" : "HORÁRIOS DISPONÍVEIS",
     width / 2,
-    layout.slots.y + (isStory ? 28 : 20),
+    layout.slotLabel.y + layout.slotLabel.height / 2,
     isStory ? 3.2 : 2.4,
     layout.slots.width - 40,
   );
@@ -639,13 +661,16 @@ function drawSlots(
     context.fillText(slot, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
     context.restore();
   });
-  if (slots.length === 1) {
-    const rect = layout.slotRects[0];
+  if (slots.length === 1 && layout.slotFooter) {
     context.fillStyle = "rgba(247, 242, 232, 0.68)";
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.font = `600 ${isStory ? 22 : 17}px "DM Sans", Arial, sans-serif`;
-    context.fillText("RESERVA ESTE HORÁRIO ANTES QUE FIQUE INDISPONÍVEL", width / 2, rect.y + rect.height + (isStory ? 55 : 30));
+    context.fillText(
+      "RESERVA ESTE HORÁRIO ANTES QUE FIQUE INDISPONÍVEL",
+      width / 2,
+      layout.slotFooter.y + layout.slotFooter.height / 2,
+    );
   }
 }
 
