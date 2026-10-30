@@ -99,6 +99,29 @@ async function loginAdmin(page: Page) {
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
 }
 
+async function getDefaultLocationSlug(page: Page) {
+  const response = await page.request.get("/api/admin/locations");
+  expect(response.ok(), await response.text()).toBe(true);
+  const locations = await response.json() as Array<{ slug: string; isDefault?: boolean }>;
+  const location = locations.find((candidate) => candidate.isDefault) ?? locations[0];
+  expect(location?.slug).toBeTruthy();
+  return location.slug;
+}
+
+async function configureActiveLocationBranding(page: Page, name: string, logoUrl: string) {
+  const locationsResponse = await page.request.get("/api/admin/locations");
+  expect(locationsResponse.ok(), await locationsResponse.text()).toBe(true);
+  const locations = await locationsResponse.json() as Array<{ id: number; isDefault?: boolean }>;
+  const location = locations.find((candidate) => candidate.isDefault) ?? locations[0];
+  expect(location).toBeTruthy();
+  const updateResponse = await page.request.patch(`/api/admin/locations/${location.id}`, {
+    data: { name, logoUrl },
+  });
+  expect(updateResponse.ok(), await updateResponse.text()).toBe(true);
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
+}
+
 async function pngDimensions(path: string) {
   const data = await readFile(path);
   expect(data.subarray(1, 4).toString("ascii")).toBe("PNG");
@@ -111,7 +134,7 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   await expect(page.getByRole("heading", { name: "Divulgar vagas" })).toBeVisible();
 
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
 
   const serviceTrigger = page.locator("#promotion-service");
@@ -154,7 +177,7 @@ test("admin creates branded story and square PNGs from authoritative availabilit
   const storyDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Descarregar PNG" }).click();
   const storyDownload = await storyDownloadPromise;
-  expect(storyDownload.suggestedFilename()).toMatch(/^baptista-barber-shop-vagas-.*-story\.png$/);
+  expect(storyDownload.suggestedFilename()).toMatch(/^[a-z0-9-]+-vagas-.*-story\.png$/);
   const storyPath = await storyDownload.path();
   expect(storyPath).not.toBeNull();
   expect(await pngDimensions(storyPath!)).toEqual({ width: 1080, height: 1920 });
@@ -197,15 +220,16 @@ test("all visual models render atomically across both formats and representative
     };
   });
   let delayedLogoRequests = 0;
-  await page.route("**/images/logo.jpg", async (route) => {
+  await page.route(/\/images\/(?:logo\.jpg|demo-logo\.svg)$/, async (route) => {
     delayedLogoRequests += 1;
     await new Promise((resolve) => setTimeout(resolve, delayedLogoRequests === 1 ? 350 : 40));
     await route.continue();
   });
   await loginAdmin(page);
+  await configureActiveLocationBranding(page, "POWERHOUSE BARBERSHOP", "/images/demo-logo.svg");
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   const slotCheckboxes = page.getByLabel("Vagas disponíveis").getByRole("checkbox");
   await expect(slotCheckboxes.nth(7)).toBeVisible();
@@ -213,6 +237,8 @@ test("all visual models render atomically across both formats and representative
   await page.getByRole("button", { name: /Moderno/ }).click();
   await page.getByRole("button", { name: /Premium/ }).click();
   const canvas = page.locator("canvas[aria-label^='Pré-visualização']");
+  await expect(canvas).toHaveAttribute("data-business-name", "POWERHOUSE BARBERSHOP");
+  await expect(canvas).toHaveAttribute("data-location-logo-url", "/images/demo-logo.svg");
   await expect(canvas).toHaveAttribute("data-template", "premium");
   await expect(page.getByRole("button", { name: "Descarregar PNG" })).toBeEnabled();
   const rapidPremium = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"));
@@ -233,8 +259,9 @@ test("all visual models render atomically across both formats and representative
 
   const samples = [
     { template: "Clássico", templateKey: "classic", layout: "Equilibrado", layoutKey: "balanced", format: "Story vertical", formatKey: "story", count: 8, file: "classic-custom-story-8.png" },
-    { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Story vertical", formatKey: "story", count: 6, file: "modern-custom-story-6.png" },
+    { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Story vertical", formatKey: "story", count: 3, file: "modern-custom-story-3.png" },
     { template: "Premium", templateKey: "premium", layout: "Em lista", layoutKey: "stacked", format: "Story vertical", formatKey: "story", count: 1, file: "premium-custom-story-1.png" },
+    { template: "Premium", templateKey: "premium", layout: "Em lista", layoutKey: "stacked", format: "Publicação quadrada", formatKey: "square", count: 1, file: "premium-custom-square-1.png" },
     { template: "Clássico", templateKey: "classic", layout: "Em lista", layoutKey: "stacked", format: "Publicação quadrada", formatKey: "square", count: 4, file: "classic-custom-square-4.png" },
     { template: "Moderno", templateKey: "modern", layout: "Compacto", layoutKey: "compact", format: "Publicação quadrada", formatKey: "square", count: 2, file: "modern-custom-square-2.png" },
     { template: "Premium", templateKey: "premium", layout: "Equilibrado", layoutKey: "balanced", format: "Publicação quadrada", formatKey: "square", count: 8, file: "premium-custom-square-8.png" },
@@ -277,7 +304,7 @@ test("empty dates, mobile preview and download fallback remain safe", async ({ p
   const customizer = page.getByTestId("availability-social-customizer");
   await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   const futureSunday = nextDateMatching(bookingWindow.today, (date) => date.getDay() === 0);
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -311,7 +338,7 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
 
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
   const yesterday = addDaysToDateKey(bookingWindow.today, -1);
-  const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const firstOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   const firstOpenWeekday = calendarDate(firstOpenDate).getDay();
   const secondOpenDate = nextDateMatching(firstOpenDate, (date) => date.getDay() === firstOpenWeekday);
   const futureSunday = nextDateMatching(secondOpenDate, (date) => date.getDay() === 0);
@@ -328,6 +355,7 @@ test("visual date picker is localized, mobile safe and preserves only valid sele
   expect(calendarBox!.x).toBeGreaterThanOrEqual(0);
   expect(calendarBox!.x + calendarBox!.width).toBeLessThanOrEqual(390);
 
+  await showCalendarMonth(calendar, firstOpenDate);
   await calendarDay(calendar, firstOpenDate).click();
   await expect(calendar).toBeHidden();
   await expect(page.getByTestId("promotion-selected-date")).toContainText(
@@ -366,7 +394,7 @@ test("visual customization imports an optimized background and reuses a named lo
   const customizer = page.getByTestId("availability-social-customizer");
   await expect(customizer).not.toHaveAttribute("open", "");
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
 
@@ -466,11 +494,12 @@ test("visual presets fail closed when browser image or settings storage is unava
 });
 
 test("Instagram preparation keeps download and canonical booking-link copy as separate mobile-safe actions", async ({ page, context }) => {
+  await page.setViewportSize({ width: 412, height: 915 });
   await loginAdmin(page);
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
 
@@ -483,11 +512,17 @@ test("Instagram preparation keeps download and canonical booking-link copy as se
   await expect(dialog).not.toContainText("zona marcada");
   await expect(page.locator("canvas[aria-label='Pré-visualização Story vertical']")).toHaveAttribute("data-format", "story");
 
-  const expectedBookingUrl = `${new URL(page.url()).origin}/booking`;
+  const expectedBookingUrl = `${new URL(page.url()).origin}/booking?location=${await getDefaultLocationSlug(page)}`;
   await expect(dialog.getByLabel("Link público de marcação")).toHaveValue(expectedBookingUrl);
   await dialog.getByRole("button", { name: "Copiar link de marcação" }).click();
   await expect(dialog.getByRole("button", { name: "Link copiado" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expectedBookingUrl);
+
+  const publicBookingPage = await context.newPage();
+  await publicBookingPage.goto(expectedBookingUrl);
+  await expect(publicBookingPage).toHaveURL(expectedBookingUrl);
+  await expect(publicBookingPage.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+  await publicBookingPage.close();
 
   const downloadPromise = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Descarregar Story PNG" }).click();
@@ -509,12 +544,15 @@ test("Instagram preparation exposes a manual copy fallback without mobile overfl
   await loginAdmin(page);
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
   const bookingWindow = await (await page.request.get("/api/public-booking-window")).json();
-  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 1 && date.getDay() <= 5);
+  const futureOpenDate = nextDateMatching(bookingWindow.today, (date) => date.getDay() >= 2 && date.getDay() <= 5);
   await selectPromotionDate(page, futureOpenDate);
   await expect(page.getByLabel("Vagas disponíveis").getByRole("checkbox").first()).toBeVisible();
   await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();
   const dialog = page.getByRole("dialog", { name: "Preparar Story para Instagram" });
   const bookingLink = dialog.getByLabel("Link público de marcação");
+  await expect(bookingLink).toHaveValue(
+    `${new URL(page.url()).origin}/booking?location=${await getDefaultLocationSlug(page)}`,
+  );
   await dialog.getByRole("button", { name: "Copiar link de marcação" }).click();
   await expect(page.getByText("Copie o link manualmente", { exact: true })).toBeVisible();
   await expect(bookingLink).toBeFocused();

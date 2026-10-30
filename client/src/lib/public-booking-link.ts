@@ -1,4 +1,13 @@
-export function resolvePublicBookingUrl(configuredBaseUrl: string | undefined, browserOrigin: string) {
+export function normalizePublicBookingLocationSlug(value: string | null | undefined) {
+  const slug = value?.trim().toLowerCase() ?? "";
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= 80 ? slug : "";
+}
+
+export function resolvePublicBookingUrl(
+  configuredBaseUrl: string | undefined,
+  browserOrigin: string,
+  locationSlug?: string | null,
+) {
   const candidates = [configuredBaseUrl, browserOrigin];
   let browserHost = "";
   try {
@@ -17,6 +26,8 @@ export function resolvePublicBookingUrl(configuredBaseUrl: string | undefined, b
       base.pathname = `${base.pathname.replace(/\/+$/, "")}/booking`;
       base.search = "";
       base.hash = "";
+      const normalizedLocationSlug = normalizePublicBookingLocationSlug(locationSlug);
+      if (normalizedLocationSlug) base.searchParams.set("location", normalizedLocationSlug);
       return base.toString().replace(/\/$/, "");
     } catch {
       // Try the browser origin before failing closed below.

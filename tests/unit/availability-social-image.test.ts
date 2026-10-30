@@ -4,11 +4,16 @@ import { getAvailableTimeSlots, calendarTimeInTimeZone } from "../../client/src/
 import {
   getAvailabilitySocialImageLayout,
   getAvailabilitySocialImageDimensions,
+  getAvailabilitySocialTrackedGlyphLayout,
   formatAvailabilitySocialServiceLine,
   sanitizeAvailabilitySocialFileName,
   type AvailabilitySocialRect,
 } from "../../client/src/lib/availability-social-image";
-import { formatPublicBookingLabel, resolvePublicBookingUrl } from "../../client/src/lib/public-booking-link";
+import {
+  formatPublicBookingLabel,
+  normalizePublicBookingLocationSlug,
+  resolvePublicBookingUrl,
+} from "../../client/src/lib/public-booking-link";
 import {
   availabilitySocialPresetStorageKey,
   createDefaultAvailabilitySocialSettings,
@@ -62,6 +67,19 @@ test("public booking links prefer the configured deployment URL and fail over sa
   assert.equal(formatPublicBookingLabel("https://baptista.kodatechs.com/booking"), "baptista.kodatechs.com/booking");
 });
 
+test("public booking links preserve the selected establishment without accepting unsafe slugs", () => {
+  assert.equal(
+    resolvePublicBookingUrl("https://bookings.example.test", "https://admin.example.test", "Loja-Porto"),
+    "https://bookings.example.test/booking?location=loja-porto",
+  );
+  assert.equal(
+    resolvePublicBookingUrl("https://bookings.example.test", "https://admin.example.test", "../admin"),
+    "https://bookings.example.test/booking",
+  );
+  assert.equal(normalizePublicBookingLocationSlug(" loja-lisboa "), "loja-lisboa");
+  assert.equal(normalizePublicBookingLocationSlug("loja?redirect=/admin"), "");
+});
+
 test("social images omit the aggregate professional label without leaving a separator", () => {
   for (const template of ["classic", "modern", "premium"] as const) {
     for (const format of ["story", "square"] as const) {
@@ -93,10 +111,27 @@ function intersects(first: AvailabilitySocialRect, second: AvailabilitySocialRec
     && first.y + first.height > second.y;
 }
 
-test("story and square layouts keep content regions and 1/2/4/6/8 slots separated", () => {
+test("tracked headings keep variable-width and accented glyphs uniformly positioned around the center", () => {
+  const value = "POWERHOUSE BARBERSHOP 24/7 — Ç";
+  const characters = Array.from(value);
+  const widths = characters.map((character) => character === " " ? 9 : "MW".includes(character) ? 22 : 14);
+  const tracking = 4;
+  const centerX = 540;
+  const glyphs = getAvailabilitySocialTrackedGlyphLayout(value, widths, centerX, tracking);
+
+  assert.equal(glyphs.length, characters.length);
+  for (let index = 1; index < glyphs.length; index += 1) {
+    assert.equal(glyphs[index].x - glyphs[index - 1].x, widths[index - 1] + tracking);
+  }
+  const firstEdge = glyphs[0].x;
+  const lastEdge = glyphs.at(-1)!.x + glyphs.at(-1)!.width;
+  assert.equal((firstEdge + lastEdge) / 2, centerX);
+});
+
+test("story and square layouts keep content regions and 1/2/3/4/6/8 slots separated", () => {
   for (const format of ["story", "square"] as const) {
     for (const scheduleLayout of ["balanced", "compact", "stacked"] as const) {
-      for (const slotCount of [1, 2, 4, 6, 8]) {
+      for (const slotCount of [1, 2, 3, 4, 6, 8]) {
       const layout = getAvailabilitySocialImageLayout(format, slotCount, scheduleLayout);
       const regions = [layout.header, layout.title, layout.meta, layout.slots];
 
@@ -108,7 +143,9 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
       }
 
       assert.equal(layout.slotRects.length, slotCount);
+      assert.equal(contains(layout.slots, layout.slotLabel), true, `${format}: slot label outside slot region`);
       for (const slot of layout.slotRects) assert.equal(contains(layout.slots, slot), true, `${format}: slot outside slot region`);
+      if (layout.slotFooter) assert.equal(contains(layout.slots, layout.slotFooter), true, `${format}: slot footer outside slot region`);
       for (let index = 0; index < layout.slotRects.length; index += 1) {
         for (let other = index + 1; other < layout.slotRects.length; other += 1) {
           assert.equal(intersects(layout.slotRects[index], layout.slotRects[other]), false, `${format}: slot cards overlap`);
@@ -116,9 +153,79 @@ test("story and square layouts keep content regions and 1/2/4/6/8 slots separate
       }
       assert.deepEqual(
         Object.keys(layout).sort(),
-        ["header", "meta", "safeArea", "slotRects", "slots", "title"],
+        ["header", "meta", "safeArea", "slotFooter", "slotLabel", "slotRects", "slots", "title"],
         `${format}: only essential image regions should remain`,
       );
+      }
+    }
+  }
+});
+
+test("slot compositions stay moderate and adapt their rows to the selected amount", () => {
+  const storySingle = getAvailabilitySocialImageLayout("story", 1, "balanced").slotRects[0];
+  const squareSingle = getAvailabilitySocialImageLayout("square", 1, "balanced").slotRects[0];
+  assert.ok(storySingle.width <= 430 && storySingle.height <= 170);
+  assert.ok(squareSingle.width <= 380 && squareSingle.height <= 125);
+
+  for (const format of ["story", "square"] as const) {
+    const two = getAvailabilitySocialImageLayout(format, 2, "balanced").slotRects;
+    assert.equal(two[0].y, two[1].y, `${format}: two slots should sit side by side`);
+
+    const three = getAvailabilitySocialImageLayout(format, 3, "balanced").slotRects;
+    assert.equal(three[0].y, three[1].y, `${format}: first row should contain two slots`);
+    assert.ok(three[2].y > three[0].y, `${format}: third slot should form a centered second row`);
+
+    for (const count of [4, 6, 8]) {
+      const rects = getAvailabilitySocialImageLayout(format, count, "balanced").slotRects;
+      assert.equal(new Set(rects.map((rect) => rect.x)).size, 2, `${format}/${count}: expected two columns`);
+    }
+  }
+
+  const compactThree = getAvailabilitySocialImageLayout("story", 3, "compact").slotRects;
+  assert.equal(new Set(compactThree.map((rect) => rect.x)).size, 3);
+  assert.equal(new Set(compactThree.map((rect) => rect.y)).size, 1);
+
+  const stackedThree = getAvailabilitySocialImageLayout("story", 3, "stacked").slotRects;
+  assert.equal(new Set(stackedThree.map((rect) => rect.x)).size, 1);
+  assert.equal(new Set(stackedThree.map((rect) => rect.y)).size, 3);
+});
+
+test("premium single-slot composition is discreetly smaller and closer to its heading", () => {
+  for (const [format, maximum] of [["story", { width: 460, height: 145 }], ["square", { width: 410, height: 108 }]] as const) {
+    const classic = getAvailabilitySocialImageLayout(format, 1, "stacked", "classic");
+    const premium = getAvailabilitySocialImageLayout(format, 1, "stacked", "premium");
+    assert.ok(premium.slotRects[0].width <= maximum.width);
+    assert.ok(premium.slotRects[0].height <= maximum.height);
+    assert.ok(premium.slotRects[0].width < classic.slotRects[0].width);
+  }
+});
+
+test("slot headings, cards and single-slot footer form one measured block", () => {
+  for (const format of ["story", "square"] as const) {
+    const expectedLabelGap = format === "story" ? 26 : 22;
+    const expectedFooterGap = format === "story" ? 30 : 22;
+    for (const template of ["classic", "modern", "premium"] as const) {
+      for (const scheduleLayout of ["balanced", "compact", "stacked"] as const) {
+        for (const count of [1, 2, 3, 4, 6, 8]) {
+          const layout = getAvailabilitySocialImageLayout(format, count, scheduleLayout, template);
+          const firstCardY = Math.min(...layout.slotRects.map((rect) => rect.y));
+          assert.equal(
+            firstCardY - (layout.slotLabel.y + layout.slotLabel.height),
+            expectedLabelGap,
+            `${format}/${template}/${scheduleLayout}/${count}: heading-to-card gap`,
+          );
+          if (count === 1) {
+            assert.ok(layout.slotFooter);
+            const card = layout.slotRects[0];
+            assert.equal(
+              layout.slotFooter!.y - (card.y + card.height),
+              expectedFooterGap,
+              `${format}/${template}/${scheduleLayout}: card-to-footer gap`,
+            );
+          } else {
+            assert.equal(layout.slotFooter, null);
+          }
+        }
       }
     }
   }
