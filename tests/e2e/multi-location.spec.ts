@@ -149,6 +149,14 @@ test("[multi-location] isola quatro lojas, mapas, equipa, reservas, permissões 
   }
   await assertPublicLocationLayout(4, "four");
 
+  await page.goto(`/booking?location=${created[0].slug}`);
+  await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toHaveCount(0);
+  await expect(page.getByTestId("public-booking-header")).toContainText(created[0].name);
+  await expect(page.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+
+  await page.goto("/booking?location=localizacao-inexistente");
+  await expect(page.getByRole("heading", { name: "Onde quer marcar?" })).toBeVisible();
+
   const deactivateDefault = await request.patch(`/api/admin/locations/${initial[0].id}`, { data: { isActive: false } });
   expect(deactivateDefault.status()).toBe(409);
   expect(await (await request.get("/api/locations")).json()).toHaveLength(4);

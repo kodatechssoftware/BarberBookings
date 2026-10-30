@@ -40,6 +40,7 @@ import {
 } from "@shared/public-booking-window";
 import type { ServiceCatalogueItem } from "@shared/schema";
 import { groupServicesForDisplay } from "@/lib/service-groups";
+import { normalizePublicBookingLocationSlug } from "@/lib/public-booking-link";
 
 type BookingPreference = {
   step: number;
@@ -315,10 +316,26 @@ export default function Booking() {
   const { toast } = useToast();
   const { data: locations = [], isLoading: loadingLocations, isError: locationsError } = useLocations({ purpose: "booking" });
   const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
+  const requestedLocationSlug = useMemo(
+    () => normalizePublicBookingLocationSlug(typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("location")),
+    [],
+  );
+  const hasAppliedRequestedLocation = useRef(false);
   const activeLocation = locations.find((location) => location.id === selectedLocationId);
   const hasMultipleLocations = locations.length > 1;
 
   useEffect(() => {
+    if (locations.length > 0 && !hasAppliedRequestedLocation.current) {
+      hasAppliedRequestedLocation.current = true;
+      const requestedLocation = requestedLocationSlug
+        ? locations.find((location) => location.slug === requestedLocationSlug)
+        : undefined;
+      if (requestedLocation) {
+        setSelectedLocationId(requestedLocation.id);
+        setActiveLocationId(requestedLocation.id);
+        return;
+      }
+    }
     if (locations.length === 1) {
       const [onlyLocation] = locations;
       if (selectedLocationId !== onlyLocation.id) {
@@ -334,7 +351,7 @@ export default function Booking() {
     setSelectedServiceId(null);
     setSelectedTime(null);
     setStep(1);
-  }, [locations, selectedLocationId]);
+  }, [locations, requestedLocationSlug, selectedLocationId]);
 
   const selectBookingLocation = (locationId: number | null) => {
     setSelectedBarberId(null);

@@ -274,8 +274,12 @@ export default function AvailabilityPromotionTab({
   const businessName = location?.name?.trim() || shopBranding.name;
   const logoUrl = resolveLocationLogoUrl(location?.logoUrl);
   const publicBookingUrl = useMemo(
-    () => resolvePublicBookingUrl(publicBaseUrl, typeof window === "undefined" ? "" : window.location.origin),
-    [publicBaseUrl],
+    () => resolvePublicBookingUrl(
+      publicBaseUrl,
+      typeof window === "undefined" ? "" : window.location.origin,
+      location?.slug,
+    ),
+    [location?.slug, publicBaseUrl],
   );
   const imageInput = useMemo<AvailabilitySocialImageInput>(() => ({
     format: imageFormat,

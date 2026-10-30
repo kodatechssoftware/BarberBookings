@@ -9,7 +9,11 @@ import {
   sanitizeAvailabilitySocialFileName,
   type AvailabilitySocialRect,
 } from "../../client/src/lib/availability-social-image";
-import { formatPublicBookingLabel, resolvePublicBookingUrl } from "../../client/src/lib/public-booking-link";
+import {
+  formatPublicBookingLabel,
+  normalizePublicBookingLocationSlug,
+  resolvePublicBookingUrl,
+} from "../../client/src/lib/public-booking-link";
 import {
   availabilitySocialPresetStorageKey,
   createDefaultAvailabilitySocialSettings,
@@ -61,6 +65,19 @@ test("public booking links prefer the configured deployment URL and fail over sa
   );
   assert.equal(resolvePublicBookingUrl("javascript:alert(1)", ""), "");
   assert.equal(formatPublicBookingLabel("https://baptista.kodatechs.com/booking"), "baptista.kodatechs.com/booking");
+});
+
+test("public booking links preserve the selected establishment without accepting unsafe slugs", () => {
+  assert.equal(
+    resolvePublicBookingUrl("https://bookings.example.test", "https://admin.example.test", "Loja-Porto"),
+    "https://bookings.example.test/booking?location=loja-porto",
+  );
+  assert.equal(
+    resolvePublicBookingUrl("https://bookings.example.test", "https://admin.example.test", "../admin"),
+    "https://bookings.example.test/booking",
+  );
+  assert.equal(normalizePublicBookingLocationSlug(" loja-lisboa "), "loja-lisboa");
+  assert.equal(normalizePublicBookingLocationSlug("loja?redirect=/admin"), "");
 });
 
 test("social images omit the aggregate professional label without leaving a separator", () => {

@@ -99,6 +99,15 @@ async function loginAdmin(page: Page) {
   await expect(page.getByRole("tab", { name: "Agenda" })).toBeVisible();
 }
 
+async function getDefaultLocationSlug(page: Page) {
+  const response = await page.request.get("/api/admin/locations");
+  expect(response.ok(), await response.text()).toBe(true);
+  const locations = await response.json() as Array<{ slug: string; isDefault?: boolean }>;
+  const location = locations.find((candidate) => candidate.isDefault) ?? locations[0];
+  expect(location?.slug).toBeTruthy();
+  return location.slug;
+}
+
 async function configureActiveLocationBranding(page: Page, name: string, logoUrl: string) {
   const locationsResponse = await page.request.get("/api/admin/locations");
   expect(locationsResponse.ok(), await locationsResponse.text()).toBe(true);
@@ -485,6 +494,7 @@ test("visual presets fail closed when browser image or settings storage is unava
 });
 
 test("Instagram preparation keeps download and canonical booking-link copy as separate mobile-safe actions", async ({ page, context }) => {
+  await page.setViewportSize({ width: 412, height: 915 });
   await loginAdmin(page);
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
   await page.getByRole("tab", { name: "Divulgar vagas" }).click();
@@ -502,11 +512,17 @@ test("Instagram preparation keeps download and canonical booking-link copy as se
   await expect(dialog).not.toContainText("zona marcada");
   await expect(page.locator("canvas[aria-label='Pré-visualização Story vertical']")).toHaveAttribute("data-format", "story");
 
-  const expectedBookingUrl = `${new URL(page.url()).origin}/booking`;
+  const expectedBookingUrl = `${new URL(page.url()).origin}/booking?location=${await getDefaultLocationSlug(page)}`;
   await expect(dialog.getByLabel("Link público de marcação")).toHaveValue(expectedBookingUrl);
   await dialog.getByRole("button", { name: "Copiar link de marcação" }).click();
   await expect(dialog.getByRole("button", { name: "Link copiado" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expectedBookingUrl);
+
+  const publicBookingPage = await context.newPage();
+  await publicBookingPage.goto(expectedBookingUrl);
+  await expect(publicBookingPage).toHaveURL(expectedBookingUrl);
+  await expect(publicBookingPage.getByRole("heading", { name: "Seleciona o barbeiro" })).toBeVisible();
+  await publicBookingPage.close();
 
   const downloadPromise = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Descarregar Story PNG" }).click();
@@ -534,6 +550,9 @@ test("Instagram preparation exposes a manual copy fallback without mobile overfl
   await page.getByRole("button", { name: "Preparar Story para Instagram" }).click();
   const dialog = page.getByRole("dialog", { name: "Preparar Story para Instagram" });
   const bookingLink = dialog.getByLabel("Link público de marcação");
+  await expect(bookingLink).toHaveValue(
+    `${new URL(page.url()).origin}/booking?location=${await getDefaultLocationSlug(page)}`,
+  );
   await dialog.getByRole("button", { name: "Copiar link de marcação" }).click();
   await expect(page.getByText("Copie o link manualmente", { exact: true })).toBeVisible();
   await expect(bookingLink).toBeFocused();
