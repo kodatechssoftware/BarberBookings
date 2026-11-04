@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -97,6 +97,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
   let serverProcess: ReturnType<typeof spawn> | undefined;
   let serverOutput = "";
   let migrationsDirectory: string | undefined;
+  let occupancyMigrationsDirectory: string | undefined;
 
   try {
     await postgres.initialise();
@@ -154,6 +155,23 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
       },
     });
     await installCurrentLocationFinanceSchema(pool);
+    occupancyMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-current-occupancy-migrations-"));
+    for (const migration of [
+      "0021_appointment_availability_windows.sql",
+      "0024_multi_service_appointment_engine.sql",
+    ]) {
+      await copyFile(path.resolve("migrations", migration), path.join(occupancyMigrationsDirectory, migration));
+    }
+    await runSchemaMigrations(pool, {
+      schemaName: "public",
+      migrationsDirectory: occupancyMigrationsDirectory,
+      environment: {
+        ...environment,
+        MIGRATION_DEFAULT_LOCATION_NAME: "Conflict Test Shop",
+        MIGRATION_DEFAULT_LOCATION_ADDRESS: "Test address",
+        MIGRATION_DEFAULT_LOCATION_TIME_ZONE: "Europe/Lisbon",
+      },
+    });
 
     const baseUrl = `http://127.0.0.1:${appPort}`;
     const startApplication = async () => {
@@ -578,6 +596,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
     if (pool) await pool.end();
     if (postgresStarted) await stopEmbeddedPostgres(postgres, databaseDir);
     if (migrationsDirectory) await rm(migrationsDirectory, { recursive: true, force: true });
+    if (occupancyMigrationsDirectory) await rm(occupancyMigrationsDirectory, { recursive: true, force: true });
     await rm(databaseDir, { recursive: true, force: true });
   }
 });

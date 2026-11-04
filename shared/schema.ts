@@ -16,6 +16,7 @@ export const servicesIdSeq = appPgSchema?.sequence("services_id_seq");
 export const serviceCategoriesIdSeq = appPgSchema?.sequence("service_categories_id_seq");
 export const appointmentsIdSeq = appPgSchema?.sequence("appointments_id_seq");
 export const appointmentAvailabilityWindowsIdSeq = appPgSchema?.sequence("appointment_availability_windows_id_seq");
+export const appointmentServiceSegmentsIdSeq = appPgSchema?.sequence("appointment_service_segments_id_seq");
 export const adminsIdSeq = appPgSchema?.sequence("admins_id_seq");
 export const blacklistIdSeq = appPgSchema?.sequence("blacklist_id_seq");
 export const verificationCodesIdSeq = appPgSchema?.sequence("verification_codes_id_seq");
@@ -359,6 +360,48 @@ export const appointments = appPgTable("appointments", {
       AND ${table.chairRentPeriodSnapshot} IN ('day', 'week', 'month'))
     ) IS TRUE
   `),
+}));
+
+export const appointmentServiceSets = appPgTable("appointment_service_sets", {
+  appointmentId: integer("appointment_id")
+    .primaryKey()
+    .references(() => appointments.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const appointmentServiceSegments = appPgTable("appointment_service_segments", {
+  id: idColumn("appointment_service_segments_id_seq"),
+  appointmentId: integer("appointment_id")
+    .references(() => appointmentServiceSets.appointmentId, { onDelete: "cascade" }).notNull(),
+  position: integer("position").notNull(),
+  serviceId: integer("service_id").references(() => services.id, { onDelete: "restrict" }).notNull(),
+  barberId: integer("barber_id").references(() => barbers.id, { onDelete: "restrict" }).notNull(),
+  startTime: timestamp("start_time").notNull(),
+  durationMinutes: integer("duration_minutes").notNull(),
+  bufferBeforeMinutesSnapshot: integer("buffer_before_minutes_snapshot").default(0).notNull(),
+  bufferAfterMinutesSnapshot: integer("buffer_after_minutes_snapshot").default(0).notNull(),
+  serviceNameSnapshot: text("service_name_snapshot").notNull(),
+  servicePriceCentsSnapshot: integer("service_price_cents_snapshot").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  positionCheck: check("appointment_service_segments_position_check", sql`${table.position} >= 0 AND ${table.position} < 12`),
+  durationCheck: check("appointment_service_segments_duration_check", sql`${table.durationMinutes} > 0 AND ${table.durationMinutes} <= 1440`),
+  buffersCheck: check("appointment_service_segments_buffers_check", sql`
+    ${table.bufferBeforeMinutesSnapshot} BETWEEN 0 AND 720
+    AND ${table.bufferAfterMinutesSnapshot} BETWEEN 0 AND 720
+  `),
+  nameCheck: check("appointment_service_segments_name_check", sql`
+    btrim(${table.serviceNameSnapshot}) <> '' AND char_length(${table.serviceNameSnapshot}) <= 100
+  `),
+  priceCheck: check("appointment_service_segments_price_check", sql`
+    ${table.servicePriceCentsSnapshot} BETWEEN 0 AND 1000000
+  `),
+  appointmentPositionUnique: uniqueIndex("appointment_service_segments_appointment_position_unique")
+    .on(table.appointmentId, table.position),
+  appointmentIndex: index("appointment_service_segments_appointment_idx")
+    .on(table.appointmentId, table.position),
+  barberTimeIndex: index("appointment_service_segments_barber_time_idx")
+    .on(table.barberId, table.startTime),
 }));
 
 export const appointmentAvailabilityWindows = appPgTable("appointment_availability_windows", {
@@ -967,6 +1010,37 @@ export const appointmentsRelations = relations(appointments, ({ one, many }) => 
   internalCosts: many(appointmentInternalCosts),
   availabilityWindows: many(appointmentAvailabilityWindows),
   occupancyPeriods: many(appointmentOccupancyPeriods),
+  serviceSet: one(appointmentServiceSets, {
+    fields: [appointments.id],
+    references: [appointmentServiceSets.appointmentId],
+  }),
+}));
+
+export const appointmentServiceSetsRelations = relations(appointmentServiceSets, ({ one, many }) => ({
+  appointment: one(appointments, {
+    fields: [appointmentServiceSets.appointmentId],
+    references: [appointments.id],
+  }),
+  segments: many(appointmentServiceSegments),
+}));
+
+export const appointmentServiceSegmentsRelations = relations(appointmentServiceSegments, ({ one }) => ({
+  serviceSet: one(appointmentServiceSets, {
+    fields: [appointmentServiceSegments.appointmentId],
+    references: [appointmentServiceSets.appointmentId],
+  }),
+  appointment: one(appointments, {
+    fields: [appointmentServiceSegments.appointmentId],
+    references: [appointments.id],
+  }),
+  service: one(services, {
+    fields: [appointmentServiceSegments.serviceId],
+    references: [services.id],
+  }),
+  barber: one(barbers, {
+    fields: [appointmentServiceSegments.barberId],
+    references: [barbers.id],
+  }),
 }));
 
 export const appointmentAvailabilityWindowsRelations = relations(appointmentAvailabilityWindows, ({ one }) => ({
@@ -1332,6 +1406,8 @@ export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
   baseIsVisible?: boolean | null;
 };
 export type Appointment = typeof appointments.$inferSelect;
+export type AppointmentServiceSet = typeof appointmentServiceSets.$inferSelect;
+export type AppointmentServiceSegment = typeof appointmentServiceSegments.$inferSelect;
 export type AppointmentAvailabilityWindow = typeof appointmentAvailabilityWindows.$inferSelect;
 export type AppointmentOccupancyPeriod = typeof appointmentOccupancyPeriods.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;

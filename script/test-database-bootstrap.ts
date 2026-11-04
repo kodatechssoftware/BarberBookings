@@ -113,17 +113,17 @@ try {
   const emptyResult = await runDatabaseBootstrap(pool, { schemaName: emptySchema, environment });
   assert.equal(emptyResult.initialState, "empty");
   assert.equal(emptyResult.baselineInstalled, true);
-  assert.equal(emptyResult.applied.length, 22);
+  assert.equal(emptyResult.applied.length, 23);
   assert.equal(await count(pool, emptySchema, "users"), 0);
   assert.equal(await count(pool, emptySchema, "barbers"), 0);
   assert.equal(await count(pool, emptySchema, "admins"), 0);
   assert.equal(await count(pool, emptySchema, "locations"), 1);
-  assert.equal(await count(pool, emptySchema, "schema_migrations"), 23);
+  assert.equal(await count(pool, emptySchema, "schema_migrations"), 24);
   const rerun = await runDatabaseBootstrap(pool, { schemaName: emptySchema, environment });
   assert.equal(rerun.initialState, "versioned");
   assert.equal(rerun.baselineInstalled, false);
   assert.deepEqual(rerun.applied, []);
-  assert.equal(rerun.alreadyApplied, 22);
+  assert.equal(rerun.alreadyApplied, 23);
 
   // Recover the exact harmless footprint left by the previously failing db:migrate.
   const emptyLedgerSchema = "bootstrap_empty_ledger";
@@ -134,7 +134,7 @@ try {
   const emptyLedgerResult = await runDatabaseBootstrap(pool, { schemaName: emptyLedgerSchema, environment });
   assert.equal(emptyLedgerResult.initialState, "empty-ledger");
   assert.equal(emptyLedgerResult.baselineInstalled, true);
-  assert.equal(emptyLedgerResult.applied.length, 22);
+  assert.equal(emptyLedgerResult.applied.length, 23);
 
   // 3: an exact legacy baseline plus an empty ledger is adopted, not recreated.
   const legacyLedgerSchema = "bootstrap_legacy_ledger";
@@ -144,7 +144,7 @@ try {
   assert.equal(legacyLedgerResult.initialState, "legacy-baseline");
   assert.equal(legacyLedgerResult.baselineInstalled, false);
   assert.equal(legacyLedgerResult.baselineRecorded, true);
-  assert.equal(legacyLedgerResult.applied.length, 22);
+  assert.equal(legacyLedgerResult.applied.length, 23);
 
   // 4: a versioned partial installation resumes at the next missing migration.
   const partialSchema = "bootstrap_partial";
@@ -157,11 +157,11 @@ try {
   assert.equal(partialFirst.applied.length, 7);
   const partialResume = await runDatabaseBootstrap(pool, { schemaName: partialSchema, environment });
   assert.equal(partialResume.initialState, "versioned");
-  assert.equal(partialResume.applied.length, 15);
+  assert.equal(partialResume.applied.length, 16);
   assert.equal(partialResume.applied[0], "0008_appointment_extras.sql");
-  assert.equal(partialResume.applied.at(-1), "0023_beauty_v2_feature_settings.sql");
+  assert.equal(partialResume.applied.at(-1), "0024_multi_service_appointment_engine.sql");
 
-  // 5, 6: an installation through 0016 receives the remaining additive migrations through 0023, then becomes a no-op.
+  // 5, 6: an installation through 0016 receives the remaining additive migrations through 0024, then becomes a no-op.
   const through0016Schema = "bootstrap_through_0016";
   await pool.query(`CREATE SCHEMA ${quoteIdentifier(through0016Schema)}`);
   const first0016 = await runDatabaseBootstrap(pool, {
@@ -178,11 +178,12 @@ try {
     "0021_appointment_availability_windows.sql",
     "0022_appointment_reminder_schedule.sql",
     "0023_beauty_v2_feature_settings.sql",
+    "0024_multi_service_appointment_engine.sql",
   ]);
   const afterLatest = await runDatabaseBootstrap(pool, { schemaName: through0016Schema, environment });
   assert.deepEqual(afterLatest.applied, []);
 
-  // A deployed Beauty schema at 0021 receives the reminder schedule and feature-settings foundation.
+  // A deployed Beauty schema at 0021 receives the reminder schedule, feature settings and multi-service foundation.
   const through0021Schema = "bootstrap_through_0021";
   await pool.query(`CREATE SCHEMA ${quoteIdentifier(through0021Schema)}`);
   const first0021 = await runDatabaseBootstrap(pool, {
@@ -203,6 +204,7 @@ try {
   assert.deepEqual(apply0022.applied, [
     "0022_appointment_reminder_schedule.sql",
     "0023_beauty_v2_feature_settings.sql",
+    "0024_multi_service_appointment_engine.sql",
   ]);
   assert.equal((await pool.query(`
     SELECT count(*)::int AS count
@@ -273,8 +275,8 @@ try {
     runDatabaseBootstrap(pool, { schemaName: concurrentSchema, environment }),
   ]);
   assert.equal(concurrent.filter((result) => result.baselineInstalled).length, 1);
-  assert.equal(concurrent.reduce((sum, result) => sum + result.applied.length, 0), 22);
-  assert.equal(await count(pool, concurrentSchema, "schema_migrations"), 23);
+  assert.equal(concurrent.reduce((sum, result) => sum + result.applied.length, 0), 23);
+  assert.equal(await count(pool, concurrentSchema, "schema_migrations"), 24);
 
   // 12: an unknown/mixed schema fails before creating a ledger or other table.
   const mixedSchema = "bootstrap_mixed";
@@ -318,8 +320,8 @@ try {
     schemaName: migrateRegressionSchema,
     environment,
   });
-  assert.equal(migrateRegression.applied.length, 22);
-  assert.equal(await count(pool, migrateRegressionSchema, "schema_migrations"), 22);
+  assert.equal(migrateRegression.applied.length, 23);
+  assert.equal(await count(pool, migrateRegressionSchema, "schema_migrations"), 23);
   assert.equal(await count(pool, migrateRegressionSchema, "users"), 0);
 
   const expectedBaselineChecksum = migrationChecksum(baselineSql);
@@ -328,7 +330,7 @@ try {
   `, [DATABASE_BASELINE_NAME])).rows[0];
   assert.equal(recordedBaseline.checksum, expectedBaselineChecksum);
 
-  console.log("Database bootstrap tests passed: empty/rerun/legacy/partial/0016/0017/0018/0020/0021/0022/0023/canonical/legacy/concurrent/fail-closed/checksums/db:migrate.");
+  console.log("Database bootstrap tests passed: empty/rerun/legacy/partial/0016/0017/0018/0020/0021/0022/0023/0024/canonical/legacy/concurrent/fail-closed/checksums/db:migrate.");
 } finally {
   if (pool) await pool.end().catch(() => undefined);
   await stopEmbeddedPostgres(postgres, databaseDir).catch((error) => {

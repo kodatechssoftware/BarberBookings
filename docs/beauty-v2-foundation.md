@@ -4,6 +4,10 @@ This document freezes the technical rules for Beauty v2. It does not enable or
 implement any of the six product features. Beauty v1 remains available at the
 immutable `beauty-v1-stable-2026-11-04` tag.
 
+Phase 2 data-engine details are documented in
+[`beauty-v2-multi-service-engine.md`](./beauty-v2-multi-service-engine.md). The
+public and Admin multi-service interfaces remain out of scope and disabled.
+
 ## Feature flag contract
 
 The six Beauty v2 capabilities have persisted settings in

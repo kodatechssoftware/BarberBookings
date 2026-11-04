@@ -281,13 +281,17 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 22,
-    "an empty legacy baseline must apply every migration through 0023");
+  assert.equal(freshRun.applied.length, 23,
+    "an empty legacy baseline must apply every migration through 0024");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("business_feature_settings")}`)).rows[0].count), 0,
     "Beauty v2 flags must start disabled by absence");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_service_sets")}`)).rows[0].count), 0,
+    "the multi-service engine must not reinterpret legacy appointments on a fresh migration");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_service_segments")}`)).rows[0].count), 0,
+    "the multi-service segment store must start empty");
   const freshExtrasColumns = (await pool.query(`
     SELECT column_name, is_nullable
     FROM information_schema.columns
@@ -352,7 +356,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 22);
+  assert.equal(secondFreshRun.alreadyApplied, 23);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1084,6 +1088,7 @@ try {
     "0021_appointment_availability_windows.sql",
     "0022_appointment_reminder_schedule.sql",
     "0023_beauty_v2_feature_settings.sql",
+    "0024_multi_service_appointment_engine.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
   assert.deepEqual((await pool.query(`
@@ -1122,6 +1127,10 @@ try {
   assert.equal(Number((await pool.query(`
     SELECT count(*) AS count FROM ${table("appointment_occupancy_periods")}
   `)).rows[0].count), 2, "legacy booked appointments must retain continuous occupancy after 0021");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_service_sets")}`)).rows[0].count), 0,
+    "the 0024 upgrade must not reinterpret historical appointments as multi-service");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_service_segments")}`)).rows[0].count), 0,
+    "the 0024 upgrade must not infer service segments from legacy summary fields");
 
   const windowParent = (await pool.query(`
     INSERT INTO ${table("appointments")} (
@@ -1400,7 +1409,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 22);
+  assert.equal(secondCompensationRun.alreadyApplied, 23);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1430,6 +1439,9 @@ try {
     "user_access_scopes_global_unique", "user_access_scopes_location_unique",
     "user_invites_token_digest_unique", "user_invites_user_idx",
     "audit_logs_actor_user_idx", "audit_logs_actor_professional_idx", "audit_logs_location_idx",
+    "appointment_service_segments_appointment_position_unique",
+    "appointment_service_segments_appointment_idx",
+    "appointment_service_segments_barber_time_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
   assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
     "the legacy global customer-note identity index must be removed");
@@ -2153,7 +2165,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0023, default-off Beauty v2 feature settings, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0024, default-off Beauty v2 feature settings, additive multi-service appointment data/occupancy, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
