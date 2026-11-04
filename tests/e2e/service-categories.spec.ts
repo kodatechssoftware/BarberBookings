@@ -116,8 +116,12 @@ test.describe("service categories", () => {
     await page.goto(`/book?barberId=${barber.id}`);
     await expect(page.getByRole("heading", { name: "Selecione o Serviço" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Outros serviços", exact: true })).toHaveCount(0);
+    const servicesForBarber = legacyServices.filter((service: any) => (
+      barber.allServicesAllowed === true
+      || (Array.isArray(barber.serviceIds) && barber.serviceIds.includes(service.id))
+    ));
     expect(await page.getByRole("heading", { level: 3 }).allTextContents())
-      .toEqual(legacyServices.map((service: any) => service.name));
+      .toEqual(servicesForBarber.map((service: any) => service.name));
 
     await loginAdmin(page);
     await page.getByRole("tab", { name: "Serviços" }).click();

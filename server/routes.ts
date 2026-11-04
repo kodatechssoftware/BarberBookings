@@ -240,6 +240,15 @@ import {
   CanonicalBootstrapError,
   getCanonicalBootstrapStatus,
 } from "./auth-bootstrap";
+import {
+  beautyV2FeatureNames,
+  parseBeautyV2MasterSwitch,
+  resolveBeautyV2Features,
+} from "@shared/business/v2-features";
+import {
+  listBeautyV2FeatureSettings,
+  setBeautyV2FeatureSetting,
+} from "./beauty-v2-feature-store";
 
 const PostgresSessionStore = connectPg(session);
 
@@ -2504,6 +2513,7 @@ export async function registerRoutes(
   const requireCatalogLocationManage = requireCapabilityAtLocation("catalog.manage_location", requireAdmin);
   const requireCatalogGlobalManage = requireGlobalCapability("catalog.manage_global", requireAdmin);
   const requireUsersManage = requireGlobalCapability("users.manage", requireAdmin);
+  const requireSettingsManage = requireGlobalCapability("settings.manage", requireAdmin);
   const requireUsersAndAccessManage = requireAllGlobalCapabilities(
     ["users.manage", "access.manage"],
     requireAdmin,
@@ -2516,6 +2526,58 @@ export async function registerRoutes(
   const requireManagementAuth = (req: Request, res: Response, next: NextFunction) => authRuntimeMode === "canonical"
     ? requireAuth(req, res, next)
     : requireAdmin(req, res, next);
+
+  const beautyV2FeatureSettingSchema = z.object({
+    enabled: z.boolean(),
+    locationId: z.number().int().positive().nullable().optional().default(null),
+  });
+  const beautyV2MasterEnabled = parseBeautyV2MasterSwitch(process.env.BEAUTY_V2_FEATURES_ENABLED);
+
+  app.get("/api/admin/beauty-v2/features", requireSettingsManage, async (req, res) => {
+    const locationId = req.query.locationId === undefined
+      ? null
+      : Number.parseInt(String(req.query.locationId), 10);
+    if (locationId !== null && (!Number.isInteger(locationId) || locationId <= 0)) {
+      return res.status(400).json({ message: "Localização inválida." });
+    }
+    const settings = await listBeautyV2FeatureSettings();
+    return res.json({
+      masterEnabled: beautyV2MasterEnabled,
+      settings,
+      effective: resolveBeautyV2Features({
+        masterEnabled: beautyV2MasterEnabled,
+        settings,
+        locationId,
+      }),
+    });
+  });
+
+  app.put("/api/admin/beauty-v2/features/:featureName", requireSettingsManage, async (req, res) => {
+    const parsedFeatureName = z.enum(beautyV2FeatureNames).safeParse(req.params.featureName);
+    if (!parsedFeatureName.success) {
+      return res.status(404).json({ message: "Funcionalidade Beauty v2 desconhecida." });
+    }
+    const featureName = parsedFeatureName.data;
+    const input = beautyV2FeatureSettingSchema.parse(req.body);
+    const setting = await setBeautyV2FeatureSetting({ featureName, ...input });
+    const effective = resolveBeautyV2Features({
+      masterEnabled: beautyV2MasterEnabled,
+      settings: await listBeautyV2FeatureSettings(),
+      locationId: input.locationId,
+    });
+    recordAuditLog(req, {
+      action: "beauty_v2_feature_updated",
+      entityType: "business_feature_setting",
+      locationId: input.locationId,
+      summary: `Feature Beauty v2 ${featureName} configurada.`,
+      metadata: { featureName, enabled: input.enabled },
+    });
+    return res.json({
+      setting,
+      effectiveEnabled: effective[featureName],
+      masterEnabled: beautyV2MasterEnabled,
+    });
+  });
 
   const requireCanonicalUsersManage = (req: Request, res: Response, next: NextFunction) => {
     if (authRuntimeMode !== "canonical") {

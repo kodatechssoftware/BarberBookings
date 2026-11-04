@@ -6,6 +6,7 @@ import net from "node:net";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 import pg from "pg";
 
 // Frozen oracle: the 16 rules and seven fields from 0134642, independently
@@ -239,7 +240,7 @@ test("ordered encoding repair: historical vs optimized on isolated UTF8 PostgreS
   } finally {
     if (applicationPool) await applicationPool.end();
     if (observer) await observer.end();
-    if (started) await postgres.stop();
+    if (started) await stopEmbeddedPostgres(postgres, databaseDir);
     const parent = await realpath(tmpdir()), target = path.resolve(databaseDir);
     assert.ok(target.startsWith(parent + path.sep));
     await rm(target, { recursive: true, force: true });

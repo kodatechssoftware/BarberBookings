@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
 import { createMigrationSubsetThrough } from "../helpers/migration-subset";
@@ -575,7 +576,7 @@ test("real PostgreSQL returns one 201 and only 409 conflicts for concurrent book
     }
     if (applicationPool) await applicationPool.end();
     if (pool) await pool.end();
-    if (postgresStarted) await postgres.stop();
+    if (postgresStarted) await stopEmbeddedPostgres(postgres, databaseDir);
     if (migrationsDirectory) await rm(migrationsDirectory, { recursive: true, force: true });
     await rm(databaseDir, { recursive: true, force: true });
   }

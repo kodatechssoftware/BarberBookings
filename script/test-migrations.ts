@@ -10,6 +10,7 @@ import { boolean, integer, pgSchema, text, timestamp } from "drizzle-orm/pg-core
 import { asc } from "drizzle-orm";
 import { getMigrationLocationConfig, migrationChecksum, runSchemaMigrations } from "../server/migrations";
 import { calculateAppointmentsFinancials } from "../server/appointment-finance";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 
 async function availablePort() {
   const server = net.createServer();
@@ -280,11 +281,13 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 21,
-    "an empty legacy baseline must apply every migration through 0022");
+  assert.equal(freshRun.applied.length, 22,
+    "an empty legacy baseline must apply every migration through 0023");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("business_feature_settings")}`)).rows[0].count), 0,
+    "Beauty v2 flags must start disabled by absence");
   const freshExtrasColumns = (await pool.query(`
     SELECT column_name, is_nullable
     FROM information_schema.columns
@@ -349,7 +352,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 21);
+  assert.equal(secondFreshRun.alreadyApplied, 22);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1080,6 +1083,7 @@ try {
     "0020_commercial_extras_internal_costs.sql",
     "0021_appointment_availability_windows.sql",
     "0022_appointment_reminder_schedule.sql",
+    "0023_beauty_v2_feature_settings.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
   assert.deepEqual((await pool.query(`
@@ -1396,7 +1400,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 21);
+  assert.equal(secondCompensationRun.alreadyApplied, 22);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2149,11 +2153,13 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0022, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0023, default-off Beauty v2 feature settings, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
-  await embedded.stop().catch(() => undefined);
+  await stopEmbeddedPostgres(embedded, databaseDir).catch((error) => {
+    console.warn("Embedded PostgreSQL shutdown failed:", error instanceof Error ? error.message : String(error));
+  });
   await rm(databaseDir, { recursive: true, force: true });
   await rm(preServiceTermsMigrationsDirectory, { recursive: true, force: true });
   await rm(preExtrasMigrationsDirectory, { recursive: true, force: true });

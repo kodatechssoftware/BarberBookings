@@ -33,6 +33,7 @@ export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id
 export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
 export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
+export const businessFeatureSettingsIdSeq = appPgSchema?.sequence("business_feature_settings_id_seq");
 export const extraDefinitionsIdSeq = appPgSchema?.sequence("extra_definitions_id_seq");
 export const internalCostDefinitionsIdSeq = appPgSchema?.sequence("internal_cost_definitions_id_seq");
 export const appointmentInternalCostsIdSeq = appPgSchema?.sequence("appointment_internal_costs_id_seq");
@@ -163,6 +164,27 @@ export const locations = appPgTable("locations", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+export const businessFeatureSettings = appPgTable("business_feature_settings", {
+  id: idColumn("business_feature_settings_id_seq"),
+  featureName: text("feature_name").notNull(),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  nameCheck: check("business_feature_settings_name_check", sql`${table.featureName} IN ('appointmentRequests', 'teamProfiles', 'googleReviews', 'notificationDeliveryStatus', 'consultationRole', 'multiServiceAppointments')`),
+  timestampsCheck: check("business_feature_settings_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+  globalUnique: uniqueIndex("business_feature_settings_global_unique")
+    .on(table.featureName)
+    .where(sql`${table.locationId} IS NULL`),
+  locationUnique: uniqueIndex("business_feature_settings_location_unique")
+    .on(table.featureName, table.locationId)
+    .where(sql`${table.locationId} IS NOT NULL`),
+  locationIndex: index("business_feature_settings_location_idx")
+    .on(table.locationId)
+    .where(sql`${table.locationId} IS NOT NULL`),
+}));
 
 /** Canonical login identity. Legacy admins/barbers remain authoritative until auth cutover. */
 export const users = appPgTable("users", {
@@ -1328,6 +1350,7 @@ export type User = typeof users.$inferSelect;
 export type UserAccessScope = typeof userAccessScopes.$inferSelect;
 export type UserAccessScopeCapability = typeof userAccessScopeCapabilities.$inferSelect;
 export type UserInvite = typeof userInvites.$inferSelect;
+export type BusinessFeatureSetting = typeof businessFeatureSettings.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
 export type BarberAvailability = typeof barberAvailability.$inferSelect;

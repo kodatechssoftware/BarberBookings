@@ -4,6 +4,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 import pg from "pg";
 import { runDatabaseBootstrap } from "../server/database-bootstrap";
 import {
@@ -227,6 +228,6 @@ try {
   console.log("Beauty demo seed tests passed.");
 } finally {
   await pool?.end().catch(() => undefined);
-  await postgres.stop().catch(() => undefined);
+  await stopEmbeddedPostgres(postgres, databaseDir).catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
 }

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import bcrypt from "bcryptjs";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 import pg from "pg";
 
 async function availablePort() {
@@ -55,7 +56,9 @@ async function stop(exitCode = 0) {
     const applicationDatabase = await import("../server/db").catch(() => undefined);
     await applicationDatabase?.pool.end().catch(() => undefined);
     await pool?.end().catch(() => undefined);
-    await postgres.stop().catch(() => undefined);
+    await stopEmbeddedPostgres(postgres, databaseDirectory).catch((error) => {
+      console.warn("Embedded PostgreSQL shutdown failed:", error instanceof Error ? error.message : String(error));
+    });
     await rm(databaseDirectory, { recursive: true, force: true });
   } finally {
     process.exit(exitCode);

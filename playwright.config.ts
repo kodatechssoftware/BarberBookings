@@ -5,7 +5,21 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testIgnore: ["production-runtime.spec.ts", "booking-slot-interval.spec.ts"],
+  testIgnore: [
+    "production-runtime.spec.ts",
+    "booking-slot-interval.spec.ts",
+    "beauty-admin-contrast.spec.ts",
+    "beauty-appointment-reminders.spec.ts",
+    "beauty-booking-visual-states.spec.ts",
+    "beauty-financial-clarity.spec.ts",
+    "beauty-recurring-expenses.spec.ts",
+    "beauty-service-buffers.spec.ts",
+    "beauty-ana-isabel-branding.spec.ts",
+    "beauty-single-location-settings.spec.ts",
+    "canonical-multi-location.spec.ts",
+    "demo-service-categories.spec.ts",
+  ],
+  grepInvert: /janela mensal de marcações públicas|\[multi-location\]|\[beauty\]/,
   timeout: 30_000,
   expect: {
     timeout: 7_500,

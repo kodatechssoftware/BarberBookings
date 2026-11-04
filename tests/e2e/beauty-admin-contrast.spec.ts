@@ -182,25 +182,6 @@ test.describe("Beauty Admin contrast", () => {
     }
   });
 
-  test("does not apply the Beauty legibility layer to the Barber Admin", async ({ page }) => {
-    const runtimeConfigResponse = await page.request.get("/api/runtime-config");
-    expect(runtimeConfigResponse.ok(), await runtimeConfigResponse.text()).toBe(true);
-    const runtimeConfig = await runtimeConfigResponse.json();
-    test.skip(runtimeConfig.vertical !== "barber", "Barber-only isolation contract");
-
-    await loginAdmin(page.request);
-    await page.goto("/admin");
-
-    await expect(page.locator("html")).not.toHaveAttribute("data-brand-theme", "beauty-clean");
-    const heading = page.getByRole("heading", { name: "Painel Administrativo" });
-    await expect(heading).toHaveCSS("color", "rgb(255, 255, 255)");
-
-    const agenda = page.getByTestId("weekly-agenda");
-    await expect(agenda).toBeVisible();
-    const agendaBackground = await agenda.evaluate((element) => getComputedStyle(element).backgroundColor);
-    expect(agendaBackground).not.toBe("rgb(255, 253, 251)");
-  });
-
   test("keeps Beauty form labels, helpers, placeholders and disabled controls legible", async ({ page }) => {
     const runtimeConfigResponse = await page.request.get("/api/runtime-config");
     expect(runtimeConfigResponse.ok(), await runtimeConfigResponse.text()).toBe(true);

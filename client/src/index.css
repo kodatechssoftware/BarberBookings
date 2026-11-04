@@ -630,6 +630,9 @@
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day {
   background-color: hsl(var(--card));
   color: hsl(var(--foreground));
+  /* Text and background must change atomically: interpolating both creates
+     transient low-contrast states while navigating the calendar. */
+  transition-property: border-color, box-shadow;
 }
 
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day:hover:not(:disabled):not([aria-selected="true"]) {
@@ -680,6 +683,9 @@
 
 :root[data-brand-theme="beauty-clean"] .booking-time-slot {
   min-height: 2.75rem;
+  /* Avoid intermediate foreground/background pairs below WCAG contrast while
+     preserving the spatial and focus transitions. */
+  transition-property: border-color, box-shadow, transform;
 }
 
 :root[data-brand-theme="beauty-clean"] .booking-shell .booking-time-slot-available,

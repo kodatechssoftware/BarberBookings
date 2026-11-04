@@ -7,6 +7,7 @@ import path from "node:path";
 import net from "node:net";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 
 test("memory catalogue counts preserve active assignments, zeroes and fresh updates", () => {
   execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", `
@@ -144,6 +145,6 @@ test("PostgreSQL catalogue returns identical counts with 1 query instead of 15",
     console.log(JSON.stringify({ measurement: "local-pg-catalogue-read-samples", samples }));
   } finally {
     if (pool) await pool.end();
-    if (started) await postgres.stop(); // persistent:false removes only its generated temporary directory
+    if (started) await stopEmbeddedPostgres(postgres, databaseDir);
   }
 });

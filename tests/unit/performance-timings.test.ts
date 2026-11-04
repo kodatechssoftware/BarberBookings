@@ -7,6 +7,7 @@ import path from "node:path";
 import net from "node:net";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 import pg from "pg";
 import type { Pool } from "pg";
 import {
@@ -128,7 +129,7 @@ test("real PostgreSQL pool reports queued acquisition apart from query round tri
     assert.ok(timings.maxPoolQueue >= 1);
   } finally {
     if (pool) await pool.end();
-    if (started) await postgres.stop();
+    if (started) await stopEmbeddedPostgres(postgres, databaseDir);
     const parent = await realpath(tmpdir());
     // persistent:false normally removes this directory on stop(). If it does
     // not, validate the exact generated target before removing it ourselves.

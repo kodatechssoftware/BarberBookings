@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 import pg from "pg";
 import { capabilityCodes, capabilityRegistry } from "../shared/auth";
 import { runLegacyAuthPreflight } from "../server/auth-legacy-preflight";
@@ -323,7 +324,7 @@ try {
   console.log("PASS: additive auth users migration preserved legacy data, created no users, and enforced identity, scope, capability, invite and audit constraints.");
 } finally {
   if (pool) await pool.end();
-  await embedded.stop().catch(() => undefined);
+  await stopEmbeddedPostgres(embedded, databaseDir).catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
   await rm(migrationDirectory, { recursive: true, force: true });
 }

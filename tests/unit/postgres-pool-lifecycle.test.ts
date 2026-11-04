@@ -8,6 +8,7 @@ import test from "node:test";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 import pg, { type PoolClient } from "pg";
 import {
   formatPostgresClientError,
@@ -214,7 +215,7 @@ test("real pool and Drizzle transactions recover after a checked-out ECONNABORTE
     assert.equal(logs.length, logsBeforeSqlError, "ordinary SQL errors do not enter the socket-error logger");
   } finally {
     if (pool) await pool.end().catch(() => undefined);
-    if (postgresStarted) await postgres.stop().catch(() => undefined);
+    if (postgresStarted) await stopEmbeddedPostgres(postgres, databaseDir).catch(() => undefined);
     await rm(databaseDir, { recursive: true, force: true }).catch(() => undefined);
   }
 });

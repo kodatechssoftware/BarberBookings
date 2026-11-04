@@ -272,6 +272,39 @@ test("Excel report headings follow the resolved backend vertical without changin
   const runtimeResponse = await request.get("/api/runtime-config");
   expect(runtimeResponse.ok()).toBe(true);
   const runtime = await runtimeResponse.json() as { vertical: "barber" | "beauty" };
+  const suffix = Date.now();
+  const serviceResponse = await request.post("/api/services", { data: {
+    name: `Serviço estrutura Excel ${suffix}`,
+    description: "Fixture isolada do contrato Excel",
+    price: 3000,
+    duration: 30,
+    isVisible: true,
+  } });
+  expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
+  const service = await serviceResponse.json();
+  const professionalResponse = await request.post("/api/barbers", { data: {
+    name: `Profissional estrutura Excel ${suffix}`,
+    specialty: "Fixture Excel",
+    color: "#7C3AED",
+    isVisible: true,
+    serviceIds: [service.id],
+    compensationModel: "commission",
+    commissionPercent: 40,
+  } });
+  expect(professionalResponse.status(), await professionalResponse.text()).toBe(201);
+  const professional = await professionalResponse.json();
+  const appointmentResponse = await request.post("/api/appointments/block", { data: {
+    barberId: professional.id,
+    serviceId: service.id,
+    startTime: "2026-10-01T15:00:00.000Z",
+    name: `Cliente estrutura Excel ${suffix}`,
+    phone: "+351912697499",
+    isManualBooking: true,
+    allowOutsideHours: true,
+    isAlreadyCompleted: true,
+    paymentMethod: "cash",
+  } });
+  expect(appointmentResponse.status(), await appointmentResponse.text()).toBe(201);
   const exportResponse = await request.get(
     "/api/admin/export?startDate=2026-10-01&endDate=2026-10-02&barberId=all",
   );
@@ -282,6 +315,7 @@ test("Excel report headings follow the resolved backend vertical without changin
   expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
     "Resumo Financeiro",
     "Detalhe dos Movimentos",
+    runtime.vertical === "beauty" ? "Acertos com Profissionais" : "Acertos com Barbeiros",
   ]);
   const summary = workbook.getWorksheet("Resumo Financeiro");
   const movements = workbook.getWorksheet("Detalhe dos Movimentos");

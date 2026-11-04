@@ -1440,7 +1440,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await expect(bookingDialog.getByTestId("manual-booking-barber")).toContainText("Selecione");
   await expect(bookingDialog.getByTestId("manual-booking-service")).toContainText("Selecione");
   await expect(bookingDialog.getByLabel("Nome do cliente", { exact: true })).toHaveValue("Cliente mantido entre lojas");
-  await expect(bookingDialog.locator("#manual-booking-phone")).toHaveValue("912345678");
+  await expect(bookingDialog.locator("#manual-booking-phone")).toHaveValue("912 345 678");
   await expect(bookingDialog.getByLabel("Email (opcional)")).toHaveValue("cliente-mantido@example.test");
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).not.toBeChecked();

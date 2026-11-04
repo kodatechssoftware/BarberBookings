@@ -296,16 +296,25 @@ async function createManualAppointmentForCurrentWeek(
   options: { name?: string; phone?: string; email?: string; hour?: number; minute?: number; allowOutsideHours?: boolean } = {},
 ) {
   await loginAdminRequest(request);
-
-  const [barbersResponse, servicesResponse] = await Promise.all([
-    request.get("/api/barbers?includeHidden=true"),
-    request.get("/api/services?includeHidden=true"),
-  ]);
-  expect(barbersResponse.ok()).toBe(true);
-  expect(servicesResponse.ok()).toBe(true);
-
-  const [barber] = await barbersResponse.json();
-  const [service] = await servicesResponse.json();
+  const suffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const serviceResponse = await request.post("/api/services", { data: {
+    name: `Serviço fixture ${suffix}`,
+    description: "Fixture isolada de navegação Admin",
+    price: 2000,
+    duration: 30,
+    isVisible: true,
+  } });
+  expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
+  const service = await serviceResponse.json();
+  const barberResponse = await request.post("/api/barbers", { data: {
+    name: `Barbeiro fixture ${suffix}`,
+    specialty: "Fixture isolada",
+    color: "#0EA5E9",
+    isVisible: true,
+    serviceIds: [service.id],
+  } });
+  expect(barberResponse.status(), await barberResponse.text()).toBe(201);
+  const barber = await barberResponse.json();
 
   const createResponse = await request.post("/api/appointments/block", {
     data: {
@@ -316,7 +325,9 @@ async function createManualAppointmentForCurrentWeek(
       phone: options.phone ?? "912695705",
       customerEmail: options.email ?? "",
       isManualBooking: true,
-      allowOutsideHours: options.allowOutsideHours,
+      // Schedule enforcement has its own tests. This isolated UI fixture must
+      // not depend on shared availability state or earlier appointments.
+      allowOutsideHours: options.allowOutsideHours ?? true,
     },
   });
   expect(createResponse.ok(), await createResponse.text()).toBe(true);
@@ -371,49 +382,37 @@ async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequ
   await loginAdminRequest(request);
   const appointmentStart = futureThursdayIso(1, 11, 0);
 
-  const [barbersResponse, servicesResponse] = await Promise.all([
-    request.get("/api/barbers?includeHidden=true"),
-    request.get("/api/services?includeHidden=true"),
-  ]);
-  expect(barbersResponse.ok()).toBe(true);
-  expect(servicesResponse.ok()).toBe(true);
-
-  const barbers = await barbersResponse.json();
-  const services = await servicesResponse.json();
-  const defaultService = services[0];
-  expect(defaultService).toBeTruthy();
-
-  const visibleBarbers = barbers.filter((barber: any) => barber.isVisible !== false);
+  const fixtureSuffix = Date.now();
+  const serviceResponse = await request.post("/api/services", { data: {
+    name: `Serviço agenda paralela ${fixtureSuffix}`,
+    description: "Fixture de alinhamento da agenda",
+    price: 2500,
+    duration: 30,
+    isVisible: true,
+  } });
+  expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
+  const fixtureService = await serviceResponse.json();
+  const visibleBarbers: any[] = [];
   const testColors = ["#2DD4BF", "#F97316", "#A855F7"];
-  while (visibleBarbers.length < 3) {
-    const index = visibleBarbers.length;
+  for (let index = 0; index < 3; index += 1) {
     const createBarberResponse = await request.post("/api/barbers", {
       data: {
-        name: `Barbeiro Grupo ${index + 1}`,
+        name: `Barbeiro Grupo ${index + 1} ${fixtureSuffix}`,
         specialty: "Teste de agenda",
         color: testColors[index] || "#D4AF37",
         isVisible: true,
-        serviceIds: [defaultService.id],
+        serviceIds: [fixtureService.id],
       },
     });
     expect(createBarberResponse.ok()).toBe(true);
     visibleBarbers.push(await createBarberResponse.json());
   }
 
-  visibleBarbers.splice(3);
-  expect(visibleBarbers.length).toBeGreaterThanOrEqual(3);
-
   for (const [index, barber] of visibleBarbers.entries()) {
-    const service = services.find((item: any) =>
-      !Array.isArray(barber.serviceIds) ||
-      barber.serviceIds.length === 0 ||
-      barber.serviceIds.includes(item.id),
-    ) || services[0];
-
     const createResponse = await request.post("/api/appointments/block", {
       data: {
         barberId: barber.id,
-        serviceId: service.id,
+        serviceId: fixtureService.id,
         startTime: appointmentStart,
         name: `Grupo Agenda ${index + 1}`,
         phone: `91269572${index}`,
@@ -752,7 +751,9 @@ test.describe("public booking flow", () => {
     }
 
     if (initiallySelectedLabel) {
-      await page.getByRole("gridcell", { name: initiallySelectedLabel, exact: true }).click();
+      await page.locator("button.booking-calendar-day:not(.booking-calendar-day-outside)", {
+        hasText: new RegExp(`^\\s*${initiallySelectedLabel}\\s*$`),
+      }).click();
       await expect(selectedDay).toHaveText(initiallySelectedLabel);
       expect(appointmentRequests).toHaveLength(2);
     }
@@ -981,25 +982,27 @@ test.describe("public booking flow", () => {
 
     const phoneInput = page.getByPlaceholder("912 345 678");
     await phoneInput.fill("91--0000000");
-    await expect(phoneInput).toHaveValue("");
+    await expect(phoneInput).toHaveValue("910 000 000");
+    await phoneInput.fill("");
     await phoneInput.focus();
     await page.keyboard.type("91-.2345");
-    await expect(phoneInput).toHaveValue("912345");
+    await expect(phoneInput).toHaveValue("912 345");
     await phoneInput.fill("9126957000000000");
-    await expect(phoneInput).toHaveValue("912695700");
+    await expect(phoneInput).toHaveValue("9126957000000000");
 
     await page.getByPlaceholder("O seu nome").fill("Pedro Faria");
     await phoneInput.fill("123");
     await page.getByPlaceholder("exemplo@email.com").fill("email-invalido");
 
     await expect(page.getByText("Indique o nome para a marcação.")).not.toBeVisible();
-    await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).toBeVisible();
+    const invalidPhoneMessage = page.getByText("Confirme que o número tem um formato válido para Portugal.");
+    await expect(invalidPhoneMessage).toBeVisible();
     await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).toBeVisible();
 
     await phoneInput.fill("912695704");
     await page.getByPlaceholder("exemplo@email.com").fill("");
 
-    await expect(page.getByText(/Confirme que o número tem 9 dígitos/)).not.toBeVisible();
+    await expect(invalidPhoneMessage).not.toBeVisible();
     await expect(page.getByText("Indique um email válido ou deixe o campo vazio.")).not.toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
@@ -3867,7 +3870,10 @@ test.describe("booking rules", () => {
       await page.getByRole("button", { name: "Registar despesa" }).click();
 
       await expect(page.getByText("Despesa registada.", { exact: true })).toBeVisible();
-      const expensesResponse = await page.request.get("/api/admin/expenses");
+      const today = new Date().toISOString().slice(0, 10);
+      const expensesResponse = await page.request.get(
+        `/api/admin/expenses?startDate=${today}&endDate=${today}&category=all`,
+      );
       expect(expensesResponse.ok(), await expensesResponse.text()).toBe(true);
       const expenses = await expensesResponse.json();
       const createdExpense = expenses.find((expense: any) => expense.description === expenseDescription);
@@ -3882,7 +3888,6 @@ test.describe("booking rules", () => {
         `${(expectedTotalCents / 100).toFixed(2).replace(".", ",")} €`,
       );
 
-      const today = new Date().toISOString().slice(0, 10);
       const exportResponse = await page.request.get(`/api/admin/export?startDate=${today}&endDate=${today}&barberId=all`);
       expect(exportResponse.ok(), await exportResponse.text()).toBe(true);
       const workbook = new ExcelJS.Workbook();
@@ -6227,7 +6232,7 @@ test.describe("booking rules", () => {
         (entry: any) => entry.email === email,
       );
       expect(matchingEntries.map((entry: any) => entry.phone).sort()).toEqual(
-        phones.map((phone) => phone.slice(4)).sort(),
+        phones.sort(),
       );
     } finally {
       const blacklistResponse = await request.get("/api/admin/blacklist");
@@ -6308,7 +6313,6 @@ test.describe("booking rules", () => {
     expect(servicesResponse.ok()).toBe(true);
     const [service] = await servicesResponse.json();
     expect(service).toBeTruthy();
-
     const suffix = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const createBarberResponse = await request.post("/api/barbers", {
       data: {
@@ -6924,6 +6928,12 @@ test.describe("booking rules", () => {
     expect(servicesResponse.ok()).toBe(true);
     const [service] = await servicesResponse.json();
     expect(service).toBeTruthy();
+    for (const barber of [ownBarber, otherBarber]) {
+      const assignmentResponse = await request.patch(`/api/barbers/${barber.id}/services`, {
+        data: { serviceIds: [service.id] },
+      });
+      expect(assignmentResponse.ok(), await assignmentResponse.text()).toBe(true);
+    }
     const exportDate = futureThursdayIso(6, 11, 0);
     const exportDateKey = dateKeyFromIso(exportDate);
     const ownCustomerName = `Own Export ${suffix}`;

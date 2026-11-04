@@ -5,6 +5,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 import ExcelJS from "exceljs";
 import express from "express";
 import pg from "pg";
@@ -776,6 +777,6 @@ try {
 } finally {
   if (routeServer) await new Promise<void>((resolve) => routeServer!.close(() => resolve())).catch(() => undefined);
   await setupPool?.end().catch(() => undefined);
-  await postgres.stop().catch(() => undefined);
+  await stopEmbeddedPostgres(postgres, databaseDir).catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true }).catch(() => undefined);
 }

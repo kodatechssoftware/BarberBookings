@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 import pg from "pg";
 
 async function availablePort() {
@@ -137,6 +138,8 @@ try {
 } finally {
   if (applicationPool) await applicationPool.end();
   if (testPool) await testPool.end();
-  await embedded.stop().catch(() => undefined);
+  await stopEmbeddedPostgres(embedded, databaseDir).catch((error) => {
+    console.warn("Embedded PostgreSQL shutdown failed:", error instanceof Error ? error.message : String(error));
+  });
   await rm(databaseDir, { recursive: true, force: true });
 }

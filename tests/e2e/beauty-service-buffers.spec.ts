@@ -43,6 +43,46 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
   let eligibleProfessional: any;
   let ineligibleProfessional: any;
 
+  test.beforeAll(async ({ request }) => {
+    await loginAdmin(request);
+    expect((await request.patch("/api/shop/availability", { data: openEveryDay })).ok()).toBe(true);
+
+    const suffix = Date.now();
+    const serviceResponse = await request.post("/api/services", { data: {
+      name: `Tratamento buffer ${suffix}`,
+      description: "Serviço Beauty com preparação e limpeza",
+      price: 4500,
+      duration: 60,
+      bufferBeforeMinutes: 15,
+      bufferAfterMinutes: 15,
+      isVisible: true,
+    } });
+    expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
+    service = await serviceResponse.json();
+
+    const professionalResponse = await request.post("/api/barbers", { data: {
+      name: `Profissional Beauty ${suffix}`,
+      specialty: "Tratamentos",
+      color: "#8B5CF6",
+      isVisible: true,
+      serviceIds: [service.id],
+    } });
+    expect(professionalResponse.status(), await professionalResponse.text()).toBe(201);
+    eligibleProfessional = await professionalResponse.json();
+    expect((await request.patch(`/api/barbers/${eligibleProfessional.id}/availability`, { data: workingEveryDay })).ok()).toBe(true);
+
+    const ineligibleResponse = await request.post("/api/barbers", { data: {
+      name: `Profissional sem tratamento ${suffix}`,
+      specialty: "Outra área",
+      color: "#64748B",
+      isVisible: true,
+      serviceIds: [],
+    } });
+    expect(ineligibleResponse.status(), await ineligibleResponse.text()).toBe(201);
+    ineligibleProfessional = await ineligibleResponse.json();
+    expect((await request.patch(`/api/barbers/${ineligibleProfessional.id}/availability`, { data: workingEveryDay })).ok()).toBe(true);
+  });
+
   test("keeps open public booking ranges finite and rejects the former sentinel safely", async ({ request }) => {
     const windowResponse = await request.get("/api/public-booking-window");
     expect(windowResponse.ok(), await windowResponse.text()).toBe(true);
@@ -134,48 +174,12 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
 
   test("applies buffers to public/manual/edit/reschedule/recurrence and preserves snapshots", async ({ request }) => {
     await loginAdmin(request);
-    expect((await request.patch("/api/shop/availability", { data: openEveryDay })).ok()).toBe(true);
-
-    const suffix = Date.now();
-    const serviceResponse = await request.post("/api/services", { data: {
-      name: `Tratamento buffer ${suffix}`,
-      description: "Serviço Beauty com preparação e limpeza",
-      price: 4500,
-      duration: 60,
-      bufferBeforeMinutes: 15,
-      bufferAfterMinutes: 15,
-      isVisible: true,
-    } });
-    expect(serviceResponse.status(), await serviceResponse.text()).toBe(201);
-    service = await serviceResponse.json();
     expect(service).toMatchObject({
       duration: 60,
       price: 4500,
       bufferBeforeMinutes: 15,
       bufferAfterMinutes: 15,
     });
-
-    const professionalResponse = await request.post("/api/barbers", { data: {
-      name: `Profissional Beauty ${suffix}`,
-      specialty: "Tratamentos",
-      color: "#8B5CF6",
-      isVisible: true,
-      serviceIds: [service.id],
-    } });
-    expect(professionalResponse.status(), await professionalResponse.text()).toBe(201);
-    eligibleProfessional = await professionalResponse.json();
-    expect((await request.patch(`/api/barbers/${eligibleProfessional.id}/availability`, { data: workingEveryDay })).ok()).toBe(true);
-
-    const ineligibleResponse = await request.post("/api/barbers", { data: {
-      name: `Profissional sem tratamento ${suffix}`,
-      specialty: "Outra área",
-      color: "#64748B",
-      isVisible: true,
-      serviceIds: [],
-    } });
-    expect(ineligibleResponse.status(), await ineligibleResponse.text()).toBe(201);
-    ineligibleProfessional = await ineligibleResponse.json();
-    expect((await request.patch(`/api/barbers/${ineligibleProfessional.id}/availability`, { data: workingEveryDay })).ok()).toBe(true);
 
     const firstStart = futureStart(60, 10);
     const firstResponse = await request.post("/api/appointments", { data: {
@@ -489,6 +493,7 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       await nextAvailableTime.click();
       await expect(startPicker).toContainText(shiftClock(initialStart));
       await expect(endPicker).toContainText(shiftClock(initialEnd));
+      const shiftedEnd = (await endPicker.innerText()).trim();
       await startPicker.click();
       const hours = page.getByRole("group", { name: "Horas" });
       const minutes = page.getByRole("group", { name: "Minutos" });
@@ -497,12 +502,24 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       const secondMinute = String(Number(firstMinute) + 1).padStart(2, "0");
       await expect(hours.getByRole("button", { name: `${selectedHour} horas` })).toBeVisible();
       await expect(hours.getByRole("button", { name: `${String(Number(selectedHour) - 1).padStart(2, "0")} horas` })).toHaveCount(0);
-      await minutes.evaluate((list) => { list.scrollTop = 0; });
-      const firstMinuteBox = await minutes.getByRole("button", { name: `${firstMinute} minutos` }).boundingBox();
-      const secondMinuteBox = await minutes.getByRole("button", { name: `${secondMinute} minutos` }).boundingBox();
-      expect(firstMinuteBox).not.toBeNull();
-      expect(secondMinuteBox).not.toBeNull();
-      expect(secondMinuteBox!.y - firstMinuteBox!.y).toBeCloseTo(firstMinuteBox!.height, 1);
+      await minutes.evaluate((list) => new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          list.scrollTop = 0;
+          requestAnimationFrame(() => resolve());
+        });
+      }));
+      const minuteGeometry = await minutes.evaluate((list, labels) => {
+        const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>("button"));
+        const first = buttons.find((button) => button.getAttribute("aria-label") === `${labels.first} minutos`);
+        const second = buttons.find((button) => button.getAttribute("aria-label") === `${labels.second} minutos`);
+        if (!first || !second) return null;
+        const firstBox = first.getBoundingClientRect();
+        const secondBox = second.getBoundingClientRect();
+        return { scrollTop: list.scrollTop, firstY: firstBox.y, secondY: secondBox.y, height: firstBox.height };
+      }, { first: firstMinute, second: secondMinute });
+      expect(minuteGeometry).not.toBeNull();
+      expect(minuteGeometry!.scrollTop).toBe(0);
+      expect(minuteGeometry!.secondY - minuteGeometry!.firstY).toBeCloseTo(minuteGeometry!.height, 1);
       await minutes.hover();
       await page.mouse.wheel(0, 10_000);
       await expect.poll(() => minutes.evaluate((list) => list.scrollTop)).toBe(
@@ -512,16 +529,19 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       expect(await minutes.evaluate((list) => list.scrollTop)).toBe(
         await minutes.evaluate((list) => list.scrollHeight - list.clientHeight),
       );
-      const [endHour, endMinute] = initialEnd.split(":").map(Number);
+      const [endHour, endMinute] = shiftedEnd.split(":").map(Number);
       const latestStartTotal = endHour * 60 + endMinute - 1;
       const latestStartHour = String(Math.floor(latestStartTotal / 60)).padStart(2, "0");
       const latestStartMinute = String(latestStartTotal % 60).padStart(2, "0");
+      await hours.getByRole("button", { name: `${latestStartHour} horas` }).click();
+      await expect(minutes.getByRole("button", { name: `${latestStartMinute} minutos` })).toBeVisible();
       await minutes.getByRole("button", { name: `${latestStartMinute} minutos` }).click();
       await expect(startPicker).toContainText(`${latestStartHour}:${latestStartMinute}`);
       await startPicker.click();
       await expect(hours.getByRole("button", { name: `${latestStartHour} horas` })).toBeVisible();
       await expect(minutes.getByRole("button", { name: `${String(Number(latestStartMinute) + 1).padStart(2, "0")} minutos` })).toHaveCount(0);
-      await page.keyboard.press("Escape");
+      await minutes.getByRole("button", { name: `${latestStartMinute} minutos` }).click();
+      await expect(dialog).toBeVisible();
       await section.getByRole("button", { name: "Adicionar janela" }).click();
       await expect(section.getByRole("button", { name: /^Início: / })).toHaveCount(2);
       await expect(section.getByRole("button", { name: /^Fim: / })).toHaveCount(2);

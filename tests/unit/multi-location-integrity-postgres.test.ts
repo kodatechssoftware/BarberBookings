@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 import pg from "pg";
 import { runSchemaMigrations } from "../../server/migrations";
 import { createMigrationSubsetThrough } from "../helpers/migration-subset";
@@ -405,7 +406,7 @@ test("real PostgreSQL keeps location and barber assignment consistent with concu
   } finally {
     if (applicationPool) await applicationPool.end();
     if (pool) await pool.end();
-    if (postgresStarted) await postgres.stop().catch(() => undefined);
+    if (postgresStarted) await stopEmbeddedPostgres(postgres, databaseDir).catch(() => undefined);
     if (migrationsDirectory) await rm(migrationsDirectory, { recursive: true, force: true });
     await rm(databaseDir, { recursive: true, force: true });
   }

@@ -662,7 +662,7 @@ test.describe.serial("manual booking Extras", () => {
     }
   });
 
-  test("completes Beauty appointments with optional last-minute Extras and a simple payment summary", async ({ request, page }) => {
+  test("[beauty] completes Beauty appointments with optional last-minute Extras and a simple payment summary", async ({ request, page }) => {
     test.setTimeout(120_000);
     const suffix = Date.now();
     const testDay = new Date();

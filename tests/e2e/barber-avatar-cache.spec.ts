@@ -24,7 +24,9 @@ test("browser reuses a versioned avatar and fetches a changed photo immediately"
   try {
     const catalogue = await (await page.request.get("/api/barbers?avatarMode=reference")).json();
     const reference = catalogue.find((item: any) => item.id === barber.id).avatar as string;
-    await page.goto("/");
+    // Use an inert same-origin route so the homepage cannot preload this visible
+    // professional's avatar before the first measured request.
+    await page.goto("/__avatar-cache-probe");
     const metrics = await page.evaluate(async (url) => {
       performance.clearResourceTimings();
       const samples = [];

@@ -5,6 +5,7 @@ import path from "node:path";
 import net from "node:net";
 import bcrypt from "bcryptjs";
 import EmbeddedPostgres from "embedded-postgres";
+import { stopEmbeddedPostgres } from "./embedded-postgres-lifecycle";
 import pg from "pg";
 import {
   acceptLegacyProfessionalInviteCanonical,
@@ -269,7 +270,7 @@ try {
   console.log("Canonical auth runtime PostgreSQL checks passed.");
 } finally {
   await pool?.end().catch(() => undefined);
-  await embedded.stop().catch(() => undefined);
+  await stopEmbeddedPostgres(embedded, databaseDir).catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });
   await rm(migrationsDirectory, { recursive: true, force: true });
 }
