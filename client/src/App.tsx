@@ -22,6 +22,7 @@ const Reschedule = lazy(preloadReschedulePage);
 const BarberInvite = lazy(() => import("@/pages/BarberInvite"));
 const UserInvite = lazy(() => import("@/pages/UserInvite"));
 const Setup = lazy(() => import("@/pages/Setup"));
+const AppointmentRequestProposal = lazy(() => import("@/pages/AppointmentRequestProposal"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function PageLoader() {
@@ -45,6 +46,7 @@ function Router() {
         <Route path="/barber-invite/:token">{() => <BarberInvite />}</Route>
         <Route path="/user-invite">{() => <UserInvite />}</Route>
         <Route path="/setup">{() => <Setup />}</Route>
+        <Route path="/appointment-request/proposal">{() => <AppointmentRequestProposal />}</Route>
         <Route>{() => <NotFound />}</Route>
       </Switch>
     </Suspense>

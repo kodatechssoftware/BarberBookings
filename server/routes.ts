@@ -36,6 +36,7 @@ import {
   appointmentRequestListQuerySchema,
   appointmentRequestAvailabilitySchema,
   appointmentRequestProposalResponseSchema,
+  appointmentRequestProposalTokenSchema,
   appointmentRequestProposalSchema,
   appointmentRequestRefusalSchema,
   createAppointmentRequestSchema,
@@ -90,6 +91,7 @@ import {
   approveAppointmentRequestWithPool,
   createAppointmentRequestWithPool,
   getAppointmentRequestWithPool,
+  inspectAppointmentRequestProposalWithPool,
   listAppointmentRequestsWithPool,
   proposeAppointmentRequestTimeWithPool,
   refuseAppointmentRequestWithPool,
@@ -2691,15 +2693,19 @@ export async function registerRoutes(
   app.get("/api/beauty-v2/features", async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const locationId = Number(res.locals.locationId);
+    const settings = await listBeautyV2FeatureSettings();
     const effective = resolveBeautyV2Features({
       masterEnabled: beautyV2MasterEnabled,
-      settings: await listBeautyV2FeatureSettings(),
+      settings,
       locationId,
     });
     return res.json({
       enabled: beautyV2MasterEnabled && resolvedBusinessConfig.vertical === "beauty",
       appointmentRequests: effective.appointmentRequests,
       multiServiceAppointments: effective.multiServiceAppointments,
+      appointmentRequestsAvailable: beautyV2MasterEnabled
+        && resolvedBusinessConfig.vertical === "beauty"
+        && settings.some((setting) => setting.featureName === "appointmentRequests" && setting.enabled),
     });
   });
 
@@ -2773,6 +2779,24 @@ export async function registerRoutes(
         input,
         appointmentRequestOptions,
       ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error, true);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/appointment-request-proposals/inspect", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!applyPublicRequestRateLimit(
+      req,
+      res,
+      publicAppointmentProposalRateLimiter,
+      "appointment-request-proposal-inspect",
+    )) return;
+    try {
+      const input = appointmentRequestProposalTokenSchema.parse(req.body);
+      return res.json(await inspectAppointmentRequestProposalWithPool(pool, input.token, appointmentRequestOptions));
     } catch (error) {
       const sent = sendAppointmentRequestError(res, error, true);
       if (sent) return sent;

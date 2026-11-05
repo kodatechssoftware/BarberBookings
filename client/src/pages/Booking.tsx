@@ -44,6 +44,8 @@ import { useBusinessBranding } from "@/business/use-business-branding";
 import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
 import { formatBusinessCopy } from "@shared/business/copy";
 import type { BusinessBookingFlow } from "@shared/business/booking-flow";
+import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
+import BeautyV2Booking from "@/pages/BeautyV2Booking";
 
 type BookingPreference = {
   step: number;
@@ -296,7 +298,7 @@ const StepIndicator = ({
   );
 };
 
-export default function Booking() {
+function LegacyBooking() {
   const businessConfig = useBusinessConfig();
   const shopBranding = useBusinessBranding();
   const ServiceIcon = useBusinessServiceIcon();
@@ -1402,4 +1404,16 @@ export default function Booking() {
       </main>
     </div>
   );
+}
+
+export default function Booking() {
+  const businessConfig = useBusinessConfig();
+  const { data: features, isLoading } = useBeautyV2Features({
+    enabled: businessConfig.vertical === "beauty",
+  });
+  if (businessConfig.vertical === "beauty" && isLoading) {
+    return <div className="flex min-h-screen items-center justify-center bg-background"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+  }
+  if (features?.appointmentRequests || features?.appointmentRequestsAvailable) return <BeautyV2Booking features={features} />;
+  return <LegacyBooking />;
 }

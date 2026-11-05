@@ -32,6 +32,7 @@
     "test:beauty-v2-features": "cross-env NODE_ENV=test USE_MEMORY_STORAGE=true tsx --test tests/unit/beauty-v2-features.test.ts",
     "test:beauty-v2-multi-service": "cross-env NODE_ENV=test BUSINESS_VERTICAL=beauty TZ=UTC tsx --test tests/unit/multi-service-appointments.test.ts tests/unit/multi-service-appointments-postgres.test.ts",
     "test:beauty-v2-appointment-requests": "cross-env NODE_ENV=test BUSINESS_VERTICAL=beauty TZ=UTC tsx --test tests/unit/appointment-request-contracts.test.ts tests/unit/appointment-requests-postgres.test.ts",
+    "test:beauty-v2-ui": "playwright test --config=playwright.beauty-v2.config.ts",
     "test:appointment-windows": "cross-env NODE_ENV=test BUSINESS_VERTICAL=beauty USE_MEMORY_STORAGE=true tsx --test tests/unit/appointment-availability-windows.test.ts",
     "test:startup-overlap": "tsx script/test-appointment-overlap-startup.ts",
     "auth:preflight": "tsx script/auth-legacy-preflight.ts",

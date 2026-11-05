@@ -119,6 +119,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     `);
 
     const engine = await import("../../server/appointment-request-engine");
+    const multiServiceEngine = await import("../../server/multi-service-appointment-engine");
     applicationPool = (await import("../../server/db")).pool;
     const options = {
       masterEnabled: true,
@@ -148,6 +149,17 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         && error.status === 404,
     );
     await pool.query(`UPDATE business_feature_settings SET enabled = true WHERE feature_name = 'appointmentRequests'`);
+
+    const availability = await multiServiceEngine.previewSequentialAppointmentAvailabilityWithPool(pool, {
+      locationId: 1,
+      date: "2035-01-04",
+      services: [{ serviceId: 1, barberId: 1 }, { serviceId: 2, barberId: 2 }],
+      slotIntervalMinutes: 30,
+      now: new Date("2035-01-01T00:00:00.000Z"),
+    }, options);
+    assert.equal(availability.totalPriceCents, 3000);
+    assert.equal(availability.durationMinutes, 75);
+    assert.ok(availability.starts.length > 0);
 
     await assert.rejects(
       engine.createAppointmentRequestWithPool(
@@ -270,6 +282,14 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       expiresAt: new Date("2035-01-08T11:00:00.000Z"),
       commandKey: "proposal-command-accept",
     }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") });
+    const publicProposal = await engine.inspectAppointmentRequestProposalWithPool(
+      pool,
+      proposal.responseToken,
+      { ...options, now: () => new Date("2035-01-02T00:00:00.000Z") },
+    );
+    assert.equal(publicProposal.status, "active");
+    assert.equal(publicProposal.services[0].name, "Manicure");
+    assert.equal("customerName" in publicProposal, false);
     const accepted = await engine.respondToAppointmentRequestProposalWithPool(pool, {
       token: proposal.responseToken,
       decision: "accept",

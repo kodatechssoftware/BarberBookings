@@ -1041,3 +1041,44 @@ export async function respondToAppointmentRequestProposalWithPool(
     client.release();
   }
 }
+
+export async function inspectAppointmentRequestProposalWithPool(
+  databasePool: Pool,
+  token: string,
+  options: AppointmentRequestEngineOptions = {},
+) {
+  const table = tableFactory();
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN");
+    const proposalResult = await client.query<ProposalRow>(`
+      SELECT * FROM ${table("appointment_request_proposals")}
+      WHERE response_token_hash = $1
+    `, [sha256(token)]);
+    const proposal = proposalResult.rows[0];
+    if (!proposal) throw new AppointmentRequestError(404, "APPOINTMENT_REQUEST_PROPOSAL_NOT_FOUND", "A proposta não existe ou o link é inválido.");
+    const request = await loadRequest(client, proposal.request_id, table);
+    if (!request) throw new AppointmentRequestError(404, "APPOINTMENT_REQUEST_NOT_FOUND", "Pedido não encontrado.");
+    const rows = await loadSegments(client, request.id, table);
+    await assertRequestFeature(client, request.location_id, rows.length, options, table);
+    await client.query("COMMIT");
+    const expired = proposal.expires_at <= (options.now?.() ?? new Date());
+    return {
+      status: expired && proposal.status === "active" ? "expired" : proposal.status,
+      requestStatus: request.status,
+      proposedStartTime: new Date(proposal.proposed_start_time),
+      expiresAt: new Date(proposal.expires_at),
+      services: rows.map((row) => ({
+        position: Number(row.position),
+        name: row.service_name_snapshot,
+        durationMinutes: Number(row.duration_minutes),
+        priceCents: Number(row.service_price_cents_snapshot),
+      })),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}

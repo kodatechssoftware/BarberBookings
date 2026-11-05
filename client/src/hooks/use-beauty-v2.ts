@@ -6,6 +6,7 @@ export type BeautyV2PublicFeatures = {
   enabled: boolean;
   appointmentRequests: boolean;
   multiServiceAppointments: boolean;
+  appointmentRequestsAvailable: boolean;
 };
 
 export function useBeautyV2Features(options?: { enabled?: boolean; locationId?: number | null }) {

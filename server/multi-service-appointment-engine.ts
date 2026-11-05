@@ -351,7 +351,7 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
   const table = (name: string) => `${schema}.${quoteIdentifier(name)}`;
   const client = await databasePool.connect();
   try {
-    await client.query("BEGIN READ ONLY");
+    await client.query("BEGIN");
     await assertBeautyV2FeaturesEnabledWithClient(client, input.locationId, {
       ...options,
       requiredFeatures: input.services.length > 1
