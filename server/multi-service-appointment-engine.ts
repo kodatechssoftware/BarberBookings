@@ -5,12 +5,17 @@ import type { BeautyV2FeatureName } from "@shared/business/v2-features";
 import {
   assertMultiServicePlanFitsWorkingPeriods,
   MIN_MULTI_SERVICE_SEGMENTS,
+  MultiServiceAppointmentValidationError,
   planSequentialAppointmentServices,
   type MultiServiceAppointmentPlan,
   type MultiServiceSegmentTerms,
   type MultiServiceWorkingPeriod,
 } from "@shared/multi-service-appointments";
-import { getCalendarDateTimeParts } from "./calendar-timezone";
+import {
+  calendarDateTimeToInstant,
+  getCalendarDateBounds,
+  getCalendarDateTimeParts,
+} from "./calendar-timezone";
 
 export type MultiServiceSelection = {
   serviceId: number;
@@ -286,9 +291,13 @@ async function resolveWorkingPeriods(
   locationId: number,
   timeZone: string,
   table: (name: string) => string,
+  cached?: {
+    shopRows: Array<{ day_of_week: number; start_time: string; end_time: string; is_open: boolean }>;
+    barberRows: Array<{ barber_id: number; day_of_week: number; start_time: string; end_time: string; is_working: boolean }>;
+  },
 ) {
   const barberIds = Array.from(new Set(plan.segments.map((segment) => segment.barberId)));
-  const shopResult = await client.query<{
+  const shopResult = cached ? { rows: cached.shopRows } : await client.query<{
     day_of_week: number; start_time: string; end_time: string; is_open: boolean;
   }>(`
     SELECT day_of_week, start_time, end_time, is_open
@@ -297,7 +306,7 @@ async function resolveWorkingPeriods(
     ORDER BY day_of_week, start_time, end_time
     FOR SHARE
   `, [locationId]);
-  const barberResult = await client.query<{
+  const barberResult = cached ? { rows: cached.barberRows } : await client.query<{
     barber_id: number; day_of_week: number; start_time: string; end_time: string; is_working: boolean;
   }>(`
     SELECT barber_id, day_of_week, start_time, end_time, is_working
@@ -324,6 +333,122 @@ async function resolveWorkingPeriods(
     periods.set(`${segment.barberId}:${weekday}`, professionalPeriods);
   }
   return periods;
+}
+
+export async function previewSequentialAppointmentAvailabilityWithPool(
+  databasePool: Pool,
+  input: {
+    locationId: number;
+    date: string;
+    services: MultiServiceSelection[];
+    slotIntervalMinutes: number;
+    now?: Date;
+  },
+  options: MultiServiceEngineOptions = {},
+) {
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const schema = quoteIdentifier(schemaName);
+  const table = (name: string) => `${schema}.${quoteIdentifier(name)}`;
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN READ ONLY");
+    await assertBeautyV2FeaturesEnabledWithClient(client, input.locationId, {
+      ...options,
+      requiredFeatures: input.services.length > 1
+        ? ["appointmentRequests", "multiServiceAppointments"]
+        : ["appointmentRequests"],
+    }, table);
+    const location = await client.query<{ timezone: string }>(`
+      SELECT timezone FROM ${table("locations")}
+      WHERE id = $1 AND is_active = true
+    `, [input.locationId]);
+    if (!location.rows[0]) throw new MultiServiceScopeError("A localização não está disponível.");
+    const timeZone = location.rows[0].timezone;
+    const terms = await resolveAppointmentServiceTermsWithClient(client, input.locationId, input.services, table);
+    const [year, month, day] = input.date.split("-").map(Number);
+    const bounds = getCalendarDateBounds(input.date, timeZone);
+    const barberIds = Array.from(new Set(input.services.map((selection) => selection.barberId)));
+    const occupied = await client.query<{ barber_id: number; start_time: Date; end_time: Date }>(`
+      SELECT barber_id, start_time, end_time
+      FROM ${table("appointment_occupancy_periods")}
+      WHERE barber_id = ANY($1::int[])
+        AND start_time < $3 AND end_time > $2
+    `, [barberIds, bounds.start, bounds.endExclusive]);
+    const shopAvailability = await client.query<{
+      day_of_week: number; start_time: string; end_time: string; is_open: boolean;
+    }>(`
+      SELECT day_of_week, start_time, end_time, is_open
+      FROM ${table("shop_availability")}
+      WHERE location_id = $1
+      ORDER BY day_of_week, start_time, end_time
+    `, [input.locationId]);
+    const professionalAvailability = await client.query<{
+      barber_id: number; day_of_week: number; start_time: string; end_time: string; is_working: boolean;
+    }>(`
+      SELECT barber_id, day_of_week, start_time, end_time, is_working
+      FROM ${table("barber_availability")}
+      WHERE location_id = $1 AND barber_id = ANY($2::int[])
+      ORDER BY barber_id, day_of_week, start_time, end_time
+    `, [input.locationId, barberIds]);
+    const starts: string[] = [];
+    const now = input.now ?? new Date();
+    for (let minute = 0; minute < 24 * 60; minute += input.slotIntervalMinutes) {
+      const startTime = calendarDateTimeToInstant({
+        year,
+        month,
+        day,
+        hour: Math.floor(minute / 60),
+        minute: minute % 60,
+        second: 0,
+      }, timeZone);
+      const represented = getCalendarDateTimeParts(startTime, timeZone);
+      if (represented.year !== year || represented.month !== month || represented.day !== day
+        || represented.hour !== Math.floor(minute / 60) || represented.minute !== minute % 60
+        || startTime <= now) continue;
+      const plan = planSequentialAppointmentServices(startTime, terms, 1);
+      try {
+        const periods = await resolveWorkingPeriods(client, plan, input.locationId, timeZone, table, {
+          shopRows: shopAvailability.rows,
+          barberRows: professionalAvailability.rows,
+        });
+        assertMultiServicePlanFitsWorkingPeriods(plan, timeZone, periods);
+      } catch (error) {
+        if (error instanceof MultiServiceAppointmentValidationError) continue;
+        throw error;
+      }
+      const conflict = plan.occupancyPeriods.some((period) => occupied.rows.some((row) =>
+        row.barber_id === period.barberId
+        && new Date(row.start_time) < period.endTime
+        && new Date(row.end_time) > period.startTime));
+      if (!conflict) starts.push(startTime.toISOString());
+    }
+    await client.query("COMMIT");
+    const plan = planSequentialAppointmentServices(
+      calendarDateTimeToInstant({ year, month, day, hour: 12, minute: 0, second: 0 }, timeZone),
+      terms,
+      1,
+    );
+    return {
+      date: input.date,
+      timeZone,
+      starts,
+      durationMinutes: plan.durationMinutes,
+      totalPriceCents: plan.totalPriceCents,
+      segments: plan.segments.map((segment) => ({
+        position: segment.position,
+        serviceId: segment.serviceId,
+        barberId: segment.barberId,
+        durationMinutes: segment.durationMinutes,
+        serviceName: segment.serviceNameSnapshot,
+        priceCents: segment.servicePriceCentsSnapshot,
+      })),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createSequentialAppointmentInTransaction(

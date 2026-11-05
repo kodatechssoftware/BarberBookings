@@ -38,3 +38,14 @@ test("every Admin appointment-request mutation is protected by the team manageme
     assert.ok(source.includes(route), `missing protected route fragment: ${route}`);
   }
 });
+
+test("public appointment-request routes are no-store, rate-limited and return safe proposal errors", async () => {
+  const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  assert.match(source, /publicAppointmentRequestRateLimiter/);
+  assert.match(source, /publicAppointmentProposalRateLimiter/);
+  assert.match(source, /publicAppointmentAvailabilityRateLimiter/);
+  assert.match(source, /app\.post\("\/api\/appointment-requests"[\s\S]*?Cache-Control", "no-store"/);
+  assert.match(source, /app\.post\("\/api\/appointment-request-proposals\/respond"[\s\S]*?sendAppointmentRequestError\(res, error, true\)/);
+  assert.match(source, /APPOINTMENT_REQUEST_PROPOSAL_UNAVAILABLE/);
+  assert.doesNotMatch(source, /console\.(?:log|info|warn|error)\([^\n]*(?:responseToken|customerPhone|customerEmail)/);
+});

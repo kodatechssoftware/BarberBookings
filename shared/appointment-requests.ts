@@ -33,6 +33,11 @@ export const appointmentRequestProposalResponseSchema = z.object({
   decision: z.enum(["accept", "reject"]),
 });
 
+export const appointmentRequestAvailabilitySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  services: z.array(appointmentRequestSelectionSchema).min(1).max(12),
+});
+
 export const appointmentRequestListQuerySchema = z.object({
   status: z.enum(["pending", "proposed", "approved", "refused"]).optional(),
 });

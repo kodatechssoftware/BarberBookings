@@ -34,12 +34,13 @@ import {
 import { z } from "zod";
 import {
   appointmentRequestListQuerySchema,
+  appointmentRequestAvailabilitySchema,
   appointmentRequestProposalResponseSchema,
   appointmentRequestProposalSchema,
   appointmentRequestRefusalSchema,
   createAppointmentRequestSchema,
 } from "@shared/appointment-requests";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { performance } from "node:perf_hooks";
 import {
   sendBookingCancellationConfirmation,
@@ -102,6 +103,7 @@ import {
   MultiServiceConflictError,
   MultiServiceFeatureDisabledError,
   MultiServiceScopeError,
+  previewSequentialAppointmentAvailabilityWithPool,
 } from "./multi-service-appointment-engine";
 import { startupTimings } from "./startup-timings";
 import {
@@ -297,6 +299,18 @@ const canonicalPasswordRateLimiter = createFixedWindowRateLimiter({
 });
 const canonicalBootstrapRateLimiter = createFixedWindowRateLimiter({
   maxAttempts: 5,
+  windowMs: 15 * 60 * 1_000,
+});
+const publicAppointmentRequestRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 10,
+  windowMs: 15 * 60 * 1_000,
+});
+const publicAppointmentProposalRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 20,
+  windowMs: 15 * 60 * 1_000,
+});
+const publicAppointmentAvailabilityRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 60,
   windowMs: 15 * 60 * 1_000,
 });
 const ADMIN_PUBLIC_COPY = resolvedBusinessConfig.copy.admin;
@@ -512,6 +526,30 @@ function canonicalAuthRateKey(req: Request, purpose: string, subject = "") {
   return `${purpose}:${req.ip || req.socket.remoteAddress || "unknown"}:${subject}`;
 }
 
+function publicRequestRateKey(req: Request, purpose: string, locationId?: number) {
+  const address = req.ip || req.socket.remoteAddress || "unknown";
+  return createHash("sha256")
+    .update(`${purpose}:${locationId ?? "global"}:${address}`)
+    .digest("hex");
+}
+
+function applyPublicRequestRateLimit(
+  req: Request,
+  res: Response,
+  limiter: ReturnType<typeof createFixedWindowRateLimiter>,
+  purpose: string,
+  locationId?: number,
+) {
+  const decision = limiter.consume(publicRequestRateKey(req, purpose, locationId));
+  if (decision.allowed) return true;
+  res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  res.status(429).json({
+    code: "APPOINTMENT_REQUEST_RATE_LIMITED",
+    message: "Foram efetuados demasiados pedidos. Aguarde alguns minutos e tente novamente.",
+  });
+  return false;
+}
+
 function applyRateLimit(
   req: Request,
   res: Response,
@@ -653,7 +691,7 @@ async function getAppointmentRequestActor(req: Request): Promise<AppointmentRequ
   } as AppointmentRequestActor;
 }
 
-function sendAppointmentRequestError(res: Response, error: unknown) {
+function sendAppointmentRequestError(res: Response, error: unknown, publicResponse = false) {
   if (error instanceof z.ZodError) {
     return res.status(400).json({
       code: "APPOINTMENT_REQUEST_INPUT_INVALID",
@@ -662,6 +700,16 @@ function sendAppointmentRequestError(res: Response, error: unknown) {
     });
   }
   if (error instanceof AppointmentRequestError) {
+    if (publicResponse && [
+      "APPOINTMENT_REQUEST_PROPOSAL_NOT_FOUND",
+      "APPOINTMENT_REQUEST_NOT_FOUND",
+      "APPOINTMENT_REQUEST_PROPOSAL_STALE",
+    ].includes(error.code)) {
+      return res.status(error.status === 410 ? 410 : 404).json({
+        code: "APPOINTMENT_REQUEST_PROPOSAL_UNAVAILABLE",
+        message: "Esta ligação não é válida ou já não está disponível.",
+      });
+    }
     return res.status(error.status).json({ code: error.code, message: error.message });
   }
   if (error instanceof MultiServiceFeatureDisabledError) {
@@ -2640,12 +2688,65 @@ export async function registerRoutes(
     appointmentNotificationsEnabled: appointmentNotificationEventsEnabled,
   } as const;
 
+  app.get("/api/beauty-v2/features", async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const locationId = Number(res.locals.locationId);
+    const effective = resolveBeautyV2Features({
+      masterEnabled: beautyV2MasterEnabled,
+      settings: await listBeautyV2FeatureSettings(),
+      locationId,
+    });
+    return res.json({
+      enabled: beautyV2MasterEnabled && resolvedBusinessConfig.vertical === "beauty",
+      appointmentRequests: effective.appointmentRequests,
+      multiServiceAppointments: effective.multiServiceAppointments,
+    });
+  });
+
+  app.post("/api/appointment-requests/availability", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const locationId = Number(res.locals.locationId);
+    if (!applyPublicRequestRateLimit(
+      req,
+      res,
+      publicAppointmentAvailabilityRateLimiter,
+      "appointment-request-availability",
+      locationId,
+    )) return;
+    try {
+      const input = appointmentRequestAvailabilitySchema.parse(req.body);
+      const window = currentPublicBookingWindow();
+      if (input.date < window.today || input.date > window.maxDate) {
+        return sendPublicBookingWindowClosed(res);
+      }
+      return res.json(await previewSequentialAppointmentAvailabilityWithPool(pool, {
+        locationId,
+        date: input.date,
+        services: input.services,
+        slotIntervalMinutes: bookingSlotIntervalMinutes,
+      }, appointmentRequestOptions));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error, true);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
   app.post("/api/appointment-requests", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const locationId = Number(res.locals.locationId);
+    if (!applyPublicRequestRateLimit(
+      req,
+      res,
+      publicAppointmentRequestRateLimiter,
+      "appointment-request-create",
+      locationId,
+    )) return;
     try {
       const input = createAppointmentRequestSchema.parse(req.body);
       const result = await createAppointmentRequestWithPool(
         pool,
-        Number(res.locals.locationId),
+        locationId,
         input,
         appointmentRequestOptions,
       );
@@ -2658,6 +2759,13 @@ export async function registerRoutes(
   });
 
   app.post("/api/appointment-request-proposals/respond", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!applyPublicRequestRateLimit(
+      req,
+      res,
+      publicAppointmentProposalRateLimiter,
+      "appointment-request-proposal-response",
+    )) return;
     try {
       const input = appointmentRequestProposalResponseSchema.parse(req.body);
       return res.json(await respondToAppointmentRequestProposalWithPool(
@@ -2666,7 +2774,7 @@ export async function registerRoutes(
         appointmentRequestOptions,
       ));
     } catch (error) {
-      const sent = sendAppointmentRequestError(res, error);
+      const sent = sendAppointmentRequestError(res, error, true);
       if (sent) return sent;
       throw error;
     }
