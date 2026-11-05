@@ -137,17 +137,20 @@ export function mergeMultiServiceOccupancyPeriods(
     || left.barberId - right.barberId);
 }
 
-export function planMultiServiceAppointment(
+export function planSequentialAppointmentServices(
   startTimeInput: Date | string,
   terms: readonly MultiServiceSegmentTerms[],
+  minimumSegments = 1,
 ): MultiServiceAppointmentPlan {
   const startTime = startTimeInput instanceof Date ? new Date(startTimeInput) : new Date(startTimeInput);
   if (Number.isNaN(startTime.getTime())
-    || terms.length < MIN_MULTI_SERVICE_SEGMENTS
+    || !Number.isInteger(minimumSegments)
+    || minimumSegments < 1
+    || terms.length < minimumSegments
     || terms.length > MAX_MULTI_SERVICE_SEGMENTS) {
     throw new MultiServiceAppointmentValidationError(
       "MULTI_SERVICE_SEGMENTS_INVALID",
-      `A marcação deve incluir entre ${MIN_MULTI_SERVICE_SEGMENTS} e ${MAX_MULTI_SERVICE_SEGMENTS} serviços.`,
+      `A marcação deve incluir entre ${minimumSegments} e ${MAX_MULTI_SERVICE_SEGMENTS} serviços.`,
     );
   }
 
@@ -218,6 +221,13 @@ export function planMultiServiceAppointment(
     segments,
     occupancyPeriods: mergeMultiServiceOccupancyPeriods(segments),
   };
+}
+
+export function planMultiServiceAppointment(
+  startTimeInput: Date | string,
+  terms: readonly MultiServiceSegmentTerms[],
+): MultiServiceAppointmentPlan {
+  return planSequentialAppointmentServices(startTimeInput, terms, MIN_MULTI_SERVICE_SEGMENTS);
 }
 
 export function assertMultiServicePlanFitsWorkingPeriods(

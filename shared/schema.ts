@@ -17,6 +17,10 @@ export const serviceCategoriesIdSeq = appPgSchema?.sequence("service_categories_
 export const appointmentsIdSeq = appPgSchema?.sequence("appointments_id_seq");
 export const appointmentAvailabilityWindowsIdSeq = appPgSchema?.sequence("appointment_availability_windows_id_seq");
 export const appointmentServiceSegmentsIdSeq = appPgSchema?.sequence("appointment_service_segments_id_seq");
+export const appointmentRequestsIdSeq = appPgSchema?.sequence("appointment_requests_id_seq");
+export const appointmentRequestSegmentsIdSeq = appPgSchema?.sequence("appointment_request_segments_id_seq");
+export const appointmentRequestProposalsIdSeq = appPgSchema?.sequence("appointment_request_proposals_id_seq");
+export const appointmentRequestEventsIdSeq = appPgSchema?.sequence("appointment_request_events_id_seq");
 export const adminsIdSeq = appPgSchema?.sequence("admins_id_seq");
 export const blacklistIdSeq = appPgSchema?.sequence("blacklist_id_seq");
 export const verificationCodesIdSeq = appPgSchema?.sequence("verification_codes_id_seq");
@@ -68,6 +72,16 @@ export const appointmentPaymentMethods = [
   "card",
   "voucher",
   "gift",
+] as const;
+
+export const appointmentRequestStatuses = ["pending", "proposed", "approved", "refused"] as const;
+export const appointmentRequestProposalStatuses = [
+  "active",
+  "accepted",
+  "rejected",
+  "replaced",
+  "expired",
+  "unavailable",
 ] as const;
 
 export const userStatuses = ["invited", "active", "disabled"] as const;
@@ -402,6 +416,130 @@ export const appointmentServiceSegments = appPgTable("appointment_service_segmen
     .on(table.appointmentId, table.position),
   barberTimeIndex: index("appointment_service_segments_barber_time_idx")
     .on(table.barberId, table.startTime),
+}));
+
+export const appointmentRequests = appPgTable("appointment_requests", {
+  id: idColumn("appointment_requests_id_seq"),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "restrict" }).notNull(),
+  status: text("status", { enum: appointmentRequestStatuses }).default("pending").notNull(),
+  revision: integer("revision").default(1).notNull(),
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone").notNull(),
+  whatsappOptIn: boolean("whatsapp_opt_in").default(false).notNull(),
+  requestedStartTime: timestamp("requested_start_time").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  requestFingerprint: text("request_fingerprint").notNull(),
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "restrict" }),
+  refusalReason: text("refusal_reason"),
+  decidedAt: timestamp("decided_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  statusCheck: check("appointment_requests_status_check", sql`${table.status} IN ('pending', 'proposed', 'approved', 'refused')`),
+  revisionCheck: check("appointment_requests_revision_check", sql`${table.revision} > 0`),
+  customerNameCheck: check("appointment_requests_customer_name_check", sql`btrim(${table.customerName}) <> '' AND char_length(${table.customerName}) <= 80`),
+  customerEmailCheck: check("appointment_requests_customer_email_check", sql`${table.customerEmail} IS NULL OR char_length(${table.customerEmail}) <= 120`),
+  customerPhoneCheck: check("appointment_requests_customer_phone_check", sql`btrim(${table.customerPhone}) <> '' AND char_length(${table.customerPhone}) <= 32`),
+  idempotencyKeyCheck: check("appointment_requests_idempotency_key_check", sql`btrim(${table.idempotencyKey}) <> '' AND char_length(${table.idempotencyKey}) <= 100`),
+  fingerprintCheck: check("appointment_requests_fingerprint_check", sql`${table.requestFingerprint} ~ '^[0-9a-f]{64}$'`),
+  refusalReasonCheck: check("appointment_requests_refusal_reason_check", sql`${table.refusalReason} IS NULL OR char_length(${table.refusalReason}) <= 500`),
+  stateCheck: check("appointment_requests_state_check", sql`
+    (${table.status} IN ('pending', 'proposed') AND ${table.appointmentId} IS NULL AND ${table.decidedAt} IS NULL AND ${table.refusalReason} IS NULL)
+    OR (${table.status} = 'approved' AND ${table.appointmentId} IS NOT NULL AND ${table.decidedAt} IS NOT NULL AND ${table.refusalReason} IS NULL)
+    OR (${table.status} = 'refused' AND ${table.appointmentId} IS NULL AND ${table.decidedAt} IS NOT NULL)
+  `),
+  timestampsCheck: check("appointment_requests_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+  locationIdempotencyUnique: uniqueIndex("appointment_requests_location_idempotency_unique")
+    .on(table.locationId, table.idempotencyKey),
+  appointmentUnique: uniqueIndex("appointment_requests_appointment_unique")
+    .on(table.appointmentId).where(sql`${table.appointmentId} IS NOT NULL`),
+  locationStatusIndex: index("appointment_requests_location_status_idx")
+    .on(table.locationId, table.status, table.createdAt, table.id),
+}));
+
+export const appointmentRequestSegments = appPgTable("appointment_request_segments", {
+  id: idColumn("appointment_request_segments_id_seq"),
+  requestId: integer("request_id").references(() => appointmentRequests.id, { onDelete: "cascade" }).notNull(),
+  position: integer("position").notNull(),
+  serviceId: integer("service_id").references(() => services.id, { onDelete: "restrict" }).notNull(),
+  barberId: integer("barber_id").references(() => barbers.id, { onDelete: "restrict" }).notNull(),
+  startTime: timestamp("start_time").notNull(),
+  durationMinutes: integer("duration_minutes").notNull(),
+  bufferBeforeMinutesSnapshot: integer("buffer_before_minutes_snapshot").default(0).notNull(),
+  bufferAfterMinutesSnapshot: integer("buffer_after_minutes_snapshot").default(0).notNull(),
+  serviceNameSnapshot: text("service_name_snapshot").notNull(),
+  servicePriceCentsSnapshot: integer("service_price_cents_snapshot").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  positionCheck: check("appointment_request_segments_position_check", sql`${table.position} >= 0 AND ${table.position} < 12`),
+  durationCheck: check("appointment_request_segments_duration_check", sql`${table.durationMinutes} > 0 AND ${table.durationMinutes} <= 1440`),
+  buffersCheck: check("appointment_request_segments_buffers_check", sql`${table.bufferBeforeMinutesSnapshot} BETWEEN 0 AND 720 AND ${table.bufferAfterMinutesSnapshot} BETWEEN 0 AND 720`),
+  nameCheck: check("appointment_request_segments_name_check", sql`btrim(${table.serviceNameSnapshot}) <> '' AND char_length(${table.serviceNameSnapshot}) <= 100`),
+  priceCheck: check("appointment_request_segments_price_check", sql`${table.servicePriceCentsSnapshot} BETWEEN 0 AND 1000000`),
+  requestPositionUnique: uniqueIndex("appointment_request_segments_request_position_unique")
+    .on(table.requestId, table.position),
+  requestIndex: index("appointment_request_segments_request_idx").on(table.requestId, table.position),
+  barberTimeIndex: index("appointment_request_segments_barber_time_idx").on(table.barberId, table.startTime),
+}));
+
+export const appointmentRequestProposals = appPgTable("appointment_request_proposals", {
+  id: idColumn("appointment_request_proposals_id_seq"),
+  requestId: integer("request_id").references(() => appointmentRequests.id, { onDelete: "cascade" }).notNull(),
+  revision: integer("revision").notNull(),
+  proposedStartTime: timestamp("proposed_start_time").notNull(),
+  status: text("status", { enum: appointmentRequestProposalStatuses }).default("active").notNull(),
+  responseTokenHash: text("response_token_hash").notNull(),
+  commandKey: text("command_key").notNull(),
+  proposalFingerprint: text("proposal_fingerprint").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  respondedAt: timestamp("responded_at"),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdByProfessionalId: integer("created_by_professional_id").references(() => barbers.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  revisionCheck: check("appointment_request_proposals_revision_check", sql`${table.revision} > 0`),
+  statusCheck: check("appointment_request_proposals_status_check", sql`${table.status} IN ('active', 'accepted', 'rejected', 'replaced', 'expired', 'unavailable')`),
+  tokenHashCheck: check("appointment_request_proposals_token_hash_check", sql`${table.responseTokenHash} ~ '^[0-9a-f]{64}$'`),
+  commandKeyCheck: check("appointment_request_proposals_command_key_check", sql`btrim(${table.commandKey}) <> '' AND char_length(${table.commandKey}) <= 100`),
+  fingerprintCheck: check("appointment_request_proposals_fingerprint_check", sql`${table.proposalFingerprint} ~ '^[0-9a-f]{64}$'`),
+  expiryCheck: check("appointment_request_proposals_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+  responseCheck: check("appointment_request_proposals_response_check", sql`
+    (${table.status} IN ('active', 'replaced', 'unavailable') AND ${table.respondedAt} IS NULL)
+    OR (${table.status} IN ('accepted', 'rejected', 'expired') AND ${table.respondedAt} IS NOT NULL)
+  `),
+  requestRevisionUnique: uniqueIndex("appointment_request_proposals_request_revision_unique")
+    .on(table.requestId, table.revision),
+  requestCommandUnique: uniqueIndex("appointment_request_proposals_request_command_unique")
+    .on(table.requestId, table.commandKey),
+  tokenUnique: uniqueIndex("appointment_request_proposals_token_unique").on(table.responseTokenHash),
+  oneActive: uniqueIndex("appointment_request_proposals_one_active")
+    .on(table.requestId).where(sql`${table.status} = 'active'`),
+}));
+
+export const appointmentRequestEvents = appPgTable("appointment_request_events", {
+  id: idColumn("appointment_request_events_id_seq"),
+  requestId: integer("request_id").references(() => appointmentRequests.id, { onDelete: "cascade" }).notNull(),
+  proposalId: integer("proposal_id").references(() => appointmentRequestProposals.id, { onDelete: "set null" }),
+  appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "set null" }),
+  eventType: text("event_type").notNull(),
+  actorType: text("actor_type").notNull(),
+  actorUserId: integer("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  actorProfessionalId: integer("actor_professional_id").references(() => barbers.id, { onDelete: "set null" }),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status").notNull(),
+  reason: text("reason"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  eventTypeCheck: check("appointment_request_events_type_check", sql`${table.eventType} IN (
+    'request_created', 'request_approved', 'request_refused', 'approval_conflict', 'proposal_created',
+    'proposal_replaced', 'proposal_accepted', 'proposal_rejected',
+    'proposal_expired', 'proposal_unavailable'
+  )`),
+  actorTypeCheck: check("appointment_request_events_actor_check", sql`${table.actorType} IN ('client', 'admin', 'professional', 'system')`),
+  reasonCheck: check("appointment_request_events_reason_check", sql`${table.reason} IS NULL OR char_length(${table.reason}) <= 500`),
+  requestIndex: index("appointment_request_events_request_idx").on(table.requestId, table.createdAt, table.id),
 }));
 
 export const appointmentAvailabilityWindows = appPgTable("appointment_availability_windows", {
@@ -1014,6 +1152,10 @@ export const appointmentsRelations = relations(appointments, ({ one, many }) => 
     fields: [appointments.id],
     references: [appointmentServiceSets.appointmentId],
   }),
+  originatingRequest: one(appointmentRequests, {
+    fields: [appointments.id],
+    references: [appointmentRequests.appointmentId],
+  }),
 }));
 
 export const appointmentServiceSetsRelations = relations(appointmentServiceSets, ({ one, many }) => ({
@@ -1040,6 +1182,66 @@ export const appointmentServiceSegmentsRelations = relations(appointmentServiceS
   barber: one(barbers, {
     fields: [appointmentServiceSegments.barberId],
     references: [barbers.id],
+  }),
+}));
+
+export const appointmentRequestsRelations = relations(appointmentRequests, ({ one, many }) => ({
+  location: one(locations, {
+    fields: [appointmentRequests.locationId],
+    references: [locations.id],
+  }),
+  appointment: one(appointments, {
+    fields: [appointmentRequests.appointmentId],
+    references: [appointments.id],
+  }),
+  segments: many(appointmentRequestSegments),
+  proposals: many(appointmentRequestProposals),
+  events: many(appointmentRequestEvents),
+}));
+
+export const appointmentRequestSegmentsRelations = relations(appointmentRequestSegments, ({ one }) => ({
+  request: one(appointmentRequests, {
+    fields: [appointmentRequestSegments.requestId],
+    references: [appointmentRequests.id],
+  }),
+  service: one(services, {
+    fields: [appointmentRequestSegments.serviceId],
+    references: [services.id],
+  }),
+  barber: one(barbers, {
+    fields: [appointmentRequestSegments.barberId],
+    references: [barbers.id],
+  }),
+}));
+
+export const appointmentRequestProposalsRelations = relations(appointmentRequestProposals, ({ one, many }) => ({
+  request: one(appointmentRequests, {
+    fields: [appointmentRequestProposals.requestId],
+    references: [appointmentRequests.id],
+  }),
+  createdByUser: one(users, {
+    fields: [appointmentRequestProposals.createdByUserId],
+    references: [users.id],
+  }),
+  createdByProfessional: one(barbers, {
+    fields: [appointmentRequestProposals.createdByProfessionalId],
+    references: [barbers.id],
+  }),
+  events: many(appointmentRequestEvents),
+}));
+
+export const appointmentRequestEventsRelations = relations(appointmentRequestEvents, ({ one }) => ({
+  request: one(appointmentRequests, {
+    fields: [appointmentRequestEvents.requestId],
+    references: [appointmentRequests.id],
+  }),
+  proposal: one(appointmentRequestProposals, {
+    fields: [appointmentRequestEvents.proposalId],
+    references: [appointmentRequestProposals.id],
+  }),
+  appointment: one(appointments, {
+    fields: [appointmentRequestEvents.appointmentId],
+    references: [appointments.id],
   }),
 }));
 
@@ -1408,6 +1610,12 @@ export type ServiceCatalogueItem = Omit<Service, "categoryId"> & {
 export type Appointment = typeof appointments.$inferSelect;
 export type AppointmentServiceSet = typeof appointmentServiceSets.$inferSelect;
 export type AppointmentServiceSegment = typeof appointmentServiceSegments.$inferSelect;
+export type AppointmentRequest = typeof appointmentRequests.$inferSelect;
+export type AppointmentRequestSegment = typeof appointmentRequestSegments.$inferSelect;
+export type AppointmentRequestProposal = typeof appointmentRequestProposals.$inferSelect;
+export type AppointmentRequestEvent = typeof appointmentRequestEvents.$inferSelect;
+export type AppointmentRequestStatus = typeof appointmentRequestStatuses[number];
+export type AppointmentRequestProposalStatus = typeof appointmentRequestProposalStatuses[number];
 export type AppointmentAvailabilityWindow = typeof appointmentAvailabilityWindows.$inferSelect;
 export type AppointmentOccupancyPeriod = typeof appointmentOccupancyPeriods.$inferSelect;
 export type AppointmentSeries = typeof appointmentSeries.$inferSelect;

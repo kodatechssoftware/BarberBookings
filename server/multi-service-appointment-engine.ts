@@ -1,9 +1,11 @@
 import type { Pool, PoolClient } from "pg";
 import { pool as applicationPool } from "./db";
 import { parseBeautyV2MasterSwitch } from "@shared/business/v2-features";
+import type { BeautyV2FeatureName } from "@shared/business/v2-features";
 import {
   assertMultiServicePlanFitsWorkingPeriods,
-  planMultiServiceAppointment,
+  MIN_MULTI_SERVICE_SEGMENTS,
+  planSequentialAppointmentServices,
   type MultiServiceAppointmentPlan,
   type MultiServiceSegmentTerms,
   type MultiServiceWorkingPeriod,
@@ -115,9 +117,12 @@ export class MultiServiceConflictError extends Error {
   }
 }
 
-type MultiServiceEngineOptions = {
+export type MultiServiceEngineOptions = {
   masterEnabled?: boolean;
   businessVertical?: string;
+  requiredFeatures?: readonly BeautyV2FeatureName[];
+  minimumSegments?: number;
+  termsSnapshot?: readonly MultiServiceSegmentTerms[];
   afterSegmentsInserted?: (client: PoolClient, appointmentId: number) => Promise<void>;
 };
 
@@ -188,7 +193,7 @@ function databaseCode(error: unknown) {
   return undefined;
 }
 
-async function assertFeatureEnabled(
+export async function assertBeautyV2FeaturesEnabledWithClient(
   client: PoolClient,
   locationId: number,
   options: MultiServiceEngineOptions,
@@ -199,20 +204,23 @@ async function assertFeatureEnabled(
   const vertical = (options.businessVertical ?? process.env.BUSINESS_VERTICAL ?? "barber").trim().toLowerCase();
   if (!masterEnabled || vertical !== "beauty") throw new MultiServiceFeatureDisabledError();
 
-  const settings = await client.query<{ location_id: number | null; enabled: boolean }>(`
-    SELECT location_id, enabled
+  const requiredFeatures = options.requiredFeatures ?? ["multiServiceAppointments"];
+  const settings = await client.query<{ feature_name: BeautyV2FeatureName; location_id: number | null; enabled: boolean }>(`
+    SELECT feature_name, location_id, enabled
     FROM ${table("business_feature_settings")}
-    WHERE feature_name = 'multiServiceAppointments'
+    WHERE feature_name = ANY($2::text[])
       AND (location_id IS NULL OR location_id = $1)
-    ORDER BY location_id NULLS FIRST
+    ORDER BY feature_name, location_id NULLS FIRST
     FOR SHARE
-  `, [locationId]);
-  let enabled = false;
-  for (const setting of settings.rows) enabled = Boolean(setting.enabled);
-  if (!enabled) throw new MultiServiceFeatureDisabledError();
+  `, [locationId, requiredFeatures]);
+  const effective = new Map<BeautyV2FeatureName, boolean>(
+    requiredFeatures.map((feature) => [feature, false]),
+  );
+  for (const setting of settings.rows) effective.set(setting.feature_name, Boolean(setting.enabled));
+  if (requiredFeatures.some((feature) => !effective.get(feature))) throw new MultiServiceFeatureDisabledError();
 }
 
-async function resolveTerms(
+export async function resolveAppointmentServiceTermsWithClient(
   client: PoolClient,
   locationId: number,
   selections: readonly MultiServiceSelection[],
@@ -280,22 +288,24 @@ async function resolveWorkingPeriods(
   table: (name: string) => string,
 ) {
   const barberIds = Array.from(new Set(plan.segments.map((segment) => segment.barberId)));
-  const [shopResult, barberResult] = await Promise.all([
-    client.query<{ day_of_week: number; start_time: string; end_time: string; is_open: boolean }>(`
-      SELECT day_of_week, start_time, end_time, is_open
-      FROM ${table("shop_availability")}
-      WHERE location_id = $1
-      ORDER BY day_of_week, start_time, end_time
-      FOR SHARE
-    `, [locationId]),
-    client.query<{ barber_id: number; day_of_week: number; start_time: string; end_time: string; is_working: boolean }>(`
-      SELECT barber_id, day_of_week, start_time, end_time, is_working
-      FROM ${table("barber_availability")}
-      WHERE location_id = $1 AND barber_id = ANY($2::int[])
-      ORDER BY barber_id, day_of_week, start_time, end_time
-      FOR SHARE
-    `, [locationId, barberIds]),
-  ]);
+  const shopResult = await client.query<{
+    day_of_week: number; start_time: string; end_time: string; is_open: boolean;
+  }>(`
+    SELECT day_of_week, start_time, end_time, is_open
+    FROM ${table("shop_availability")}
+    WHERE location_id = $1
+    ORDER BY day_of_week, start_time, end_time
+    FOR SHARE
+  `, [locationId]);
+  const barberResult = await client.query<{
+    barber_id: number; day_of_week: number; start_time: string; end_time: string; is_working: boolean;
+  }>(`
+    SELECT barber_id, day_of_week, start_time, end_time, is_working
+    FROM ${table("barber_availability")}
+    WHERE location_id = $1 AND barber_id = ANY($2::int[])
+    ORDER BY barber_id, day_of_week, start_time, end_time
+    FOR SHARE
+  `, [locationId, barberIds]);
 
   const periods = new Map<string, MultiServiceWorkingPeriod[]>();
   for (const segment of plan.segments) {
@@ -316,65 +326,80 @@ async function resolveWorkingPeriods(
   return periods;
 }
 
-export async function createMultiServiceAppointmentWithPool(
-  databasePool: Pool,
+export async function createSequentialAppointmentInTransaction(
+  client: PoolClient,
   input: CreateMultiServiceAppointmentInput,
   options: MultiServiceEngineOptions = {},
 ): Promise<CreatedMultiServiceAppointment> {
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
   const schema = quoteIdentifier(schemaName);
   const table = (name: string) => `${schema}.${quoteIdentifier(name)}`;
-  const client = await databasePool.connect();
+  await assertBeautyV2FeaturesEnabledWithClient(client, input.locationId, options, table);
+  const location = await client.query<{ id: number; timezone: string }>(`
+    SELECT id, timezone FROM ${table("locations")}
+    WHERE id = $1 AND is_active = true
+    FOR SHARE
+  `, [input.locationId]);
+  if (!location.rows[0]) throw new MultiServiceScopeError("A localização não está disponível.");
 
-  try {
-    await client.query("BEGIN");
-    await assertFeatureEnabled(client, input.locationId, options, table);
-    const location = await client.query<{ id: number; timezone: string }>(`
-      SELECT id, timezone FROM ${table("locations")}
-      WHERE id = $1 AND is_active = true
-      FOR SHARE
-    `, [input.locationId]);
-    if (!location.rows[0]) throw new MultiServiceScopeError("A localização não está disponível.");
+  const currentTerms = await resolveAppointmentServiceTermsWithClient(
+    client,
+    input.locationId,
+    input.services,
+    table,
+  );
+  const terms = options.termsSnapshot
+    ? options.termsSnapshot.map((snapshot, index) => {
+        const current = currentTerms[index];
+        if (!current || current.serviceId !== snapshot.serviceId || current.barberId !== snapshot.barberId) {
+          throw new MultiServiceScopeError();
+        }
+        return { ...snapshot };
+      })
+    : currentTerms;
+  if (terms.length !== currentTerms.length) throw new MultiServiceScopeError();
+  const plan = planSequentialAppointmentServices(
+    input.startTime,
+    terms,
+    options.minimumSegments ?? MIN_MULTI_SERVICE_SEGMENTS,
+  );
+  if (!input.manualOutsideHours) {
+    const workingPeriods = await resolveWorkingPeriods(
+      client,
+      plan,
+      input.locationId,
+      location.rows[0].timezone,
+      table,
+    );
+    assertMultiServicePlanFitsWorkingPeriods(plan, location.rows[0].timezone, workingPeriods);
+  }
 
-    const terms = await resolveTerms(client, input.locationId, input.services, table);
-    const plan = planMultiServiceAppointment(input.startTime, terms);
-    if (!input.manualOutsideHours) {
-      const workingPeriods = await resolveWorkingPeriods(
-        client,
-        plan,
-        input.locationId,
-        location.rows[0].timezone,
-        table,
-      );
-      assertMultiServicePlanFitsWorkingPeriods(plan, location.rows[0].timezone, workingPeriods);
-    }
+  const lockKeys = Array.from(new Set(plan.occupancyPeriods.flatMap((period) => [
+    `${period.barberId}:${lockDayKey(period.startTime)}`,
+    `${period.barberId}:${lockDayKey(period.endTime)}`,
+  ]))).map((key) => key.split(":").map(Number) as [number, number])
+    .sort(([leftBarber, leftDay], [rightBarber, rightDay]) => leftBarber - rightBarber || leftDay - rightDay);
+  for (const [barberId, dayKey] of lockKeys) {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [barberId, dayKey]);
+  }
 
-    const lockKeys = Array.from(new Set(plan.occupancyPeriods.flatMap((period) => [
-      `${period.barberId}:${lockDayKey(period.startTime)}`,
-      `${period.barberId}:${lockDayKey(period.endTime)}`,
-    ]))).map((key) => key.split(":").map(Number) as [number, number])
-      .sort(([leftBarber, leftDay], [rightBarber, rightDay]) => leftBarber - rightBarber || leftDay - rightDay);
-    for (const [barberId, dayKey] of lockKeys) {
-      await client.query("SELECT pg_advisory_xact_lock($1, $2)", [barberId, dayKey]);
-    }
+  for (const period of plan.occupancyPeriods) {
+    const conflict = await client.query(`
+      SELECT appointment_id
+      FROM ${table("appointment_occupancy_periods")}
+      WHERE barber_id = $1 AND start_time < $2 AND end_time > $3
+      LIMIT 1
+    `, [period.barberId, utcTimestamp(period.endTime), utcTimestamp(period.startTime)]);
+    if (conflict.rowCount) throw new MultiServiceConflictError();
+  }
 
-    for (const period of plan.occupancyPeriods) {
-      const conflict = await client.query(`
-        SELECT appointment_id
-        FROM ${table("appointment_occupancy_periods")}
-        WHERE barber_id = $1 AND start_time < $2 AND end_time > $3
-        LIMIT 1
-      `, [period.barberId, utcTimestamp(period.endTime), utcTimestamp(period.startTime)]);
-      if (conflict.rowCount) throw new MultiServiceConflictError();
-    }
+  const customerName = input.customerName.trim();
+  const customerPhone = input.customerPhone.trim();
+  if (!customerName || !customerPhone || !input.cancelToken.trim()) {
+    throw new MultiServiceScopeError("Os dados essenciais da marcação são inválidos.");
+  }
 
-    const customerName = input.customerName.trim();
-    const customerPhone = input.customerPhone.trim();
-    if (!customerName || !customerPhone || !input.cancelToken.trim()) {
-      throw new MultiServiceScopeError("Os dados essenciais da marcação são inválidos.");
-    }
-
-    const appointmentResult = await client.query<{
+  const appointmentResult = await client.query<{
       id: number;
       location_id: number;
       barber_id: number;
@@ -418,13 +443,14 @@ export async function createMultiServiceAppointmentWithPool(
       input.whatsappOptIn ?? false,
       input.whatsappOptIn ? utcTimestamp(new Date()) : null,
     ]);
-    const appointmentId = appointmentResult.rows[0].id;
+  const appointmentId = appointmentResult.rows[0].id;
+  const storedSegments: StoredMultiServiceSegment[] = [];
+  if (plan.segments.length > 1) {
     await client.query(`
       INSERT INTO ${table("appointment_service_sets")} (appointment_id)
       VALUES ($1)
     `, [appointmentId]);
 
-    const storedSegments: StoredMultiServiceSegment[] = [];
     for (const segment of plan.segments) {
       const result = await client.query<{
         id: number;
@@ -462,26 +488,43 @@ export async function createMultiServiceAppointmentWithPool(
       const row = result.rows[0];
       storedSegments.push(mapStoredSegment(row));
     }
+  }
 
-    await options.afterSegmentsInserted?.(client, appointmentId);
-    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+  await options.afterSegmentsInserted?.(client, appointmentId);
+  await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+  const appointment = appointmentResult.rows[0];
+  return {
+    appointment: {
+      id: Number(appointment.id),
+      locationId: Number(appointment.location_id),
+      barberId: Number(appointment.barber_id),
+      serviceId: Number(appointment.service_id),
+      startTime: new Date(appointment.start_time),
+      durationMinutes: Number(appointment.duration_minutes),
+      serviceNameSnapshot: appointment.service_name_snapshot,
+      servicePriceCentsSnapshot: Number(appointment.service_price_cents_snapshot),
+      status: appointment.status,
+    },
+    segments: storedSegments,
+    plan,
+  };
+}
+
+export async function createMultiServiceAppointmentWithPool(
+  databasePool: Pool,
+  input: CreateMultiServiceAppointmentInput,
+  options: MultiServiceEngineOptions = {},
+): Promise<CreatedMultiServiceAppointment> {
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN");
+    const created = await createSequentialAppointmentInTransaction(client, input, {
+      ...options,
+      requiredFeatures: options.requiredFeatures ?? ["multiServiceAppointments"],
+      minimumSegments: options.minimumSegments ?? MIN_MULTI_SERVICE_SEGMENTS,
+    });
     await client.query("COMMIT");
-    const appointment = appointmentResult.rows[0];
-    return {
-      appointment: {
-        id: Number(appointment.id),
-        locationId: Number(appointment.location_id),
-        barberId: Number(appointment.barber_id),
-        serviceId: Number(appointment.service_id),
-        startTime: new Date(appointment.start_time),
-        durationMinutes: Number(appointment.duration_minutes),
-        serviceNameSnapshot: appointment.service_name_snapshot,
-        servicePriceCentsSnapshot: Number(appointment.service_price_cents_snapshot),
-        status: appointment.status,
-      },
-      segments: storedSegments,
-      plan,
-    };
+    return created;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     if (databaseCode(error) === "23P01") throw new MultiServiceConflictError();

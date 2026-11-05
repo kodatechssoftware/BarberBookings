@@ -288,7 +288,7 @@ test.afterAll(async () => {
   ]);
 });
 
-test("canonical scopes restrict location context and Professional linkage grants nothing implicitly", async () => {
+test("canonical scopes restrict location context and Professional linkage grants nothing implicitly", async ({ request }) => {
   const { userA, administrator, locationA, locationB, professionalA } = fixture;
   const me = await (await expectOk(await userA.get("/api/admin/me"))).json();
   expect(me).toMatchObject({ authorized: true, professionalId: professionalA.id });
@@ -301,6 +301,12 @@ test("canonical scopes restrict location context and Professional linkage grants
   const forbidden = await userA.get("/api/appointments?scope=team", { headers: headersFor(locationB.id) });
   expect(forbidden.status()).toBe(403);
   expect(await forbidden.json()).toEqual({ message: "Não tem acesso a esta localização." });
+  expect((await request.get("/api/admin/appointment-requests", {
+    headers: headersFor(locationA.id),
+  })).status()).toBe(401);
+  expect((await userA.get("/api/admin/appointment-requests", {
+    headers: headersFor(locationB.id),
+  })).status()).toBe(403);
 
   const expensePayload = {
     category: "other",

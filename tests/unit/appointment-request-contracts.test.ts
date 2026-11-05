@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import {
+  appointmentRequestProposalResponseSchema,
+  createAppointmentRequestSchema,
+} from "../../shared/appointment-requests";
+
+test("appointment request contracts normalize international phones and reject malformed payloads", () => {
+  const parsed = createAppointmentRequestSchema.parse({
+    startTime: "2035-06-01T10:00:00.000Z",
+    customerName: "Cliente",
+    customerPhone: "+34 612 34 56 78",
+    idempotencyKey: "request-contract-1",
+    services: [{ serviceId: 1, barberId: 2 }],
+  });
+  assert.equal(parsed.customerPhone, "+34612345678");
+  assert.equal(parsed.whatsappOptIn, false);
+  assert.throws(() => createAppointmentRequestSchema.parse({
+    ...parsed,
+    services: [],
+  }));
+  assert.throws(() => appointmentRequestProposalResponseSchema.parse({
+    token: "short",
+    decision: "accept",
+  }));
+});
+
+test("every Admin appointment-request mutation is protected by the team management capability", async () => {
+  const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  for (const route of [
+    "/api/admin/appointment-requests\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id/approve\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id/refuse\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id/propose\", requireTeamAppointmentsManage",
+  ]) {
+    assert.ok(source.includes(route), `missing protected route fragment: ${route}`);
+  }
+});

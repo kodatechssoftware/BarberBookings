@@ -8,6 +8,11 @@ Phase 2 data-engine details are documented in
 [`beauty-v2-multi-service-engine.md`](./beauty-v2-multi-service-engine.md). The
 public and Admin multi-service interfaces remain out of scope and disabled.
 
+Phase 3 request-workflow details are documented in
+[`beauty-v2-appointment-requests.md`](./beauty-v2-appointment-requests.md). This
+adds API and transactional domain support only; no final public or Admin UI is
+enabled by this phase.
+
 ## Feature flag contract
 
 The six Beauty v2 capabilities have persisted settings in

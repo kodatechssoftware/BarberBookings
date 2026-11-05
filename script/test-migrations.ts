@@ -281,8 +281,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 23,
-    "an empty legacy baseline must apply every migration through 0024");
+  assert.equal(freshRun.applied.length, 24,
+    "an empty legacy baseline must apply every migration through 0025");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -292,6 +292,10 @@ try {
     "the multi-service engine must not reinterpret legacy appointments on a fresh migration");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_service_segments")}`)).rows[0].count), 0,
     "the multi-service segment store must start empty");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_requests")}`)).rows[0].count), 0,
+    "the appointment-request workflow must not create requests automatically");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_request_proposals")}`)).rows[0].count), 0,
+    "the appointment-request workflow must not create proposals automatically");
   const freshExtrasColumns = (await pool.query(`
     SELECT column_name, is_nullable
     FROM information_schema.columns
@@ -356,7 +360,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 23);
+  assert.equal(secondFreshRun.alreadyApplied, 24);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1089,6 +1093,7 @@ try {
     "0022_appointment_reminder_schedule.sql",
     "0023_beauty_v2_feature_settings.sql",
     "0024_multi_service_appointment_engine.sql",
+    "0025_appointment_request_approval.sql",
   ]);
   assert.equal(compensationMigrationRun.alreadyApplied, 13);
   assert.deepEqual((await pool.query(`
@@ -1131,6 +1136,8 @@ try {
     "the 0024 upgrade must not reinterpret historical appointments as multi-service");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_service_segments")}`)).rows[0].count), 0,
     "the 0024 upgrade must not infer service segments from legacy summary fields");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_requests")}`)).rows[0].count), 0,
+    "the 0025 upgrade must not infer appointment requests from historical appointments");
 
   const windowParent = (await pool.query(`
     INSERT INTO ${table("appointments")} (
@@ -1409,7 +1416,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 23);
+  assert.equal(secondCompensationRun.alreadyApplied, 24);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1442,6 +1449,18 @@ try {
     "appointment_service_segments_appointment_position_unique",
     "appointment_service_segments_appointment_idx",
     "appointment_service_segments_barber_time_idx",
+    "appointment_requests_location_idempotency_unique",
+    "appointment_requests_appointment_unique",
+    "appointment_requests_location_status_idx",
+    "appointment_request_segments_request_position_unique",
+    "appointment_request_segments_request_idx",
+    "appointment_request_segments_barber_time_idx",
+    "appointment_request_proposals_request_revision_unique",
+    "appointment_request_proposals_request_command_unique",
+    "appointment_request_proposals_token_unique",
+    "appointment_request_proposals_one_active",
+    "appointment_request_events_request_idx",
+    "appointment_notification_events_request_idx",
   ]) assert.ok(indexes.has(index), `missing index ${index}`);
   assert.equal(indexes.has("customer_notes_phone_name_idx"), false,
     "the legacy global customer-note identity index must be removed");
@@ -2165,7 +2184,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0024, default-off Beauty v2 feature settings, additive multi-service appointment data/occupancy, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0025, default-off Beauty v2 feature settings, additive multi-service and appointment-request workflows, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

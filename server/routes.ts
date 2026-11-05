@@ -32,6 +32,13 @@ import {
   serviceUpdateInputSchema,
 } from "@shared/routes";
 import { z } from "zod";
+import {
+  appointmentRequestListQuerySchema,
+  appointmentRequestProposalResponseSchema,
+  appointmentRequestProposalSchema,
+  appointmentRequestRefusalSchema,
+  createAppointmentRequestSchema,
+} from "@shared/appointment-requests";
 import { randomUUID } from "crypto";
 import { performance } from "node:perf_hooks";
 import {
@@ -77,6 +84,25 @@ import {
   verifyMetaWebhookSignature,
 } from "./meta-webhook";
 import { pool } from "./db";
+import {
+  AppointmentRequestError,
+  approveAppointmentRequestWithPool,
+  createAppointmentRequestWithPool,
+  getAppointmentRequestWithPool,
+  listAppointmentRequestsWithPool,
+  proposeAppointmentRequestTimeWithPool,
+  refuseAppointmentRequestWithPool,
+  respondToAppointmentRequestProposalWithPool,
+  type AppointmentRequestActor,
+} from "./appointment-request-engine";
+import {
+  MultiServiceAppointmentValidationError,
+} from "@shared/multi-service-appointments";
+import {
+  MultiServiceConflictError,
+  MultiServiceFeatureDisabledError,
+  MultiServiceScopeError,
+} from "./multi-service-appointment-engine";
 import { startupTimings } from "./startup-timings";
 import {
   performanceTimingsEnabled,
@@ -617,6 +643,35 @@ async function getAuditActor(req: Request) {
     actorId: null,
     actorName: "Sistema",
   };
+}
+
+async function getAppointmentRequestActor(req: Request): Promise<AppointmentRequestActor> {
+  const actor = await getAuditActor(req);
+  return {
+    ...actor,
+    actorType: actor.actorType === "barber" ? "professional" : actor.actorType,
+  } as AppointmentRequestActor;
+}
+
+function sendAppointmentRequestError(res: Response, error: unknown) {
+  if (error instanceof z.ZodError) {
+    return res.status(400).json({
+      code: "APPOINTMENT_REQUEST_INPUT_INVALID",
+      message: error.issues[0]?.message || "Pedido inválido.",
+      field: error.issues[0]?.path.join("."),
+    });
+  }
+  if (error instanceof AppointmentRequestError) {
+    return res.status(error.status).json({ code: error.code, message: error.message });
+  }
+  if (error instanceof MultiServiceFeatureDisabledError) {
+    return res.status(error.status).json({ code: error.code, message: error.message });
+  }
+  if (error instanceof MultiServiceScopeError || error instanceof MultiServiceConflictError
+    || error instanceof MultiServiceAppointmentValidationError) {
+    return res.status(error.status).json({ code: error.code, message: error.message });
+  }
+  return null;
 }
 
 function recordAuditLog(req: Request, input: AuditLogInput) {
@@ -2577,6 +2632,138 @@ export async function registerRoutes(
       effectiveEnabled: effective[featureName],
       masterEnabled: beautyV2MasterEnabled,
     });
+  });
+
+  const appointmentRequestOptions = {
+    masterEnabled: beautyV2MasterEnabled,
+    businessVertical: resolvedBusinessConfig.vertical,
+    appointmentNotificationsEnabled: appointmentNotificationEventsEnabled,
+  } as const;
+
+  app.post("/api/appointment-requests", async (req, res) => {
+    try {
+      const input = createAppointmentRequestSchema.parse(req.body);
+      const result = await createAppointmentRequestWithPool(
+        pool,
+        Number(res.locals.locationId),
+        input,
+        appointmentRequestOptions,
+      );
+      return res.status(result.reused ? 200 : 201).json(result);
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/appointment-request-proposals/respond", async (req, res) => {
+    try {
+      const input = appointmentRequestProposalResponseSchema.parse(req.body);
+      return res.json(await respondToAppointmentRequestProposalWithPool(
+        pool,
+        input,
+        appointmentRequestOptions,
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.get("/api/admin/appointment-requests", requireTeamAppointmentsManage, async (req, res) => {
+    try {
+      const query = appointmentRequestListQuerySchema.parse(req.query);
+      return res.json(await listAppointmentRequestsWithPool(
+        pool,
+        Number(res.locals.locationId),
+        query.status,
+        appointmentRequestOptions,
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.get("/api/admin/appointment-requests/:id", requireTeamAppointmentsManage, async (req, res) => {
+    try {
+      const requestId = parsePositiveInteger(req.params.id);
+      if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+      const request = await getAppointmentRequestWithPool(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        appointmentRequestOptions,
+      );
+      return request
+        ? res.json(request)
+        : res.status(404).json({ code: "APPOINTMENT_REQUEST_NOT_FOUND", message: "Pedido não encontrado." });
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/admin/appointment-requests/:id/approve", requireTeamAppointmentsManage, async (req, res) => {
+    try {
+      const requestId = parsePositiveInteger(req.params.id);
+      if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+      return res.json(await approveAppointmentRequestWithPool(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        await getAppointmentRequestActor(req),
+        appointmentRequestOptions,
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/admin/appointment-requests/:id/refuse", requireTeamAppointmentsManage, async (req, res) => {
+    try {
+      const requestId = parsePositiveInteger(req.params.id);
+      if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+      const input = appointmentRequestRefusalSchema.parse(req.body ?? {});
+      return res.json(await refuseAppointmentRequestWithPool(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        input,
+        await getAppointmentRequestActor(req),
+        appointmentRequestOptions,
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/admin/appointment-requests/:id/propose", requireTeamAppointmentsManage, async (req, res) => {
+    try {
+      const requestId = parsePositiveInteger(req.params.id);
+      if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+      const input = appointmentRequestProposalSchema.parse(req.body);
+      return res.json(await proposeAppointmentRequestTimeWithPool(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        input,
+        await getAppointmentRequestActor(req),
+        appointmentRequestOptions,
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
   });
 
   const requireCanonicalUsersManage = (req: Request, res: Response, next: NextFunction) => {
