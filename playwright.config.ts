@@ -16,6 +16,7 @@ export default defineConfig({
     "beauty-service-buffers.spec.ts",
     "beauty-ana-isabel-branding.spec.ts",
     "beauty-single-location-settings.spec.ts",
+    "beauty-v2-booking.spec.ts",
     "canonical-multi-location.spec.ts",
     "demo-service-categories.spec.ts",
   ],

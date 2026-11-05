@@ -1,7 +1,6 @@
 # Beauty v2 — pedidos de marcação sujeitos a aprovação
 
-Estado: Fase 3, contratos, API e motor transacional. A interface final pública
-e Admin continua fora de âmbito.
+Estado: Fase 4, motor transacional, proteção pública e interfaces pública/Admin.
 
 ## Ativação fail-closed
 
@@ -67,10 +66,12 @@ Pedidos de um serviço criam uma marcação legacy normal. Pedidos com vários
 serviços criam também o service set e os segmentos da Fase 2. Marcações antigas
 não são reinterpretadas ou alteradas pela migration.
 
-## API preparada nesta fase
+## API e interfaces
 
 - `POST /api/appointment-requests`
 - `POST /api/appointment-request-proposals/respond`
+- `POST /api/appointment-request-proposals/inspect`
+- `POST /api/appointment-requests/availability`
 - `GET /api/admin/appointment-requests`
 - `GET /api/admin/appointment-requests/:id`
 - `POST /api/admin/appointment-requests/:id/approve`
@@ -80,6 +81,23 @@ não são reinterpretadas ou alteradas pela migration.
 As rotas Admin exigem a capability de gestão de marcações da equipa. A
 localização é sempre resolvida pelo middleware existente e não pode ser
 fornecida livremente no body.
+
+Os endpoints públicos têm limites independentes por IP/localização, respostas
+`no-store` e erros neutros para tokens inexistentes ou obsoletos. O token de
+resposta é transportado no fragmento da ligação pública, não no path/query, e
+apenas o respetivo SHA-256 é persistido. Repetir uma aceitação já concluída
+devolve a mesma marcação sem criar outra.
+
+Com `appointmentRequests=true`, o booking Beauty apresenta o fluxo de pedido e
+mantém o fluxo Beauty v1 intacto quando a flag está desligada. Com
+`multiServiceAppointments=true`, a cliente pode ordenar até 12 serviços,
+escolher o profissional de cada segmento e consultar horários conjuntos antes
+de submeter. A disponibilidade apresentada é uma pré-visualização; a aprovação
+ou aceitação continua a revalidar tudo dentro da transação.
+
+O Admin disponibiliza uma inbox por localização para pedidos pendentes,
+propostas e decisões finais. Aprovação, recusa e proposta continuam protegidas
+por `appointments.manage_team` no backend.
 
 ## Notificações e limites intencionais
 
@@ -91,11 +109,13 @@ existente depois de existir uma marcação confirmada.
 
 Não estão incluídos nesta fase:
 
-- UI pública ou Admin definitiva;
 - ativação de flags em qualquer ambiente;
 - migrations remotas ou backfill;
 - recorrências, alteração de pedidos ou marketing;
 - implementação dos outros requisitos Beauty v2.
+- entrega real dos novos intents de pedido/proposta por WhatsApp/email; estes
+  continuam registados no outbox como `DELIVERY_NOT_ENABLED` até uma fase
+  própria de templates, conteúdo e transportes.
 
 ## Validação
 
@@ -104,3 +124,6 @@ multi-serviço, idempotência, concorrência, conflitos, rollback, recusa,
 propostas aceites/rejeitadas/substituídas/expiradas, localização, histórico,
 audit log, outbox desativado e compatibilidade legacy. A migration é validada
 por `test:migrations` e `test:database-bootstrap` em PostgreSQL real.
+
+`npm run test:beauty-v2-ui` cobre o booking multi-serviço, a mensagem de pedido
+pendente, a resposta protegida a propostas e a inbox Admin em desktop/mobile.
