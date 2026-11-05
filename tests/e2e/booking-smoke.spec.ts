@@ -425,12 +425,18 @@ async function createConcurrentManualAppointmentsForCurrentWeek(request: APIRequ
   return appointmentStart;
 }
 
-async function openManualBookingFromAgendaSlot(page: Page, isoDate: string, time: string) {
+async function openManualBookingFromAgendaSlot(
+  page: Page,
+  isoDate: string,
+  time: string,
+  barberName: string,
+) {
   await selectAgendaDay(page, isoDate);
   const dateLabel = dateLabelFromIso(isoDate);
-  const slotButton = page.locator(
-    `button[aria-label^="Criar marcação para"][aria-label*="${dateLabel}"][aria-label$="às ${time}"]`,
-  ).first();
+  const slotButton = page.getByRole("button", {
+    name: `Criar marcação para ${barberName} em ${dateLabel} às ${time}`,
+    exact: true,
+  });
   await expect(slotButton).toBeVisible();
   await slotButton.click();
 
@@ -2495,7 +2501,7 @@ test.describe("admin navigation", () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await loginAdmin(page);
 
-      let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
+      let dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00", barber.name);
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, shortService.name);
       const initialTime = dialog.getByRole("button", { name: "09:00", exact: true });
@@ -2563,7 +2569,7 @@ test.describe("admin navigation", () => {
       expect(cancelResponse.ok(), await cancelResponse.text()).toBe(true);
 
       await page.setViewportSize({ width: 1440, height: 900 });
-      dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00");
+      dialog = await openManualBookingFromAgendaSlot(page, appointmentStart, "09:00", barber.name);
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, shortService.name);
       await expect(dialog.getByRole("button", { name: "16:30", exact: true })).toBeEnabled();
@@ -2581,7 +2587,7 @@ test.describe("admin navigation", () => {
       const publicAppointment = await saveAppointmentId(`Público sincronizado QA ${suffix}`);
 
       await dialog.getByRole("button", { name: "Close" }).click();
-      dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00");
+      dialog = await openManualBookingFromAgendaSlot(page, publicAppointmentStart, "09:00", barber.name);
       await selectDialogOption(page, dialog, 0, barber.name);
       await selectDialogOption(page, dialog, 1, shortService.name);
       await expect(dialog.getByRole("button", { name: "15:00", exact: true })).toBeDisabled();
