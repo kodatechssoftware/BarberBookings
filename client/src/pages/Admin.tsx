@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes, Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -55,6 +55,8 @@ import { ServiceCategoriesManager } from "@/components/admin/ServiceCategoriesMa
 import { ExtrasManager } from "@/components/admin/ExtrasManager";
 import { InternalCostsManager } from "@/components/admin/InternalCostsManager";
 import { UserAccessManager } from "@/components/admin/UserAccessManager";
+import { AppointmentRequestsManager } from "@/components/admin/AppointmentRequestsManager";
+import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import {
   RecurringExpenseOccurrenceDialog,
   RecurringExpensesManager,
@@ -1814,6 +1816,12 @@ export default function Admin() {
   const activeLocation = availableLocations.find((location) => location.id === activeLocationId)
     ?? availableLocations.find((location) => location.isDefault)
     ?? availableLocations[0];
+  const { data: beautyV2Features } = useBeautyV2Features({
+    enabled: user?.authorized === true && businessConfig.vertical === "beauty",
+    locationId: activeLocation?.id ?? activeLocationId,
+  });
+  const canManageAppointmentRequests = canManageTeamAppointments
+    && beautyV2Features?.appointmentRequests === true;
   const activeBookingLocations = useMemo(
     () => availableLocations.filter((location) => location.isActive),
     [availableLocations],
@@ -4426,6 +4434,7 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
+            {canManageAppointmentRequests && <TabsTrigger value="appointment-requests" className={adminTabTriggerClass}><Inbox className="w-4 h-4" /> Pedidos</TabsTrigger>}
             {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> {adminCopy.team.tabLabel}</TabsTrigger>}
             {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><ServiceIcon className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> {adminCopy.extras.tabLabel}</TabsTrigger>}
@@ -4558,6 +4567,12 @@ export default function Admin() {
               getStatusClass={getStatusClass}
             />
           </TabsContent>
+
+          {canManageAppointmentRequests && activeLocation && (
+            <TabsContent value="appointment-requests" className="space-y-6 outline-none">
+              <AppointmentRequestsManager locationId={activeLocation.id} timeZone={activeLocation.timezone || "Europe/Lisbon"} />
+            </TabsContent>
+          )}
 
           <TabsContent value="barbers" className="outline-none">
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
