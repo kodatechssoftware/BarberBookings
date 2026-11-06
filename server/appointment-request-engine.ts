@@ -101,7 +101,7 @@ export class AppointmentRequestError extends Error {
 }
 export class AppointmentRequestAvailabilityError extends AppointmentRequestError {
   constructor() {
-    super(409, "APPOINTMENT_REQUEST_TIME_UNAVAILABLE", "O horário deixou de estar disponível. É necessária outra proposta.");
+    super(409, "APPOINTMENT_REQUEST_TIME_UNAVAILABLE", "O horário deixou de estar disponível. A equipa terá de analisar outra opção.");
   }
 }
 

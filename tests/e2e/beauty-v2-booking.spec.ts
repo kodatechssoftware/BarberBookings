@@ -99,13 +99,14 @@ test("Beauty v2 public flow submits a multi-service request without claiming con
     await page.getByRole("option", { name: "Ana" }).click();
     await page.getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "Beatriz" }).click();
-    await expect(page.getByText("Duração total: 75 min")).toBeVisible();
+    await expect(page.getByText("Duração prevista: 75 min")).toBeVisible();
     await page.getByRole("button", { name: /10:00/ }).click();
     await page.getByLabel("Nome *").fill("Cliente QA");
     await page.getByLabel("Telemóvel *").fill("912345678");
-    await page.getByRole("button", { name: "Enviar pedido" }).click();
-    await expect(page.getByRole("heading", { name: "Pedido recebido" })).toBeVisible();
-    await expect(page.getByText(/ainda não é uma marcação confirmada/i)).toBeVisible();
+    await page.getByRole("button", { name: "Enviar pedido de marcação" }).click();
+    await expect(page.getByRole("heading", { name: "Pedido enviado com sucesso!" })).toBeVisible();
+    await expect(page.getByText(/só ficará confirmada depois de o pedido ser aprovado/i)).toBeVisible();
+    await expect(page.getByText(/receberá uma atualização/i)).toHaveCount(0);
   }
   expect(submitted).toHaveLength(2);
   expect(submitted[0]).toMatchObject({ services: [{ serviceId: 11, barberId: 21 }, { serviceId: 12, barberId: 22 }] });
@@ -133,7 +134,7 @@ test("Beauty v2 booking keeps Beauty contrast, hierarchy and selection states on
     expect(await contrastRatio(serviceName)).toBeGreaterThanOrEqual(4.5);
     expect(await contrastRatio(page.locator(".beauty-v2-calendar-caption"))).toBeGreaterThanOrEqual(4.5);
     expect(await contrastRatio(page.locator("label[for=request-name]"))).toBeGreaterThanOrEqual(4.5);
-    expect(await contrastRatio(page.getByRole("button", { name: "Enviar pedido" }))).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(page.getByRole("button", { name: "Enviar pedido de marcação" }))).toBeGreaterThanOrEqual(4.5);
 
     await page.getByRole("button", { name: /Manicure/ }).focus();
     await expect(page.getByRole("button", { name: /Manicure/ })).toBeFocused();
@@ -178,7 +179,7 @@ test("Beauty v2 booking exposes loading, empty and error availability states", a
   await page.getByRole("button", { name: /Manicure/ }).click();
   await page.getByRole("combobox", { name: "Profissional para Manicure" }).click();
   await page.getByRole("option", { name: "Ana" }).click();
-  await expect(page.getByText("A calcular horários...")).toBeVisible();
+  await expect(page.getByText("A consultar os horários disponíveis...")).toBeVisible();
   releaseAvailability();
   await expect(page.getByText("Sem horários disponíveis")).toBeVisible();
 
@@ -188,7 +189,27 @@ test("Beauty v2 booking exposes loading, empty and error availability states", a
   await expect(page.getByRole("alert").filter({ hasText: "Não foi possível consultar os horários" })).toBeVisible();
 });
 
-test("proposal response keeps the token in the URL fragment and handles unavailable clipboard-free links", async ({ page }) => {
+test("home call to action follows the effective request or immediate-confirmation flow", async ({ page }) => {
+  await mockBeautyV2(page);
+  await page.goto("/");
+  const requestAction = page.getByRole("link", { name: "Pedir marcação", exact: true });
+  await expect(requestAction).toBeVisible();
+  await requestAction.click();
+  await expect(page.getByRole("heading", { name: "Faça o seu pedido de marcação" })).toBeVisible();
+
+  await page.unroute("**/api/beauty-v2/features");
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true,
+    appointmentRequests: false,
+    multiServiceAppointments: false,
+    appointmentRequestsAvailable: false,
+  } }));
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: "Marcar agora", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Pedir marcação", exact: true })).toHaveCount(0);
+});
+
+test("proposal response keeps the token in the URL fragment and communicates each state accurately", async ({ page }) => {
   const token = "a".repeat(43);
   let accepted = false;
   await page.route("**/api/appointment-request-proposals/inspect", (route) => route.fulfill({ json: {
@@ -202,10 +223,46 @@ test("proposal response keeps the token in the URL fragment and handles unavaila
   });
   await page.goto(`/appointment-request/proposal#token=${token}`);
   expect(page.url()).toContain(`#token=${token}`);
-  await expect(page.getByRole("heading", { name: "Novo horário sugerido" })).toBeVisible();
-  await page.getByRole("button", { name: "Aceitar horário" }).click();
-  await expect(page.getByRole("heading", { name: "Novo horário aceite" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Proposta de novo horário" })).toBeVisible();
+  await expect(page.getByText(/a marcação só fica confirmada se o horário continuar disponível/i)).toBeVisible();
+  await page.getByRole("button", { name: "Aceitar novo horário" }).click();
+  await expect(page.getByRole("heading", { name: "Marcação confirmada" })).toBeVisible();
+  await expect(page.getByText(/a sua marcação ficou confirmada/i)).toBeVisible();
+  await expect(page.getByText(/receberá os detalhes/i)).toHaveCount(0);
   expect(accepted).toBe(true);
+});
+
+test("invalid proposal links and submit failures use safe public copy", async ({ page }) => {
+  await page.goto("/appointment-request/proposal");
+  await expect(page.getByRole("heading", { name: "Ligação indisponível" })).toBeVisible();
+  await expect(page.getByText(/não é válida, expirou ou já não está disponível/i)).toBeVisible();
+
+  await page.clock.setFixedTime(new Date("2030-06-01T08:00:00+01:00"));
+  await mockBeautyV2(page);
+  await page.route("**/api/appointment-requests", (route) => route.fulfill({
+    status: 500,
+    json: { code: "INTERNAL_ERROR", message: "database relation and private details" },
+  }));
+  await page.goto("/booking");
+  await page.getByRole("button", { name: /Manicure/ }).click();
+  await page.getByRole("combobox", { name: "Profissional para Manicure" }).click();
+  await page.getByRole("option", { name: "Ana" }).click();
+  await page.locator(".booking-time-slot-available").first().click();
+  await page.getByLabel("Nome *").fill("Cliente QA");
+  await page.getByLabel("Telemóvel *").fill("912345678");
+  await page.getByRole("button", { name: "Enviar pedido de marcação" }).click();
+  await expect(page.getByText("Não foi possível enviar o pedido")).toBeVisible();
+  await expect(page.getByText("Verifique os dados e tente novamente.")).toBeVisible();
+  await expect(page.getByText(/database relation/i)).toHaveCount(0);
+
+  await page.unroute("**/api/appointment-requests");
+  await page.route("**/api/appointment-requests", (route) => route.fulfill({
+    status: 409,
+    json: { code: "MULTI_SERVICE_APPOINTMENT_CONFLICT", message: "internal provider wording" },
+  }));
+  await page.getByRole("button", { name: "Enviar pedido de marcação" }).click();
+  await expect(page.getByText("Um dos profissionais já tem uma marcação neste período. Escolha outro horário.")).toBeVisible();
+  await expect(page.getByText(/internal provider wording/i)).toHaveCount(0);
 });
 
 test("authorized Admin can review and approve a request from the location-scoped inbox", async ({ page }) => {

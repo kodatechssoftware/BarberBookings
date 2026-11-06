@@ -17,6 +17,8 @@ import { setActiveLocationId, useActiveLocationId } from "@/lib/location-context
 import { resolveLocationMapLinks } from "@shared/location-maps";
 import { groupServicesForDisplay } from "@/lib/service-groups";
 import { getProfessionalAvatar } from "@/lib/professional-presentation";
+import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
+import { resolvePublicBookingPrimaryAction } from "@shared/business/copy/appointment-request.pt";
 
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
@@ -139,6 +141,14 @@ export default function Home() {
   const selectedLocation = publicLocations.find((location) => location.id === selectedLocationId)
     ?? publicLocations.find((location) => location.isDefault)
     ?? publicLocations[0];
+  const { data: beautyV2Features } = useBeautyV2Features({
+    enabled: businessConfig.vertical === "beauty" && selectedLocation.id > 0,
+    locationId: selectedLocation.id > 0 ? selectedLocation.id : null,
+  });
+  const primaryBookingAction = resolvePublicBookingPrimaryAction(
+    Boolean(beautyV2Features?.appointmentRequests),
+    shopBranding.heroPrimaryCtaLabel,
+  );
   const selectedMapLinks = resolveLocationMapLinks(selectedLocation);
   const selectedMapKey = `${selectedLocation.id}:${selectedMapLinks.mapEmbedUrl}`;
 
@@ -291,7 +301,7 @@ export default function Home() {
                 onMouseEnter={warmBookingFlow}
                 onTouchStart={warmBookingFlow}
               >
-                <Link href="/book">{shopBranding.heroPrimaryCtaLabel}</Link>
+                <Link href="/book">{primaryBookingAction}</Link>
               </Button>
               <Button asChild variant="outline" size="lg" className="home-secondary-cta h-12 w-full border-white/15 bg-black/30 px-8 text-base text-white hover:bg-white/10 hover:text-white sm:w-auto">
                 <a href="#services">{shopBranding.heroSecondaryCtaLabel}</a>

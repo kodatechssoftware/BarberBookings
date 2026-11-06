@@ -35,6 +35,10 @@ import { canBarberPerformService } from "@/lib/availability";
 import { cn } from "@/lib/utils";
 import { DEFAULT_PHONE_COUNTRY, isValidPhoneForCountry, toStoredPhone, type PhoneCountryCode } from "@shared/phone-countries";
 import { useBeautyV2Features, type BeautyV2PublicFeatures } from "@/hooks/use-beauty-v2";
+import {
+  APPOINTMENT_REQUEST_PUBLIC_COPY as requestCopy,
+  requestReviewText,
+} from "@shared/business/copy/appointment-request.pt";
 
 type Selection = { serviceId: number; barberId: number | null };
 type AvailabilityPreview = {
@@ -48,6 +52,20 @@ type AvailabilityPreview = {
 
 function money(cents: number) {
   return new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(cents / 100);
+}
+
+function publicSubmissionError(error: unknown) {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  if (!candidate || typeof candidate.code !== "string") return requestCopy.submitErrorDescription;
+  const publicMessages: Record<string, string> = {
+    APPOINTMENT_REQUEST_RATE_LIMITED: requestCopy.submitErrors.rateLimited,
+    APPOINTMENT_REQUEST_TIME_INVALID: requestCopy.submitErrors.invalidTime,
+    APPOINTMENT_REQUEST_TIME_UNAVAILABLE: requestCopy.submitErrors.unavailableTime,
+    MULTI_SERVICE_APPOINTMENT_CONFLICT: requestCopy.submitErrors.conflict,
+    MULTI_SERVICE_SCOPE_INVALID: requestCopy.submitErrors.unavailableSelection,
+    MULTI_SERVICE_APPOINTMENTS_DISABLED: requestCopy.submitErrors.featureUnavailable,
+  };
+  return publicMessages[candidate.code] ?? requestCopy.submitErrorDescription;
 }
 
 function StepHeading({
@@ -167,7 +185,11 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
 
   const submit = async () => {
     if (!locationId || !selectedStart || completeSelections.length !== selections.length || !name.trim() || !isValidPhoneForCountry(phone, phoneCountry)) {
-      toast({ title: "Confirme os dados", description: "Escolha os serviços, profissionais, horário e indique um contacto válido.", variant: "destructive" });
+      toast({
+        title: requestCopy.validationTitle,
+        description: requestCopy.validationDescription,
+        variant: "destructive",
+      });
       return;
     }
     setSubmitting(true);
@@ -184,7 +206,11 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
       const result = await response.json();
       setSubmitted({ id: result.request.id });
     } catch (error) {
-      toast({ title: "Não foi possível enviar o pedido", description: error instanceof Error ? error.message : "Tente novamente.", variant: "destructive" });
+      toast({
+        title: requestCopy.submitErrorTitle,
+        description: publicSubmissionError(error),
+        variant: "destructive",
+      });
     } finally {
       setSubmitting(false);
     }
@@ -193,7 +219,7 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
   if (loadingLocations) return <div className="booking-shell flex min-h-screen items-center justify-center bg-background text-foreground">
     <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-5 py-4 shadow-sm" role="status">
       <Loader2 className="h-5 w-5 animate-spin text-primary" />
-      <span className="font-medium">A preparar o pedido...</span>
+      <span className="font-medium">{requestCopy.loadingForm}</span>
     </div>
   </div>;
 
@@ -204,26 +230,26 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
           <Check className="h-8 w-8 text-primary" />
         </div>
         <div>
-          <h1 className="font-display text-2xl font-bold text-foreground sm:text-3xl">Pedido recebido</h1>
+          <h1 className="font-display text-2xl font-bold text-foreground sm:text-3xl">{requestCopy.success.title}</h1>
           <p className="mt-3 leading-relaxed text-foreground">
-            O estabelecimento vai analisar a disponibilidade. Este pedido <strong>ainda não é uma marcação confirmada</strong>.
+            {requestCopy.success.description}
           </p>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Receberá uma atualização quando o pedido for aprovado, recusado ou tiver uma proposta de outro horário.
+          <p className="mt-2 rounded-xl bg-secondary/60 px-4 py-3 text-sm font-medium leading-relaxed text-secondary-foreground">
+            {requestCopy.success.notice}
           </p>
         </div>
-        <Button asChild variant="outline"><Link href="/">Voltar ao início</Link></Button>
+        <Button asChild variant="outline"><Link href="/">{requestCopy.success.backHome}</Link></Button>
       </CardContent>
     </Card>
   </main>;
 
   return <div className="booking-shell beauty-v2-booking min-h-screen bg-background pb-10 text-foreground" data-testid="beauty-v2-booking">
     <header className="border-b border-border/80 bg-card/95 shadow-sm backdrop-blur">
-      <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3 sm:py-4">
-        <Button asChild variant="ghost" size="sm"><Link href="/"><ChevronLeft className="mr-1 h-4 w-4" />Voltar</Link></Button>
+      <div className="mx-auto flex max-w-5xl items-start gap-2 px-3 py-3 sm:items-center sm:gap-3 sm:px-4 sm:py-4">
+        <Button asChild variant="ghost" size="sm" className="shrink-0"><Link href="/"><ChevronLeft className="mr-1 h-4 w-4" />Voltar</Link></Button>
         <div className="min-w-0 border-l border-border pl-3">
-          <h1 className="truncate font-display text-xl font-bold text-foreground sm:text-2xl">Pedido de marcação</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground sm:text-sm">Escolha os serviços e envie o pedido para aprovação.</p>
+          <h1 className="font-display text-lg font-bold leading-tight text-foreground sm:text-2xl">{requestCopy.pageTitle}</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground sm:text-sm">{requestCopy.pageIntroduction}</p>
         </div>
       </div>
     </header>
@@ -249,7 +275,7 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
       </section>}
 
       {!effectiveFeatures.appointmentRequests ? <div className="rounded-2xl border border-amber-600/30 bg-amber-50 p-4 text-sm font-medium text-amber-900" role="status">
-        Os pedidos de marcação não estão ativos neste estabelecimento.
+        {requestCopy.unavailable}
       </div> : null}
 
       <section className={cn(
@@ -258,10 +284,10 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
       )}>
         <StepHeading
           number={1}
-          title="Serviços"
+          title={effectiveFeatures.multiServiceAppointments ? requestCopy.services.titleMultiple : requestCopy.services.titleSingle}
           description={effectiveFeatures.multiServiceAppointments
-            ? "Combine os serviços pretendidos e escolha o profissional para cada um."
-            : "Escolha o serviço e o profissional pretendidos."}
+            ? requestCopy.services.instructionMultiple
+            : requestCopy.services.instructionSingle}
           icon={<Sparkles className="h-5 w-5" />}
         />
 
@@ -289,14 +315,14 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
               </div>
               <div className="space-y-2">
                 <Label className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <UserRound className="h-4 w-4 text-primary" /> Profissional
+                  <UserRound className="h-4 w-4 text-primary" /> {requestCopy.services.professionalLabel}
                 </Label>
                 <Select
                   value={selection.barberId ? String(selection.barberId) : ""}
                   onValueChange={(value) => setSelections((current) => current.map((item, position) => position === index ? { ...item, barberId: Number(value) } : item))}
                 >
                   <SelectTrigger className="h-11 border-border bg-card text-foreground" aria-label={`Profissional para ${service?.name ?? "serviço"}`}>
-                    <SelectValue placeholder="Escolher profissional" />
+                    <SelectValue placeholder={requestCopy.services.professionalPlaceholder} />
                   </SelectTrigger>
                   <SelectContent>{professionals.map((barber) => <SelectItem key={barber.id} value={String(barber.id)}>{barber.name}</SelectItem>)}</SelectContent>
                 </Select>
@@ -307,15 +333,15 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
 
         <div className="mt-5 border-t border-border pt-5">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-foreground">{selections.length > 0 ? "Adicionar outro serviço" : "Escolha um serviço"}</p>
+            <p className="text-sm font-semibold text-foreground">{selections.length > 0 ? requestCopy.services.addAnother : requestCopy.services.chooseSingle}</p>
             {effectiveFeatures.multiServiceAppointments && <span className="rounded-full bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground">{selections.length}/12 selecionados</span>}
           </div>
           {(loadingServices || loadingBarbers) ? <div className="flex min-h-28 items-center justify-center gap-2 text-muted-foreground" role="status">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" /> A carregar serviços...
+            <Loader2 className="h-5 w-5 animate-spin text-primary" /> {requestCopy.services.loading}
           </div> : visibleServices.filter((service) => !selectedIds.has(service.id)).length === 0 ? <PanelMessage
             icon={<Check className="h-5 w-5" />}
-            title="Serviços selecionados"
-            description="Pode continuar para escolher a data e o horário."
+            title={selections.length === 1 ? requestCopy.services.selectedSingle : requestCopy.services.selectedMultiple}
+            description={requestCopy.services.allSelectedDescription}
           /> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{visibleServices.filter((service) => !selectedIds.has(service.id)).map((service) => <button
             key={service.id}
             type="button"
@@ -340,8 +366,8 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
       <section className="rounded-3xl border border-border bg-card p-4 shadow-sm sm:p-6">
         <StepHeading
           number={2}
-          title="Data e horário"
-          description="Escolha um dia e consulte os horários que acomodam todos os serviços."
+          title={requestCopy.schedule.title}
+          description={requestCopy.schedule.instruction}
           icon={<CalendarDays className="h-5 w-5" />}
         />
         <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(290px,340px)_1fr] lg:items-start">
@@ -379,32 +405,32 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
 
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="flex items-center gap-2 font-bold text-foreground"><Clock className="h-5 w-5 text-primary" />Horários disponíveis</h3>
+              <h3 className="flex items-center gap-2 font-bold text-foreground"><Clock className="h-5 w-5 text-primary" />{requestCopy.schedule.availableTimes}</h3>
               <div className="flex gap-3 text-xs font-medium text-muted-foreground" aria-label="Legenda dos horários">
-                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-primary bg-card" />Disponível</span>
-                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-primary" />Selecionado</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-primary bg-card" />{requestCopy.schedule.available}</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-primary" />{requestCopy.schedule.selected}</span>
               </div>
             </div>
             <div className="rounded-2xl border border-border bg-background p-3 sm:p-4" aria-live="polite">
               {selections.length === 0 ? <PanelMessage
                 icon={<Sparkles className="h-5 w-5" />}
-                title="Escolha um serviço"
-                description="Os horários serão apresentados depois de escolher os serviços e profissionais."
+                title={requestCopy.schedule.chooseServiceTitle}
+                description={requestCopy.schedule.chooseServiceDescription}
               /> : completeSelections.length !== selections.length ? <PanelMessage
                 icon={<UserRound className="h-5 w-5" />}
-                title="Escolha os profissionais"
-                description="Indique quem realizará cada serviço para calcularmos a disponibilidade conjunta."
+                title={requestCopy.schedule.chooseProfessionalsTitle}
+                description={requestCopy.schedule.chooseProfessionalsDescription}
               /> : loadingPreview ? <div className="flex min-h-32 flex-col items-center justify-center gap-2 text-sm text-muted-foreground" role="status">
-                <Loader2 className="h-6 w-6 animate-spin text-primary" /> A calcular horários...
+                <Loader2 className="h-6 w-6 animate-spin text-primary" /> {requestCopy.schedule.loading}
               </div> : previewError ? <PanelMessage
                 icon={<AlertCircle className="h-5 w-5" />}
-                title="Não foi possível consultar os horários"
-                description="Tente novamente dentro de alguns instantes."
+                title={requestCopy.schedule.errorTitle}
+                description={requestCopy.schedule.errorDescription}
                 tone="error"
               /> : preview?.starts.length === 0 ? <PanelMessage
                 icon={<Clock className="h-5 w-5" />}
-                title="Sem horários disponíveis"
-                description="Não existem horários que acomodem todos os serviços neste dia. Experimente outra data."
+                title={requestCopy.schedule.emptyTitle}
+                description={requestCopy.schedule.emptyDescription}
               /> : <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5">{preview?.starts.map((instant) => {
                 const isSelected = startTime === instant;
                 return <button
@@ -420,8 +446,8 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
               })}</div>}
             </div>
             {preview && <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-secondary/55 px-4 py-3 text-sm text-secondary-foreground">
-              <span>Duração total: <strong>{preview.durationMinutes} min</strong></span>
-              <span>Total: <strong className="text-primary">{money(preview.totalPriceCents)}</strong></span>
+              <span>{requestCopy.schedule.totalDuration}: <strong>{preview.durationMinutes} min</strong></span>
+              <span>{requestCopy.schedule.totalPrice}: <strong className="text-primary">{money(preview.totalPriceCents)}</strong></span>
             </div>}
           </div>
         </div>
@@ -430,35 +456,40 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
       <section className="rounded-3xl border border-border bg-card p-4 shadow-sm sm:p-6">
         <StepHeading
           number={3}
-          title="Os seus dados"
-          description="O pedido só fica confirmado depois da aprovação do estabelecimento."
+          title={requestCopy.customer.title}
+          description={requestCopy.customer.instruction}
           icon={<UserRound className="h-5 w-5" />}
         />
         <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           <div className="space-y-2">
-            <Label htmlFor="request-name" className="text-sm font-semibold text-foreground">Nome <span aria-hidden="true">*</span></Label>
+            <Label htmlFor="request-name" className="text-sm font-semibold text-foreground">{requestCopy.customer.name} <span aria-hidden="true">*</span></Label>
             <Input id="request-name" className="h-11 border-border bg-background text-foreground shadow-sm" autoComplete="name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="request-email" className="text-sm font-semibold text-foreground">Email <span className="font-normal text-muted-foreground">(opcional)</span></Label>
+            <Label htmlFor="request-email" className="text-sm font-semibold text-foreground">{requestCopy.customer.email} <span className="font-normal text-muted-foreground">({requestCopy.customer.optional})</span></Label>
             <Input id="request-email" className="h-11 border-border bg-background text-foreground shadow-sm" type="email" autoComplete="email" maxLength={120} value={email} onChange={(event) => setEmail(event.target.value)} />
           </div>
           <div className="space-y-2 md:col-span-2 lg:col-span-1">
-            <Label htmlFor="request-phone" className="text-sm font-semibold text-foreground">Telemóvel <span aria-hidden="true">*</span></Label>
+            <Label htmlFor="request-phone" className="text-sm font-semibold text-foreground">{requestCopy.customer.phone} <span aria-hidden="true">*</span></Label>
             <InternationalPhoneInput id="request-phone" value={phone} countryCode={phoneCountry} onValueChange={(value, country) => { setPhone(value); setPhoneCountry(country); }} />
           </div>
         </div>
       </section>
 
       <div className="flex flex-col items-stretch justify-between gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center">
-        <p className="text-sm leading-relaxed text-muted-foreground">Revise os serviços, o profissional e o horário antes de enviar.</p>
+        <div className="space-y-1">
+          <p className="text-sm font-medium leading-relaxed text-foreground">{requestReviewText(selections.length)}</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">{requestCopy.approvalNotice}</p>
+        </div>
         <Button
           variant="gold"
           className="h-11 w-full px-6 disabled:cursor-not-allowed disabled:border disabled:border-border disabled:bg-secondary disabled:text-foreground disabled:opacity-100 sm:w-auto"
           disabled={submitting || !selectedStart}
           onClick={submit}
         >
-          {submitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />A enviar...</> : <><Scissors className="mr-2 h-4 w-4" />Enviar pedido</>}
+          {submitting
+            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{requestCopy.submitting}</>
+            : <><Scissors className="mr-2 h-4 w-4" />{requestCopy.submit}</>}
         </Button>
       </div>
     </main>
