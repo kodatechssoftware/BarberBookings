@@ -3,8 +3,12 @@ import test from "node:test";
 import { calendarDateTimeToInstant, getCalendarDateTimeParts } from "../../server/calendar-timezone";
 import {
   assertMultiServicePlanFitsWorkingPeriods,
+  assertParallelServiceCompatibility,
   MultiServiceAppointmentValidationError,
+  planAppointmentServices,
   planMultiServiceAppointment,
+  planParallelAppointmentServices,
+  serviceCompatibilityKey,
 } from "../../shared/multi-service-appointments";
 
 const service = (overrides: Partial<{
@@ -15,6 +19,7 @@ const service = (overrides: Partial<{
   durationMinutes: number;
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
+  executionStage: number;
 }> = {}) => ({
   serviceId: 1,
   barberId: 1,
@@ -24,6 +29,59 @@ const service = (overrides: Partial<{
   bufferBeforeMinutes: 0,
   bufferAfterMinutes: 0,
   ...overrides,
+});
+
+test("plans two and three simultaneous services using the longest duration", () => {
+  const compatible = new Set([
+    serviceCompatibilityKey(1, 2),
+    serviceCompatibilityKey(1, 3),
+    serviceCompatibilityKey(2, 3),
+  ]);
+  const plan = planParallelAppointmentServices("2030-01-10T14:00:00.000Z", [
+    service({ serviceId: 1, barberId: 1, durationMinutes: 30 }),
+    service({ serviceId: 2, barberId: 2, durationMinutes: 60 }),
+    service({ serviceId: 3, barberId: 3, durationMinutes: 90 }),
+  ], compatible, 1);
+
+  assert.deepEqual(plan.segments.map((segment) => segment.executionStage), [0, 0, 0]);
+  assert.deepEqual(plan.segments.map((segment) => segment.startTime.toISOString()), [
+    "2030-01-10T14:00:00.000Z",
+    "2030-01-10T14:00:00.000Z",
+    "2030-01-10T14:00:00.000Z",
+  ]);
+  assert.equal(plan.durationMinutes, 90);
+  assert.equal(plan.endTime.toISOString(), "2030-01-10T15:30:00.000Z");
+});
+
+test("plans hybrid stages and keeps the next stage after the longest parallel service", () => {
+  const plan = planAppointmentServices("2030-01-10T14:00:00.000Z", [
+    service({ serviceId: 1, barberId: 1, durationMinutes: 30, executionStage: 0 }),
+    service({ serviceId: 2, barberId: 2, durationMinutes: 60, executionStage: 0 }),
+    service({ serviceId: 3, barberId: 1, durationMinutes: 45, executionStage: 1 }),
+  ], 1);
+
+  assert.deepEqual(plan.segments.map((segment) => segment.startTime.toISOString()), [
+    "2030-01-10T14:00:00.000Z",
+    "2030-01-10T14:00:00.000Z",
+    "2030-01-10T15:00:00.000Z",
+  ]);
+  assert.equal(plan.durationMinutes, 105);
+});
+
+test("rejects the same professional and incomplete pair compatibility in one stage", () => {
+  const pair = new Set([serviceCompatibilityKey(1, 2)]);
+  assert.throws(() => planAppointmentServices(new Date(), [
+    service({ serviceId: 1, barberId: 1, executionStage: 0 }),
+    service({ serviceId: 2, barberId: 1, executionStage: 0 }),
+  ], 1), (error: unknown) => error instanceof MultiServiceAppointmentValidationError
+    && error.code === "MULTI_SERVICE_PARALLEL_BARBER_CONFLICT");
+
+  assert.throws(() => assertParallelServiceCompatibility([
+    service({ serviceId: 1, barberId: 1, executionStage: 0 }),
+    service({ serviceId: 2, barberId: 2, executionStage: 0 }),
+    service({ serviceId: 3, barberId: 3, executionStage: 0 }),
+  ], pair), (error: unknown) => error instanceof MultiServiceAppointmentValidationError
+    && error.code === "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID");
 });
 
 test("plans sequential services and preserves immutable duration, buffer and price snapshots", () => {

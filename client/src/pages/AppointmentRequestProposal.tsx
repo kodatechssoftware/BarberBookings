@@ -14,7 +14,7 @@ type ProposalPreview = {
   requestStatus: string;
   proposedStartTime: string;
   expiresAt: string;
-  services: Array<{ position: number; name: string; durationMinutes: number; priceCents: number }>;
+  services: Array<{ position: number; executionStage: number; name: string; durationMinutes: number; priceCents: number }>;
 };
 
 function getFragmentToken() {
@@ -97,8 +97,8 @@ export default function AppointmentRequestProposal() {
             </div>
             <div className="space-y-3">
               <h2 className="font-semibold text-foreground">{data.services.length === 1 ? "Serviço" : "Serviços"}</h2>
-              {data.services.map((service) => <div key={service.position} className="flex justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2.5 text-sm">
-                <span className="text-foreground">{service.position + 1}. {service.name}<small className="mt-0.5 block text-muted-foreground">{service.durationMinutes} min</small></span>
+              {data.services.map((service, index) => <div key={service.position} className="flex justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2.5 text-sm">
+                <span className="text-foreground">{service.position + 1}. {service.name}<small className="mt-0.5 block text-muted-foreground">{service.durationMinutes} min{index > 0 && service.executionStage === data.services[index - 1].executionStage ? " · em simultâneo" : ""}</small></span>
                 <strong className="shrink-0 text-foreground">{money(service.priceCents)}</strong>
               </div>)}
               <div className="flex justify-between border-t border-border pt-3 font-bold text-foreground">

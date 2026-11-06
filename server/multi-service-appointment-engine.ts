@@ -3,10 +3,14 @@ import { pool as applicationPool } from "./db";
 import { parseBeautyV2MasterSwitch } from "@shared/business/v2-features";
 import type { BeautyV2FeatureName } from "@shared/business/v2-features";
 import {
+  assertParallelServiceCompatibility,
+  assignParallelExecutionStages,
   assertMultiServicePlanFitsWorkingPeriods,
   MIN_MULTI_SERVICE_SEGMENTS,
   MultiServiceAppointmentValidationError,
+  planAppointmentServices,
   planSequentialAppointmentServices,
+  serviceCompatibilityKey,
   type MultiServiceAppointmentPlan,
   type MultiServiceSegmentTerms,
   type MultiServiceWorkingPeriod,
@@ -38,6 +42,7 @@ export type StoredMultiServiceSegment = {
   id: number;
   appointmentId: number;
   position: number;
+  executionStage: number;
   serviceId: number;
   barberId: number;
   startTime: Date;
@@ -68,6 +73,7 @@ function mapStoredSegment(row: {
   id: number;
   appointment_id: number;
   position: number;
+  execution_stage: number | null;
   service_id: number;
   barber_id: number;
   start_time: Date;
@@ -81,6 +87,7 @@ function mapStoredSegment(row: {
     id: Number(row.id),
     appointmentId: Number(row.appointment_id),
     position: Number(row.position),
+    executionStage: Number(row.execution_stage ?? row.position),
     serviceId: Number(row.service_id),
     barberId: Number(row.barber_id),
     startTime: new Date(row.start_time),
@@ -225,6 +232,77 @@ export async function assertBeautyV2FeaturesEnabledWithClient(
   if (requiredFeatures.some((feature) => !effective.get(feature))) throw new MultiServiceFeatureDisabledError();
 }
 
+export async function isBeautyV2FeatureEnabledWithClient(
+  client: PoolClient,
+  locationId: number,
+  featureName: BeautyV2FeatureName,
+  options: MultiServiceEngineOptions,
+  table: (name: string) => string,
+) {
+  const masterEnabled = options.masterEnabled
+    ?? parseBeautyV2MasterSwitch(process.env.BEAUTY_V2_FEATURES_ENABLED);
+  const vertical = (options.businessVertical ?? process.env.BUSINESS_VERTICAL ?? "barber").trim().toLowerCase();
+  if (!masterEnabled || vertical !== "beauty") return false;
+  const result = await client.query<{ location_id: number | null; enabled: boolean }>(`
+    SELECT location_id, enabled FROM ${table("business_feature_settings")}
+    WHERE feature_name = $2 AND (location_id IS NULL OR location_id = $1)
+    ORDER BY location_id NULLS FIRST
+    FOR SHARE
+  `, [locationId, featureName]);
+  let enabled = false;
+  for (const row of result.rows) enabled = Boolean(row.enabled);
+  return enabled;
+}
+
+export async function loadParallelServiceCompatibilityWithClient(
+  client: PoolClient,
+  locationId: number,
+  serviceIds: readonly number[],
+  table: (name: string) => string,
+) {
+  const uniqueIds = Array.from(new Set(serviceIds));
+  if (uniqueIds.length < 2) return new Set<string>();
+  const result = await client.query<{ first_service_id: number; second_service_id: number }>(`
+    SELECT first_service_id, second_service_id
+    FROM ${table("parallel_service_compatibilities")}
+    WHERE location_id = $1
+      AND first_service_id = ANY($2::int[])
+      AND second_service_id = ANY($2::int[])
+    FOR SHARE
+  `, [locationId, uniqueIds]);
+  return new Set(result.rows.map((row) => serviceCompatibilityKey(
+    Number(row.first_service_id),
+    Number(row.second_service_id),
+  )));
+}
+
+export async function resolveExecutionTermsWithClient(
+  client: PoolClient,
+  locationId: number,
+  terms: readonly MultiServiceSegmentTerms[],
+  options: MultiServiceEngineOptions,
+  table: (name: string) => string,
+  preserveStages: boolean,
+) {
+  const parallelEnabled = await isBeautyV2FeatureEnabledWithClient(
+    client, locationId, "parallelServiceScheduling", options, table,
+  );
+  if (!parallelEnabled) {
+    if (preserveStages && terms.some((term, position) => (term.executionStage ?? position) !== position)) {
+      throw new MultiServiceFeatureDisabledError();
+    }
+    return terms.map((term, position) => ({ ...term, executionStage: position }));
+  }
+  const pairs = await loadParallelServiceCompatibilityWithClient(
+    client, locationId, terms.map((term) => term.serviceId), table,
+  );
+  const staged = preserveStages
+    ? terms.map((term, position) => ({ ...term, executionStage: term.executionStage ?? position }))
+    : assignParallelExecutionStages(terms, pairs);
+  assertParallelServiceCompatibility(staged, pairs);
+  return staged;
+}
+
 export async function resolveAppointmentServiceTermsWithClient(
   client: PoolClient,
   locationId: number,
@@ -364,7 +442,8 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
     `, [input.locationId]);
     if (!location.rows[0]) throw new MultiServiceScopeError("A localização não está disponível.");
     const timeZone = location.rows[0].timezone;
-    const terms = await resolveAppointmentServiceTermsWithClient(client, input.locationId, input.services, table);
+    const currentTerms = await resolveAppointmentServiceTermsWithClient(client, input.locationId, input.services, table);
+    const terms = await resolveExecutionTermsWithClient(client, input.locationId, currentTerms, options, table, false);
     const [year, month, day] = input.date.split("-").map(Number);
     const bounds = getCalendarDateBounds(input.date, timeZone);
     const barberIds = Array.from(new Set(input.services.map((selection) => selection.barberId)));
@@ -405,7 +484,7 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
       if (represented.year !== year || represented.month !== month || represented.day !== day
         || represented.hour !== Math.floor(minute / 60) || represented.minute !== minute % 60
         || startTime <= now) continue;
-      const plan = planSequentialAppointmentServices(startTime, terms, 1);
+      const plan = planAppointmentServices(startTime, terms, 1);
       try {
         const periods = await resolveWorkingPeriods(client, plan, input.locationId, timeZone, table, {
           shopRows: shopAvailability.rows,
@@ -423,7 +502,7 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
       if (!conflict) starts.push(startTime.toISOString());
     }
     await client.query("COMMIT");
-    const plan = planSequentialAppointmentServices(
+    const plan = planAppointmentServices(
       calendarDateTimeToInstant({ year, month, day, hour: 12, minute: 0, second: 0 }, timeZone),
       terms,
       1,
@@ -436,8 +515,10 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
       totalPriceCents: plan.totalPriceCents,
       segments: plan.segments.map((segment) => ({
         position: segment.position,
+        executionStage: segment.executionStage,
         serviceId: segment.serviceId,
         barberId: segment.barberId,
+        startOffsetMinutes: Math.round((segment.startTime.getTime() - plan.startTime.getTime()) / 60_000),
         durationMinutes: segment.durationMinutes,
         serviceName: segment.serviceNameSnapshot,
         priceCents: segment.servicePriceCentsSnapshot,
@@ -473,7 +554,7 @@ export async function createSequentialAppointmentInTransaction(
     input.services,
     table,
   );
-  const terms = options.termsSnapshot
+  const snapshotTerms = options.termsSnapshot
     ? options.termsSnapshot.map((snapshot, index) => {
         const current = currentTerms[index];
         if (!current || current.serviceId !== snapshot.serviceId || current.barberId !== snapshot.barberId) {
@@ -482,8 +563,11 @@ export async function createSequentialAppointmentInTransaction(
         return { ...snapshot };
       })
     : currentTerms;
-  if (terms.length !== currentTerms.length) throw new MultiServiceScopeError();
-  const plan = planSequentialAppointmentServices(
+  if (snapshotTerms.length !== currentTerms.length) throw new MultiServiceScopeError();
+  const terms = await resolveExecutionTermsWithClient(
+    client, input.locationId, snapshotTerms, options, table, Boolean(options.termsSnapshot),
+  );
+  const plan = planAppointmentServices(
     input.startTime,
     terms,
     options.minimumSegments ?? MIN_MULTI_SERVICE_SEGMENTS,
@@ -581,6 +665,7 @@ export async function createSequentialAppointmentInTransaction(
         id: number;
         appointment_id: number;
         position: number;
+        execution_stage: number | null;
         service_id: number;
         barber_id: number;
         start_time: Date;
@@ -591,16 +676,17 @@ export async function createSequentialAppointmentInTransaction(
         service_price_cents_snapshot: number;
       }>(`
         INSERT INTO ${table("appointment_service_segments")} (
-          appointment_id, position, service_id, barber_id, start_time, duration_minutes,
+          appointment_id, position, execution_stage, service_id, barber_id, start_time, duration_minutes,
           buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
           service_name_snapshot, service_price_cents_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id, appointment_id, position, service_id, barber_id, start_time, duration_minutes,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id, appointment_id, position, execution_stage, service_id, barber_id, start_time, duration_minutes,
           buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
           service_name_snapshot, service_price_cents_snapshot
       `, [
         appointmentId,
         segment.position,
+        segment.executionStage,
         segment.serviceId,
         segment.barberId,
         utcTimestamp(segment.startTime),
@@ -670,7 +756,7 @@ export async function getMultiServiceAppointmentSegmentsWithPool(
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
   const schema = quoteIdentifier(schemaName);
   const result = await databasePool.query<Parameters<typeof mapStoredSegment>[0]>(`
-    SELECT id, appointment_id, position, service_id, barber_id, start_time, duration_minutes,
+    SELECT id, appointment_id, position, execution_stage, service_id, barber_id, start_time, duration_minutes,
       buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
       service_name_snapshot, service_price_cents_snapshot
     FROM ${schema}.${quoteIdentifier("appointment_service_segments")}

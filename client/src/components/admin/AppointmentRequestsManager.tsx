@@ -31,6 +31,7 @@ type AppointmentRequest = {
   createdAt: string;
   segments: Array<{
     position: number;
+    executionStage: number;
     serviceId: number;
     barberId: number;
     startTime: string;
@@ -171,7 +172,7 @@ export function AppointmentRequestsManager({ locationId, timeZone }: { locationI
             <div><p className="text-gray-400">Cliente</p><p className="font-semibold">{detail.customerName}</p><p>{detail.customerPhone}</p><p>{detail.customerEmail}</p></div>
             <div><p className="text-gray-400">Horário pedido</p><p className="font-semibold">{dateTime(detail.requestedStartTime)}</p><p className="mt-2 text-gray-400">Estado</p><p>{statusLabels[detail.status]}</p></div>
           </div>
-          <div className="space-y-2"><h3 className="font-semibold">Serviços</h3>{detail.segments.map((segment) => <div key={`${segment.position}-${segment.serviceId}`} className="flex justify-between gap-4 rounded-lg bg-background/50 p-3 text-sm"><span>{segment.position + 1}. {segment.serviceNameSnapshot}<small className="block text-gray-400">{segment.durationMinutes} min · profissional #{segment.barberId}</small></span><strong>{money(segment.servicePriceCentsSnapshot)}</strong></div>)}<div className="flex justify-between border-t border-white/10 pt-2 font-bold"><span>Total</span><span className="text-primary">{money(total)}</span></div></div>
+          <div className="space-y-2"><h3 className="font-semibold">Serviços</h3>{detail.segments.map((segment, index) => <div key={`${segment.position}-${segment.serviceId}`} className="flex justify-between gap-4 rounded-lg bg-background/50 p-3 text-sm"><span>{segment.position + 1}. {segment.serviceNameSnapshot}<small className="block text-gray-400">{segment.durationMinutes} min · profissional #{segment.barberId}{index > 0 && segment.executionStage === detail.segments[index - 1].executionStage ? " · em simultâneo" : ""}</small></span><strong>{money(segment.servicePriceCentsSnapshot)}</strong></div>)}<div className="flex justify-between border-t border-white/10 pt-2 font-bold"><span>Total</span><span className="text-primary">{money(total)}</span></div></div>
           {detail.activeProposal && <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm"><p className="font-semibold">Proposta ativa</p><p>{dateTime(detail.activeProposal.proposedStartTime)} · expira {dateTime(detail.activeProposal.expiresAt)}</p></div>}
           {(detail.history?.length ?? 0) > 0 && <div className="space-y-2"><h3 className="font-semibold">Histórico</h3>{detail.history!.map((event) => <div key={event.id} className="flex gap-3 border-l border-white/10 pl-3 text-xs"><Clock className="mt-0.5 h-3.5 w-3.5 text-primary" /><span><strong>{event.event_type.replaceAll("_", " ")}</strong><small className="block text-gray-400">{dateTime(event.created_at)} · {event.actor_type}</small>{event.reason && <small className="block text-gray-300">{event.reason}</small>}</span></div>)}</div>}
           {(detail.status === "pending" || detail.status === "proposed") && <div className="grid gap-2 sm:grid-cols-3">

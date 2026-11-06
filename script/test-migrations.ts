@@ -36,6 +36,7 @@ const preVoucherPaymentMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "
 const preServiceLocationOffersMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-service-location-offers-"));
 const preBarberServicesLocationMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-barber-services-location-"));
 const preBarberCompensationMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-barber-compensation-"));
+const preParallelSchedulingMigrationsDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migrations-before-parallel-scheduling-"));
 const isolatedBarberServicesLocationMigrationDirectory = await mkdtemp(path.join(tmpdir(), "barberbookings-migration-barber-services-location-only-"));
 const migrationsDirectory = path.resolve(process.cwd(), "migrations");
 await copyFile(
@@ -149,6 +150,21 @@ for (const file of [
   "0013_barber_services_location.sql",
 ]) {
   await copyFile(path.join(migrationsDirectory, file), path.join(preBarberCompensationMigrationsDirectory, file));
+}
+for (const file of [
+  "0014_barber_location_compensation.sql",
+  "0015_auth_users_foundation.sql",
+  "0016_blacklist_location_scope.sql",
+  "0017_service_buffers.sql",
+  "0018_recurring_expense_management.sql",
+  "0020_commercial_extras_internal_costs.sql",
+  "0021_appointment_availability_windows.sql",
+  "0022_appointment_reminder_schedule.sql",
+  "0023_beauty_v2_feature_settings.sql",
+  "0024_multi_service_appointment_engine.sql",
+  "0025_appointment_request_approval.sql",
+]) {
+  await copyFile(path.join(migrationsDirectory, file), path.join(preParallelSchedulingMigrationsDirectory, file));
 }
 const port = await availablePort();
 const embedded = new EmbeddedPostgres({ databaseDir, port, user: "postgres", password: "migration-test", persistent: false,
@@ -281,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 24,
-    "an empty legacy baseline must apply every migration through 0025");
+  assert.equal(freshRun.applied.length, 25,
+    "an empty legacy baseline must apply every migration through 0026");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -296,6 +312,15 @@ try {
     "the appointment-request workflow must not create requests automatically");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_request_proposals")}`)).rows[0].count), 0,
     "the appointment-request workflow must not create proposals automatically");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("parallel_service_compatibilities")}`)).rows[0].count), 0,
+    "parallel service compatibility must be explicit and start empty");
+  for (const tableName of ["appointment_service_segments", "appointment_request_segments"]) {
+    const executionStage = (await pool.query(`
+      SELECT is_nullable FROM information_schema.columns
+      WHERE table_schema = $1 AND table_name = $2 AND column_name = 'execution_stage'
+    `, [freshSchema, tableName])).rows[0];
+    assert.deepEqual(executionStage, { is_nullable: "YES" }, `${tableName} must use an additive nullable execution-stage snapshot`);
+  }
   const freshExtrasColumns = (await pool.query(`
     SELECT column_name, is_nullable
     FROM information_schema.columns
@@ -360,7 +385,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 24);
+  assert.equal(secondFreshRun.alreadyApplied, 25);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1080,7 +1105,7 @@ try {
   const compensationMigrationRun = await runSchemaMigrations(pool, {
     schemaName: schema,
     environment,
-    migrationsDirectory,
+    migrationsDirectory: preParallelSchedulingMigrationsDirectory,
   });
   assert.deepEqual(compensationMigrationRun.applied, [
     "0014_barber_location_compensation.sql",
@@ -1095,7 +1120,7 @@ try {
     "0024_multi_service_appointment_engine.sql",
     "0025_appointment_request_approval.sql",
   ]);
-  assert.equal(compensationMigrationRun.alreadyApplied, 13);
+  assert.equal(compensationMigrationRun.alreadyApplied, 0);
   assert.deepEqual((await pool.query(`
     SELECT quantity FROM ${table("appointment_extras")}
     WHERE appointment_id = 2 AND extra_definition_id = $1
@@ -1138,6 +1163,68 @@ try {
     "the 0024 upgrade must not infer service segments from legacy summary fields");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("appointment_requests")}`)).rows[0].count), 0,
     "the 0025 upgrade must not infer appointment requests from historical appointments");
+
+  const preParallelClient = await pool.connect();
+  let preParallelParent: { id: number };
+  try {
+    await preParallelClient.query("BEGIN");
+    preParallelParent = (await preParallelClient.query(`
+      INSERT INTO ${table("appointments")} (
+        location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token, service_name_snapshot, service_price_cents_snapshot,
+        buffer_before_minutes_snapshot, buffer_after_minutes_snapshot
+      ) VALUES ($1, 1, 1, '2045-01-03 10:00:00', 'QA pre-0026 multi-service', '910000026',
+        105, 'booked', 'qa-pre-0026-multi', 'Serviço original + Serviço oculto', 4250, 0, 0)
+      RETURNING id
+    `, [defaultLocation.id])).rows[0];
+    await preParallelClient.query(`INSERT INTO ${table("appointment_service_sets")} (appointment_id) VALUES ($1)`, [preParallelParent.id]);
+    await preParallelClient.query(`
+      INSERT INTO ${table("appointment_service_segments")} (
+        appointment_id, position, service_id, barber_id, start_time, duration_minutes,
+        buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
+        service_name_snapshot, service_price_cents_snapshot
+      ) VALUES
+        ($1, 0, 1, 1, '2045-01-03 10:00:00', 30, 0, 0, 'Serviço original', 1500),
+        ($1, 1, 2, 1, '2045-01-03 10:30:00', 75, 0, 0, 'Serviço oculto', 2750)
+    `, [preParallelParent.id]);
+    await preParallelClient.query("COMMIT");
+  } catch (error) {
+    await preParallelClient.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    preParallelClient.release();
+  }
+
+  const parallelSchedulingMigrationRun = await runSchemaMigrations(pool, {
+    schemaName: schema,
+    environment,
+    migrationsDirectory,
+  });
+  assert.deepEqual(parallelSchedulingMigrationRun.applied, ["0026_parallel_service_scheduling.sql"]);
+  assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
+  assert.deepEqual((await pool.query(`
+    SELECT position, execution_stage FROM ${table("appointment_service_segments")}
+    WHERE appointment_id = $1 ORDER BY position
+  `, [preParallelParent.id])).rows, [
+    { position: 0, execution_stage: 0 },
+    { position: 1, execution_stage: 1 },
+  ], "the 0026 upgrade must preserve existing sequential appointments by backfilling stage = position");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("parallel_service_compatibilities")}
+  `)).rows[0].count), 0, "the 0026 upgrade must not infer compatibility between services");
+  const compatibilityOnlyLocation = (await pool.query(`
+    INSERT INTO ${table("locations")} (name, slug, address, timezone, is_active, is_default)
+    VALUES ('QA compatibility scope', 'qa-compatibility-scope', 'QA address', 'Europe/Lisbon', true, false)
+    RETURNING id
+  `)).rows[0];
+  await assert.rejects(pool.query(`
+    INSERT INTO ${table("parallel_service_compatibilities")}
+      (location_id, first_service_id, second_service_id)
+    VALUES ($1, 1, 2)
+  `, [compatibilityOnlyLocation.id]), (error: any) => error?.code === "23503",
+  "parallel compatibility must reference two services offered by the same location");
+  await pool.query(`DELETE FROM ${table("locations")} WHERE id = $1`, [compatibilityOnlyLocation.id]);
+  await pool.query(`DELETE FROM ${table("appointments")} WHERE id = $1`, [preParallelParent.id]);
 
   const windowParent = (await pool.query(`
     INSERT INTO ${table("appointments")} (
@@ -1416,7 +1503,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 24);
+  assert.equal(secondCompensationRun.alreadyApplied, 25);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -1449,12 +1536,16 @@ try {
     "appointment_service_segments_appointment_position_unique",
     "appointment_service_segments_appointment_idx",
     "appointment_service_segments_barber_time_idx",
+    "appointment_service_segments_stage_idx",
     "appointment_requests_location_idempotency_unique",
     "appointment_requests_appointment_unique",
     "appointment_requests_location_status_idx",
     "appointment_request_segments_request_position_unique",
     "appointment_request_segments_request_idx",
     "appointment_request_segments_barber_time_idx",
+    "appointment_request_segments_stage_idx",
+    "parallel_service_compatibilities_pkey",
+    "parallel_service_compatibilities_location_idx",
     "appointment_request_proposals_request_revision_unique",
     "appointment_request_proposals_request_command_unique",
     "appointment_request_proposals_token_unique",
@@ -2184,7 +2275,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0025, default-off Beauty v2 feature settings, additive multi-service and appointment-request workflows, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0026, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
@@ -2200,5 +2291,6 @@ try {
   await rm(preServiceLocationOffersMigrationsDirectory, { recursive: true, force: true });
   await rm(preBarberServicesLocationMigrationsDirectory, { recursive: true, force: true });
   await rm(preBarberCompensationMigrationsDirectory, { recursive: true, force: true });
+  await rm(preParallelSchedulingMigrationsDirectory, { recursive: true, force: true });
   await rm(isolatedBarberServicesLocationMigrationDirectory, { recursive: true, force: true });
 }

@@ -1,21 +1,22 @@
 # Beauty v2 - foundation and compatibility contract
 
-This document freezes the technical rules for Beauty v2. It does not enable or
-implement any of the six product features. Beauty v1 remains available at the
-immutable `beauty-v1-stable-2026-11-04` tag.
+This document freezes the technical rules for Beauty v2. Implemented
+capabilities remain guarded by the master switch and persisted feature flags;
+none is enabled by a migration. Beauty v1 remains available at the immutable
+`beauty-v1-stable-2026-11-04` tag.
 
 Phase 2 data-engine details are documented in
 [`beauty-v2-multi-service-engine.md`](./beauty-v2-multi-service-engine.md). The
-public and Admin multi-service interfaces remain out of scope and disabled.
+public request and Admin read/configuration surfaces are implemented behind the
+same default-off gates.
 
 Phase 3 request-workflow details are documented in
-[`beauty-v2-appointment-requests.md`](./beauty-v2-appointment-requests.md). This
-adds API and transactional domain support only; no final public or Admin UI is
-enabled by this phase.
+[`beauty-v2-appointment-requests.md`](./beauty-v2-appointment-requests.md).
 
 ## Feature flag contract
 
-The six Beauty v2 capabilities have persisted settings in
+The original six Beauty v2 capabilities, plus the independently controlled
+`parallelServiceScheduling` evolution, have persisted settings in
 `business_feature_settings`. Missing rows and new rows default to `false`.
 Settings may be installation-wide (`location_id IS NULL`) or location-specific;
 a location-specific row takes precedence.

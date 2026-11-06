@@ -9,7 +9,7 @@ import type {
 import type { AppointmentRequestStatus } from "@shared/schema";
 import {
   MultiServiceAppointmentValidationError,
-  planSequentialAppointmentServices,
+  planAppointmentServices,
   type MultiServiceSegmentTerms,
 } from "@shared/multi-service-appointments";
 import { serializeSafeAuditMetadata } from "./audit-log-security";
@@ -20,6 +20,7 @@ import {
   MultiServiceConflictError,
   MultiServiceScopeError,
   resolveAppointmentServiceTermsWithClient,
+  resolveExecutionTermsWithClient,
   type MultiServiceEngineOptions,
   type MultiServiceSelection,
 } from "./multi-service-appointment-engine";
@@ -62,6 +63,7 @@ type SegmentRow = {
   id: number;
   request_id: number;
   position: number;
+  execution_stage: number | null;
   service_id: number;
   barber_id: number;
   start_time: Date;
@@ -157,7 +159,11 @@ function isAvailabilityError(error: unknown) {
   return error instanceof MultiServiceConflictError
     || databaseCode(error) === "23P01"
     || (error instanceof MultiServiceAppointmentValidationError
-      && error.code === "MULTI_SERVICE_OUTSIDE_AVAILABILITY");
+      && [
+        "MULTI_SERVICE_OUTSIDE_AVAILABILITY",
+        "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
+        "MULTI_SERVICE_PARALLEL_BARBER_CONFLICT",
+      ].includes(error.code));
 }
 
 function mapRequest(row: RequestRow, segments: SegmentRow[] = [], proposal?: ProposalRow | null) {
@@ -179,6 +185,7 @@ function mapRequest(row: RequestRow, segments: SegmentRow[] = [], proposal?: Pro
     segments: segments.map((segment) => ({
       id: Number(segment.id),
       position: Number(segment.position),
+      executionStage: Number(segment.execution_stage ?? segment.position),
       serviceId: Number(segment.service_id),
       barberId: Number(segment.barber_id),
       startTime: new Date(segment.start_time),
@@ -208,6 +215,7 @@ function segmentTerms(rows: SegmentRow[]): MultiServiceSegmentTerms[] {
     durationMinutes: Number(segment.duration_minutes),
     bufferBeforeMinutes: Number(segment.buffer_before_minutes_snapshot),
     bufferAfterMinutes: Number(segment.buffer_after_minutes_snapshot),
+    executionStage: Number(segment.execution_stage ?? segment.position),
   }));
 }
 
@@ -470,8 +478,9 @@ export async function createAppointmentRequestWithPool(
     `, [locationId]);
     if (!location.rowCount) throw new MultiServiceScopeError("A localização não está disponível.");
 
-    const terms = await resolveAppointmentServiceTermsWithClient(client, locationId, input.services, table);
-    const plan = planSequentialAppointmentServices(input.startTime, terms, 1);
+    const currentTerms = await resolveAppointmentServiceTermsWithClient(client, locationId, input.services, table);
+    const terms = await resolveExecutionTermsWithClient(client, locationId, currentTerms, options, table, false);
+    const plan = planAppointmentServices(input.startTime, terms, 1);
     const fingerprint = stableFingerprint({
       locationId,
       startTime: plan.startTime.toISOString(),
@@ -531,14 +540,15 @@ export async function createAppointmentRequestWithPool(
     for (const segment of plan.segments) {
       const result = await client.query<SegmentRow>(`
         INSERT INTO ${table("appointment_request_segments")} (
-          request_id, position, service_id, barber_id, start_time, duration_minutes,
+          request_id, position, execution_stage, service_id, barber_id, start_time, duration_minutes,
           buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
           service_name_snapshot, service_price_cents_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
       `, [
         request.id,
         segment.position,
+        segment.executionStage,
         segment.serviceId,
         segment.barberId,
         utcTimestamp(segment.startTime),
@@ -1078,6 +1088,7 @@ export async function inspectAppointmentRequestProposalWithPool(
       expiresAt: new Date(proposal.expires_at),
       services: rows.map((row) => ({
         position: Number(row.position),
+        executionStage: Number(row.execution_stage ?? row.position),
         name: row.service_name_snapshot,
         durationMinutes: Number(row.duration_minutes),
         priceCents: Number(row.service_price_cents_snapshot),

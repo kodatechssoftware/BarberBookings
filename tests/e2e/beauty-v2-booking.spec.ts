@@ -52,7 +52,7 @@ async function contrastRatio(locator: ReturnType<Page["locator"]>) {
 }
 
 async function mockBeautyV2(page: Page) {
-  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true } }));
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true, parallelServiceScheduling: true } }));
   await page.route("**/api/locations", (route) => route.fulfill({ json: [location] }));
   await page.route("**/api/services", (route) => route.fulfill({ json: services }));
   await page.route("**/api/barbers?avatarMode=reference", (route) => route.fulfill({ json: professionals }));
@@ -63,16 +63,18 @@ async function mockBeautyV2(page: Page) {
       const service = services.find((item) => item.id === selection.serviceId)!;
       return {
         position,
+        executionStage: body.services.length > 1 ? 0 : position,
         serviceId: service.id,
         barberId: selection.barberId,
         durationMinutes: service.duration,
         serviceName: service.name,
         priceCents: service.price,
+        startOffsetMinutes: 0,
       };
     });
     await route.fulfill({ json: {
       date: body.date, timeZone: "Europe/Lisbon", starts: ["09:00", "10:30", "12:00", "14:00", "15:30", "17:00"].map((time) => `${body.date}T${time}:00.000Z`),
-      durationMinutes: segments.reduce((total, segment) => total + segment.durationMinutes, 0),
+      durationMinutes: Math.max(...segments.map((segment) => segment.durationMinutes)),
       totalPriceCents: segments.reduce((total, segment) => total + segment.priceCents, 0),
       segments,
     } });
@@ -99,7 +101,8 @@ test("Beauty v2 public flow submits a multi-service request without claiming con
     await page.getByRole("option", { name: "Ana" }).click();
     await page.getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "Beatriz" }).click();
-    await expect(page.getByText("Duração prevista: 75 min")).toBeVisible();
+    await expect(page.getByText("Duração prevista: 45 min")).toBeVisible();
+    await expect(page.getByText("Em simultâneo")).toBeVisible();
     await page.getByRole("button", { name: /10:00/ }).click();
     await page.getByLabel("Nome *").fill("Cliente QA");
     await page.getByLabel("Telemóvel *").fill("912345678");
@@ -276,7 +279,10 @@ test("authorized Admin can review and approve a request from the location-scoped
     customerPhone: "+351912345678", customerEmail: "qa@example.test",
     requestedStartTime: "2030-06-02T09:00:00.000Z", appointmentId: null, refusalReason: null,
     createdAt: "2030-06-01T08:00:00.000Z", activeProposal: null,
-    segments: [{ position: 0, serviceId: 11, barberId: 21, startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 45, serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500 }],
+    segments: [
+      { position: 0, executionStage: 0, serviceId: 11, barberId: 21, startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 45, serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500 },
+      { position: 1, executionStage: 0, serviceId: 12, barberId: 22, startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 30, serviceNameSnapshot: "Nail art", servicePriceCentsSnapshot: 900 },
+    ],
     history: [{ id: 1, event_type: "request_created", actor_type: "client", from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z" }],
   };
   let approved = false;
@@ -294,6 +300,7 @@ test("authorized Admin can review and approve a request from the location-scoped
   await expect(page.getByTestId("appointment-requests-manager")).toBeVisible();
   await page.getByRole("button", { name: "Ver e decidir" }).click();
   await expect(page.getByText("Pedido recebido — ainda não é uma marcação confirmada.")).toBeVisible();
+  await expect(page.getByText("Em simultâneo")).toBeVisible();
   await page.getByRole("button", { name: "Aprovar" }).click();
   await expect.poll(() => approved).toBe(true);
 });

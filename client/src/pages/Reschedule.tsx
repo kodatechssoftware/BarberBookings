@@ -160,7 +160,7 @@ export default function Reschedule() {
     );
   }
 
-  if (appointment.manualOutsideHours && appointment.status === "booked") {
+  if ((appointment.manualOutsideHours || appointment.requiresAssistedReschedule) && appointment.status === "booked") {
     return (
       <div className="public-cycle-shell min-h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="max-w-md">

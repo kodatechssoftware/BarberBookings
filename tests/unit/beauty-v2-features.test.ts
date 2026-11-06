@@ -30,6 +30,7 @@ test("location settings override installation settings only when the master swit
   assert.equal(effective.teamProfiles, true);
   assert.equal(effective.googleReviews, false);
   assert.equal(effective.multiServiceAppointments, false);
+  assert.equal(effective.parallelServiceScheduling, false);
 });
 
 test("the master switch rejects ambiguous configuration", () => {

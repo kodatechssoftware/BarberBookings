@@ -188,7 +188,7 @@ export const businessFeatureSettings = appPgTable("business_feature_settings", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
-  nameCheck: check("business_feature_settings_name_check", sql`${table.featureName} IN ('appointmentRequests', 'teamProfiles', 'googleReviews', 'notificationDeliveryStatus', 'consultationRole', 'multiServiceAppointments')`),
+  nameCheck: check("business_feature_settings_name_check", sql`${table.featureName} IN ('appointmentRequests', 'teamProfiles', 'googleReviews', 'notificationDeliveryStatus', 'consultationRole', 'multiServiceAppointments', 'parallelServiceScheduling')`),
   timestampsCheck: check("business_feature_settings_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
   globalUnique: uniqueIndex("business_feature_settings_global_unique")
     .on(table.featureName)
@@ -388,6 +388,7 @@ export const appointmentServiceSegments = appPgTable("appointment_service_segmen
   appointmentId: integer("appointment_id")
     .references(() => appointmentServiceSets.appointmentId, { onDelete: "cascade" }).notNull(),
   position: integer("position").notNull(),
+  executionStage: integer("execution_stage"),
   serviceId: integer("service_id").references(() => services.id, { onDelete: "restrict" }).notNull(),
   barberId: integer("barber_id").references(() => barbers.id, { onDelete: "restrict" }).notNull(),
   startTime: timestamp("start_time").notNull(),
@@ -399,6 +400,7 @@ export const appointmentServiceSegments = appPgTable("appointment_service_segmen
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   positionCheck: check("appointment_service_segments_position_check", sql`${table.position} >= 0 AND ${table.position} < 12`),
+  executionStageCheck: check("appointment_service_segments_execution_stage_check", sql`${table.executionStage} IS NULL OR ${table.executionStage} BETWEEN 0 AND 11`),
   durationCheck: check("appointment_service_segments_duration_check", sql`${table.durationMinutes} > 0 AND ${table.durationMinutes} <= 1440`),
   buffersCheck: check("appointment_service_segments_buffers_check", sql`
     ${table.bufferBeforeMinutesSnapshot} BETWEEN 0 AND 720
@@ -416,6 +418,30 @@ export const appointmentServiceSegments = appPgTable("appointment_service_segmen
     .on(table.appointmentId, table.position),
   barberTimeIndex: index("appointment_service_segments_barber_time_idx")
     .on(table.barberId, table.startTime),
+}));
+
+export const parallelServiceCompatibilities = appPgTable("parallel_service_compatibilities", {
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "cascade" }).notNull(),
+  firstServiceId: integer("first_service_id").references(() => services.id, { onDelete: "cascade" }).notNull(),
+  secondServiceId: integer("second_service_id").references(() => services.id, { onDelete: "cascade" }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  primaryKey: primaryKey({ columns: [table.locationId, table.firstServiceId, table.secondServiceId] }),
+  firstServiceLocationFk: foreignKey({
+    name: "parallel_service_compatibilities_first_location_fkey",
+    columns: [table.firstServiceId, table.locationId],
+    foreignColumns: [serviceLocations.serviceId, serviceLocations.locationId],
+  }).onDelete("cascade"),
+  secondServiceLocationFk: foreignKey({
+    name: "parallel_service_compatibilities_second_location_fkey",
+    columns: [table.secondServiceId, table.locationId],
+    foreignColumns: [serviceLocations.serviceId, serviceLocations.locationId],
+  }).onDelete("cascade"),
+  orderCheck: check("parallel_service_compatibilities_order_check", sql`${table.firstServiceId} < ${table.secondServiceId}`),
+  timestampsCheck: check("parallel_service_compatibilities_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+  locationIndex: index("parallel_service_compatibilities_location_idx")
+    .on(table.locationId, table.firstServiceId, table.secondServiceId),
 }));
 
 export const appointmentRequests = appPgTable("appointment_requests", {
@@ -462,6 +488,7 @@ export const appointmentRequestSegments = appPgTable("appointment_request_segmen
   id: idColumn("appointment_request_segments_id_seq"),
   requestId: integer("request_id").references(() => appointmentRequests.id, { onDelete: "cascade" }).notNull(),
   position: integer("position").notNull(),
+  executionStage: integer("execution_stage"),
   serviceId: integer("service_id").references(() => services.id, { onDelete: "restrict" }).notNull(),
   barberId: integer("barber_id").references(() => barbers.id, { onDelete: "restrict" }).notNull(),
   startTime: timestamp("start_time").notNull(),
@@ -473,6 +500,7 @@ export const appointmentRequestSegments = appPgTable("appointment_request_segmen
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   positionCheck: check("appointment_request_segments_position_check", sql`${table.position} >= 0 AND ${table.position} < 12`),
+  executionStageCheck: check("appointment_request_segments_execution_stage_check", sql`${table.executionStage} IS NULL OR ${table.executionStage} BETWEEN 0 AND 11`),
   durationCheck: check("appointment_request_segments_duration_check", sql`${table.durationMinutes} > 0 AND ${table.durationMinutes} <= 1440`),
   buffersCheck: check("appointment_request_segments_buffers_check", sql`${table.bufferBeforeMinutesSnapshot} BETWEEN 0 AND 720 AND ${table.bufferAfterMinutesSnapshot} BETWEEN 0 AND 720`),
   nameCheck: check("appointment_request_segments_name_check", sql`btrim(${table.serviceNameSnapshot}) <> '' AND char_length(${table.serviceNameSnapshot}) <= 100`),

@@ -34,6 +34,22 @@ export type WeeklyAgendaAppointment = {
   depositReason?: string | null;
   canManage?: boolean;
   availabilityWindows?: Array<{ startTime: string; endTime: string }>;
+  serviceSegments?: Array<{
+    id: number;
+    appointmentId: number;
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    startTime: string;
+    durationMinutes: number;
+    bufferBeforeMinutesSnapshot: number;
+    bufferAfterMinutesSnapshot: number;
+    serviceNameSnapshot: string;
+    servicePriceCentsSnapshot: number;
+  }>;
+  agendaEntryKey?: string;
+  multiServiceSegmentPosition?: number;
 };
 
 type AppointmentStatusFilter = AppointmentStatus | "all";
@@ -260,6 +276,10 @@ type WeeklyAgendaAppointmentLayout = {
   laneCount: number;
 };
 
+function getWeeklyAppointmentKey(appointment: WeeklyAgendaAppointment) {
+  return appointment.agendaEntryKey ?? String(appointment.id);
+}
+
 type WeeklyAgendaCrowdedGroup = {
   id: string;
   appointments: WeeklyAgendaAppointment[];
@@ -295,7 +315,7 @@ function createAppointmentLayouts(
   startMinutes: number,
   endMinutes: number,
 ) {
-  const layouts = new Map<number, WeeklyAgendaAppointmentLayout>();
+  const layouts = new Map<string, WeeklyAgendaAppointmentLayout>();
   const sortedAppointments = appointments
     .map((appointment) => ({
       appointment,
@@ -311,18 +331,18 @@ function createAppointmentLayouts(
 
   const commitCluster = (cluster: typeof sortedAppointments) => {
     const laneEndMinutes: number[] = [];
-    const clusterLayouts = new Map<number, WeeklyAgendaAppointmentLayout>();
+    const clusterLayouts = new Map<string, WeeklyAgendaAppointmentLayout>();
 
     cluster.forEach((item) => {
       const laneIndex = laneEndMinutes.findIndex((laneEnd) => laneEnd <= item.startMinutes);
       const resolvedLaneIndex = laneIndex === -1 ? laneEndMinutes.length : laneIndex;
       laneEndMinutes[resolvedLaneIndex] = item.endMinutes;
-      clusterLayouts.set(item.appointment.id, { laneIndex: resolvedLaneIndex, laneCount: 1 });
+      clusterLayouts.set(getWeeklyAppointmentKey(item.appointment), { laneIndex: resolvedLaneIndex, laneCount: 1 });
     });
 
     const laneCount = Math.max(1, laneEndMinutes.length);
-    clusterLayouts.forEach((layout, appointmentId) => {
-      layouts.set(appointmentId, { ...layout, laneCount });
+    clusterLayouts.forEach((layout, appointmentKey) => {
+      layouts.set(appointmentKey, { ...layout, laneCount });
     });
   };
 
@@ -733,7 +753,7 @@ export function WeeklyAgenda({
 
     return (
       <button
-        key={appointment.id}
+        key={getWeeklyAppointmentKey(appointment)}
         type="button"
         aria-label={appointmentLabel}
         title={appointmentLabel}
@@ -778,7 +798,7 @@ export function WeeklyAgenda({
 
     return (
       <button
-        key={appointment.id}
+        key={getWeeklyAppointmentKey(appointment)}
         type="button"
         className="grid w-full grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-lg border border-white/10 bg-background/70 p-3 text-left transition hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         onClick={() => {
@@ -932,7 +952,7 @@ export function WeeklyAgenda({
                                       const barber = barbersById.get(appointment.barberId);
                                       return (
                                         <span
-                                          key={appointment.id}
+                                          key={getWeeklyAppointmentKey(appointment)}
                                           className="h-3 w-3 rounded-full border border-background"
                                           style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                         />
@@ -998,7 +1018,7 @@ export function WeeklyAgenda({
                               const barber = barbersById.get(appointment.barberId);
                               return (
                                 <span
-                                  key={appointment.id}
+                                  key={getWeeklyAppointmentKey(appointment)}
                                   className="h-3 w-3 rounded-full border border-background"
                                   style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                 />
@@ -1128,7 +1148,7 @@ export function WeeklyAgenda({
                                   );
                                   const top = getAgendaTopPx(startMinutes, selectedDayAgendaStartMinutes);
                                   const height = getAgendaHeightPx(startMinutes, endMinutes);
-                                  const layout = appointmentLayouts.get(appointment.id) || { laneIndex: 0, laneCount: 1 };
+                                  const layout = appointmentLayouts.get(getWeeklyAppointmentKey(appointment)) || { laneIndex: 0, laneCount: 1 };
                                   const laneWidth = 100 / layout.laneCount;
                                   const service = appointment.serviceId ? servicesById.get(appointment.serviceId) : undefined;
                                   const color = normalizeActiveColor(barber.color);
@@ -1139,7 +1159,7 @@ export function WeeklyAgenda({
 
                                   return (
                                     <button
-                                      key={appointment.id}
+                                      key={getWeeklyAppointmentKey(appointment)}
                                       type="button"
                                       draggable={Boolean(canManageSchedule && appointment.canManage !== false && appointment.status === "booked")}
                                       aria-label={appointmentLabel}
@@ -1317,7 +1337,7 @@ export function WeeklyAgenda({
                                           const barber = barbersById.get(appointment.barberId);
                                           return (
                                             <span
-                                              key={appointment.id}
+                                              key={getWeeklyAppointmentKey(appointment)}
                                               className="h-3 w-3 rounded-full border border-background"
                                               style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                             />
@@ -1332,7 +1352,7 @@ export function WeeklyAgenda({
                                           const barberColor = normalizeActiveColor(barber?.color);
                                           return (
                                             <span
-                                              key={appointment.id}
+                                              key={getWeeklyAppointmentKey(appointment)}
                                               className="flex min-w-0 items-center gap-1 text-[10px] font-semibold leading-tight text-gray-100"
                                             >
                                               <span
@@ -1406,7 +1426,7 @@ export function WeeklyAgenda({
                                         const barberColor = normalizeActiveColor(barber?.color);
                                         return (
                                           <span
-                                            key={appointment.id}
+                                            key={getWeeklyAppointmentKey(appointment)}
                                             className="flex min-w-0 items-center gap-1 text-[10px] font-semibold leading-tight text-gray-100"
                                           >
                                             <span
@@ -1431,7 +1451,7 @@ export function WeeklyAgenda({
                                         const barber = barbersById.get(appointment.barberId);
                                         return (
                                           <span
-                                            key={appointment.id}
+                                            key={getWeeklyAppointmentKey(appointment)}
                                             className="h-3 w-3 rounded-full border border-background"
                                             style={{ backgroundColor: normalizeActiveColor(barber?.color) }}
                                           />
@@ -1453,7 +1473,7 @@ export function WeeklyAgenda({
                             );
                             const top = getAgendaTopPx(startMinutes, globalAgendaStartMinutes);
                             const height = getAgendaHeightPx(startMinutes, endMinutes);
-                            const layout = appointmentLayouts.get(appointment.id) || { laneIndex: 0, laneCount: 1 };
+                            const layout = appointmentLayouts.get(getWeeklyAppointmentKey(appointment)) || { laneIndex: 0, laneCount: 1 };
                             const laneIndex = layout.laneIndex;
                             const laneWidth = 100 / layout.laneCount;
                             const isCompact = height < 34 || laneWidth < 52;
@@ -1466,7 +1486,7 @@ export function WeeklyAgenda({
 
                             return (
                               <button
-                                key={appointment.id}
+                                key={getWeeklyAppointmentKey(appointment)}
                                 type="button"
                                 draggable={Boolean(canManageSchedule && appointment.canManage !== false && appointment.status === "booked")}
                                 aria-label={appointmentLabel}

@@ -93,6 +93,20 @@ type AdminAppointment = {
   availabilityWindows?: Array<{ startTime: string; endTime: string }>;
   notificationRevision?: number;
   seriesId?: string | null;
+  serviceSegments?: Array<{
+    id: number;
+    appointmentId: number;
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    startTime: string;
+    durationMinutes: number;
+    bufferBeforeMinutesSnapshot: number;
+    bufferAfterMinutesSnapshot: number;
+    serviceNameSnapshot: string;
+    servicePriceCentsSnapshot: number;
+  }>;
 };
 
 export type AppointmentMutationPendingAction = {
@@ -1346,6 +1360,16 @@ export function AppointmentDetailsDialog({
   const end = getWeeklyAppointmentEnd(appointment);
   const contactLinks = getAppointmentContactLinks(appointment.customerPhone);
   const serviceName = appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId);
+  const serviceSegments = [...(appointment.serviceSegments ?? [])]
+    .sort((left, right) => left.position - right.position);
+  const isMultiServiceAppointment = serviceSegments.length >= 2;
+  const multiServiceProfessionals = Array.from(new Set(serviceSegments.map((segment) => getBarberName(segment.barberId))));
+  const multiServiceStages = Array.from(new Set(serviceSegments.map((segment) => segment.executionStage)))
+    .map((stage) => ({
+      stage,
+      segments: serviceSegments.filter((segment) => segment.executionStage === stage),
+    }))
+    .sort((left, right) => left.stage - right.stage);
   const finalPrice = appointment.servicePriceCentsSnapshot
     ?? services?.find((service) => service.id === appointment.serviceId)?.price
     ?? 0;
@@ -1473,12 +1497,20 @@ export function AppointmentDetailsDialog({
 
             <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
               <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
-                <p className="text-xs uppercase tracking-widest text-gray-500">{agendaCopy.professional.label}</p>
-                <p className="mt-1 font-semibold text-white">{getBarberName(appointment.barberId)}</p>
+                <p className="text-xs uppercase tracking-widest text-gray-500">
+                  {isMultiServiceAppointment ? "Profissionais" : agendaCopy.professional.label}
+                </p>
+                <p className="mt-1 font-semibold text-white">
+                  {isMultiServiceAppointment ? multiServiceProfessionals.join(" · ") : getBarberName(appointment.barberId)}
+                </p>
               </div>
               <div className="rounded-xl border border-white/10 bg-card px-3 py-2">
-                <p className="text-xs uppercase tracking-widest text-gray-500">Serviço</p>
-                <p className="mt-1 font-semibold text-white">{serviceName}</p>
+                <p className="text-xs uppercase tracking-widest text-gray-500">
+                  {isMultiServiceAppointment ? "Serviços" : "Serviço"}
+                </p>
+                <p className="mt-1 font-semibold text-white">
+                  {isMultiServiceAppointment ? `${serviceSegments.length} serviços` : serviceName}
+                </p>
                 <p className="mt-1 text-xs text-gray-400">
                   {appointmentExtras.length > 0 ? "Preço do serviço" : "Preço final"}: {formatAppointmentPrice(finalPrice)}
                 </p>
@@ -1495,6 +1527,31 @@ export function AppointmentDetailsDialog({
                 </div>
               )}
             </div>
+            {isMultiServiceAppointment && (
+              <div className="mt-3 space-y-3 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3" data-testid="appointment-multi-service-summary">
+                {multiServiceStages.map(({ stage, segments }) => (
+                  <div key={stage}>
+                    <p className="text-[11px] font-bold uppercase tracking-widest text-primary">
+                      {segments.length > 1 ? "Em simultâneo" : stage === 0 ? "Primeiro serviço" : "Serviço seguinte"}
+                    </p>
+                    <div className="mt-1.5 space-y-1.5">
+                      {segments.map((segment) => {
+                        const segmentStart = parseISO(segment.startTime);
+                        const segmentEnd = new Date(segmentStart.getTime() + segment.durationMinutes * 60000);
+                        return (
+                          <div key={segment.id} className="flex flex-col gap-0.5 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <span className="font-semibold text-white">{segment.serviceNameSnapshot} · {getBarberName(segment.barberId)}</span>
+                            <span className="shrink-0 text-xs text-gray-300">
+                              {format(segmentStart, "HH:mm")}–{format(segmentEnd, "HH:mm")} · {segment.durationMinutes} min
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {(appointment.availabilityWindows?.length ?? 0) > 0 && (
               <div
                 className="mt-3 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3 text-sm"
@@ -1519,10 +1576,17 @@ export function AppointmentDetailsDialog({
               </div>
             )}
             <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-card px-3 py-3 text-sm" data-testid="appointment-price-breakdown">
-              <div className="flex items-start justify-between gap-4">
-                <span className="min-w-0 break-words text-gray-300">Serviço</span>
-                <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(finalPrice)}</span>
-              </div>
+              {isMultiServiceAppointment ? serviceSegments.map((segment) => (
+                <div key={segment.id} className="flex items-start justify-between gap-4">
+                  <span className="min-w-0 break-words text-gray-300">{segment.serviceNameSnapshot}</span>
+                  <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(segment.servicePriceCentsSnapshot)}</span>
+                </div>
+              )) : (
+                <div className="flex items-start justify-between gap-4">
+                  <span className="min-w-0 break-words text-gray-300">Serviço</span>
+                  <span className="shrink-0 font-medium text-white">{formatAppointmentPrice(finalPrice)}</span>
+                </div>
+              )}
               {appointmentExtras.length > 0 && (
                 <>
                   <p className="pt-1 text-xs uppercase tracking-widest text-gray-500">{extrasCopy.tabLabel}</p>

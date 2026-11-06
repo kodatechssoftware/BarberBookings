@@ -39,6 +39,27 @@ test("every Admin appointment-request mutation is protected by the team manageme
   }
 });
 
+test("parallel compatibility configuration is location-scoped and capability protected", async () => {
+  const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  assert.ok(source.includes(
+    'app.get("/api/admin/parallel-service-compatibilities", requireCatalogView',
+  ));
+  assert.ok(source.includes(
+    'app.put("/api/admin/parallel-service-compatibilities", requireCatalogLocationManage',
+  ));
+  assert.match(source, /parallel_service_compatibilities[\s\S]*?WHERE location_id = \$1/);
+  assert.match(source, /service_locations[\s\S]*?WHERE location_id = \$1 AND is_active = true/);
+  assert.match(source, /parallel_service_compatibilities_updated/);
+});
+
+test("multi-service agenda reads every professional segment and rescheduling fails safely", async () => {
+  const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  assert.match(source, /attachAppointmentServiceSegments\([\s\S]*?appointmentIncludesProfessional/);
+  assert.match(source, /serviceSegments[\s\S]*?segment\.barberId === effectiveBarberId/);
+  assert.match(source, /app\.post\("\/api\/appointments\/reschedule\/:token"[\s\S]*?MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE/);
+  assert.match(source, /app\.patch\("\/api\/appointments\/:id"[\s\S]*?MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE/);
+});
+
 test("public appointment-request routes are no-store, rate-limited and return safe proposal errors", async () => {
   const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
   assert.match(source, /publicAppointmentRequestRateLimiter/);

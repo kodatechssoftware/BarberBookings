@@ -12,10 +12,12 @@ export type MultiServiceSegmentTerms = {
   durationMinutes: number;
   bufferBeforeMinutes?: number | null;
   bufferAfterMinutes?: number | null;
+  executionStage?: number | null;
 };
 
 export type PlannedMultiServiceSegment = {
   position: number;
+  executionStage: number;
   serviceId: number;
   barberId: number;
   serviceNameSnapshot: string;
@@ -61,7 +63,9 @@ export class MultiServiceAppointmentValidationError extends Error {
     public code:
       | "MULTI_SERVICE_SEGMENTS_INVALID"
       | "MULTI_SERVICE_TERMS_INVALID"
-      | "MULTI_SERVICE_OUTSIDE_AVAILABILITY",
+      | "MULTI_SERVICE_OUTSIDE_AVAILABILITY"
+      | "MULTI_SERVICE_PARALLEL_BARBER_CONFLICT"
+      | "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
     message: string,
   ) {
     super(message);
@@ -137,7 +141,62 @@ export function mergeMultiServiceOccupancyPeriods(
     || left.barberId - right.barberId);
 }
 
-export function planSequentialAppointmentServices(
+export function serviceCompatibilityKey(leftServiceId: number, rightServiceId: number) {
+  return leftServiceId < rightServiceId
+    ? `${leftServiceId}:${rightServiceId}`
+    : `${rightServiceId}:${leftServiceId}`;
+}
+
+export function assignParallelExecutionStages(
+  terms: readonly MultiServiceSegmentTerms[],
+  compatibleServicePairs: ReadonlySet<string>,
+) {
+  const stages: MultiServiceSegmentTerms[][] = [];
+  return terms.map((term) => {
+    let executionStage = stages.findIndex((stage) => stage.every((candidate) =>
+      candidate.barberId !== term.barberId
+      && compatibleServicePairs.has(serviceCompatibilityKey(candidate.serviceId, term.serviceId))));
+    if (executionStage < 0) {
+      executionStage = stages.length;
+      stages.push([]);
+    }
+    stages[executionStage].push(term);
+    return { ...term, executionStage };
+  });
+}
+
+export function assertParallelServiceCompatibility(
+  terms: readonly MultiServiceSegmentTerms[],
+  compatibleServicePairs: ReadonlySet<string>,
+) {
+  const byStage = new Map<number, MultiServiceSegmentTerms[]>();
+  terms.forEach((term, position) => {
+    const stage = term.executionStage ?? position;
+    const entries = byStage.get(stage) ?? [];
+    entries.push(term);
+    byStage.set(stage, entries);
+  });
+  for (const entries of Array.from(byStage.values())) {
+    for (let left = 0; left < entries.length; left += 1) {
+      for (let right = left + 1; right < entries.length; right += 1) {
+        if (entries[left].barberId === entries[right].barberId) {
+          throw new MultiServiceAppointmentValidationError(
+            "MULTI_SERVICE_PARALLEL_BARBER_CONFLICT",
+            "O mesmo profissional não pode realizar dois serviços em simultâneo.",
+          );
+        }
+        if (!compatibleServicePairs.has(serviceCompatibilityKey(entries[left].serviceId, entries[right].serviceId))) {
+          throw new MultiServiceAppointmentValidationError(
+            "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
+            "Os serviços selecionados não estão configurados para decorrer em simultâneo.",
+          );
+        }
+      }
+    }
+  }
+}
+
+export function planAppointmentServices(
   startTimeInput: Date | string,
   terms: readonly MultiServiceSegmentTerms[],
   minimumSegments = 1,
@@ -154,7 +213,36 @@ export function planSequentialAppointmentServices(
     );
   }
 
+  const stages = terms.map((segment, position) => segment.executionStage ?? position);
+  const orderedStages = Array.from(new Set(stages)).sort((left, right) => left - right);
+  if (orderedStages.some((stage, index) => stage !== index)
+    || stages.some((stage) => !integerInRange(stage, 0, MAX_MULTI_SERVICE_SEGMENTS - 1))) {
+    throw new MultiServiceAppointmentValidationError(
+      "MULTI_SERVICE_TERMS_INVALID",
+      "As etapas de execução dos serviços são inválidas.",
+    );
+  }
+  for (const stage of orderedStages) {
+    const professionals = terms
+      .filter((_segment, position) => stages[position] === stage)
+      .map((segment) => segment.barberId);
+    if (new Set(professionals).size !== professionals.length) {
+      throw new MultiServiceAppointmentValidationError(
+        "MULTI_SERVICE_PARALLEL_BARBER_CONFLICT",
+        "O mesmo profissional não pode realizar dois serviços em simultâneo.",
+      );
+    }
+  }
+
+  const stageStarts = new Map<number, number>();
   let cursor = startTime.getTime();
+  for (const stage of orderedStages) {
+    stageStarts.set(stage, cursor);
+    const stageDuration = Math.max(...terms
+      .filter((_segment, position) => stages[position] === stage)
+      .map((segment) => segment.durationMinutes));
+    cursor += stageDuration * 60_000;
+  }
   let totalPriceCents = 0;
   const segments = terms.map((segment, position): PlannedMultiServiceSegment => {
     const name = segment.serviceName.trim();
@@ -173,9 +261,9 @@ export function planSequentialAppointmentServices(
       );
     }
 
-    const segmentStart = new Date(cursor);
-    const segmentEnd = new Date(cursor + segment.durationMinutes * 60_000);
-    cursor = segmentEnd.getTime();
+    const executionStage = stages[position];
+    const segmentStart = new Date(stageStarts.get(executionStage)!);
+    const segmentEnd = new Date(segmentStart.getTime() + segment.durationMinutes * 60_000);
     totalPriceCents += segment.priceCents;
     if (totalPriceCents > MAX_MULTI_SERVICE_PRICE_CENTS) {
       throw new MultiServiceAppointmentValidationError(
@@ -185,6 +273,7 @@ export function planSequentialAppointmentServices(
     }
     return {
       position,
+      executionStage,
       serviceId: segment.serviceId,
       barberId: segment.barberId,
       serviceNameSnapshot: name,
@@ -200,8 +289,8 @@ export function planSequentialAppointmentServices(
   });
 
   const first = segments[0];
-  const last = segments.at(-1)!;
-  const durationMinutes = Math.round((last.endTime.getTime() - startTime.getTime()) / 60_000);
+  const last = segments.reduce((latest, segment) => segment.endTime > latest.endTime ? segment : latest);
+  const durationMinutes = Math.round((cursor - startTime.getTime()) / 60_000);
   if (durationMinutes > MAX_MULTI_SERVICE_DURATION_MINUTES) {
     throw new MultiServiceAppointmentValidationError(
       "MULTI_SERVICE_TERMS_INVALID",
@@ -221,6 +310,29 @@ export function planSequentialAppointmentServices(
     segments,
     occupancyPeriods: mergeMultiServiceOccupancyPeriods(segments),
   };
+}
+
+export function planSequentialAppointmentServices(
+  startTimeInput: Date | string,
+  terms: readonly MultiServiceSegmentTerms[],
+  minimumSegments = 1,
+) {
+  return planAppointmentServices(
+    startTimeInput,
+    terms.map((term, position) => ({ ...term, executionStage: position })),
+    minimumSegments,
+  );
+}
+
+export function planParallelAppointmentServices(
+  startTimeInput: Date | string,
+  terms: readonly MultiServiceSegmentTerms[],
+  compatibleServicePairs: ReadonlySet<string>,
+  minimumSegments = 1,
+) {
+  const staged = assignParallelExecutionStages(terms, compatibleServicePairs);
+  assertParallelServiceCompatibility(staged, compatibleServicePairs);
+  return planAppointmentServices(startTimeInput, staged, minimumSegments);
 }
 
 export function planMultiServiceAppointment(

@@ -47,7 +47,16 @@ type AvailabilityPreview = {
   starts: string[];
   durationMinutes: number;
   totalPriceCents: number;
-  segments: Array<{ position: number; serviceId: number; barberId: number; durationMinutes: number; serviceName: string; priceCents: number }>;
+  segments: Array<{
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    startOffsetMinutes: number;
+    durationMinutes: number;
+    serviceName: string;
+    priceCents: number;
+  }>;
 };
 
 function money(cents: number) {
@@ -169,6 +178,16 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
 
   useEffect(() => setStartTime(null), [dateKey, selectionKey, locationId]);
   const selectedStart = preview?.starts.find((candidate) => candidate === startTime) ?? null;
+  const previewStages = useMemo(() => {
+    const grouped = new Map<number, AvailabilityPreview["segments"]>();
+    for (const segment of preview?.segments ?? []) {
+      const entries = grouped.get(segment.executionStage) ?? [];
+      entries.push(segment);
+      grouped.set(segment.executionStage, entries);
+    }
+    return Array.from(grouped.entries()).sort(([left], [right]) => left - right);
+  }, [preview]);
+  const hasParallelStage = previewStages.some(([, segments]) => segments.length > 1);
   const canAddService = effectiveFeatures.multiServiceAppointments && selections.length < 12;
   const selectedIds = new Set(selections.map((selection) => selection.serviceId));
   const isDateAllowed = (candidate: Date) => Boolean(bookingWindow
@@ -448,6 +467,16 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
             {preview && <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-secondary/55 px-4 py-3 text-sm text-secondary-foreground">
               <span>{requestCopy.schedule.totalDuration}: <strong>{preview.durationMinutes} min</strong></span>
               <span>{requestCopy.schedule.totalPrice}: <strong className="text-primary">{money(preview.totalPriceCents)}</strong></span>
+            </div>}
+            {hasParallelStage && <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4" data-testid="parallel-service-plan">
+              <h4 className="font-semibold text-foreground">Como serão realizados</h4>
+              <div className="mt-3 space-y-2">{previewStages.map(([stage, segments]) => <div key={stage} className="rounded-xl bg-card px-3 py-2.5 text-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                  {segments.length > 1 ? "Ao mesmo tempo" : stage === 0 ? "Primeiro serviço" : "Serviço seguinte"}
+                </p>
+                <p className="mt-1 text-foreground">{segments.map((segment) => segment.serviceName).join(" + ")}</p>
+              </div>)}</div>
+              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">A duração apresentada já considera os serviços que decorrem em simultâneo.</p>
             </div>}
           </div>
         </div>

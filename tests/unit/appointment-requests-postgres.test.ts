@@ -76,6 +76,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "0023_beauty_v2_feature_settings.sql",
       "0024_multi_service_appointment_engine.sql",
       "0025_appointment_request_approval.sql",
+      "0026_parallel_service_scheduling.sql",
     ]) {
       await copyFile(path.resolve("migrations", migration), path.join(migrationsDirectory, migration));
     }
@@ -204,6 +205,77 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
       [multiApproved.request.appointmentId],
     )).rows[0].count), 2);
+
+    await pool.query(`
+      INSERT INTO business_feature_settings (feature_name, location_id, enabled)
+      VALUES ('parallelServiceScheduling', 1, true)
+      ON CONFLICT (feature_name, location_id) WHERE location_id IS NOT NULL
+      DO UPDATE SET enabled = true;
+      INSERT INTO parallel_service_compatibilities (location_id, first_service_id, second_service_id)
+      VALUES (1, 1, 2)
+      ON CONFLICT DO NOTHING
+    `);
+    const parallelRequest = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-01-14T10:00:00.000Z", true),
+      options,
+    );
+    assert.deepEqual(parallelRequest.request.segments.map((segment) => segment.executionStage), [0, 0]);
+    assert.deepEqual(parallelRequest.request.segments.map((segment) => segment.startTime.toISOString()), [
+      "2035-01-14T10:00:00.000Z",
+      "2035-01-14T10:00:00.000Z",
+    ]);
+
+    await pool.query(`DELETE FROM parallel_service_compatibilities WHERE location_id = 1`);
+    await assert.rejects(
+      engine.approveAppointmentRequestWithPool(pool, parallelRequest.request.id, 1, admin, options),
+      (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError,
+      "approval revalidates compatibility changed since the request was submitted",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM appointment_requests WHERE id = $1", [parallelRequest.request.id])).rows[0].status,
+      "pending",
+    );
+    await pool.query(`
+      INSERT INTO parallel_service_compatibilities (location_id, first_service_id, second_service_id)
+      VALUES (1, 1, 2)
+    `);
+    const parallelApproved = await engine.approveAppointmentRequestWithPool(
+      pool,
+      parallelRequest.request.id,
+      1,
+      admin,
+      options,
+    );
+    assert.equal(parallelApproved.appointment.durationMinutes, 45);
+    assert.deepEqual(
+      (await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, parallelApproved.appointment.id))
+        .map((segment) => segment.executionStage),
+      [0, 0],
+    );
+
+    const proposedParallel = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-01-15T10:00:00.000Z", true),
+      options,
+    );
+    const parallelProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, proposedParallel.request.id, 1, {
+      startTime: new Date("2035-01-15T12:00:00.000Z"),
+      expiresAt: new Date("2035-01-15T11:00:00.000Z"),
+      commandKey: "parallel-proposal-command",
+    }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") });
+    const acceptedParallelProposal = await engine.respondToAppointmentRequestProposalWithPool(pool, {
+      token: parallelProposal.responseToken,
+      decision: "accept",
+    }, { ...options, now: () => new Date("2035-01-02T00:00:00.000Z") });
+    assert.equal(acceptedParallelProposal.appointment.durationMinutes, 45);
+    assert.deepEqual(
+      (await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, acceptedParallelProposal.appointment.id))
+        .map((segment) => [segment.executionStage, segment.startTime.toISOString()]),
+      [[0, "2035-01-15T12:00:00.000Z"], [0, "2035-01-15T12:00:00.000Z"]],
+    );
 
     const partiallyOccupied = await engine.createAppointmentRequestWithPool(
       pool,

@@ -136,3 +136,12 @@ Application startup does not run these migrations. The older `ensure*`
 functions remain temporarily available for isolated legacy DEV tooling, but
 the server startup no longer invokes the multi-location or notification
 foundation functions.
+
+Migration `0026_parallel_service_scheduling.sql` adds the independent,
+default-off `parallelServiceScheduling` feature flag, location-scoped explicit
+service compatibility pairs and nullable execution-stage snapshots on confirmed
+and requested service segments. Existing segments are backfilled with
+`execution_stage = position`, preserving sequential behaviour. Database
+validators accept hybrid stages but never consult the mutable compatibility
+catalogue for historical rows; the transactional engine revalidates current
+compatibility before confirmation.

@@ -349,6 +349,10 @@ function quoteSqlIdentifier(identifier: string) {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
 
+function qualifiedAppTable(tableName: string) {
+  return `${quoteSqlIdentifier(databaseSchema || "public")}.${quoteSqlIdentifier(tableName)}`;
+}
+
 async function ensureSessionStoreTable() {
   if (useMemoryStorage) return;
 
@@ -1426,6 +1430,83 @@ async function attachAppointmentAvailabilityWindows<T extends Appointment>(
       endTime: window.endTime,
     })),
   }));
+}
+
+type AppointmentServiceSegmentView = {
+  id: number;
+  appointmentId: number;
+  position: number;
+  executionStage: number;
+  serviceId: number;
+  barberId: number;
+  startTime: Date;
+  durationMinutes: number;
+  bufferBeforeMinutesSnapshot: number;
+  bufferAfterMinutesSnapshot: number;
+  serviceNameSnapshot: string;
+  servicePriceCentsSnapshot: number;
+};
+
+async function loadAppointmentServiceSegments(appointmentIds: number[]) {
+  const uniqueIds = Array.from(new Set(appointmentIds.filter((id) => Number.isInteger(id) && id > 0)));
+  if (useMemoryStorage || uniqueIds.length === 0) return [] as AppointmentServiceSegmentView[];
+  const result = await pool.query<{
+    id: number;
+    appointment_id: number;
+    position: number;
+    execution_stage: number | null;
+    service_id: number;
+    barber_id: number;
+    start_time: Date;
+    duration_minutes: number;
+    buffer_before_minutes_snapshot: number;
+    buffer_after_minutes_snapshot: number;
+    service_name_snapshot: string;
+    service_price_cents_snapshot: number;
+  }>(`
+    SELECT id, appointment_id, position, execution_stage, service_id, barber_id, start_time,
+      duration_minutes, buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
+      service_name_snapshot, service_price_cents_snapshot
+    FROM ${qualifiedAppTable("appointment_service_segments")}
+    WHERE appointment_id = ANY($1::integer[])
+    ORDER BY appointment_id, position
+  `, [uniqueIds]);
+  return result.rows.map((segment) => ({
+    id: segment.id,
+    appointmentId: segment.appointment_id,
+    position: segment.position,
+    executionStage: segment.execution_stage ?? segment.position,
+    serviceId: segment.service_id,
+    barberId: segment.barber_id,
+    startTime: segment.start_time,
+    durationMinutes: segment.duration_minutes,
+    bufferBeforeMinutesSnapshot: segment.buffer_before_minutes_snapshot,
+    bufferAfterMinutesSnapshot: segment.buffer_after_minutes_snapshot,
+    serviceNameSnapshot: segment.service_name_snapshot,
+    servicePriceCentsSnapshot: segment.service_price_cents_snapshot,
+  }));
+}
+
+async function attachAppointmentServiceSegments<T extends Appointment>(appointments: T[]) {
+  const segments = await loadAppointmentServiceSegments(appointments.map((appointment) => appointment.id));
+  const byAppointment = new Map<number, AppointmentServiceSegmentView[]>();
+  for (const segment of segments) {
+    const values = byAppointment.get(segment.appointmentId) ?? [];
+    values.push(segment);
+    byAppointment.set(segment.appointmentId, values);
+  }
+  return appointments.map((appointment) => ({
+    ...appointment,
+    serviceSegments: byAppointment.get(appointment.id) ?? [],
+  }));
+}
+
+function appointmentIncludesProfessional(
+  appointment: Appointment & { serviceSegments?: AppointmentServiceSegmentView[] },
+  professionalId: number,
+) {
+  return appointment.barberId === professionalId
+    || Boolean(appointment.serviceSegments?.some((segment) => segment.barberId === professionalId));
 }
 
 async function attachAppointmentExtras<T extends Appointment>(appointments: T[]) {
@@ -2703,10 +2784,90 @@ export async function registerRoutes(
       enabled: beautyV2MasterEnabled && resolvedBusinessConfig.vertical === "beauty",
       appointmentRequests: effective.appointmentRequests,
       multiServiceAppointments: effective.multiServiceAppointments,
+      parallelServiceScheduling: effective.parallelServiceScheduling,
       appointmentRequestsAvailable: beautyV2MasterEnabled
         && resolvedBusinessConfig.vertical === "beauty"
         && settings.some((setting) => setting.featureName === "appointmentRequests" && setting.enabled),
     });
+  });
+
+  const parallelCompatibilityPairSchema = z.object({
+    firstServiceId: z.number().int().positive(),
+    secondServiceId: z.number().int().positive(),
+  }).refine((pair) => pair.firstServiceId !== pair.secondServiceId, {
+    message: "Selecione dois serviços diferentes.",
+  });
+  const parallelCompatibilityUpdateSchema = z.object({
+    // The appointment limit is 12 services, but the catalogue may contain
+    // many more pairs that need to be configured for different bookings.
+    pairs: z.array(parallelCompatibilityPairSchema).max(5000),
+  });
+
+  app.get("/api/admin/parallel-service-compatibilities", requireCatalogView, async (_req, res) => {
+    if (!beautyV2MasterEnabled || resolvedBusinessConfig.vertical !== "beauty") {
+      return res.status(404).json({ message: "Funcionalidade indisponível." });
+    }
+    const locationId = Number(res.locals.locationId);
+    const result = await pool.query(`
+      SELECT first_service_id AS "firstServiceId", second_service_id AS "secondServiceId"
+      FROM ${qualifiedAppTable("parallel_service_compatibilities")}
+      WHERE location_id = $1
+      ORDER BY first_service_id, second_service_id
+    `, [locationId]);
+    return res.json({ pairs: result.rows });
+  });
+
+  app.put("/api/admin/parallel-service-compatibilities", requireCatalogLocationManage, async (req, res) => {
+    if (!beautyV2MasterEnabled || resolvedBusinessConfig.vertical !== "beauty") {
+      return res.status(404).json({ message: "Funcionalidade indisponível." });
+    }
+    const locationId = Number(res.locals.locationId);
+    const input = parallelCompatibilityUpdateSchema.parse(req.body);
+    const normalized = Array.from(new Map(input.pairs.map((pair) => {
+      const firstServiceId = Math.min(pair.firstServiceId, pair.secondServiceId);
+      const secondServiceId = Math.max(pair.firstServiceId, pair.secondServiceId);
+      return [`${firstServiceId}:${secondServiceId}`, { firstServiceId, secondServiceId }];
+    })).values());
+    const serviceIds = Array.from(new Set(normalized.flatMap((pair) => [pair.firstServiceId, pair.secondServiceId])));
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (serviceIds.length > 0) {
+        const available = await client.query(`
+          SELECT service_id FROM ${qualifiedAppTable("service_locations")}
+          WHERE location_id = $1 AND is_active = true AND service_id = ANY($2::int[])
+          FOR SHARE
+        `, [locationId, serviceIds]);
+        if (available.rowCount !== serviceIds.length) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            message: "Um dos serviços deixou de estar disponível neste estabelecimento.",
+          });
+        }
+      }
+      await client.query(`DELETE FROM ${qualifiedAppTable("parallel_service_compatibilities")} WHERE location_id = $1`, [locationId]);
+      for (const pair of normalized) {
+        await client.query(`
+          INSERT INTO ${qualifiedAppTable("parallel_service_compatibilities")}
+            (location_id, first_service_id, second_service_id)
+          VALUES ($1, $2, $3)
+        `, [locationId, pair.firstServiceId, pair.secondServiceId]);
+      }
+      await client.query("COMMIT");
+      await recordAuditLog(req, {
+        action: "parallel_service_compatibilities_updated",
+        entityType: "service_compatibility",
+        locationId,
+        summary: "Compatibilidades de serviços simultâneos atualizadas.",
+        metadata: { pairCount: normalized.length },
+      });
+      return res.json({ pairs: normalized });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   });
 
   app.post("/api/appointment-requests/availability", async (req, res) => {
@@ -5340,28 +5501,54 @@ export async function registerRoutes(
       if (!await isBarberAssignedToLocation(effectiveBarberId, locationId)) {
         return res.status(404).json({ message: AGENDA_PUBLIC_COPY.backend.professionalNotFound });
       }
-      const busyAppointments = await attachAppointmentAvailabilityWindows(date
-        ? await storage.getAppointmentsRange(
-            effectiveBarberId,
-            shiftCalendarDateKey(date, -1),
-            shiftCalendarDateKey(date, 1),
-          )
-        : await storage.getAppointments(effectiveBarberId));
-      return res.json(busyAppointments
-        .filter((appointment) => appointment.status === "booked")
-        .map((appointment) => ({
-          barberId: appointment.barberId,
-          startTime: appointment.startTime,
-          durationMinutes: appointment.durationMinutes,
-          bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot,
-          bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot,
-          ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
-            ? { availabilityWindows: appointment.availabilityWindows ?? [] }
-            : {}),
-          status: "booked" as const,
-        })));
+      const busyParents = await attachAppointmentServiceSegments(
+        await attachAppointmentAvailabilityWindows(date
+          ? await storage.getAppointmentsRange(
+              undefined,
+              shiftCalendarDateKey(date, -1),
+              shiftCalendarDateKey(date, 1),
+            )
+          : await storage.getAppointments(undefined, undefined, locationId)),
+      );
+      return res.json(busyParents
+        .filter((appointment) => appointment.status === "booked"
+          && appointmentIncludesProfessional(appointment, effectiveBarberId))
+        .flatMap((appointment) => {
+          const professionalSegments = appointment.serviceSegments
+            .filter((segment) => segment.barberId === effectiveBarberId);
+          if (professionalSegments.length > 0) {
+            return professionalSegments.map((segment) => ({
+              barberId: segment.barberId,
+              startTime: segment.startTime,
+              durationMinutes: segment.durationMinutes,
+              bufferBeforeMinutesSnapshot: segment.bufferBeforeMinutesSnapshot,
+              bufferAfterMinutesSnapshot: segment.bufferAfterMinutesSnapshot,
+              status: "booked" as const,
+            }));
+          }
+          return [{
+            barberId: appointment.barberId,
+            startTime: appointment.startTime,
+            durationMinutes: appointment.durationMinutes,
+            bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot,
+            bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot,
+            ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
+              ? { availabilityWindows: appointment.availabilityWindows ?? [] }
+              : {}),
+            status: "booked" as const,
+          }];
+        }));
     }
-    const appointments = await storage.getAppointments(effectiveBarberId, date, locationId);
+    // Multi-service appointments belong to every professional represented by a
+    // segment, not only to the legacy primary professional stored on the parent.
+    // Load the location view first and apply the professional filter after the
+    // immutable segment snapshots have been attached.
+    const locationAppointments = await attachAppointmentServiceSegments(
+      await storage.getAppointments(undefined, date, locationId),
+    );
+    const appointments = effectiveBarberId
+      ? locationAppointments.filter((appointment) => appointmentIncludesProfessional(appointment, effectiveBarberId))
+      : locationAppointments;
 
     const canonicalProfessionalId = canonicalContext?.professionalId ?? undefined;
     const canViewAllCustomerData = Boolean(canonicalContext && hasCanonicalCapability(
@@ -5391,16 +5578,16 @@ export async function registerRoutes(
       ? Number(canonicalProfessionalId)
       : Number(appSession.barberId);
     const ownAppointments = await attachCommercialAppointmentExtras(
-      appointments.filter((appointment) => appointment.barberId === ownBarberId),
+      appointments.filter((appointment) => appointmentIncludesProfessional(appointment, ownBarberId)),
     );
     const ownAppointmentsById = new Map(ownAppointments.map((appointment) => [appointment.id, appointment]));
     return res.json(appointments.map((appointment) => {
-      const isOwnAppointment = appointment.barberId === ownBarberId;
+      const isOwnAppointment = appointmentIncludesProfessional(appointment, ownBarberId);
       const canViewCustomer = authRuntimeMode === "canonical"
         ? Boolean(canonicalContext && hasCanonicalOwnCapability(
           canonicalContext,
           "customers.view_own",
-          appointment.barberId,
+          ownBarberId,
           locationId,
         ))
         : isOwnAppointment;
@@ -5408,7 +5595,7 @@ export async function registerRoutes(
         ? Boolean(canonicalContext && hasCanonicalOwnOrTeamCapability(canonicalContext, {
           ownCapability: "appointments.manage_own",
           teamCapability: "appointments.manage_team",
-          ownerProfessionalId: appointment.barberId,
+          ownerProfessionalId: isOwnAppointment ? ownBarberId : appointment.barberId,
           locationId,
         }))
         : isOwnAppointment;
@@ -6235,17 +6422,17 @@ export async function registerRoutes(
       endDate = bookingWindow.maxDate;
     }
     const effectiveBarberId = barberId === 0 ? undefined : barberId;
-    const appointments = await attachAppointmentAvailabilityWindows(date
+    const appointments = await attachAppointmentServiceSegments(await attachAppointmentAvailabilityWindows(date
       ? await storage.getAppointmentsRange(
-          effectiveBarberId,
+          undefined,
           shiftCalendarDateKey(date, -1),
           shiftCalendarDateKey(date, 1),
         )
       : await storage.getAppointmentsRange(
-          effectiveBarberId,
+          undefined,
           startDate ? shiftCalendarDateKey(startDate, -1) : startDate,
           endDate ? shiftCalendarDateKey(endDate, 1) : endDate,
-        ));
+        )));
     const locationBarberIds = await getBarberIdsForLocation(locationId);
     const allowedBarberIds = locationBarberIds === undefined ? null : new Set(locationBarberIds);
     const visibleBarberIds = new Set(
@@ -6263,21 +6450,59 @@ export async function registerRoutes(
       requestLocationTimeZone(res),
     );
     const publicAppointments = appointments
-      .filter((app) => app.status === "booked"
-        && visibleBarberIds.has(app.barberId)
-        && appointmentIntersectsPublicResponseBounds(app, serviceDurations, responseBounds))
-      .map((app) => ({
-        id: app.id,
-        startTime: app.startTime,
-        barberId: app.barberId,
-        serviceId: app.locationId === locationId ? app.serviceId : null,
-        duration: getEffectiveAppointmentDurationMinutes(app, serviceDurations),
-        bufferBeforeMinutes: app.bufferBeforeMinutesSnapshot,
-        bufferAfterMinutes: app.bufferAfterMinutesSnapshot,
-        ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
-          ? { availabilityWindows: app.availabilityWindows ?? [] }
-          : {}),
-      }));
+      // A professional may work in more than one location. Busy periods must
+      // remain global for that professional, while cross-location catalogue
+      // details stay hidden exactly as in the legacy response.
+      .filter((app) => app.status === "booked")
+      .flatMap<{
+        id: number;
+        startTime: Date;
+        barberId: number;
+        serviceId: number | null;
+        duration: number;
+        bufferBeforeMinutes: number;
+        bufferAfterMinutes: number;
+        availabilityWindows?: Array<{ startTime: Date; endTime: Date }>;
+      }>((app) => {
+        if (app.serviceSegments.length > 0) {
+          return app.serviceSegments
+            .filter((segment) => visibleBarberIds.has(segment.barberId)
+              && (!effectiveBarberId || segment.barberId === effectiveBarberId))
+            .filter((segment) => appointmentIntersectsPublicResponseBounds({
+              ...app,
+              barberId: segment.barberId,
+              serviceId: segment.serviceId as number | null,
+              startTime: segment.startTime,
+              durationMinutes: segment.durationMinutes,
+              bufferBeforeMinutesSnapshot: segment.bufferBeforeMinutesSnapshot,
+              bufferAfterMinutesSnapshot: segment.bufferAfterMinutesSnapshot,
+            }, serviceDurations, responseBounds))
+            .map((segment) => ({
+              id: app.id,
+              startTime: segment.startTime,
+              barberId: segment.barberId,
+              serviceId: app.locationId === locationId ? segment.serviceId : null,
+              duration: segment.durationMinutes,
+              bufferBeforeMinutes: segment.bufferBeforeMinutesSnapshot,
+              bufferAfterMinutes: segment.bufferAfterMinutesSnapshot,
+            }));
+        }
+        if (!visibleBarberIds.has(app.barberId)
+          || (effectiveBarberId && app.barberId !== effectiveBarberId)
+          || !appointmentIntersectsPublicResponseBounds(app, serviceDurations, responseBounds)) return [];
+        return [{
+          id: app.id,
+          startTime: app.startTime,
+          barberId: app.barberId,
+          serviceId: app.serviceId,
+          duration: getEffectiveAppointmentDurationMinutes(app, serviceDurations),
+          bufferBeforeMinutes: app.bufferBeforeMinutesSnapshot,
+          bufferAfterMinutes: app.bufferAfterMinutesSnapshot,
+          ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
+            ? { availabilityWindows: app.availabilityWindows ?? [] }
+            : {}),
+        }];
+      });
     res.json(publicAppointments);
   });
   
@@ -6433,6 +6658,13 @@ export async function registerRoutes(
         || hasCustomDurationPatch || hasServicePricePatch;
       const hasScheduleOrTermsPatch = hasStartTimePatch || hasBarberPatch || hasAppointmentTermsPatch
         || hasAllowOutsideHoursPatch;
+
+      if (hasScheduleOrTermsPatch && (await loadAppointmentServiceSegments([appointmentId])).length > 0) {
+        return res.status(409).json({
+          code: "MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE",
+          message: "Esta marcação inclui vários serviços. Cancele-a ou crie uma nova marcação para garantir que todos os profissionais são atualizados em conjunto.",
+        });
+      }
 
       if (Number.isNaN(newStartTime.getTime())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
@@ -7057,11 +7289,12 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Marcação não encontrada" });
     }
 
-    const [barber, service, location, appointmentExtras] = await Promise.all([
+    const [barber, service, location, appointmentExtras, serviceSegments] = await Promise.all([
       storage.getBarber(appointment.barberId),
       appointment.serviceId ? storage.getService(appointment.serviceId) : Promise.resolve(undefined),
       getLocation(appointment.locationId, true),
       storage.getAppointmentExtras([appointment.id]),
+      loadAppointmentServiceSegments([appointment.id]),
     ]);
     const price = resolveAppointmentPriceCents(
       appointment,
@@ -7103,6 +7336,8 @@ export async function registerRoutes(
       })),
       totalPrice: price + sumAppointmentExtras(appointmentExtras),
       manualOutsideHours: appointment.manualOutsideHours,
+      requiresAssistedReschedule: serviceSegments.length > 0,
+      serviceSegments,
     });
   });
 
@@ -7115,6 +7350,12 @@ export async function registerRoutes(
 
       if (appointment.status !== "booked") {
         return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
+      }
+      if ((await loadAppointmentServiceSegments([appointment.id])).length > 0) {
+        return res.status(409).json({
+          code: "MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE",
+          message: PUBLIC_CYCLE_COPY.reschedule.backend.assistedContact,
+        });
       }
       if (appointment.manualOutsideHours) {
         return res.status(409).json({

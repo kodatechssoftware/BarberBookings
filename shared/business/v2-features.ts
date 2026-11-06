@@ -5,6 +5,7 @@ export const beautyV2FeatureNames = [
   "notificationDeliveryStatus",
   "consultationRole",
   "multiServiceAppointments",
+  "parallelServiceScheduling",
 ] as const;
 
 export type BeautyV2FeatureName = (typeof beautyV2FeatureNames)[number];

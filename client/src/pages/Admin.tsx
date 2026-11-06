@@ -56,6 +56,7 @@ import { ExtrasManager } from "@/components/admin/ExtrasManager";
 import { InternalCostsManager } from "@/components/admin/InternalCostsManager";
 import { UserAccessManager } from "@/components/admin/UserAccessManager";
 import { AppointmentRequestsManager } from "@/components/admin/AppointmentRequestsManager";
+import { ParallelServiceCompatibilityManager } from "@/components/admin/ParallelServiceCompatibilityManager";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import {
   RecurringExpenseOccurrenceDialog,
@@ -176,6 +177,22 @@ type AdminAppointment = {
   depositRequired?: boolean;
   depositReason?: string | null;
   canManage?: boolean;
+  serviceSegments?: Array<{
+    id: number;
+    appointmentId: number;
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    startTime: string;
+    durationMinutes: number;
+    bufferBeforeMinutesSnapshot: number;
+    bufferAfterMinutesSnapshot: number;
+    serviceNameSnapshot: string;
+    servicePriceCentsSnapshot: number;
+  }>;
+  agendaEntryKey?: string;
+  multiServiceSegmentPosition?: number;
 };
 
 function normalizeManualBookingPhoneForSubmit(phone: string, countryCode: PhoneCountryCode) {
@@ -1932,20 +1949,37 @@ export default function Admin() {
     const list = Array.isArray(weeklyAppointments) ? (weeklyAppointments as AdminAppointment[]) : [];
     return [...list].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   }, [weeklyAppointments]);
+  const agendaDisplayAppointmentList = useMemo(() => agendaAppointmentList.flatMap((appointment) => {
+    if (!appointment.serviceSegments || appointment.serviceSegments.length < 2) return [appointment];
+    return appointment.serviceSegments.map((segment) => ({
+      ...appointment,
+      barberId: segment.barberId,
+      serviceId: segment.serviceId,
+      startTime: segment.startTime,
+      durationMinutes: segment.durationMinutes,
+      bufferBeforeMinutesSnapshot: segment.bufferBeforeMinutesSnapshot,
+      bufferAfterMinutesSnapshot: segment.bufferAfterMinutesSnapshot,
+      serviceNameSnapshot: segment.serviceNameSnapshot,
+      agendaEntryKey: `${appointment.id}:${segment.position}`,
+      multiServiceSegmentPosition: segment.position,
+    }));
+  }), [agendaAppointmentList]);
   const filteredAgendaAppointmentList = useMemo(() => {
-    return agendaAppointmentList.filter((appointment) => {
+    return agendaDisplayAppointmentList.filter((appointment) => {
       const matchesBarber = selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
       const matchesStatus = selectedAgendaStatusFilter === "all"
         || appointment.status === selectedAgendaStatusFilter;
       return matchesBarber && matchesStatus;
     });
-  }, [agendaAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter]);
+  }, [agendaDisplayAppointmentList, selectedAgendaStatusFilter, selectedBarberFilter]);
   const todaySummary = useMemo<TodaySummary>(() => {
     const now = new Date();
     const todayKey = format(startOfToday(), "yyyy-MM-dd");
     const todayAppointments = agendaAppointmentList.filter((appointment) => {
       const matchesDay = format(parseISO(appointment.startTime), "yyyy-MM-dd") === todayKey;
-      const matchesBarber = selectedBarberFilter === "all" || String(appointment.barberId) === selectedBarberFilter;
+      const matchesBarber = selectedBarberFilter === "all"
+        || String(appointment.barberId) === selectedBarberFilter
+        || appointment.serviceSegments?.some((segment) => String(segment.barberId) === selectedBarberFilter);
       return matchesDay && matchesBarber && isOperationalAdminAppointment(appointment);
     });
     const bookedToday = todayAppointments.filter((appointment) => appointment.status === "booked");
@@ -4480,7 +4514,9 @@ export default function Admin() {
               onManualBooking={openManualBookingDialog}
               onCreateAtSlot={openManualBookingAtSlot}
               onMoveAppointment={handleMoveAppointment}
-              onSelectAppointment={setSelectedAppointment}
+              onSelectAppointment={(appointment) => setSelectedAppointment(
+                agendaAppointmentList.find((candidate) => candidate.id === appointment.id) ?? appointment,
+              )}
               getStatusLabel={getStatusLabel}
             />
 
@@ -5302,6 +5338,13 @@ export default function Admin() {
                 </Dialog>}
               </div>
             </div>
+            {beautyV2Features?.enabled && beautyV2Features.multiServiceAppointments && (
+              <ParallelServiceCompatibilityManager
+                locationId={activeLocation?.id ?? activeLocationId}
+                services={services ?? []}
+                canManage={canManageCatalogLocation}
+              />
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {services?.map(service => {
                 const assignedCategory = serviceCategories.find((category) => category.id === service.categoryId);

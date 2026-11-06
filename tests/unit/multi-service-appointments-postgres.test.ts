@@ -78,6 +78,7 @@ test("multi-service PostgreSQL engine is atomic, concurrent and legacy-compatibl
       "0021_appointment_availability_windows.sql",
       "0023_beauty_v2_feature_settings.sql",
       "0024_multi_service_appointment_engine.sql",
+      "0026_parallel_service_scheduling.sql",
     ]) {
       await copyFile(path.resolve("migrations", migration), path.join(migrationsDirectory, migration));
     }
@@ -90,26 +91,29 @@ test("multi-service PostgreSQL engine is atomic, concurrent and legacy-compatibl
       ON CONFLICT (id) DO UPDATE SET is_active = true, timezone = EXCLUDED.timezone;
       INSERT INTO barbers (id, name, specialty, color, is_visible) VALUES
         (1, 'Ana', 'Unhas', '#111111', true),
-        (2, 'Beatriz', 'Estética', '#222222', true)
+        (2, 'Beatriz', 'Estética', '#222222', true),
+        (3, 'Carla', 'Pestanas', '#333333', true)
       ON CONFLICT (id) DO NOTHING;
       INSERT INTO services (id, name, price, duration, is_visible) VALUES
         (1, 'Manicure', 2000, 30, true),
-        (2, 'Nail art', 1000, 45, true)
+        (2, 'Nail art', 1000, 45, true),
+        (3, 'Pestanas', 1500, 60, true)
       ON CONFLICT (id) DO NOTHING;
       INSERT INTO barber_locations (barber_id, location_id, is_active) VALUES
-        (1, 1, true), (2, 1, true)
+        (1, 1, true), (2, 1, true), (3, 1, true)
       ON CONFLICT (barber_id, location_id) DO UPDATE SET is_active = true;
       INSERT INTO service_locations (
         service_id, location_id, is_active, buffer_before_minutes, buffer_after_minutes
       ) VALUES
         (1, 1, true, 10, 5),
-        (2, 1, true, 5, 10)
+        (2, 1, true, 5, 10),
+        (3, 1, true, 0, 0)
       ON CONFLICT (service_id, location_id) DO UPDATE SET
         is_active = true,
         buffer_before_minutes = EXCLUDED.buffer_before_minutes,
         buffer_after_minutes = EXCLUDED.buffer_after_minutes;
       INSERT INTO barber_services (barber_id, service_id, location_id) VALUES
-        (1, 1, 1), (2, 2, 1)
+        (1, 1, 1), (2, 2, 1), (3, 3, 1)
       ON CONFLICT (barber_id, service_id, location_id) DO NOTHING;
       INSERT INTO shop_availability (location_id, day_of_week, start_time, end_time, is_open)
       SELECT 1, day, '08:00', '20:00', true FROM generate_series(0, 6) day;
@@ -170,6 +174,83 @@ test("multi-service PostgreSQL engine is atomic, concurrent and legacy-compatibl
       "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
       [created.appointment.id],
     )).rows[0].count), 2);
+
+    await pool.query(`
+      INSERT INTO business_feature_settings (feature_name, location_id, enabled)
+      VALUES ('parallelServiceScheduling', 1, true)
+      ON CONFLICT (feature_name, location_id) WHERE location_id IS NOT NULL
+      DO UPDATE SET enabled = true;
+      INSERT INTO parallel_service_compatibilities (location_id, first_service_id, second_service_id)
+      VALUES (1, 1, 2)
+      ON CONFLICT DO NOTHING;
+    `);
+    const parallel = await engine.createMultiServiceAppointmentWithPool(
+      pool,
+      request("Parallel", "2035-02-01T10:00:00.000Z"),
+      { masterEnabled: true, businessVertical: "beauty" },
+    );
+    assert.deepEqual(parallel.segments.map((segment) => segment.executionStage), [0, 0]);
+    assert.deepEqual(parallel.segments.map((segment) => segment.startTime.toISOString()), [
+      "2035-02-01T10:00:00.000Z",
+      "2035-02-01T10:00:00.000Z",
+    ]);
+    assert.equal(parallel.appointment.durationMinutes, 45);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [parallel.appointment.id],
+    )).rows[0].count), 2);
+    await pool.query("UPDATE appointments SET status = 'cancelled' WHERE id = $1", [parallel.appointment.id]);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [parallel.appointment.id],
+    )).rows[0].count), 0, "cancelling the parent releases every professional occupancy period");
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
+      [parallel.appointment.id],
+    )).rows[0].count), 2, "cancellation preserves the immutable multi-service history");
+
+    const hybrid = await engine.createMultiServiceAppointmentWithPool(pool, {
+      ...request("Hybrid", "2035-02-08T10:00:00.000Z"),
+      services: [
+        { serviceId: 1, barberId: 1 },
+        { serviceId: 2, barberId: 2 },
+        { serviceId: 3, barberId: 3 },
+      ],
+    }, { masterEnabled: true, businessVertical: "beauty" });
+    assert.deepEqual(hybrid.segments.map((segment) => segment.executionStage), [0, 0, 1]);
+    assert.deepEqual(hybrid.segments.map((segment) => segment.startTime.toISOString()), [
+      "2035-02-08T10:00:00.000Z",
+      "2035-02-08T10:00:00.000Z",
+      "2035-02-08T10:45:00.000Z",
+    ]);
+    assert.equal(hybrid.appointment.durationMinutes, 105);
+    assert.equal(hybrid.appointment.servicePriceCentsSnapshot, 4500);
+
+    await pool.query(`
+      INSERT INTO parallel_service_compatibilities (location_id, first_service_id, second_service_id)
+      VALUES (1, 1, 3), (1, 2, 3)
+      ON CONFLICT DO NOTHING
+    `);
+    const tripleParallel = await engine.createMultiServiceAppointmentWithPool(pool, {
+      ...request("Triple parallel", "2035-02-15T10:00:00.000Z"),
+      services: [
+        { serviceId: 1, barberId: 1 },
+        { serviceId: 2, barberId: 2 },
+        { serviceId: 3, barberId: 3 },
+      ],
+    }, { masterEnabled: true, businessVertical: "beauty" });
+    assert.deepEqual(tripleParallel.segments.map((segment) => segment.executionStage), [0, 0, 0]);
+    assert.equal(tripleParallel.appointment.durationMinutes, 60);
+
+    await assert.rejects(
+      pool.query(`
+        UPDATE appointment_service_segments
+        SET barber_id = 1
+        WHERE appointment_id = $1 AND position = 1
+      `, [tripleParallel.appointment.id]),
+      (error: any) => error?.code === "23514",
+      "PostgreSQL rejects one professional assigned twice in the same execution stage",
+    );
 
     const legacy = await pool.query<{ id: number }>(`
       INSERT INTO appointments (

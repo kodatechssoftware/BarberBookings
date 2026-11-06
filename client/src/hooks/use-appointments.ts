@@ -61,6 +61,22 @@ export type AppointmentRecord = {
   notificationChannel?: "email" | "none";
   notificationSent?: boolean;
   canManage?: boolean;
+  serviceSegments?: AppointmentServiceSegmentSnapshot[];
+};
+
+export type AppointmentServiceSegmentSnapshot = {
+  id: number;
+  appointmentId: number;
+  position: number;
+  executionStage: number;
+  serviceId: number;
+  barberId: number;
+  startTime: string;
+  durationMinutes: number;
+  bufferBeforeMinutesSnapshot: number;
+  bufferAfterMinutesSnapshot: number;
+  serviceNameSnapshot: string;
+  servicePriceCentsSnapshot: number;
 };
 
 export type PublicAppointment = {
@@ -98,6 +114,8 @@ export type AppointmentByToken = {
   extras: Array<Pick<AppointmentExtraSnapshot, "nameSnapshot" | "amountCentsSnapshot" | "quantity" | "position">>;
   totalPrice: number;
   manualOutsideHours: boolean;
+  requiresAssistedReschedule?: boolean;
+  serviceSegments?: AppointmentServiceSegmentSnapshot[];
 };
 
 export type CancelAppointmentResponse = {
