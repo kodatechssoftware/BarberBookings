@@ -421,7 +421,8 @@ async function markAvailabilityConflict(
   const nextRevision = request.revision + 1;
   await client.query(`
     UPDATE ${table("appointment_requests")}
-    SET status = 'pending', revision = $2, updated_at = $3
+    SET status = 'pending', revision = $2,
+      updated_at = GREATEST($3::timestamp, created_at)
     WHERE id = $1
   `, [request.id, nextRevision, utcTimestamp(now)]);
   await insertHistory(client, table, {
@@ -675,7 +676,8 @@ async function approveLockedRequest(
     const updated = await client.query<RequestRow>(`
       UPDATE ${table("appointment_requests")}
       SET status = 'approved', revision = $2, appointment_id = $3,
-        decided_at = $4, updated_at = $4
+        decided_at = GREATEST($4::timestamp, created_at),
+        updated_at = GREATEST($4::timestamp, created_at)
       WHERE id = $1 RETURNING *
     `, [request.id, nextRevision, created.appointment.id, utcTimestamp(now)]);
     await insertHistory(client, table, {
@@ -782,7 +784,8 @@ export async function refuseAppointmentRequestWithPool(
     const updated = await client.query<RequestRow>(`
       UPDATE ${table("appointment_requests")}
       SET status = 'refused', revision = $2, refusal_reason = $3,
-        decided_at = $4, updated_at = $4
+        decided_at = GREATEST($4::timestamp, created_at),
+        updated_at = GREATEST($4::timestamp, created_at)
       WHERE id = $1 RETURNING *
     `, [request.id, nextRevision, input.reason?.trim() || null, utcTimestamp(now)]);
     await insertHistory(client, table, {
@@ -886,7 +889,8 @@ export async function proposeAppointmentRequestTimeWithPool(
     const proposal = created.rows[0];
     const updated = await client.query<RequestRow>(`
       UPDATE ${table("appointment_requests")}
-      SET status = 'proposed', revision = $2, updated_at = $3
+      SET status = 'proposed', revision = $2,
+        updated_at = GREATEST($3::timestamp, created_at)
       WHERE id = $1 RETURNING *
     `, [request.id, nextRevision, utcTimestamp(now)]);
     await insertHistory(client, table, {
@@ -971,7 +975,9 @@ export async function respondToAppointmentRequestProposalWithPool(
       const nextRevision = request.revision + 1;
       await client.query(`
         UPDATE ${table("appointment_requests")}
-        SET status = 'pending', revision = $2, updated_at = $3 WHERE id = $1
+        SET status = 'pending', revision = $2,
+          updated_at = GREATEST($3::timestamp, created_at)
+        WHERE id = $1
       `, [request.id, nextRevision, utcTimestamp(now)]);
       await insertHistory(client, table, {
         requestId: request.id,
@@ -996,7 +1002,9 @@ export async function respondToAppointmentRequestProposalWithPool(
       const nextRevision = request.revision + 1;
       const updated = await client.query<RequestRow>(`
         UPDATE ${table("appointment_requests")}
-        SET status = 'pending', revision = $2, updated_at = $3 WHERE id = $1 RETURNING *
+        SET status = 'pending', revision = $2,
+          updated_at = GREATEST($3::timestamp, created_at)
+        WHERE id = $1 RETURNING *
       `, [request.id, nextRevision, utcTimestamp(now)]);
       await insertHistory(client, table, {
         requestId: request.id,

@@ -267,7 +267,12 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
 
     const refused = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-07T10:00:00.000Z"), options);
     const refusedResult = await engine.refuseAppointmentRequestWithPool(
-      pool, refused.request.id, 1, { reason: "Sem disponibilidade" }, admin, options,
+      pool,
+      refused.request.id,
+      1,
+      { reason: "Sem disponibilidade" },
+      admin,
+      { ...options, now: () => new Date(refused.request.createdAt) },
     );
     assert.equal(refusedResult.request.status, "refused");
     await assert.rejects(
