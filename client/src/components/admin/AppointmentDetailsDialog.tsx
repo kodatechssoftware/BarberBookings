@@ -1474,7 +1474,7 @@ export function AppointmentDetailsDialog({
         <DialogHeader>
           <DialogTitle>Detalhes da marcação</DialogTitle>
           <DialogDescription className="text-gray-400">
-            {format(start, "dd/MM/yyyy", { locale: pt })} · {format(start, "HH:mm")} - {format(end, "HH:mm")}
+            {format(start, "dd/MM/yyyy", { locale: pt })} · {format(start, "HH:mm")}–{format(end, "HH:mm")} · {appointment.durationMinutes} min
           </DialogDescription>
         </DialogHeader>
 
@@ -1541,8 +1541,9 @@ export function AppointmentDetailsDialog({
                         return (
                           <div key={segment.id} className="flex flex-col gap-0.5 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                             <span className="font-semibold text-white">{segment.serviceNameSnapshot} · {getBarberName(segment.barberId)}</span>
-                            <span className="shrink-0 text-xs text-gray-300">
-                              {format(segmentStart, "HH:mm")}–{format(segmentEnd, "HH:mm")} · {segment.durationMinutes} min
+                            <span className="shrink-0 text-xs text-gray-300 sm:text-right">
+                              <span className="block">{format(segmentStart, "HH:mm")}–{format(segmentEnd, "HH:mm")} · {segment.durationMinutes} min</span>
+                              <span className="mt-0.5 block font-semibold text-primary">{formatAppointmentPrice(segment.servicePriceCentsSnapshot)}</span>
                             </span>
                           </div>
                         );

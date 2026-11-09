@@ -68,6 +68,7 @@ import {
 } from "@shared/booking-slot-interval";
 import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
 import { appointmentStatusTransitionError } from "@shared/appointment-status-transitions";
+import { appointmentIncludesProfessional } from "@shared/appointment-participants";
 import {
   DEFAULT_APPOINTMENT_DURATION_MINUTES,
   hasAppointmentServiceTermsSnapshot,
@@ -1499,14 +1500,6 @@ async function attachAppointmentServiceSegments<T extends Appointment>(appointme
     ...appointment,
     serviceSegments: byAppointment.get(appointment.id) ?? [],
   }));
-}
-
-function appointmentIncludesProfessional(
-  appointment: Appointment & { serviceSegments?: AppointmentServiceSegmentView[] },
-  professionalId: number,
-) {
-  return appointment.barberId === professionalId
-    || Boolean(appointment.serviceSegments?.some((segment) => segment.barberId === professionalId));
 }
 
 async function attachAppointmentExtras<T extends Appointment>(appointments: T[]) {

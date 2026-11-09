@@ -8,9 +8,14 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { AppointmentDaySummary } from "@/components/admin/AppointmentDaySummary";
-import { getAppointmentContactLinks, type WeeklyAgendaAppointment } from "@/components/admin/WeeklyAgenda";
+import {
+  getAppointmentContactLinks,
+  getWeeklyAppointmentEnd,
+  type WeeklyAgendaAppointment,
+} from "@/components/admin/WeeklyAgenda";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import type { PhoneCountryCode } from "@shared/phone-countries";
+import { getAppointmentProfessionalIds } from "@shared/appointment-participants";
 
 export type AppointmentStatusFilter = AppointmentStatus | "all";
 export type AppointmentViewMode = "day" | "upcoming";
@@ -189,6 +194,14 @@ export function AppointmentsTab({
                 onSelect={(date) => date && onSelectedDateFilterChange(date)}
                 locale={pt}
                 initialFocus
+                className="appointments-filter-calendar"
+                classNames={{
+                  day: "appointments-filter-calendar-day h-9 w-9 p-0 font-normal aria-selected:opacity-100",
+                  day_selected: "appointments-filter-calendar-day-selected bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
+                  day_today: "appointments-filter-calendar-day-today border border-primary/50 [&:not([aria-selected=true])]:text-primary aria-selected:border-primary aria-selected:text-primary-foreground",
+                  day_outside: "appointments-filter-calendar-day-outside day-outside text-muted-foreground",
+                  day_disabled: "appointments-filter-calendar-day-disabled text-muted-foreground",
+                }}
               />
             </PopoverContent>
           </Popover>
@@ -199,7 +212,7 @@ export function AppointmentsTab({
         )}
 
         <Select value={selectedStatusFilter} onValueChange={(value) => onSelectedStatusFilterChange(value as AppointmentStatusFilter)}>
-          <SelectTrigger className="h-11 w-full border-white/10 bg-background/60 text-white sm:w-[210px]">
+          <SelectTrigger aria-label="Filtrar por estado" className="h-11 w-full border-white/10 bg-background/60 text-white sm:w-[210px]">
             <SelectValue placeholder="Filtrar por estado" />
           </SelectTrigger>
           <SelectContent className="bg-card border-white/10 text-white">
@@ -268,7 +281,15 @@ export function AppointmentsTab({
                 <div className="space-y-2 p-2 md:space-y-0 md:p-0 md:divide-y md:divide-white/10">
                   {filteredAppointmentList.map((appointment) => {
                     const start = parseISO(appointment.startTime);
+                    const end = getWeeklyAppointmentEnd(appointment);
                     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")}`;
+                    const professionalNames = getAppointmentProfessionalIds(appointment)
+                      .map((professionalId) => getBarberName(professionalId));
+                    const serviceNames = appointment.serviceSegments?.length
+                      ? [...appointment.serviceSegments]
+                        .sort((left, right) => left.position - right.position)
+                        .map((segment) => segment.serviceNameSnapshot)
+                      : [appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId)];
 
                     return (
                       <button
@@ -283,8 +304,10 @@ export function AppointmentsTab({
                         )}
                       >
                         <div>
-                          <p className="font-display text-xl font-bold text-primary">{format(start, "HH:mm")}</p>
-                          <p className="text-xs text-gray-500">{format(start, "dd/MM/yyyy")}</p>
+                          <p className="font-display text-lg font-bold text-primary">
+                            {format(start, "HH:mm")}–{format(end, "HH:mm")}
+                          </p>
+                          <p className="text-xs text-gray-500">{format(start, "dd/MM/yyyy")} · {appointment.durationMinutes} min</p>
                         </div>
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">{appointment.customerName}</p>
@@ -292,12 +315,14 @@ export function AppointmentsTab({
                         </div>
                         <div className="min-w-0">
                           <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">{agendaCopy.professional.label}</p>
-                          <p className="truncate text-sm text-gray-300">{getBarberName(appointment.barberId)}</p>
+                          <p className="line-clamp-2 text-sm text-gray-300" title={professionalNames.join(", ")}>
+                            {professionalNames.join(" · ")}
+                          </p>
                         </div>
                         <div className="min-w-0">
                           <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Serviço</p>
-                          <p className="truncate text-sm text-gray-300">
-                            {appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId)}
+                          <p className="line-clamp-2 text-sm text-gray-300" title={serviceNames.join(", ")}>
+                            {serviceNames.join(" · ")}
                           </p>
                         </div>
                         <div className="flex md:justify-end">

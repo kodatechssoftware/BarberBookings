@@ -413,3 +413,228 @@ test("Admin presents proposed and refused requests with state-aware PT-PT histor
   await expect(dialog).toContainText("1 de junho de 2030, às 10:01");
   await expect(dialog).not.toContainText("request_refused");
 });
+
+test("Admin appointment list keeps one row and filters multi-service appointments by every professional", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2030-06-01T08:00:00+01:00"));
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const listProfessionals = [
+    { id: 21, name: "Mariana Silva", specialty: "Unhas", color: "#d6a1ad", isVisible: true },
+    { id: 22, name: "Carla Ferreira", specialty: "Estética", color: "#b98ba4", isVisible: true },
+    { id: 23, name: "Beatriz Costa", specialty: "Pestanas", color: "#c9a17e", isVisible: true },
+  ];
+  const listServices = [
+    { id: 11, name: "Manicure gel", price: 3500, duration: 60, isVisible: true },
+    { id: 12, name: "Limpeza de pele", price: 4500, duration: 60, isVisible: true },
+    { id: 13, name: "Extensão de pestanas", price: 3300, duration: 90, isVisible: true },
+  ];
+  const segment = (
+    id: number,
+    position: number,
+    executionStage: number,
+    serviceId: number,
+    barberId: number,
+    startTime: string,
+    durationMinutes: number,
+    serviceNameSnapshot: string,
+    servicePriceCentsSnapshot: number,
+  ) => ({
+    id, appointmentId: 103, position, executionStage, serviceId, barberId, startTime,
+    durationMinutes, bufferBeforeMinutesSnapshot: 0, bufferAfterMinutesSnapshot: 0,
+    serviceNameSnapshot, servicePriceCentsSnapshot,
+  });
+  const common = {
+    locationId: 1, customerPhone: "+351912345678", customerEmail: null,
+    bufferBeforeMinutesSnapshot: 0, bufferAfterMinutesSnapshot: 0,
+    manualOutsideHours: false, paymentMethod: "pending", canManage: true,
+  };
+  const appointments = [
+    {
+      ...common, id: 100, barberId: 21, serviceId: 11, startTime: "2030-06-01T08:00:00.000Z",
+      durationMinutes: 60, serviceNameSnapshot: "Manicure gel", servicePriceCentsSnapshot: 3500,
+      status: "completed", customerName: "Cliente Legacy", serviceSegments: [],
+    },
+    {
+      ...common, id: 101, barberId: 21, serviceId: 11, startTime: "2030-06-01T10:00:00.000Z",
+      durationMinutes: 120, serviceNameSnapshot: "Manicure gel + Nail art", servicePriceCentsSnapshot: 5000,
+      status: "booked", customerName: "Cliente Mesmo Profissional",
+      serviceSegments: [
+        { ...segment(1011, 0, 0, 11, 21, "2030-06-01T10:00:00.000Z", 60, "Manicure gel", 3500), appointmentId: 101 },
+        { ...segment(1012, 1, 1, 11, 21, "2030-06-01T11:00:00.000Z", 60, "Nail art", 1500), appointmentId: 101 },
+      ],
+    },
+    {
+      ...common, id: 103, barberId: 21, serviceId: 11, startTime: "2030-06-01T13:30:00.000Z",
+      durationMinutes: 210, serviceNameSnapshot: "Manicure gel + Limpeza de pele + Extensão de pestanas",
+      servicePriceCentsSnapshot: 11300, status: "booked", customerName: "Cliente Multi Profissional",
+      serviceSegments: [
+        segment(1031, 0, 0, 11, 21, "2030-06-01T13:30:00.000Z", 60, "Manicure gel", 3500),
+        segment(1032, 1, 1, 12, 22, "2030-06-01T14:30:00.000Z", 60, "Limpeza de pele", 4500),
+        segment(1033, 2, 2, 13, 23, "2030-06-01T15:30:00.000Z", 90, "Extensão de pestanas", 3300),
+      ],
+    },
+    {
+      ...common, id: 104, barberId: 21, serviceId: 11, startTime: "2030-06-01T17:00:00.000Z",
+      durationMinutes: 60, serviceNameSnapshot: "Manicure gel + Limpeza de pele", servicePriceCentsSnapshot: 8000,
+      status: "booked", customerName: "Cliente Serviços Simultâneos",
+      serviceSegments: [
+        { ...segment(1041, 0, 0, 11, 21, "2030-06-01T17:00:00.000Z", 60, "Manicure gel", 3500), appointmentId: 104 },
+        { ...segment(1042, 1, 0, 12, 23, "2030-06-01T17:00:00.000Z", 60, "Limpeza de pele", 4500), appointmentId: 104 },
+      ],
+    },
+  ];
+  const requestedProfessionalIds: Array<string | null> = [];
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({
+    json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true, parallelServiceScheduling: true },
+  }));
+  await page.route("**/api/barbers?*", (route) => route.fulfill({ json: listProfessionals }));
+  await page.route("**/api/services?*", (route) => route.fulfill({ json: listServices }));
+  await page.route("**/api/appointments*", (route) => {
+    const url = new URL(route.request().url());
+    const professionalId = url.searchParams.get("barberId");
+    if (url.searchParams.get("scope") !== "team") requestedProfessionalIds.push(professionalId);
+    const filtered = professionalId
+      ? appointments.filter((appointment) => appointment.barberId === Number(professionalId)
+        || appointment.serviceSegments.some((item) => item.barberId === Number(professionalId)))
+      : appointments;
+    return route.fulfill({ json: filtered });
+  });
+
+  await page.goto("/admin");
+  await page.getByRole("tab", { name: "Marcações" }).click();
+  await expect(page.getByText("4 registos")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Cliente Legacy/ })).toHaveCount(1);
+  const sameProfessionalRow = page.getByRole("button", { name: /Cliente Mesmo Profissional/ });
+  await expect(sameProfessionalRow).toHaveCount(1);
+  expect((await sameProfessionalRow.innerText()).match(/Mariana Silva/g)).toHaveLength(1);
+  let multiRow = page.getByRole("button", { name: /Cliente Multi Profissional/ });
+  await expect(multiRow).toHaveCount(1);
+  await expect(multiRow).toContainText("Mariana Silva · Carla Ferreira · Beatriz Costa");
+  await expect(multiRow).toContainText("14:30–18:00");
+  await expect(multiRow).toContainText("210 min");
+
+  const professionalFilter = page.getByRole("combobox", { name: "Filtrar profissional" });
+  for (const professional of listProfessionals) {
+    await professionalFilter.click();
+    await page.getByRole("option", { name: professional.name }).click();
+    multiRow = page.getByRole("button", { name: /Cliente Multi Profissional/ });
+    await expect(multiRow).toHaveCount(1);
+  }
+  expect(requestedProfessionalIds).toEqual(expect.arrayContaining(["21", "22", "23"]));
+
+  await multiRow.click();
+  let details = page.getByRole("dialog", { name: "Detalhes da marcação" });
+  await expect(details).toContainText("14:30–18:00 · 210 min");
+  await expect(details).toContainText("Manicure gel · Mariana Silva");
+  await expect(details).toContainText("14:30–15:30 · 60 min");
+  await expect(details).toContainText("35,00 €");
+  await expect(details).toContainText("Limpeza de pele · Carla Ferreira");
+  await expect(details).toContainText("15:30–16:30 · 60 min");
+  await expect(details).toContainText("45,00 €");
+  await expect(details).toContainText("Extensão de pestanas · Beatriz Costa");
+  await expect(details).toContainText("16:30–18:00 · 90 min");
+  await expect(details).toContainText("33,00 €");
+  await details.getByRole("button", { name: "Close" }).click();
+
+  await professionalFilter.click();
+  await page.getByRole("option", { name: "Todos os profissionais" }).click();
+  await page.getByRole("button", { name: "Próximas" }).click();
+  await expect(page.getByText("4 registos")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Cliente Multi Profissional/ })).toHaveCount(1);
+
+  const statusFilter = page.getByRole("combobox", { name: "Filtrar por estado" });
+  await statusFilter.click();
+  await page.getByRole("option", { name: "Concluídas" }).click();
+  await expect(page.getByText("1 de 4 registos")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Cliente Legacy/ })).toHaveCount(1);
+
+  await statusFilter.click();
+  await page.getByRole("option", { name: "Todos os estados" }).click();
+  await page.getByRole("button", { name: /Cliente Serviços Simultâneos/ }).click();
+  details = page.getByRole("dialog", { name: "Detalhes da marcação" });
+  await expect(details).toContainText("Em simultâneo");
+  await expect(details).toContainText("18:00–19:00 · 60 min");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await details.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+test("Admin appointment calendar keeps every Beauty day state readable", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2030-06-01T08:00:00+01:00"));
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+
+  for (const viewport of [
+    { width: 1440, height: 1000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: /Marca/ }).click();
+    await page.getByRole("button", { name: /01 de junho/i }).click();
+
+    const calendar = page.locator(".appointments-filter-calendar");
+    await expect(calendar).toBeVisible();
+
+    const selectedToday = calendar.locator(
+      ".appointments-filter-calendar-day-today.appointments-filter-calendar-day-selected",
+    );
+    await expect(selectedToday).toHaveCount(1);
+    await expect(selectedToday).toHaveAttribute("aria-selected", "true");
+    expect(await contrastRatio(selectedToday)).toBeGreaterThanOrEqual(4.5);
+
+    const nextDay = calendar
+      .locator(".appointments-filter-calendar-day:not(.appointments-filter-calendar-day-outside)")
+      .filter({ hasText: /^2$/ });
+    await nextDay.click();
+
+    const selectedNotToday = calendar.locator(
+      ".appointments-filter-calendar-day-selected:not(.appointments-filter-calendar-day-today)",
+    );
+    const todayNotSelected = calendar.locator(
+      ".appointments-filter-calendar-day-today:not(.appointments-filter-calendar-day-selected)",
+    );
+    await expect(selectedNotToday).toHaveCount(1);
+    await expect(todayNotSelected).toHaveCount(1);
+    expect(await contrastRatio(selectedNotToday)).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(todayNotSelected)).toBeGreaterThanOrEqual(4.5);
+
+    const normalDay = calendar.locator(
+      ".appointments-filter-calendar-day:not(.appointments-filter-calendar-day-selected):not(.appointments-filter-calendar-day-today):not(.appointments-filter-calendar-day-outside):not(:disabled)",
+    ).first();
+    await expect(normalDay).toBeVisible();
+    expect(await contrastRatio(normalDay)).toBeGreaterThanOrEqual(4.5);
+    await normalDay.hover();
+    expect(await contrastRatio(normalDay)).toBeGreaterThanOrEqual(4.5);
+    await selectedNotToday.focus();
+    await page.keyboard.press("ArrowRight");
+    const keyboardFocusedDay = calendar.locator(".appointments-filter-calendar-day:focus-visible");
+    await expect(keyboardFocusedDay).toHaveCount(1);
+    const focusStyle = await keyboardFocusedDay.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { outlineStyle: style.outlineStyle, outlineWidth: Number.parseFloat(style.outlineWidth) };
+    });
+    expect(focusStyle.outlineStyle).toBe("solid");
+    expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
+
+    const outsideDay = calendar.locator(".appointments-filter-calendar-day-outside").first();
+    await expect(outsideDay).toBeVisible();
+    expect(await contrastRatio(outsideDay)).toBeGreaterThanOrEqual(4.5);
+
+    const disabledState = calendar.locator(
+      ".appointments-filter-calendar-day:not(.appointments-filter-calendar-day-selected):not(.appointments-filter-calendar-day-today):not(.appointments-filter-calendar-day-outside)",
+    ).last();
+    await disabledState.evaluate((element) => {
+      element.classList.add("appointments-filter-calendar-day-disabled");
+      (element as HTMLButtonElement).disabled = true;
+    });
+    await expect(disabledState).toBeDisabled();
+    expect(await contrastRatio(disabledState)).toBeGreaterThanOrEqual(4.5);
+
+    expect(await calendar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+});

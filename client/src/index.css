@@ -627,7 +627,8 @@
   box-shadow: 0 0.65rem 1.7rem hsl(25 14% 29% / 0.06);
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day,
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day {
   background-color: hsl(var(--card));
   color: hsl(var(--foreground));
   /* Text and background must change atomically: interpolating both creates
@@ -635,17 +636,20 @@
   transition-property: border-color, box-shadow;
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day:hover:not(:disabled):not([aria-selected="true"]) {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day:hover:not(:disabled):not([aria-selected="true"]),
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day:hover:not(:disabled):not([aria-selected="true"]) {
   background-color: hsl(348 38% 94%);
   color: hsl(348 43% 38%);
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day:focus-visible {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day:focus-visible,
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day:focus-visible {
   outline: 2px solid hsl(42 52% 48%);
   outline-offset: 2px;
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day-today:not([aria-selected="true"]) {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day-today:not([aria-selected="true"]),
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-today:not([aria-selected="true"]) {
   border: 1px solid hsl(348 43% 43%);
   background-color: hsl(348 38% 94%);
   color: hsl(348 48% 34%);
@@ -654,13 +658,17 @@
 
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day-selected,
 :root[data-brand-theme="beauty-clean"] .booking-calendar-day-selected:hover,
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day-selected:focus {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day-selected:focus,
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-selected[aria-selected="true"],
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-selected[aria-selected="true"]:hover,
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-selected[aria-selected="true"]:focus {
   border-color: hsl(348 46% 35%);
   background-color: hsl(348 46% 35%);
   color: hsl(0 0% 100%);
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day-disabled {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day-disabled,
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-disabled {
   border-color: transparent;
   background-color: hsl(31 18% 93%);
   color: hsl(24 10% 34%);
@@ -668,14 +676,16 @@
   cursor: not-allowed;
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day-today.booking-calendar-day-disabled:not([aria-selected="true"]) {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day-today.booking-calendar-day-disabled:not([aria-selected="true"]),
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-today.appointments-filter-calendar-day-disabled:not([aria-selected="true"]) {
   border: 1px dashed hsl(348 43% 43%);
   background-color: hsl(348 28% 93%);
   color: hsl(348 36% 35%);
   font-weight: 700;
 }
 
-:root[data-brand-theme="beauty-clean"] .booking-calendar-day-outside:not([aria-selected="true"]) {
+:root[data-brand-theme="beauty-clean"] .booking-calendar-day-outside:not([aria-selected="true"]),
+:root[data-brand-theme="beauty-clean"] .appointments-filter-calendar-day-outside:not([aria-selected="true"]) {
   background-color: hsl(31 18% 95%);
   color: hsl(24 10% 36%);
   opacity: 1;

@@ -64,6 +64,7 @@ import {
   type RecurringExpenseOccurrence,
 } from "@/components/admin/RecurringExpensesManager";
 import { getAppointmentContactLinks, WeeklyAgenda } from "@/components/admin/WeeklyAgenda";
+import { appointmentIncludesProfessional } from "@shared/appointment-participants";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { API_UNAUTHORIZED_EVENT, apiFetch } from "@/lib/api";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
@@ -2007,7 +2008,7 @@ export default function Admin() {
   const selectedAppointmentIsOwn = Boolean(
     selectedAppointmentDetails
     && operationalProfessionalId
-    && selectedAppointmentDetails.barberId === operationalProfessionalId,
+    && appointmentIncludesProfessional(selectedAppointmentDetails, operationalProfessionalId),
   );
   const canEditSelectedAppointment = canManageTeamAppointments
     || (canManageOwnAppointments && selectedAppointmentIsOwn);
