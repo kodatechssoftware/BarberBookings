@@ -483,7 +483,10 @@ export async function createAppointmentRequestWithPool(
     if (!location.rowCount) throw new MultiServiceScopeError("A localização não está disponível.");
 
     const currentTerms = await resolveAppointmentServiceTermsWithClient(client, locationId, input.services, table);
-    const terms = await resolveExecutionTermsWithClient(client, locationId, currentTerms, options, table, false);
+    const executionMode = input.executionMode ?? "sequential";
+    const terms = await resolveExecutionTermsWithClient(
+      client, locationId, currentTerms, options, table, false, executionMode,
+    );
     const plan = planAppointmentServices(input.startTime, terms, 1);
     const fingerprint = stableFingerprint({
       locationId,
@@ -492,6 +495,7 @@ export async function createAppointmentRequestWithPool(
       customerEmail: input.customerEmail ?? null,
       customerPhone: input.customerPhone,
       whatsappOptIn: input.whatsappOptIn,
+      executionMode,
       services: input.services,
     });
     const existing = await client.query<RequestRow>(`

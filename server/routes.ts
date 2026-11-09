@@ -2882,6 +2882,7 @@ export async function registerRoutes(
       return res.json(await previewSequentialAppointmentAvailabilityWithPool(pool, {
         locationId,
         date: input.date,
+        executionMode: input.executionMode,
         services: input.services,
         slotIntervalMinutes: bookingSlotIntervalMinutes,
       }, appointmentRequestOptions));

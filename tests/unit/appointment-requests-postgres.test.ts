@@ -9,6 +9,7 @@ import EmbeddedPostgres from "embedded-postgres";
 import pg from "pg";
 import { stopEmbeddedPostgres } from "../../script/embedded-postgres-lifecycle";
 import { runSchemaMigrations } from "../../server/migrations";
+import { MultiServiceAppointmentValidationError } from "../../shared/multi-service-appointments";
 
 process.env.TZ = "UTC";
 
@@ -133,13 +134,14 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     } as const;
     const admin = { actorType: "admin" as const, actorId: 1, actorName: "Admin QA", actorUserId: 1 };
     let sequence = 0;
-    const input = (startTime: string, multi = false) => ({
+    const input = (startTime: string, multi = false, executionMode: "sequential" | "parallel" = "sequential") => ({
       startTime: new Date(startTime),
       customerName: `Cliente ${++sequence}`,
       customerEmail: `cliente-${sequence}@example.test`,
       customerPhone: "+351910000001",
       whatsappOptIn: true,
       idempotencyKey: `request-key-${sequence}`,
+      executionMode,
       services: multi
         ? [{ serviceId: 1, barberId: 1 }, { serviceId: 2, barberId: 2 }]
         : [{ serviceId: 1, barberId: 1 }],
@@ -164,6 +166,16 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     assert.equal(availability.totalPriceCents, 3000);
     assert.equal(availability.durationMinutes, 75);
     assert.ok(availability.starts.length > 0);
+    await assert.rejects(
+      engine.createAppointmentRequestWithPool(
+        pool,
+        1,
+        input("2035-01-18T10:00:00.000Z", true, "parallel"),
+        options,
+      ),
+      (error: unknown) => error instanceof multiServiceEngine.MultiServiceFeatureDisabledError,
+      "the server refuses a parallel request while the location feature is disabled",
+    );
 
     await assert.rejects(
       engine.createAppointmentRequestWithPool(
@@ -233,10 +245,51 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       VALUES (1, 1, 2)
       ON CONFLICT DO NOTHING
     `);
+    const sequentialChoicePreview = await multiServiceEngine.previewSequentialAppointmentAvailabilityWithPool(pool, {
+      locationId: 1,
+      date: "2035-01-16",
+      executionMode: "sequential",
+      services: [{ serviceId: 1, barberId: 1 }, { serviceId: 2, barberId: 2 }],
+      slotIntervalMinutes: 30,
+      now: new Date("2035-01-01T00:00:00.000Z"),
+    }, options);
+    assert.equal(sequentialChoicePreview.executionMode, "sequential");
+    assert.equal(sequentialChoicePreview.parallelEligible, true);
+    assert.equal(sequentialChoicePreview.sequentialDurationMinutes, 75);
+    assert.equal(sequentialChoicePreview.parallelDurationMinutes, 45);
+    assert.equal(sequentialChoicePreview.durationMinutes, 75);
+    assert.deepEqual(sequentialChoicePreview.segments.map((segment) => segment.executionStage), [0, 1]);
+
+    const parallelChoicePreview = await multiServiceEngine.previewSequentialAppointmentAvailabilityWithPool(pool, {
+      locationId: 1,
+      date: "2035-01-16",
+      executionMode: "parallel",
+      services: [{ serviceId: 1, barberId: 1 }, { serviceId: 2, barberId: 2 }],
+      slotIntervalMinutes: 30,
+      now: new Date("2035-01-01T00:00:00.000Z"),
+    }, options);
+    assert.equal(parallelChoicePreview.durationMinutes, 45);
+    assert.deepEqual(parallelChoicePreview.segments.map((segment) => segment.executionStage), [0, 0]);
+
+    const explicitlySequentialRequest = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-01-16T10:00:00.000Z", true, "sequential"),
+      options,
+    );
+    assert.deepEqual(
+      explicitlySequentialRequest.request.segments.map((segment) => segment.executionStage),
+      [0, 1],
+    );
+    const explicitlySequentialApproved = await engine.approveAppointmentRequestWithPool(
+      pool, explicitlySequentialRequest.request.id, 1, admin, options,
+    );
+    assert.equal(explicitlySequentialApproved.appointment.durationMinutes, 75);
+
     const parallelRequest = await engine.createAppointmentRequestWithPool(
       pool,
       1,
-      input("2035-01-14T10:00:00.000Z", true),
+      input("2035-01-14T10:00:00.000Z", true, "parallel"),
       options,
     );
     assert.deepEqual(parallelRequest.request.segments.map((segment) => segment.executionStage), [0, 0]);
@@ -246,6 +299,17 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     ]);
 
     await pool.query(`DELETE FROM parallel_service_compatibilities WHERE location_id = 1`);
+    await assert.rejects(
+      engine.createAppointmentRequestWithPool(
+        pool,
+        1,
+        input("2035-01-17T10:00:00.000Z", true, "parallel"),
+        options,
+      ),
+      (error: unknown) => error instanceof MultiServiceAppointmentValidationError
+        && error.code === "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
+      "request creation revalidates compatibility instead of trusting the public interface",
+    );
     await assert.rejects(
       engine.approveAppointmentRequestWithPool(pool, parallelRequest.request.id, 1, admin, options),
       (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError,
@@ -276,7 +340,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     const proposedParallel = await engine.createAppointmentRequestWithPool(
       pool,
       1,
-      input("2035-01-15T10:00:00.000Z", true),
+      input("2035-01-15T10:00:00.000Z", true, "parallel"),
       options,
     );
     const parallelProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, proposedParallel.request.id, 1, {

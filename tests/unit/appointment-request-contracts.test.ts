@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  appointmentRequestAvailabilitySchema,
   appointmentRequestProposalResponseSchema,
   createAppointmentRequestSchema,
 } from "../../shared/appointment-requests";
@@ -16,6 +17,20 @@ test("appointment request contracts normalize international phones and reject ma
   });
   assert.equal(parsed.customerPhone, "+34612345678");
   assert.equal(parsed.whatsappOptIn, false);
+  assert.equal(parsed.executionMode, "sequential");
+  assert.equal(appointmentRequestAvailabilitySchema.parse({
+    date: "2035-06-01",
+    services: [{ serviceId: 1, barberId: 2 }],
+  }).executionMode, "sequential");
+  assert.equal(createAppointmentRequestSchema.parse({
+    ...parsed,
+    executionMode: "parallel",
+  }).executionMode, "parallel");
+  assert.throws(() => appointmentRequestAvailabilitySchema.parse({
+    date: "2035-06-01",
+    executionMode: "automatic",
+    services: [{ serviceId: 1, barberId: 2 }],
+  }));
   assert.throws(() => createAppointmentRequestSchema.parse({
     ...parsed,
     services: [],

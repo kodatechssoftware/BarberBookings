@@ -20,6 +20,7 @@ import {
   getCalendarDateBounds,
   getCalendarDateTimeParts,
 } from "./calendar-timezone";
+import type { AppointmentRequestExecutionMode } from "@shared/appointment-requests";
 
 export type MultiServiceSelection = {
   serviceId: number;
@@ -283,11 +284,18 @@ export async function resolveExecutionTermsWithClient(
   options: MultiServiceEngineOptions,
   table: (name: string) => string,
   preserveStages: boolean,
+  executionMode?: AppointmentRequestExecutionMode,
 ) {
+  if (!preserveStages && executionMode === "sequential") {
+    return terms.map((term, position) => ({ ...term, executionStage: position }));
+  }
   const parallelEnabled = await isBeautyV2FeatureEnabledWithClient(
     client, locationId, "parallelServiceScheduling", options, table,
   );
   if (!parallelEnabled) {
+    if (!preserveStages && executionMode === "parallel") {
+      throw new MultiServiceFeatureDisabledError();
+    }
     if (preserveStages && terms.some((term, position) => (term.executionStage ?? position) !== position)) {
       throw new MultiServiceFeatureDisabledError();
     }
@@ -300,6 +308,19 @@ export async function resolveExecutionTermsWithClient(
     ? terms.map((term, position) => ({ ...term, executionStage: term.executionStage ?? position }))
     : assignParallelExecutionStages(terms, pairs);
   assertParallelServiceCompatibility(staged, pairs);
+  if (!preserveStages && executionMode === "parallel") {
+    const stageCounts = new Map<number, number>();
+    staged.forEach((term, position) => {
+      const stage = term.executionStage ?? position;
+      stageCounts.set(stage, (stageCounts.get(stage) ?? 0) + 1);
+    });
+    if (!Array.from(stageCounts.values()).some((count) => count > 1)) {
+      throw new MultiServiceAppointmentValidationError(
+        "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
+        "Os serviços e profissionais selecionados não permitem uma execução em simultâneo.",
+      );
+    }
+  }
   return staged;
 }
 
@@ -419,6 +440,7 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
     locationId: number;
     date: string;
     services: MultiServiceSelection[];
+    executionMode?: AppointmentRequestExecutionMode;
     slotIntervalMinutes: number;
     now?: Date;
   },
@@ -443,7 +465,35 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
     if (!location.rows[0]) throw new MultiServiceScopeError("A localização não está disponível.");
     const timeZone = location.rows[0].timezone;
     const currentTerms = await resolveAppointmentServiceTermsWithClient(client, input.locationId, input.services, table);
-    const terms = await resolveExecutionTermsWithClient(client, input.locationId, currentTerms, options, table, false);
+    const executionMode = input.executionMode ?? "sequential";
+    const sequentialTerms = currentTerms.map((term, position) => ({ ...term, executionStage: position }));
+    let parallelTerms: Array<MultiServiceSegmentTerms & { executionStage: number }> | null = null;
+    let parallelFailure: unknown;
+    if (currentTerms.length > 1) {
+      try {
+        parallelTerms = await resolveExecutionTermsWithClient(
+          client, input.locationId, currentTerms, options, table, false, "parallel",
+        );
+      } catch (error) {
+        if (error instanceof MultiServiceFeatureDisabledError
+          || (error instanceof MultiServiceAppointmentValidationError
+            && [
+              "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
+              "MULTI_SERVICE_PARALLEL_BARBER_CONFLICT",
+            ].includes(error.code))) {
+          parallelFailure = error;
+        } else {
+          throw error;
+        }
+      }
+    }
+    if (executionMode === "parallel" && !parallelTerms) {
+      throw parallelFailure ?? new MultiServiceAppointmentValidationError(
+        "MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID",
+        "Os serviços e profissionais selecionados não permitem uma execução em simultâneo.",
+      );
+    }
+    const terms = executionMode === "parallel" ? parallelTerms! : sequentialTerms;
     const [year, month, day] = input.date.split("-").map(Number);
     const bounds = getCalendarDateBounds(input.date, timeZone);
     const barberIds = Array.from(new Set(input.services.map((selection) => selection.barberId)));
@@ -507,10 +557,16 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
       terms,
       1,
     );
+    const sequentialPlan = planAppointmentServices(plan.startTime, sequentialTerms, 1);
+    const parallelPlan = parallelTerms ? planAppointmentServices(plan.startTime, parallelTerms, 1) : null;
     return {
       date: input.date,
       timeZone,
       starts,
+      executionMode,
+      parallelEligible: Boolean(parallelPlan && parallelPlan.durationMinutes < sequentialPlan.durationMinutes),
+      sequentialDurationMinutes: sequentialPlan.durationMinutes,
+      parallelDurationMinutes: parallelPlan?.durationMinutes ?? null,
       durationMinutes: plan.durationMinutes,
       totalPriceCents: plan.totalPriceCents,
       segments: plan.segments.map((segment) => ({

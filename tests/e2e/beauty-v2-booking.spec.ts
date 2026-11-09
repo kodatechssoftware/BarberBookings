@@ -58,23 +58,36 @@ async function mockBeautyV2(page: Page) {
   await page.route("**/api/barbers?avatarMode=reference", (route) => route.fulfill({ json: professionals }));
   await page.route("**/api/public-booking-window**", (route) => route.fulfill({ json: { enabled: false, today: "2030-06-01", maxDate: "2030-07-31", openDay: 1 } }));
   await page.route("**/api/appointment-requests/availability", async (route) => {
-    const body = route.request().postDataJSON() as { date: string; services: Array<{ serviceId: number; barberId: number }> };
+    const body = route.request().postDataJSON() as {
+      date: string;
+      executionMode: "sequential" | "parallel";
+      services: Array<{ serviceId: number; barberId: number }>;
+    };
+    let elapsed = 0;
     const segments = body.services.map((selection, position) => {
       const service = services.find((item) => item.id === selection.serviceId)!;
+      const startOffsetMinutes = body.executionMode === "parallel" ? 0 : elapsed;
+      if (body.executionMode === "sequential") elapsed += service.duration;
       return {
         position,
-        executionStage: body.services.length > 1 ? 0 : position,
+        executionStage: body.executionMode === "parallel" ? 0 : position,
         serviceId: service.id,
         barberId: selection.barberId,
         durationMinutes: service.duration,
         serviceName: service.name,
         priceCents: service.price,
-        startOffsetMinutes: 0,
+        startOffsetMinutes,
       };
     });
+    const sequentialDurationMinutes = segments.reduce((total, segment) => total + segment.durationMinutes, 0);
+    const parallelDurationMinutes = Math.max(...segments.map((segment) => segment.durationMinutes));
     await route.fulfill({ json: {
       date: body.date, timeZone: "Europe/Lisbon", starts: ["09:00", "10:30", "12:00", "14:00", "15:30", "17:00"].map((time) => `${body.date}T${time}:00.000Z`),
-      durationMinutes: Math.max(...segments.map((segment) => segment.durationMinutes)),
+      executionMode: body.executionMode,
+      parallelEligible: segments.length > 1,
+      sequentialDurationMinutes,
+      parallelDurationMinutes,
+      durationMinutes: body.executionMode === "parallel" ? parallelDurationMinutes : sequentialDurationMinutes,
       totalPriceCents: segments.reduce((total, segment) => total + segment.priceCents, 0),
       segments,
     } });
@@ -101,8 +114,12 @@ test("Beauty v2 public flow submits a multi-service request without claiming con
     await page.getByRole("option", { name: "Ana" }).click();
     await page.getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "Beatriz" }).click();
+    await expect(page.getByText("Duração prevista: 75 min")).toBeVisible();
+    const parallelChoice = page.getByRole("radio", { name: /Em simultâneo/ });
+    await expect(parallelChoice).toBeVisible();
+    await parallelChoice.click();
     await expect(page.getByText("Duração prevista: 45 min")).toBeVisible();
-    await expect(page.getByText("Em simultâneo")).toBeVisible();
+    await expect(page.getByTestId("parallel-service-plan").getByText("Ao mesmo tempo", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: /10:00/ }).click();
     await page.getByLabel("Nome *").fill("Cliente QA");
     await page.getByLabel("Telemóvel *").fill("912345678");
@@ -112,7 +129,10 @@ test("Beauty v2 public flow submits a multi-service request without claiming con
     await expect(page.getByText(/receberá uma atualização/i)).toHaveCount(0);
   }
   expect(submitted).toHaveLength(2);
-  expect(submitted[0]).toMatchObject({ services: [{ serviceId: 11, barberId: 21 }, { serviceId: 12, barberId: 22 }] });
+  expect(submitted[0]).toMatchObject({
+    executionMode: "parallel",
+    services: [{ serviceId: 11, barberId: 21 }, { serviceId: 12, barberId: 22 }],
+  });
 });
 
 test("Beauty v2 booking keeps Beauty contrast, hierarchy and selection states on desktop and mobile", async ({ page }) => {

@@ -6,6 +6,8 @@ export const appointmentRequestSelectionSchema = z.object({
   barberId: z.number().int().positive(),
 });
 
+export const appointmentRequestExecutionModeSchema = z.enum(["sequential", "parallel"]);
+
 export const createAppointmentRequestSchema = z.object({
   startTime: z.coerce.date(),
   customerName: z.string().trim().min(1).max(80),
@@ -15,6 +17,7 @@ export const createAppointmentRequestSchema = z.object({
     .transform((value) => normalizePhoneNumber(value)),
   whatsappOptIn: z.boolean().optional().default(false),
   idempotencyKey: z.string().trim().min(8).max(100),
+  executionMode: appointmentRequestExecutionModeSchema.optional().default("sequential"),
   services: z.array(appointmentRequestSelectionSchema).min(1).max(12),
 });
 
@@ -39,6 +42,7 @@ export const appointmentRequestProposalTokenSchema = z.object({
 
 export const appointmentRequestAvailabilitySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  executionMode: appointmentRequestExecutionModeSchema.optional().default("sequential"),
   services: z.array(appointmentRequestSelectionSchema).min(1).max(12),
 });
 
@@ -47,6 +51,7 @@ export const appointmentRequestListQuerySchema = z.object({
 });
 
 export type CreateAppointmentRequestInput = z.infer<typeof createAppointmentRequestSchema>;
+export type AppointmentRequestExecutionMode = z.infer<typeof appointmentRequestExecutionModeSchema>;
 export type AppointmentRequestRefusalInput = z.infer<typeof appointmentRequestRefusalSchema>;
 export type AppointmentRequestProposalInput = z.infer<typeof appointmentRequestProposalSchema>;
 export type AppointmentRequestProposalResponseInput = z.infer<typeof appointmentRequestProposalResponseSchema>;

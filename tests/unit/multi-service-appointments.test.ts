@@ -38,9 +38,9 @@ test("plans two and three simultaneous services using the longest duration", () 
     serviceCompatibilityKey(2, 3),
   ]);
   const plan = planParallelAppointmentServices("2030-01-10T14:00:00.000Z", [
-    service({ serviceId: 1, barberId: 1, durationMinutes: 30 }),
-    service({ serviceId: 2, barberId: 2, durationMinutes: 60 }),
-    service({ serviceId: 3, barberId: 3, durationMinutes: 90 }),
+    service({ serviceId: 1, barberId: 1, serviceName: "Manicure gel", durationMinutes: 60, priceCents: 2_800 }),
+    service({ serviceId: 2, barberId: 2, serviceName: "Limpeza de pele", durationMinutes: 60, priceCents: 4_000 }),
+    service({ serviceId: 3, barberId: 3, serviceName: "Extensão de pestanas", durationMinutes: 90, priceCents: 4_500 }),
   ], compatible, 1);
 
   assert.deepEqual(plan.segments.map((segment) => segment.executionStage), [0, 0, 0]);
@@ -50,6 +50,7 @@ test("plans two and three simultaneous services using the longest duration", () 
     "2030-01-10T14:00:00.000Z",
   ]);
   assert.equal(plan.durationMinutes, 90);
+  assert.equal(plan.totalPriceCents, 11_300);
   assert.equal(plan.endTime.toISOString(), "2030-01-10T15:30:00.000Z");
 });
 

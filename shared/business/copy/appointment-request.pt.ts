@@ -35,6 +35,14 @@ export const APPOINTMENT_REQUEST_PUBLIC_COPY = {
     emptyDescription: "Não encontramos um horário que permita realizar todos os serviços neste dia. Experimente outra data.",
     totalDuration: "Duração prevista",
     totalPrice: "Total",
+    execution: {
+      title: "Como prefere realizar os serviços?",
+      description: "Escolha entre realizar os serviços por ordem ou, quando possível, ao mesmo tempo.",
+      sequential: "Sequencial",
+      sequentialDescription: "Um serviço depois do outro",
+      parallel: "Em simultâneo",
+      parallelDescription: "Serviços compatíveis ao mesmo tempo",
+    },
   },
   customer: {
     title: "Os seus dados",
@@ -60,6 +68,7 @@ export const APPOINTMENT_REQUEST_PUBLIC_COPY = {
     conflict: "Um dos profissionais já tem uma marcação neste período. Escolha outro horário.",
     unavailableSelection: "Um dos serviços ou profissionais deixou de estar disponível. Reveja o pedido.",
     featureUnavailable: "Neste momento, não é possível pedir vários serviços na mesma marcação.",
+    parallelUnavailable: "Estes serviços já não podem ser realizados em simultâneo. Escolha a opção sequencial ou reveja os profissionais.",
   },
   success: {
     title: "Pedido enviado com sucesso!",

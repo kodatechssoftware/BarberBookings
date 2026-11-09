@@ -41,10 +41,15 @@ import {
 } from "@shared/business/copy/appointment-request.pt";
 
 type Selection = { serviceId: number; barberId: number | null };
+type ExecutionMode = "sequential" | "parallel";
 type AvailabilityPreview = {
   date: string;
   timeZone: string;
   starts: string[];
+  executionMode: ExecutionMode;
+  parallelEligible: boolean;
+  sequentialDurationMinutes: number;
+  parallelDurationMinutes: number | null;
   durationMinutes: number;
   totalPriceCents: number;
   segments: Array<{
@@ -73,6 +78,8 @@ function publicSubmissionError(error: unknown) {
     MULTI_SERVICE_APPOINTMENT_CONFLICT: requestCopy.submitErrors.conflict,
     MULTI_SERVICE_SCOPE_INVALID: requestCopy.submitErrors.unavailableSelection,
     MULTI_SERVICE_APPOINTMENTS_DISABLED: requestCopy.submitErrors.featureUnavailable,
+    MULTI_SERVICE_PARALLEL_COMPATIBILITY_INVALID: requestCopy.submitErrors.parallelUnavailable,
+    MULTI_SERVICE_PARALLEL_BARBER_CONFLICT: requestCopy.submitErrors.parallelUnavailable,
   };
   return publicMessages[candidate.code] ?? requestCopy.submitErrorDescription;
 }
@@ -134,6 +141,12 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
   const [selections, setSelections] = useState<Selection[]>([]);
   const [date, setDate] = useState<Date | undefined>(startOfToday());
   const [startTime, setStartTime] = useState<string | null>(null);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("sequential");
+  const [parallelOption, setParallelOption] = useState<{
+    contextKey: string;
+    sequentialDurationMinutes: number;
+    parallelDurationMinutes: number;
+  } | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -161,22 +174,42 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
   const completeSelections = selections.filter((selection): selection is { serviceId: number; barberId: number } => selection.barberId !== null);
   const dateKey = date ? format(date, "yyyy-MM-dd") : null;
   const selectionKey = completeSelections.map((item) => `${item.serviceId}:${item.barberId}`).join(",");
+  const executionContextKey = `${locationId ?? "none"}:${selections
+    .map((item) => `${item.serviceId}:${item.barberId ?? "pending"}`)
+    .join(",")}`;
+  const requestedExecutionMode: ExecutionMode = executionMode === "parallel"
+    && parallelOption?.contextKey === executionContextKey
+    ? "parallel"
+    : "sequential";
   const previewEnabled = Boolean(locationId && dateKey && selections.length > 0 && completeSelections.length === selections.length);
   const { data: preview, isFetching: loadingPreview, isError: previewError } = useQuery<AvailabilityPreview>({
-    queryKey: ["/api/appointment-requests/availability", dateKey, selectionKey, { locationId }],
+    queryKey: ["/api/appointment-requests/availability", dateKey, selectionKey, requestedExecutionMode, { locationId }],
     enabled: previewEnabled,
     queryFn: async () => {
       const response = await apiFetch("/api/appointment-requests/availability", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...locationHeaders(locationId) },
-        body: JSON.stringify({ date: dateKey, services: completeSelections }),
+        body: JSON.stringify({ date: dateKey, executionMode: requestedExecutionMode, services: completeSelections }),
       });
       if (!response.ok) throw new Error("Não foi possível consultar a disponibilidade conjunta.");
       return response.json();
     },
   });
 
-  useEffect(() => setStartTime(null), [dateKey, selectionKey, locationId]);
+  useEffect(() => {
+    setExecutionMode("sequential");
+    setParallelOption(null);
+  }, [executionContextKey]);
+  useEffect(() => {
+    if (preview?.parallelEligible && preview.parallelDurationMinutes !== null) {
+      setParallelOption({
+        contextKey: executionContextKey,
+        sequentialDurationMinutes: preview.sequentialDurationMinutes,
+        parallelDurationMinutes: preview.parallelDurationMinutes,
+      });
+    }
+  }, [executionContextKey, preview]);
+  useEffect(() => setStartTime(null), [dateKey, selectionKey, locationId, requestedExecutionMode]);
   const selectedStart = preview?.starts.find((candidate) => candidate === startTime) ?? null;
   const previewStages = useMemo(() => {
     const grouped = new Map<number, AvailabilityPreview["segments"]>();
@@ -220,6 +253,7 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
         customerPhone: toStoredPhone(phone, phoneCountry),
         whatsappOptIn: true,
         idempotencyKey: idempotencyKey.current,
+        executionMode: requestedExecutionMode,
         services: completeSelections,
       }, { headers: locationHeaders(locationId) });
       const result = await response.json();
@@ -389,6 +423,49 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
           description={requestCopy.schedule.instruction}
           icon={<CalendarDays className="h-5 w-5" />}
         />
+        {effectiveFeatures.parallelServiceScheduling
+          && completeSelections.length > 1
+          && completeSelections.length === selections.length
+          && parallelOption?.contextKey === executionContextKey
+          ? <fieldset className="mt-5 rounded-2xl border border-primary/20 bg-primary/5 p-4" data-testid="execution-mode-selector">
+              <legend className="px-1 text-sm font-bold text-foreground">{requestCopy.schedule.execution.title}</legend>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{requestCopy.schedule.execution.description}</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label={requestCopy.schedule.execution.title}>
+                {([
+                  {
+                    mode: "sequential" as const,
+                    label: requestCopy.schedule.execution.sequential,
+                    description: requestCopy.schedule.execution.sequentialDescription,
+                    duration: parallelOption.sequentialDurationMinutes,
+                  },
+                  {
+                    mode: "parallel" as const,
+                    label: requestCopy.schedule.execution.parallel,
+                    description: requestCopy.schedule.execution.parallelDescription,
+                    duration: parallelOption.parallelDurationMinutes,
+                  },
+                ]).map((option) => <button
+                  key={option.mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={executionMode === option.mode}
+                  onClick={() => setExecutionMode(option.mode)}
+                  className={cn(
+                    "rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                    executionMode === option.mode
+                      ? "border-primary bg-card shadow-sm"
+                      : "border-border bg-background hover:border-primary/60 hover:bg-card",
+                  )}
+                >
+                  <span className="flex items-center justify-between gap-3">
+                    <strong className="text-foreground">{option.label}</strong>
+                    <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-bold text-secondary-foreground">{option.duration} min</span>
+                  </span>
+                  <span className="mt-1 block text-sm text-muted-foreground">{option.description}</span>
+                </button>)}
+              </div>
+            </fieldset>
+          : null}
         <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(290px,340px)_1fr] lg:items-start">
           <div className="booking-calendar-card overflow-hidden rounded-2xl border bg-card p-2 sm:p-3">
             <Calendar
