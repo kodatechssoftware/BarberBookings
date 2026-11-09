@@ -414,7 +414,7 @@ test("Admin presents proposed and refused requests with state-aware PT-PT histor
   await expect(dialog).not.toContainText("request_refused");
 });
 
-test("Admin appointment list keeps one row and filters multi-service appointments by every professional", async ({ page }) => {
+test("Admin appointment list keeps one row and filters multi-service appointments by every professional", async ({ page }, testInfo) => {
   await page.clock.setFixedTime(new Date("2030-06-01T08:00:00+01:00"));
   const login = await page.request.post("/api/admin/login", {
     data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
@@ -507,14 +507,23 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await page.getByRole("tab", { name: "Marcações" }).click();
   await expect(page.getByText("4 registos")).toBeVisible();
   await expect(page.getByRole("button", { name: /Cliente Legacy/ })).toHaveCount(1);
+  const legacyAssignments = page.getByTestId("appointment-100-service-assignment");
+  await expect(legacyAssignments).toHaveCount(1);
+  await expect(legacyAssignments).toContainText("Manicure gel");
+  await expect(legacyAssignments).toContainText("Mariana Silva");
   const sameProfessionalRow = page.getByRole("button", { name: /Cliente Mesmo Profissional/ });
   await expect(sameProfessionalRow).toHaveCount(1);
-  expect((await sameProfessionalRow.innerText()).match(/Mariana Silva/g)).toHaveLength(1);
+  await expect(page.getByTestId("appointment-101-service-assignment")).toHaveCount(2);
   let multiRow = page.getByRole("button", { name: /Cliente Multi Profissional/ });
   await expect(multiRow).toHaveCount(1);
-  await expect(multiRow).toContainText("Mariana Silva · Carla Ferreira · Beatriz Costa");
   await expect(multiRow).toContainText("14:30–18:00");
   await expect(multiRow).toContainText("210 min");
+  const multiAssignments = page.getByTestId("appointment-103-service-assignment");
+  await expect(multiAssignments).toHaveCount(3);
+  await expect(multiAssignments.nth(0)).toHaveAttribute("title", "Manicure gel — Mariana Silva");
+  await expect(multiAssignments.nth(1)).toHaveAttribute("title", "Limpeza de pele — Carla Ferreira");
+  await expect(multiAssignments.nth(2)).toHaveAttribute("title", "Extensão de pestanas — Beatriz Costa");
+  await page.getByTestId("appointments-list").screenshot({ path: testInfo.outputPath("appointments-multi-professional-desktop.png") });
 
   const professionalFilter = page.getByRole("combobox", { name: "Filtrar profissional" });
   for (const professional of listProfessionals) {
@@ -522,7 +531,15 @@ test("Admin appointment list keeps one row and filters multi-service appointment
     await page.getByRole("option", { name: professional.name }).click();
     multiRow = page.getByRole("button", { name: /Cliente Multi Profissional/ });
     await expect(multiRow).toHaveCount(1);
+    const filteredAssignments = page.getByTestId("appointment-103-service-assignment");
+    const highlightedAssignment = filteredAssignments.filter({ hasText: professional.name });
+    await expect(highlightedAssignment).toHaveAttribute("data-filter-match", "true");
+    const highlightedText = highlightedAssignment.locator("span:not([aria-hidden='true'])");
+    expect(await contrastRatio(highlightedText.first())).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(highlightedText.last())).toBeGreaterThanOrEqual(4.5);
+    await expect(filteredAssignments.filter({ hasNotText: professional.name })).toHaveCount(2);
   }
+  await page.getByTestId("appointments-list").screenshot({ path: testInfo.outputPath("appointments-filtered-professional-desktop.png") });
   expect(requestedProfessionalIds).toEqual(expect.arrayContaining(["21", "22", "23"]));
 
   await multiRow.click();
@@ -559,6 +576,10 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await expect(details).toContainText("18:00–19:00 · 60 min");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await details.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await details.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("appointments-list")).toBeVisible();
+  expect(await page.getByTestId("appointments-list").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.getByTestId("appointments-list").screenshot({ path: testInfo.outputPath("appointments-multi-professional-mobile.png") });
 });
 
 test("Admin appointment calendar keeps every Beauty day state readable", async ({ page }) => {

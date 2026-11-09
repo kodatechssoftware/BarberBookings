@@ -15,7 +15,6 @@ import {
 } from "@/components/admin/WeeklyAgenda";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import type { PhoneCountryCode } from "@shared/phone-countries";
-import { getAppointmentProfessionalIds } from "@shared/appointment-participants";
 
 export type AppointmentStatusFilter = AppointmentStatus | "all";
 export type AppointmentViewMode = "day" | "upcoming";
@@ -271,25 +270,36 @@ export function AppointmentsTab({
               </div>
             ) : (
               <div className="overflow-hidden rounded-2xl border border-white/10 md:bg-background/20">
-                <div className="hidden grid-cols-[120px_1.2fr_1fr_1fr_130px] gap-4 border-b border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500 md:grid">
+                <div className="hidden grid-cols-[120px_1.2fr_minmax(0,2fr)_130px] gap-4 border-b border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500 md:grid">
                   <span>Quando</span>
                   <span>Cliente</span>
-                  <span>{agendaCopy.professional.label}</span>
-                  <span>Serviço</span>
+                  <span>Serviços e profissionais</span>
                   <span className="text-right">Estado</span>
                 </div>
-                <div className="space-y-2 p-2 md:space-y-0 md:p-0 md:divide-y md:divide-white/10">
+                <div data-testid="appointments-list" className="space-y-2 p-2 md:space-y-0 md:p-0 md:divide-y md:divide-white/10">
                   {filteredAppointmentList.map((appointment) => {
                     const start = parseISO(appointment.startTime);
                     const end = getWeeklyAppointmentEnd(appointment);
                     const appointmentLabel = `Abrir detalhes da marcação de ${appointment.customerName}, ${format(start, "HH:mm")}`;
-                    const professionalNames = getAppointmentProfessionalIds(appointment)
-                      .map((professionalId) => getBarberName(professionalId));
-                    const serviceNames = appointment.serviceSegments?.length
+                    const serviceAssignments = appointment.serviceSegments?.length
                       ? [...appointment.serviceSegments]
                         .sort((left, right) => left.position - right.position)
-                        .map((segment) => segment.serviceNameSnapshot)
-                      : [appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId)];
+                        .map((segment) => ({
+                          key: `segment-${segment.id}`,
+                          serviceName: segment.serviceNameSnapshot?.trim() || getServiceName(segment.serviceId),
+                          professionalId: segment.barberId,
+                          professionalName: getBarberName(segment.barberId),
+                        }))
+                      : [{
+                        key: `appointment-${appointment.id}`,
+                        serviceName: appointment.serviceNameSnapshot?.trim() || getServiceName(appointment.serviceId),
+                        professionalId: appointment.barberId,
+                        professionalName: getBarberName(appointment.barberId),
+                      }];
+                    const selectedProfessionalId = selectedBarberFilter === "all"
+                      ? null
+                      : Number(selectedBarberFilter);
+                    const isMultiService = serviceAssignments.length > 1;
 
                     return (
                       <button
@@ -299,7 +309,7 @@ export function AppointmentsTab({
                         title={appointmentLabel}
                         onClick={() => onSelectAppointment(appointment)}
                         className={cn(
-                          "grid w-full gap-3 rounded-xl border border-white/10 bg-background/55 px-4 py-4 text-left transition hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary md:rounded-none md:border-0 md:bg-transparent md:grid-cols-[120px_1.2fr_1fr_1fr_130px] md:items-center md:gap-4",
+                          "grid w-full gap-3 rounded-xl border border-white/10 bg-background/55 px-4 py-4 text-left transition hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary md:rounded-none md:border-0 md:bg-transparent md:grid-cols-[120px_1.2fr_minmax(0,2fr)_130px] md:items-center md:gap-4",
                           appointment.status !== "booked" && "opacity-70",
                         )}
                       >
@@ -314,16 +324,35 @@ export function AppointmentsTab({
                           <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
                         </div>
                         <div className="min-w-0">
-                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">{agendaCopy.professional.label}</p>
-                          <p className="line-clamp-2 text-sm text-gray-300" title={professionalNames.join(", ")}>
-                            {professionalNames.join(" · ")}
-                          </p>
-                        </div>
-                        <div className="min-w-0">
-                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Serviço</p>
-                          <p className="line-clamp-2 text-sm text-gray-300" title={serviceNames.join(", ")}>
-                            {serviceNames.join(" · ")}
-                          </p>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Serviços e profissionais</p>
+                          <div className={cn(isMultiService && "flex flex-wrap gap-1.5")}>
+                            {serviceAssignments.map((assignment) => {
+                              const matchesSelectedProfessional = selectedProfessionalId === assignment.professionalId;
+                              return (
+                                <span
+                                  key={assignment.key}
+                                  data-testid={`appointment-${appointment.id}-service-assignment`}
+                                  data-filter-match={matchesSelectedProfessional ? "true" : "false"}
+                                  className={cn(
+                                    "min-w-0 text-sm",
+                                    isMultiService
+                                      ? "inline-flex max-w-full items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs"
+                                      : "block truncate",
+                                    matchesSelectedProfessional && "rounded-md border-primary/50 bg-primary/10 px-2 py-1 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.12)]",
+                                  )}
+                                  title={`${assignment.serviceName} — ${assignment.professionalName}`}
+                                >
+                                  <span className={cn("truncate font-semibold text-white", matchesSelectedProfessional && "text-primary")}>
+                                    {assignment.serviceName}
+                                  </span>
+                                  <span aria-hidden="true" className={cn("shrink-0 text-gray-500", !isMultiService && "mx-1")}>—</span>
+                                  <span className={cn("shrink-0 text-gray-300", matchesSelectedProfessional && "font-semibold text-primary")}>
+                                    {assignment.professionalName}
+                                  </span>
+                                </span>
+                              );
+                            })}
+                          </div>
                         </div>
                         <div className="flex md:justify-end">
                           <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", getStatusClass(appointment.status))}>
