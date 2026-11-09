@@ -87,6 +87,9 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         (1, 'Beauty Request Test', 'principal', 'Test address', 'Europe/Lisbon', true, true),
         (2, 'Other location', 'other', 'Other address', 'Europe/Lisbon', true, false)
       ON CONFLICT (id) DO UPDATE SET is_active = true, timezone = EXCLUDED.timezone;
+      INSERT INTO users (id, display_name, email, password_hash, status) VALUES
+        (1, 'Admin QA', 'admin-qa@example.test', 'test-only-password-hash', 'active')
+      ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
       INSERT INTO barbers (id, name, specialty, color, is_visible) VALUES
         (1, 'Ana', 'Unhas', '#111111', true),
         (2, 'Beatriz', 'Estética', '#222222', true)
@@ -128,7 +131,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       responseTokenSecret: environment.SESSION_SECRET,
       appointmentNotificationsEnabled: true,
     } as const;
-    const admin = { actorType: "admin" as const, actorId: 1, actorName: "Admin" };
+    const admin = { actorType: "admin" as const, actorId: 1, actorName: "Admin QA", actorUserId: 1 };
     let sequence = 0;
     const input = (startTime: string, multi = false) => ({
       startTime: new Date(startTime),
@@ -178,6 +181,12 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     assert.equal(simple.request.status, "pending");
     assert.equal(simple.request.segments.length, 1);
     assert.equal(Number((await pool.query("SELECT count(*) AS count FROM appointments")).rows[0].count), 0);
+    const pendingRequests = await engine.listAppointmentRequestsWithPool(pool, 1, "pending", options);
+    assert.ok(pendingRequests.some((request) => request.id === simple.request.id));
+    assert.equal(
+      pendingRequests.find((request) => request.id === simple.request.id)?.segments[0].barberName,
+      "Ana",
+    );
     const simpleRetry = await engine.createAppointmentRequestWithPool(pool, 1, simpleInput, options);
     assert.equal(simpleRetry.reused, true);
     assert.equal(simpleRetry.request.id, simple.request.id);
@@ -197,6 +206,15 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "SELECT count(*) AS count FROM appointments WHERE customer_name = $1",
       [simpleInput.customerName],
     )).rows[0].count), 1);
+    const approvedRequests = await engine.listAppointmentRequestsWithPool(pool, 1, "approved", options);
+    assert.ok(approvedRequests.some((request) => request.id === simple.request.id));
+    const allRequestsAfterApproval = await engine.listAppointmentRequestsWithPool(pool, 1, undefined, options);
+    assert.ok(allRequestsAfterApproval.some((request) => request.id === simple.request.id));
+    assert.equal(
+      (await engine.listAppointmentRequestsWithPool(pool, 1, "pending", options))
+        .some((request) => request.id === simple.request.id),
+      false,
+    );
 
     const multi = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-05T10:00:00.000Z", true), options);
     const multiApproved = await engine.approveAppointmentRequestWithPool(pool, multi.request.id, 1, admin, options);
@@ -347,6 +365,14 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       { ...options, now: () => new Date(refused.request.createdAt) },
     );
     assert.equal(refusedResult.request.status, "refused");
+    assert.ok(
+      (await engine.listAppointmentRequestsWithPool(pool, 1, "refused", options))
+        .some((request) => request.id === refused.request.id),
+    );
+    assert.ok(
+      (await engine.listAppointmentRequestsWithPool(pool, 1, undefined, options))
+        .some((request) => request.id === refused.request.id),
+    );
     await assert.rejects(
       engine.approveAppointmentRequestWithPool(pool, refused.request.id, 1, admin, options),
       (error: unknown) => error instanceof engine.AppointmentRequestError
@@ -359,6 +385,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       expiresAt: new Date("2035-01-08T11:00:00.000Z"),
       commandKey: "proposal-command-accept",
     }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") });
+    assert.ok(
+      (await engine.listAppointmentRequestsWithPool(pool, 1, "proposed", options))
+        .some((request) => request.id === proposed.request.id),
+    );
     const publicProposal = await engine.inspectAppointmentRequestProposalWithPool(
       pool,
       proposal.responseToken,
@@ -459,6 +489,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     );
     const full = await engine.getAppointmentRequestWithPool(pool, concurrentRequest.request.id, 1, options);
     assert.ok(full?.history.some((event: { event_type: string }) => event.event_type === "request_approved"));
+    assert.equal(
+      full?.history.find((event: { event_type: string }) => event.event_type === "request_approved")?.actor_name,
+      "Admin QA",
+    );
     assert.ok(Number((await pool.query(
       "SELECT count(*) AS count FROM audit_logs WHERE entity_type = 'appointment_request'",
     )).rows[0].count) > 0);

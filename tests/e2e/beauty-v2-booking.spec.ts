@@ -280,27 +280,136 @@ test("authorized Admin can review and approve a request from the location-scoped
     requestedStartTime: "2030-06-02T09:00:00.000Z", appointmentId: null, refusalReason: null,
     createdAt: "2030-06-01T08:00:00.000Z", activeProposal: null,
     segments: [
-      { position: 0, executionStage: 0, serviceId: 11, barberId: 21, startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 45, serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500 },
-      { position: 1, executionStage: 0, serviceId: 12, barberId: 22, startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 30, serviceNameSnapshot: "Nail art", servicePriceCentsSnapshot: 900 },
+      { position: 0, executionStage: 0, serviceId: 11, barberId: 21, barberName: "Mariana Silva", startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 45, serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500 },
+      { position: 1, executionStage: 0, serviceId: 12, barberId: 22, barberName: "Beatriz Costa", startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 30, serviceNameSnapshot: "Nail art", servicePriceCentsSnapshot: 900 },
     ],
-    history: [{ id: 1, event_type: "request_created", actor_type: "client", from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z" }],
+    history: [{ id: 1, event_type: "request_created", actor_type: "client", actor_name: null, from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z" }],
   };
-  let approved = false;
+  let currentRequest = request;
+  let approvalCount = 0;
   await page.route("**/api/admin/appointment-requests**", async (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() === "POST" && url.pathname.endsWith("/approve")) {
-      approved = true;
-      return route.fulfill({ json: { request: { ...request, status: "approved" }, appointment: { id: 99 } } });
+      approvalCount += 1;
+      currentRequest = {
+        ...currentRequest,
+        status: "approved",
+        appointmentId: 99,
+        history: [
+          ...currentRequest.history,
+          { id: 2, event_type: "request_approved", actor_type: "admin", actor_name: "Admin QA", from_status: "pending", to_status: "approved", reason: null, created_at: "2030-06-01T08:01:00.000Z" },
+        ],
+      };
+      return route.fulfill({ json: { request: currentRequest, appointment: { id: 99 } } });
     }
-    if (url.pathname === "/api/admin/appointment-requests/44") return route.fulfill({ json: request });
-    return route.fulfill({ json: [request] });
+    if (url.pathname === "/api/admin/appointment-requests/44") return route.fulfill({ json: currentRequest });
+    const requestedStatus = url.searchParams.get("status");
+    return route.fulfill({ json: !requestedStatus || requestedStatus === currentRequest.status ? [currentRequest] : [] });
   });
   await page.goto("/admin");
   await page.getByRole("tab", { name: "Pedidos" }).click();
   await expect(page.getByTestId("appointment-requests-manager")).toBeVisible();
+
+  // Cache empty/composite views before the transition. Approval must invalidate
+  // every status list, not only the list that happened to be open.
+  await page.getByRole("button", { name: "Aprovado" }).click();
+  await expect(page.getByText("Não existem pedidos neste estado.")).toBeVisible();
+  await page.getByRole("button", { name: "Todos" }).click();
+  await expect(page.getByText("Cliente QA")).toBeVisible();
+  await page.getByRole("button", { name: "Pendente" }).click();
   await page.getByRole("button", { name: "Ver e decidir" }).click();
-  await expect(page.getByText("Pedido recebido — ainda não é uma marcação confirmada.")).toBeVisible();
+  const requestDialog = page.getByRole("dialog", { name: "Pedido de marcação" });
+  await expect(page.getByText("Pedido recebido — aguarda aprovação do estabelecimento.")).toBeVisible();
+  await expect(requestDialog).toContainText("Manicure");
+  await expect(requestDialog).toContainText("Mariana Silva");
+  await expect(requestDialog).toContainText("Nail art");
+  await expect(requestDialog).toContainText("Beatriz Costa");
+  await expect(page.getByRole("list", { name: "Histórico do pedido" })).toContainText("Pedido recebido");
+  await expect(page.getByRole("list", { name: "Histórico do pedido" })).toContainText("Enviado pelo cliente");
   await expect(page.getByText("Em simultâneo")).toBeVisible();
   await page.getByRole("button", { name: "Aprovar" }).click();
-  await expect.poll(() => approved).toBe(true);
+  await expect.poll(() => approvalCount).toBe(1);
+  await expect(page.getByText("Pedido aprovado — marcação confirmada.")).toBeVisible();
+  await expect(page.getByRole("list", { name: "Histórico do pedido" })).toContainText("Marcação aprovada");
+  await expect(page.getByRole("list", { name: "Histórico do pedido" })).toContainText("Aprovada por Admin QA");
+  await expect(page.getByText("A marcação foi criada e a disponibilidade voltou a ser validada.", { exact: true })).toBeVisible();
+  await requestDialog.getByRole("button", { name: "Close" }).click();
+  await expect(requestDialog).toBeHidden();
+
+  await page.getByRole("button", { name: "Aprovado" }).click();
+  await expect(page.getByText("Cliente QA")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ver detalhe" })).toBeVisible();
+  await page.getByRole("button", { name: "Todos" }).click();
+  await expect(page.getByText("Cliente QA")).toBeVisible();
+  expect(approvalCount).toBe(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Ver detalhe" }).click();
+  await expect(requestDialog).toBeVisible();
+  await expect(requestDialog).toContainText("Mariana Silva");
+  await expect(requestDialog.getByRole("list", { name: "Histórico do pedido" })).toBeVisible();
+  expect(await requestDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+test("Admin presents proposed and refused requests with state-aware PT-PT history", async ({ page }) => {
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({
+    json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true },
+  }));
+  const baseRequest = {
+    locationId: 1, revision: 2, customerPhone: "+351912345678", customerEmail: null,
+    requestedStartTime: "2030-06-02T09:00:00.000Z", appointmentId: null,
+    createdAt: "2030-06-01T08:00:00.000Z",
+    segments: [{
+      position: 0, executionStage: 0, serviceId: 11, barberId: 21, barberName: "Mariana Silva",
+      startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 45,
+      serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500,
+    }],
+  };
+  const proposed = {
+    ...baseRequest, id: 45, status: "proposed", customerName: "Cliente Proposta", refusalReason: null,
+    activeProposal: { proposedStartTime: "2030-06-02T11:00:00.000Z", expiresAt: "2030-06-04T08:01:00.000Z", status: "active" },
+    history: [
+      { id: 1, event_type: "request_created", actor_type: "client", actor_name: null, from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z" },
+      { id: 2, event_type: "proposal_created", actor_type: "admin", actor_name: "Admin QA", from_status: "pending", to_status: "proposed", reason: null, created_at: "2030-06-01T08:01:00.000Z" },
+    ],
+  };
+  const refused = {
+    ...baseRequest, id: 46, status: "refused", customerName: "Cliente Recusado",
+    refusalReason: "Agenda indisponível", activeProposal: null,
+    history: [
+      { id: 3, event_type: "request_created", actor_type: "client", actor_name: null, from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T09:00:00.000Z" },
+      { id: 4, event_type: "request_refused", actor_type: "professional", actor_name: "Carla Ferreira", from_status: "pending", to_status: "refused", reason: "Agenda indisponível", created_at: "2030-06-01T09:01:00.000Z" },
+    ],
+  };
+  await page.route("**/api/admin/appointment-requests**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/45")) return route.fulfill({ json: proposed });
+    if (url.pathname.endsWith("/46")) return route.fulfill({ json: refused });
+    const requestedStatus = url.searchParams.get("status");
+    const items = [proposed, refused].filter((item) => !requestedStatus || item.status === requestedStatus);
+    return route.fulfill({ json: items });
+  });
+
+  await page.goto("/admin");
+  await page.getByRole("tab", { name: "Pedidos" }).click();
+  await page.getByRole("button", { name: "Proposta enviada" }).click();
+  await page.getByRole("button", { name: "Ver e decidir" }).click();
+  let dialog = page.getByRole("dialog", { name: "Pedido de marcação" });
+  await expect(dialog).toContainText("Foi proposta uma alteração ao horário. Aguarda resposta do cliente.");
+  await expect(dialog).toContainText("Novo horário proposto");
+  await expect(dialog).toContainText("Proposto por Admin QA");
+  await dialog.getByRole("button", { name: "Close" }).click();
+
+  await page.getByRole("button", { name: "Recusado" }).click();
+  await page.getByRole("button", { name: "Ver detalhe" }).click();
+  dialog = page.getByRole("dialog", { name: "Pedido de marcação" });
+  await expect(dialog).toContainText("Pedido recusado pelo estabelecimento.");
+  await expect(dialog).toContainText("Pedido recusado");
+  await expect(dialog).toContainText("Recusado por Carla Ferreira");
+  await expect(dialog).toContainText("1 de junho de 2030, às 10:01");
+  await expect(dialog).not.toContainText("request_refused");
 });

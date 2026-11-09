@@ -72,6 +72,7 @@ type SegmentRow = {
   buffer_after_minutes_snapshot: number;
   service_name_snapshot: string;
   service_price_cents_snapshot: number;
+  barber_name?: string | null;
   created_at: Date;
 };
 
@@ -188,6 +189,7 @@ function mapRequest(row: RequestRow, segments: SegmentRow[] = [], proposal?: Pro
       executionStage: Number(segment.execution_stage ?? segment.position),
       serviceId: Number(segment.service_id),
       barberId: Number(segment.barber_id),
+      barberName: segment.barber_name ?? null,
       startTime: new Date(segment.start_time),
       durationMinutes: Number(segment.duration_minutes),
       bufferBeforeMinutesSnapshot: Number(segment.buffer_before_minutes_snapshot),
@@ -225,8 +227,10 @@ function selections(rows: SegmentRow[]): MultiServiceSelection[] {
 
 async function loadSegments(client: PoolClient, requestId: number, table: ReturnType<typeof tableFactory>) {
   const result = await client.query<SegmentRow>(`
-    SELECT * FROM ${table("appointment_request_segments")}
-    WHERE request_id = $1 ORDER BY position
+    SELECT segment.*, professional.name AS barber_name
+    FROM ${table("appointment_request_segments")} segment
+    JOIN ${table("barbers")} professional ON professional.id = segment.barber_id
+    WHERE segment.request_id = $1 ORDER BY segment.position
   `, [requestId]);
   return result.rows;
 }
@@ -642,10 +646,14 @@ export async function getAppointmentRequestWithPool(
     const rows = await loadSegments(client, request.id, table);
     const proposal = await loadActiveProposal(client, request.id, table);
     const history = await client.query(`
-      SELECT id, proposal_id, appointment_id, event_type, actor_type,
-        from_status, to_status, reason, metadata, created_at
-      FROM ${table("appointment_request_events")}
-      WHERE request_id = $1 ORDER BY created_at, id
+      SELECT event.id, event.proposal_id, event.appointment_id, event.event_type,
+        event.actor_type, event.from_status, event.to_status, event.reason,
+        event.metadata, event.created_at,
+        COALESCE(NULLIF(btrim(actor_user.display_name), ''), NULLIF(btrim(actor_professional.name), '')) AS actor_name
+      FROM ${table("appointment_request_events")} event
+      LEFT JOIN ${table("users")} actor_user ON actor_user.id = event.actor_user_id
+      LEFT JOIN ${table("barbers")} actor_professional ON actor_professional.id = event.actor_professional_id
+      WHERE event.request_id = $1 ORDER BY event.created_at, event.id
     `, [request.id]);
     await client.query("COMMIT");
     return { ...mapRequest(request, rows, proposal), history: history.rows };
