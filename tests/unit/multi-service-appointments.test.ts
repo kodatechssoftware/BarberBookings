@@ -159,6 +159,20 @@ for (const fixture of [
     assert.deepEqual([first.hour, first.minute], [10, 0]);
     assert.deepEqual([second.hour, second.minute], [10, 30]);
   });
+
+  test(`Europe/Lisbon keeps parallel local service times valid in ${fixture.label}`, () => {
+    const start = calendarDateTimeToInstant({ ...fixture, hour: 10, minute: 0, second: 0 }, "Europe/Lisbon");
+    const plan = planParallelAppointmentServices(start, [
+      service({ serviceId: 1, barberId: 1, durationMinutes: 60 }),
+      service({ serviceId: 2, barberId: 2, durationMinutes: 90 }),
+    ], new Set([serviceCompatibilityKey(1, 2)]), 1);
+    const first = getCalendarDateTimeParts(plan.segments[0].startTime, "Europe/Lisbon");
+    const second = getCalendarDateTimeParts(plan.segments[1].startTime, "Europe/Lisbon");
+
+    assert.deepEqual([first.hour, first.minute], [10, 0]);
+    assert.deepEqual([second.hour, second.minute], [10, 0]);
+    assert.equal(plan.durationMinutes, 90);
+  });
 }
 
 test("rejects one-service and malformed multi-service plans before persistence", () => {

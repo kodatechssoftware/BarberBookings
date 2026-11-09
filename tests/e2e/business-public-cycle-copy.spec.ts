@@ -92,9 +92,20 @@ test("Barber and Beauty assisted reschedule use their resolved establishment wor
   const beautyContext = await browser.newContext({ baseURL });
   const beautyPage = await beautyContext.newPage();
   await useBeautyConfig(beautyPage);
-  await mockAppointment(beautyPage, "b5a-reschedule-beauty", { manualOutsideHours: true });
+  let beautyRescheduleMutations = 0;
+  await beautyPage.route("**/api/appointments/reschedule/b5a-reschedule-beauty", async (route) => {
+    beautyRescheduleMutations += 1;
+    await route.fulfill({ status: 500, json: { message: "unexpected mutation" } });
+  });
+  await mockAppointment(beautyPage, "b5a-reschedule-beauty", {
+    manualOutsideHours: false,
+    requiresAssistedReschedule: true,
+  });
   await beautyPage.goto("/reschedule/b5a-reschedule-beauty");
   await expect(beautyPage.getByText("Para reagendar esta marcação, contacte o estabelecimento.")).toBeVisible();
+  await expect(beautyPage.getByRole("button", { name: "Cancelar marcação" })).toBeVisible();
+  await expect(beautyPage.getByRole("button", { name: /Confirmar novo horário/i })).toHaveCount(0);
+  expect(beautyRescheduleMutations).toBe(0);
   expect(await beautyPage.locator("body").innerText()).not.toMatch(/Baptista|Powerhouse|barbeiro|barbeiros|barbearia/i);
   await beautyContext.close();
 });

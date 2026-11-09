@@ -208,6 +208,14 @@ test("multi-service PostgreSQL engine is atomic, concurrent and legacy-compatibl
       "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
       [parallel.appointment.id],
     )).rows[0].count), 2, "cancellation preserves the immutable multi-service history");
+    assert.equal(Number((await pool.query(
+      "SELECT sum(service_price_cents_snapshot) AS total FROM appointment_service_segments WHERE appointment_id = $1",
+      [parallel.appointment.id],
+    )).rows[0].total), 3000, "cancellation preserves every immutable service value");
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [created.appointment.id],
+    )).rows[0].count), 2, "cancelling one appointment does not affect another appointment");
 
     const hybrid = await engine.createMultiServiceAppointmentWithPool(pool, {
       ...request("Hybrid", "2035-02-08T10:00:00.000Z"),
@@ -297,6 +305,9 @@ test("multi-service PostgreSQL engine is atomic, concurrent and legacy-compatibl
     assert.equal(Number((await pool.query("SELECT count(*) AS count FROM appointments")).rows[0].count), beforeRollback);
     assert.equal(Number((await pool.query(
       "SELECT count(*) AS count FROM appointment_service_segments segment JOIN appointments appointment ON appointment.id = segment.appointment_id WHERE appointment.customer_name = 'Rollback'",
+    )).rows[0].count), 0);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods occupancy JOIN appointments appointment ON appointment.id = occupancy.appointment_id WHERE appointment.customer_name = 'Rollback'",
     )).rows[0].count), 0);
 
     const concurrent = await Promise.allSettled([

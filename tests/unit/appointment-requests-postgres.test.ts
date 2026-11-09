@@ -336,6 +336,104 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         .map((segment) => segment.executionStage),
       [0, 0],
     );
+    for (const selection of [
+      { serviceId: 1, barberId: 1 },
+      { serviceId: 2, barberId: 2 },
+    ]) {
+      const professionalAvailability = await multiServiceEngine.previewSequentialAppointmentAvailabilityWithPool(pool, {
+        locationId: 1,
+        date: "2035-01-14",
+        services: [selection],
+        slotIntervalMinutes: 30,
+        now: new Date("2035-01-01T00:00:00.000Z"),
+      }, options);
+      assert.equal(
+        professionalAvailability.starts.includes("2035-01-14T10:00:00.000Z"),
+        false,
+        `the public availability hides the occupied slot for professional ${selection.barberId}`,
+      );
+    }
+
+    const approvedOccupancyCount = Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [parallelApproved.appointment.id],
+    )).rows[0].count);
+    await pool.query(`DELETE FROM parallel_service_compatibilities WHERE location_id = 1`);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [parallelApproved.appointment.id],
+    )).rows[0].count), approvedOccupancyCount, "compatibility changes do not rewrite an approved appointment");
+    assert.deepEqual(
+      (await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, parallelApproved.appointment.id))
+        .map((segment) => segment.executionStage),
+      [0, 0],
+      "approved execution stages remain immutable after compatibility changes",
+    );
+    await pool.query(`
+      INSERT INTO parallel_service_compatibilities (location_id, first_service_id, second_service_id)
+      VALUES (1, 1, 2)
+    `);
+    await pool.query(`
+      UPDATE business_feature_settings
+      SET enabled = false
+      WHERE feature_name = 'parallelServiceScheduling' AND location_id = 1
+    `);
+    await assert.rejects(
+      engine.createAppointmentRequestWithPool(
+        pool,
+        1,
+        input("2035-01-22T10:00:00.000Z", true, "parallel"),
+        options,
+      ),
+      (error: unknown) => error instanceof multiServiceEngine.MultiServiceFeatureDisabledError,
+      "disabling parallel scheduling rejects new parallel requests",
+    );
+    const sequentialWhileParallelDisabled = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-01-22T12:00:00.000Z", true, "sequential"),
+      options,
+    );
+    assert.deepEqual(
+      sequentialWhileParallelDisabled.request.segments.map((segment) => segment.executionStage),
+      [0, 1],
+      "sequential requests remain available while parallel scheduling is disabled",
+    );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [parallelApproved.appointment.id],
+    )).rows[0].count), approvedOccupancyCount, "existing approved parallel appointments remain intact");
+    await pool.query(`
+      UPDATE business_feature_settings
+      SET enabled = true
+      WHERE feature_name = 'parallelServiceScheduling' AND location_id = 1
+    `);
+    await pool.query("UPDATE appointments SET status = 'cancelled' WHERE id = $1", [parallelApproved.appointment.id]);
+    assert.equal(
+      (await pool.query("SELECT status FROM appointments WHERE id = $1", [parallelApproved.appointment.id])).rows[0].status,
+      "cancelled",
+    );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
+      [parallelApproved.appointment.id],
+    )).rows[0].count), 2, "cancellation retains the complete parallel service history");
+    for (const selection of [
+      { serviceId: 1, barberId: 1 },
+      { serviceId: 2, barberId: 2 },
+    ]) {
+      const releasedAvailability = await multiServiceEngine.previewSequentialAppointmentAvailabilityWithPool(pool, {
+        locationId: 1,
+        date: "2035-01-14",
+        services: [selection],
+        slotIntervalMinutes: 30,
+        now: new Date("2035-01-01T00:00:00.000Z"),
+      }, options);
+      assert.equal(
+        releasedAvailability.starts.includes("2035-01-14T10:00:00.000Z"),
+        true,
+        `cancellation restores public availability for professional ${selection.barberId}`,
+      );
+    }
 
     const proposedParallel = await engine.createAppointmentRequestWithPool(
       pool,
@@ -358,6 +456,85 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         .map((segment) => [segment.executionStage, segment.startTime.toISOString()]),
       [[0, "2035-01-15T12:00:00.000Z"], [0, "2035-01-15T12:00:00.000Z"]],
     );
+
+    const conflictedParallelProposalRequest = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-01-19T10:00:00.000Z", true, "parallel"),
+      options,
+    );
+    const conflictedParallelProposal = await engine.proposeAppointmentRequestTimeWithPool(
+      pool,
+      conflictedParallelProposalRequest.request.id,
+      1,
+      {
+        startTime: new Date("2035-01-19T12:00:00.000Z"),
+        expiresAt: new Date("2035-01-19T11:00:00.000Z"),
+        commandKey: "parallel-proposal-conflict",
+      },
+      admin,
+      { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") },
+    );
+    await pool.query(`
+      INSERT INTO appointments (
+        location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES (1, 2, 2, '2035-01-19 12:00:00', 'Proposal occupier', '+351910000099', 45, 'booked', 'proposal-occupier')
+    `);
+    await assert.rejects(
+      engine.respondToAppointmentRequestProposalWithPool(pool, {
+        token: conflictedParallelProposal.responseToken,
+        decision: "accept",
+      }, { ...options, now: () => new Date("2035-01-02T00:00:00.000Z") }),
+      (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError,
+      "proposal acceptance revalidates every professional and fails the complete request",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM appointment_requests WHERE id = $1", [conflictedParallelProposalRequest.request.id])).rows[0].status,
+      "pending",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM appointment_request_proposals WHERE id = $1", [conflictedParallelProposal.proposal.id])).rows[0].status,
+      "unavailable",
+    );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointments WHERE customer_name = $1",
+      [conflictedParallelProposalRequest.request.customerName],
+    )).rows[0].count), 0);
+    assert.deepEqual(
+      (await pool.query(
+        "SELECT execution_stage FROM appointment_request_segments WHERE request_id = $1 ORDER BY position",
+        [conflictedParallelProposalRequest.request.id],
+      )).rows.map((row) => row.execution_stage),
+      [0, 0],
+      "an unavailable proposal preserves the requested parallel execution group",
+    );
+
+    const firstConcurrentParallel = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-20T10:00:00.000Z", true, "parallel"), options,
+    );
+    const secondConcurrentParallel = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-20T10:00:00.000Z", true, "parallel"), options,
+    );
+    const distinctConcurrentApprovals = await Promise.allSettled([
+      engine.approveAppointmentRequestWithPool(pool, firstConcurrentParallel.request.id, 1, admin, options),
+      engine.approveAppointmentRequestWithPool(pool, secondConcurrentParallel.request.id, 1, admin, options),
+    ]);
+    assert.equal(distinctConcurrentApprovals.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(distinctConcurrentApprovals.filter((result) => result.status === "rejected"
+      && result.reason instanceof engine.AppointmentRequestAvailabilityError).length, 1);
+    const concurrentParallelAppointments = await pool.query<{ id: number }>(`
+      SELECT id FROM appointments WHERE customer_name = ANY($1::text[])
+    `, [[firstConcurrentParallel.request.customerName, secondConcurrentParallel.request.customerName]]);
+    assert.equal(concurrentParallelAppointments.rowCount, 1);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
+      [concurrentParallelAppointments.rows[0].id],
+    )).rows[0].count), 2);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
+      [concurrentParallelAppointments.rows[0].id],
+    )).rows[0].count), 2);
 
     const partiallyOccupied = await engine.createAppointmentRequestWithPool(
       pool,
@@ -521,7 +698,9 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     );
     assert.equal((await pool.query("SELECT status FROM appointment_requests WHERE id = $1", [expiring.request.id])).rows[0].status, "pending");
 
-    const rollback = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-12T10:00:00.000Z", true), options);
+    const rollback = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-12T10:00:00.000Z", true, "parallel"), options,
+    );
     await assert.rejects(
       engine.approveAppointmentRequestWithPool(pool, rollback.request.id, 1, admin, {
         ...options,
@@ -534,6 +713,18 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "SELECT count(*) AS count FROM appointments WHERE customer_name = $1",
       [rollback.request.customerName],
     )).rows[0].count), 0);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count
+      FROM appointment_service_segments segment
+      JOIN appointments appointment ON appointment.id = segment.appointment_id
+      WHERE appointment.customer_name = $1
+    `, [rollback.request.customerName])).rows[0].count), 0);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count
+      FROM appointment_occupancy_periods occupancy
+      JOIN appointments appointment ON appointment.id = occupancy.appointment_id
+      WHERE appointment.customer_name = $1
+    `, [rollback.request.customerName])).rows[0].count), 0);
 
     const concurrentRequest = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-13T10:00:00.000Z"), options);
     const concurrentApprovals = await Promise.all([
