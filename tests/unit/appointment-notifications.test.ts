@@ -22,6 +22,7 @@ import {
   buildBookingRescheduledEmail,
   buildBookingUpdatedEmail,
   buildRecurringBookingEmail,
+  buildStaffRequestNotificationEmail,
 } from "../../server/email";
 import {
   buildMetaAppointmentTemplateComponents,
@@ -43,6 +44,25 @@ const accepted = (id = "wamid.accepted"): MetaTemplateDeliveryResult => ({ outco
 const failed: MetaTemplateDeliveryResult = { outcome: "failed", provider: "meta", templateName: "template",
   providerMessageId: null, providerStatus: "META_ERROR_1", responseStatus: 400, errorCode: "META_ERROR_1" };
 const unknown: MetaTemplateDeliveryResult = { ...failed, outcome: "unknown", providerStatus: "META_TIMEOUT", responseStatus: null, errorCode: "META_TIMEOUT" };
+
+test("staff request email links to the authenticated Admin without public response tokens", () => {
+  const content = buildStaffRequestNotificationEmail({
+    recipientEmail: "responsavel@example.test",
+    recipientName: "Responsável",
+    locationName: "Beauty QA",
+    locationTimeZone: "Europe/Lisbon",
+    requestId: 42,
+    locationId: 7,
+    customerName: "Cliente QA",
+    serviceNames: ["Manicure", "Pedicure"],
+    requestedStartTime: new Date("2030-06-02T09:00:00.000Z"),
+    notificationType: "new_request",
+    idempotencyKey: "notification:42:user:3:email",
+  });
+  assert.match(content.subject, /Novo pedido de marcação/);
+  assert.match(content.html, /\/admin\?tab=appointment-requests&amp;locationId=7&amp;requestId=42/);
+  assert.doesNotMatch(content.html, /responseToken|cancelToken|token=/i);
+});
 
 async function fixture(optIn = true, email: string | null = "client@example.com", event = true) {
   const storage = new MemoryStorage();

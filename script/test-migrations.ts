@@ -297,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 25,
-    "an empty legacy baseline must apply every migration through 0026");
+  assert.equal(freshRun.applied.length, 26,
+    "an empty legacy baseline must apply every migration through 0027");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -314,6 +314,15 @@ try {
     "the appointment-request workflow must not create proposals automatically");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("parallel_service_compatibilities")}`)).rows[0].count), 0,
     "parallel service compatibility must be explicit and start empty");
+  for (const tableName of [
+    "admin_notifications",
+    "admin_notification_user_states",
+    "location_request_notification_settings",
+    "location_request_notification_recipients",
+  ]) {
+    assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable(tableName)}`)).rows[0].count), 0,
+      `${tableName} must start empty`);
+  }
   for (const tableName of ["appointment_service_segments", "appointment_request_segments"]) {
     const executionStage = (await pool.query(`
       SELECT is_nullable FROM information_schema.columns
@@ -385,7 +394,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 25);
+  assert.equal(secondFreshRun.alreadyApplied, 26);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1200,7 +1209,10 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.deepEqual(parallelSchedulingMigrationRun.applied, ["0026_parallel_service_scheduling.sql"]);
+  assert.deepEqual(parallelSchedulingMigrationRun.applied, [
+    "0026_parallel_service_scheduling.sql",
+    "0027_admin_request_notifications.sql",
+  ]);
   assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
   assert.deepEqual((await pool.query(`
     SELECT position, execution_stage FROM ${table("appointment_service_segments")}
@@ -1503,7 +1515,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 25);
+  assert.equal(secondCompensationRun.alreadyApplied, 26);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2275,7 +2287,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0026, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0027, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

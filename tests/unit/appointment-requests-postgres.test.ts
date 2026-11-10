@@ -91,7 +91,8 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       ON CONFLICT (id) DO UPDATE SET is_active = true, timezone = EXCLUDED.timezone;
       INSERT INTO users (id, display_name, email, password_hash, status) VALUES
         (1, 'Admin QA', 'admin-qa@example.test', 'test-only-password-hash', 'active'),
-        (2, 'Admin QA 2', 'admin-qa-2@example.test', 'test-only-password-hash', 'active')
+        (2, 'Admin QA 2', 'admin-qa-2@example.test', 'test-only-password-hash', 'active'),
+        (3, 'Sem acesso', 'sem-acesso@example.test', 'test-only-password-hash', 'active')
       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
       INSERT INTO user_access_scopes (user_id, location_id, preset_key)
       SELECT candidate.user_id, NULL, 'administrator'
@@ -137,6 +138,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
 
     const engine = await import("../../server/appointment-request-engine");
     const adminNotifications = await import("../../server/admin-request-notifications");
+    const adminNotificationWorker = await import("../../server/admin-notification-worker");
     const multiServiceEngine = await import("../../server/multi-service-appointment-engine");
     applicationPool = (await import("../../server/db")).pool;
     const options = {
@@ -258,6 +260,107 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       (error: unknown) => error instanceof engine.AppointmentRequestError
         && error.code === "APPOINTMENT_REQUEST_IDEMPOTENCY_CONFLICT",
     );
+
+    await assert.rejects(
+      adminNotifications.updateRequestNotificationSettings(pool, 1, {
+        emailEnabled: true,
+        reminderEnabled: true,
+        reminderDelayMinutes: 30,
+        respectOpeningHours: true,
+        recipients: [{ userId: 3, isActive: true, newRequestEmail: true, pendingReminderEmail: true }],
+      }, { userId: 1, displayName: "Admin QA" }),
+      /não está ativo ou não pode gerir marcações/i,
+      "a user without location permission cannot be configured as a recipient",
+    );
+    const notificationSettings = await adminNotifications.updateRequestNotificationSettings(pool, 1, {
+      emailEnabled: true,
+      reminderEnabled: true,
+      reminderDelayMinutes: 30,
+      respectOpeningHours: true,
+      recipients: [
+        { userId: 1, isActive: true, newRequestEmail: true, pendingReminderEmail: true },
+        { userId: 2, isActive: false, newRequestEmail: true, pendingReminderEmail: true },
+      ],
+    }, { userId: 1, displayName: "Admin QA" });
+    assert.equal(notificationSettings.emailEnabled, true);
+    assert.equal(notificationSettings.reminderEnabled, true);
+    assert.equal(notificationSettings.recipients.find((recipient) => recipient.userId === 3)?.eligible, false);
+
+    const workerRequestInput = input("2035-01-08T10:00:00.000Z");
+    const workerRequest = await engine.createAppointmentRequestWithPool(pool, 1, workerRequestInput, options);
+    await pool.query(`
+      UPDATE admin_notifications SET email_delivery_enabled = true
+      WHERE appointment_request_id = $1
+    `, [workerRequest.request.id]);
+    const notificationSchedule = await pool.query<{ notification_type: string; available_at: Date }>(`
+      SELECT notification_type, available_at FROM admin_notifications
+      WHERE appointment_request_id = $1 ORDER BY available_at, id
+    `, [workerRequest.request.id]);
+    assert.deepEqual(notificationSchedule.rows.map((row) => row.notification_type).sort(), ["new_request", "pending_reminder"]);
+    const reminderAvailableAt = notificationSchedule.rows.find((row) => row.notification_type === "pending_reminder")!.available_at;
+    const reminderLocalHour = Number(new Intl.DateTimeFormat("pt-PT", {
+      timeZone: "Europe/Lisbon", hour: "2-digit", hour12: false,
+    }).format(new Date(reminderAvailableAt)));
+    assert.ok(reminderLocalHour >= 8 && reminderLocalHour < 20, "the reminder is deferred into an opening period");
+
+    const sentStaffEmails: Array<{ type: string; key: string; recipient: string }> = [];
+    let workerNow = new Date(Math.max(Date.now(), new Date(reminderAvailableAt).getTime()) + 1_000);
+    let failedOnce = false;
+    const workerDependencies: import("../../server/admin-notification-worker").AdminRequestNotificationWorkerDependencies = {
+      databasePool: pool,
+      processingEnabled: true,
+      now: () => workerNow,
+      sendEmail: async (email) => {
+        sentStaffEmails.push({ type: email.notificationType, key: email.idempotencyKey, recipient: email.recipientEmail });
+        if (!failedOnce && email.notificationType === "new_request") {
+          failedOnce = true;
+          return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
+        }
+        return { sent: true, providerMessageId: `mock-${sentStaffEmails.length}`, errorCode: null };
+      },
+    };
+    await adminNotificationWorker.processPendingAdminRequestNotificationEmails(workerDependencies);
+    assert.equal(sentStaffEmails.filter((email) => email.type === "new_request").length, 1);
+    assert.equal(sentStaffEmails.filter((email) => email.type === "pending_reminder").length, 1);
+    assert.equal(new Set(sentStaffEmails.map((email) => email.key)).size, sentStaffEmails.length, "every delivery has a deterministic recipient idempotency key");
+    assert.deepEqual(new Set(sentStaffEmails.map((email) => email.recipient)), new Set(["admin-qa@example.test"]));
+    assert.equal((await pool.query(`
+      SELECT email_status FROM admin_notification_user_states state
+      JOIN admin_notifications notification ON notification.id = state.notification_id
+      WHERE notification.appointment_request_id = $1 AND notification.notification_type = 'new_request'
+    `, [workerRequest.request.id])).rows[0].email_status, "retry");
+    workerNow = new Date(workerNow.getTime() + 61_000);
+    await adminNotificationWorker.processPendingAdminRequestNotificationEmails(workerDependencies);
+    assert.equal(sentStaffEmails.filter((email) => email.type === "new_request").length, 2, "a transient failure is retried once it is due");
+    assert.equal((await pool.query(`
+      SELECT email_status FROM admin_notification_user_states state
+      JOIN admin_notifications notification ON notification.id = state.notification_id
+      WHERE notification.appointment_request_id = $1 AND notification.notification_type = 'new_request'
+    `, [workerRequest.request.id])).rows[0].email_status, "sent");
+
+    const recoveryRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-09T10:00:00.000Z"), options,
+    );
+    await pool.query(`
+      UPDATE admin_notifications SET email_delivery_enabled = true
+      WHERE appointment_request_id = $1 AND notification_type = 'new_request'
+    `, [recoveryRequest.request.id]);
+    workerNow = new Date();
+    await adminNotificationWorker.prepareDueAdminRequestNotificationEmails(workerDependencies);
+    await pool.query(`
+      UPDATE admin_notification_user_states
+      SET email_status = 'sending', email_lease_started_at = $2, next_email_attempt_at = NULL
+      WHERE notification_id = (
+        SELECT id FROM admin_notifications WHERE appointment_request_id = $1 AND notification_type = 'new_request'
+      )
+    `, [recoveryRequest.request.id, new Date(workerNow.getTime() - 120_000)]);
+    workerNow = new Date(workerNow.getTime() + 1_000);
+    await adminNotificationWorker.processPendingAdminRequestNotificationEmails(workerDependencies);
+    assert.equal((await pool.query(`
+      SELECT email_status FROM admin_notification_user_states state
+      JOIN admin_notifications notification ON notification.id = state.notification_id
+      WHERE notification.appointment_request_id = $1 AND notification.notification_type = 'new_request'
+    `, [recoveryRequest.request.id])).rows[0].email_status, "sent", "an abandoned lease is recovered after restart");
 
     const approved = await engine.approveAppointmentRequestWithPool(pool, simple.request.id, 1, admin, options);
     assert.equal(approved.request.status, "approved");
@@ -1046,6 +1149,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       (await engine.listAppointmentRequestsWithPool(pool, 1, undefined, options))
         .some((request) => request.id === refused.request.id),
     );
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
+    `, [refused.request.id])).rows[0].count), 0, "refusing a request cancels its reminder");
     await assert.rejects(
       engine.approveAppointmentRequestWithPool(pool, refused.request.id, 1, admin, options),
       (error: unknown) => error instanceof engine.AppointmentRequestError
@@ -1062,6 +1169,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       (await engine.listAppointmentRequestsWithPool(pool, 1, "proposed", options))
         .some((request) => request.id === proposed.request.id),
     );
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
+    `, [proposed.request.id])).rows[0].count), 0, "a proposal is not treated as an unanswered pending request");
     const publicProposal = await engine.inspectAppointmentRequestProposalWithPool(
       pool,
       proposal.responseToken,
@@ -1075,6 +1186,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       decision: "accept",
     }, { ...options, now: () => new Date("2035-01-02T00:00:00.000Z") });
     assert.equal(accepted.request.status, "approved");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
+    `, [proposed.request.id])).rows[0].count), 0, "accepting a proposal leaves no pending reminder");
     assert.equal(new Date(accepted.appointment.startTime).toISOString(), "2035-01-08T12:00:00.000Z");
     const acceptedRetry = await engine.respondToAppointmentRequestProposalWithPool(pool, {
       token: proposal.responseToken,
@@ -1093,6 +1208,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       decision: "reject",
     }, { ...options, now: () => new Date("2035-01-02T00:00:00.000Z") });
     assert.equal(rejectedResponse.request.status, "pending");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
+    `, [rejected.request.id])).rows[0].count), 1, "rejecting a proposal schedules one fresh pending reminder");
 
     const replaced = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-10T10:00:00.000Z"), options);
     const firstProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, replaced.request.id, 1, {

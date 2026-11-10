@@ -65,6 +65,11 @@ export function validateRuntimeConfiguration() {
     businessRuntimeWarningsLogged = true;
   }
 
+  if (staffRequestEmailsEnabled
+    && (!process.env.RESEND_API_KEY?.trim() || !process.env.RESEND_FROM_EMAIL?.trim())) {
+    throw new Error("STAFF_REQUEST_EMAILS_ENABLED requires RESEND_API_KEY and RESEND_FROM_EMAIL.");
+  }
+
   if (!isProductionDeployment) return;
 
   const publicUrl = (process.env.PUBLIC_URL || process.env.APP_BASE_URL || "").trim();

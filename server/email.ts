@@ -87,6 +87,20 @@ export type EmailDeliveryResult = {
   errorCode: string | null;
 };
 
+export type StaffRequestNotificationEmailParams = {
+  recipientEmail: string;
+  recipientName: string;
+  locationName: string;
+  locationTimeZone: string;
+  requestId: number;
+  locationId: number;
+  customerName: string;
+  serviceNames: string[];
+  requestedStartTime: Date;
+  notificationType: "new_request" | "pending_reminder";
+  idempotencyKey: string;
+};
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, "&amp;")
@@ -97,6 +111,68 @@ const escapeHtml = (value: string) =>
 
 const toCalendarDate = (date: Date) =>
   date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+
+export function buildStaffRequestNotificationEmail(params: StaffRequestNotificationEmailParams) {
+  const { date, time } = formatAppointmentForEmail(params.requestedStartTime, params.locationTimeZone);
+  const adminUrl = `${getPublicUrl()}/admin?${new URLSearchParams({
+    tab: "appointment-requests",
+    locationId: String(params.locationId),
+    requestId: String(params.requestId),
+  }).toString()}`;
+  const isReminder = params.notificationType === "pending_reminder";
+  const serviceList = params.serviceNames.map((name) => `<li style="margin: 4px 0;">${escapeHtml(name)}</li>`).join("");
+  return {
+    subject: isReminder
+      ? `Pedido de marcação ainda por analisar - ${params.locationName}`
+      : `Novo pedido de marcação - ${params.locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #8f4965; margin-top: 0;">${isReminder ? "Pedido pendente" : "Novo pedido de marcação"}</h2>
+        <p>Olá <strong>${escapeHtml(params.recipientName)}</strong>,</p>
+        <p>${isReminder
+          ? "Este pedido continua a aguardar uma decisão do estabelecimento."
+          : "Foi recebido um novo pedido de marcação."}</p>
+        <div style="background-color: #f8f5f6; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>Cliente:</strong> ${escapeHtml(params.customerName)}</p>
+          <p style="margin: 6px 0;"><strong>Data:</strong> ${escapeHtml(date)}</p>
+          <p style="margin: 6px 0;"><strong>Hora:</strong> ${escapeHtml(time)}</p>
+          <p style="margin: 12px 0 4px;"><strong>Serviços:</strong></p>
+          <ul style="margin: 0; padding-left: 20px;">${serviceList}</ul>
+        </div>
+        <p style="text-align: center; margin-top: 24px;">
+          <a href="${escapeHtml(adminUrl)}" style="background-color: #8f4965; color: white; padding: 12px 20px; text-decoration: none; border-radius: 7px; font-weight: bold; display: inline-block;">Consultar pedido no Admin</a>
+        </p>
+        <p style="font-size: 12px; color: #666; margin-top: 20px;">O acesso requer autenticação e permissões para esta localização.</p>
+      </div>
+    `,
+  };
+}
+
+export async function sendStaffRequestNotificationEmail(
+  params: StaffRequestNotificationEmailParams,
+): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; staff request email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+  const content = buildStaffRequestNotificationEmail(params);
+  try {
+    const response = await resend.emails.send({
+      from: emailFrom,
+      to: params.recipientEmail,
+      subject: content.subject,
+      html: content.html,
+    }, { idempotencyKey: params.idempotencyKey });
+    if (response.error) {
+      console.error("Resend error while sending staff request notification:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
+    }
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
+  } catch (error) {
+    console.error("Error sending staff request notification:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
+  }
+}
 
 export function formatAppointmentForEmail(startTime: Date, timeZone = shopTimeZone) {
   return {

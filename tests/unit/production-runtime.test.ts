@@ -18,6 +18,7 @@ const baseEnvironment = {
   META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "false",
   META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED: "false",
   APPOINTMENT_REMINDERS_ENABLED: "false",
+  STAFF_REQUEST_EMAILS_ENABLED: "false",
 };
 
 const productionTemplateEnvironment = {
@@ -129,6 +130,23 @@ test("Production refuses partially activated outbox, Meta and webhook capabiliti
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_WEBHOOK_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, META_WHATSAPP_INBOUND_AUTO_REPLY_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
   assert.throws(() => evaluate({ ...baseEnvironment, APPOINTMENT_REMINDERS_ENABLED: "true" }, "m.validateRuntimeConfiguration()"));
+});
+
+test("staff request email worker is fail-closed and requires explicit Resend configuration", () => {
+  const disabled = { ...baseEnvironment };
+  delete disabled.STAFF_REQUEST_EMAILS_ENABLED;
+  const output = evaluate(disabled, "m.validateRuntimeConfiguration(); console.log(m.staffRequestEmailsEnabled)");
+  assert.equal(output, "false");
+  assert.throws(() => evaluate(
+    { ...baseEnvironment, STAFF_REQUEST_EMAILS_ENABLED: "true", RESEND_API_KEY: "", RESEND_FROM_EMAIL: "" },
+    "m.validateRuntimeConfiguration()",
+  ));
+  evaluate({
+    ...baseEnvironment,
+    STAFF_REQUEST_EMAILS_ENABLED: "true",
+    RESEND_API_KEY: "test-resend-key",
+    RESEND_FROM_EMAIL: "notifications@example.test",
+  }, "m.validateRuntimeConfiguration()");
 });
 
 test("Production requires all five appointment template names before WhatsApp activation", () => {

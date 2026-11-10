@@ -6,9 +6,11 @@ import { createServer } from "http";
 import {
   appointmentNotificationWorkerEnabled,
   resolvedBusinessConfig,
+  staffRequestEmailsEnabled,
   validateRuntimeConfiguration,
 } from "./runtime-environment";
 import { startAppointmentNotificationWorker } from "./appointment-notifications";
+import { startAdminRequestNotificationWorker } from "./admin-notification-worker";
 import {
   materializeAllDueRecurringExpenseOccurrences,
   startRecurringExpenseMaterializationWorker,
@@ -212,10 +214,11 @@ finishHttpConfiguration();
   if (recurringExpenseWorkerEnabled) {
     await materializeAllDueRecurringExpenseOccurrences();
   }
-  if (appointmentNotificationWorkerEnabled || recurringExpenseWorkerEnabled) {
+  if (appointmentNotificationWorkerEnabled || recurringExpenseWorkerEnabled || staffRequestEmailsEnabled) {
     // Measure scheduling, not the unawaited first tick or later interval work.
     const finishWorkers = startupTimings.start("workers");
     if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
+    if (staffRequestEmailsEnabled) startAdminRequestNotificationWorker();
     if (recurringExpenseWorkerEnabled) {
       startRecurringExpenseMaterializationWorker(undefined, undefined, false);
     }
