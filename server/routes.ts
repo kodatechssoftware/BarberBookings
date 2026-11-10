@@ -41,6 +41,10 @@ import {
   appointmentRequestRefusalSchema,
   createAppointmentRequestSchema,
 } from "@shared/appointment-requests";
+import {
+  adminNotificationListQuerySchema,
+  requestNotificationSettingsSchema,
+} from "@shared/admin-notifications";
 import { createHash, randomUUID } from "crypto";
 import { performance } from "node:perf_hooks";
 import {
@@ -99,6 +103,13 @@ import {
   respondToAppointmentRequestProposalWithPool,
   type AppointmentRequestActor,
 } from "./appointment-request-engine";
+import {
+  getAdminNotificationFeed,
+  getRequestNotificationSettings,
+  markAdminNotificationRead,
+  markAllAdminNotificationsRead,
+  updateRequestNotificationSettings,
+} from "./admin-request-notifications";
 import {
   MultiServiceAppointmentValidationError,
 } from "@shared/multi-service-appointments";
@@ -700,6 +711,29 @@ async function getAppointmentRequestActor(req: Request): Promise<AppointmentRequ
     ...actor,
     actorType: actor.actorType === "barber" ? "professional" : actor.actorType,
   } as AppointmentRequestActor;
+}
+
+async function getAdministrativeNotificationUser(req: Request) {
+  const canonicalContext = getCanonicalRequestAuthContext(req);
+  if (canonicalContext?.user.isActive) {
+    return {
+      id: canonicalContext.user.id,
+      displayName: canonicalContext.user.displayName || canonicalContext.user.email,
+    };
+  }
+  const appSession = getAppSession(req);
+  if (appSession.role !== "admin" || !appSession.adminId) return null;
+  const schema = process.env.DATABASE_SCHEMA?.trim() || "public";
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) return null;
+  const result = await pool.query<{ id: number; display_name: string }>(`
+    SELECT user_account.id, user_account.display_name
+    FROM "${schema}"."admins" admin_account
+    INNER JOIN "${schema}"."users" user_account ON user_account.id = admin_account.user_id
+    WHERE admin_account.id = $1 AND user_account.status = 'active'
+  `, [appSession.adminId]);
+  return result.rows[0]
+    ? { id: Number(result.rows[0].id), displayName: result.rows[0].display_name }
+    : null;
 }
 
 function sendAppointmentRequestError(res: Response, error: unknown, publicResponse = false) {
@@ -2987,6 +3021,69 @@ export async function registerRoutes(
       const sent = sendAppointmentRequestError(res, error);
       if (sent) return sent;
       throw error;
+    }
+  });
+
+  app.get("/api/admin/request-notifications", requireTeamAppointmentsManage, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const user = await getAdministrativeNotificationUser(req);
+    if (!user) return res.status(403).json({ message: "A sua conta não suporta notificações administrativas." });
+    const query = adminNotificationListQuerySchema.parse(req.query);
+    return res.json(await getAdminNotificationFeed(
+      pool,
+      Number(res.locals.locationId),
+      user.id,
+      query.limit,
+    ));
+  });
+
+  app.post("/api/admin/request-notifications/read-all", requireTeamAppointmentsManage, async (req, res) => {
+    const user = await getAdministrativeNotificationUser(req);
+    if (!user) return res.status(403).json({ message: "A sua conta não suporta notificações administrativas." });
+    const updated = await markAllAdminNotificationsRead(
+      pool,
+      Number(res.locals.locationId),
+      user.id,
+    );
+    return res.json({ updated });
+  });
+
+  app.post("/api/admin/request-notifications/:id/read", requireTeamAppointmentsManage, async (req, res) => {
+    const user = await getAdministrativeNotificationUser(req);
+    if (!user) return res.status(403).json({ message: "A sua conta não suporta notificações administrativas." });
+    const notificationId = parsePositiveInteger(req.params.id);
+    if (notificationId === null) return res.status(400).json({ message: "Notificação inválida." });
+    const updated = await markAdminNotificationRead(
+      pool,
+      Number(res.locals.locationId),
+      user.id,
+      notificationId,
+    );
+    return updated
+      ? res.json({ read: true })
+      : res.status(404).json({ message: "Notificação não encontrada." });
+  });
+
+  app.get("/api/admin/request-notification-settings", requireSettingsManage, async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(await getRequestNotificationSettings(pool, Number(res.locals.locationId)));
+  });
+
+  app.put("/api/admin/request-notification-settings", requireSettingsManage, async (req, res) => {
+    const actor = await getAdministrativeNotificationUser(req);
+    if (!actor) return res.status(403).json({ message: "A sua conta não pode alterar esta configuração." });
+    const input = requestNotificationSettingsSchema.parse(req.body);
+    try {
+      return res.json(await updateRequestNotificationSettings(
+        pool,
+        Number(res.locals.locationId),
+        input,
+        { userId: actor.id, displayName: actor.displayName },
+      ));
+    } catch (error) {
+      return res.status(400).json({
+        message: error instanceof Error ? error.message : "Não foi possível guardar os alertas.",
+      });
     }
   });
 

@@ -35,6 +35,11 @@ export const appointmentNotificationEventsEnabled =
 export const appointmentNotificationWorkerEnabled =
   explicitBoolean("NOTIFICATION_OUTBOX_WORKER_ENABLED") ?? isDevelopmentDeployment;
 
+// Staff-facing request emails are separately gated and always fail closed.
+// In-app notifications do not depend on this switch.
+export const staffRequestEmailsEnabled =
+  explicitBoolean("STAFF_REQUEST_EMAILS_ENABLED") ?? false;
+
 export const recurringWhatsappNotificationsEnabled =
   explicitBoolean("META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED") ?? false;
 

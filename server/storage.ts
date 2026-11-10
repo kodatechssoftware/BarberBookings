@@ -3716,6 +3716,7 @@ export class MemoryStorage implements IStorage {
             id: this.nextIds.appointmentNotificationEvent++,
             appointmentId: newAppointment.id,
             seriesId: null,
+            appointmentRequestId: null,
             eventType: appointment.notificationEventType,
             eventRevision: notificationRevision,
             eventKey: `appointment:${newAppointment.id}:confirmation:${notificationRevision}`,
@@ -3737,6 +3738,7 @@ export class MemoryStorage implements IStorage {
           const now = new Date();
           this.appointmentNotificationEvents.push({
             id: this.nextIds.appointmentNotificationEvent++, appointmentId: newAppointment.id, seriesId: null,
+            appointmentRequestId: null,
             eventType: "appointment_reminder_day_before", eventRevision: notificationRevision,
             eventKey: `appointment:${newAppointment.id}:reminder_day_before:${notificationRevision}`,
             availableAt: appointment.reminderAvailableAt,
@@ -3814,6 +3816,7 @@ export class MemoryStorage implements IStorage {
         if (appointment.reminderAvailableAt) {
           this.appointmentNotificationEvents.push({
             id: this.nextIds.appointmentNotificationEvent++, appointmentId: created.id, seriesId: null,
+            appointmentRequestId: null,
             eventType: "appointment_reminder_day_before", eventRevision: created.notificationRevision,
             eventKey: `appointment:${created.id}:reminder_day_before:${created.notificationRevision}`,
             availableAt: appointment.reminderAvailableAt, appointmentStartTime: toAppointmentDate(created.startTime),
@@ -3830,6 +3833,7 @@ export class MemoryStorage implements IStorage {
       const payloadSnapshot = buildRecurringNotificationSnapshot(request, createdAppointments);
       const notificationEvent: AppointmentNotificationEvent = {
         id: this.nextIds.appointmentNotificationEvent++, appointmentId: null, seriesId: series.id,
+        appointmentRequestId: null,
         eventType: "appointment_recurring_confirmation", eventRevision: 1,
         eventKey: `series:${series.id}:recurring_confirmation:1`, availableAt: now,
         appointmentStartTime: request.series.firstStartTime,
@@ -4047,6 +4051,7 @@ export class MemoryStorage implements IStorage {
         : changes.notificationEventType === "appointment_updated" ? "updated" : "cancelled";
       notificationEvent = {
         id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
+        appointmentRequestId: null,
         eventType: changes.notificationEventType, eventRevision: updated.notificationRevision,
         eventKey: `appointment:${id}:${eventLabel}:${updated.notificationRevision}`, availableAt: now,
         appointmentStartTime: toAppointmentDate(updated.startTime),
@@ -4068,6 +4073,7 @@ export class MemoryStorage implements IStorage {
     if (notificationContextChanged && reminderAvailableAt && updated.status === "booked") {
       this.appointmentNotificationEvents.push({
         id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
+        appointmentRequestId: null,
         eventType: "appointment_reminder_day_before", eventRevision: updated.notificationRevision,
         eventKey: `appointment:${id}:reminder_day_before:${updated.notificationRevision}`,
         availableAt: reminderAvailableAt, appointmentStartTime: toAppointmentDate(updated.startTime),
@@ -4201,6 +4207,7 @@ export class MemoryStorage implements IStorage {
       id: this.nextIds.appointmentNotificationEvent++,
       appointmentId: id,
       seriesId: null,
+      appointmentRequestId: null,
       eventType: "appointment_rescheduled",
       eventRevision: updated.notificationRevision,
       eventKey: `appointment:${id}:rescheduled:${updated.notificationRevision}`,
@@ -4269,6 +4276,7 @@ export class MemoryStorage implements IStorage {
     }
     const notificationEvent: AppointmentNotificationEvent = {
       id: this.nextIds.appointmentNotificationEvent++, appointmentId: id, seriesId: null,
+      appointmentRequestId: null,
       eventType: "appointment_cancelled", eventRevision: revision,
       eventKey: `appointment:${id}:cancelled:${revision}`,
       availableAt: now,

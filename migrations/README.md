@@ -145,3 +145,10 @@ and requested service segments. Existing segments are backfilled with
 validators accept hybrid stages but never consult the mutable compatibility
 catalogue for historical rows; the transactional engine revalidates current
 compatibility before confirmation.
+
+Migration `0027_admin_request_notifications.sql` adds the location-scoped,
+fail-closed administrative notification centre for appointment requests. It
+stores durable notification events, per-user read/email delivery state,
+explicit recipients and reminder settings. External email and reminders are
+disabled by default, no existing request is backfilled, and no customer or
+appointment row is rewritten.

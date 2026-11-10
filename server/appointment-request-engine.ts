@@ -14,6 +14,11 @@ import {
 } from "@shared/multi-service-appointments";
 import { serializeSafeAuditMetadata } from "./audit-log-security";
 import {
+  cancelPendingRequestRemindersWithClient,
+  insertNewRequestAdminNotificationsWithClient,
+  schedulePendingRequestReminderWithClient,
+} from "./admin-request-notifications";
+import {
   assertBeautyV2FeaturesEnabledWithClient,
   createSequentialAppointmentInTransaction,
   MultiServiceFeatureDisabledError,
@@ -38,6 +43,7 @@ export type AppointmentRequestEngineOptions = Pick<MultiServiceEngineOptions, "m
   appointmentNotificationsEnabled?: boolean;
   responseTokenSecret?: string;
   now?: () => Date;
+  afterRequestNotificationCreated?: () => Promise<void>;
   afterAppointmentCreated?: (client: PoolClient, appointmentId: number) => Promise<void>;
 };
 
@@ -457,6 +463,13 @@ async function markAvailabilityConflict(
     startTime: proposal?.proposed_start_time ?? request.requested_start_time,
     payload: { status: "pending", proposalId: proposal?.id ?? null },
   });
+  await cancelPendingRequestRemindersWithClient(client, request.id, now);
+  await schedulePendingRequestReminderWithClient(client, {
+    requestId: request.id,
+    locationId: Number(request.location_id),
+    revision: nextRevision,
+    now,
+  });
 }
 
 export async function createAppointmentRequestWithPool(
@@ -591,6 +604,13 @@ export async function createAppointmentRequestWithPool(
       startTime: request.requested_start_time,
       payload: { status: "pending", serviceCount: insertedSegments.length },
     });
+    await insertNewRequestAdminNotificationsWithClient(client, {
+      requestId: request.id,
+      locationId,
+      revision: request.revision,
+      createdAt: new Date(request.created_at),
+    });
+    await options.afterRequestNotificationCreated?.();
     await client.query("SET CONSTRAINTS ALL IMMEDIATE");
     await client.query("COMMIT");
     return { request: mapRequest(request, insertedSegments), reused: false };
@@ -703,6 +723,7 @@ async function approveLockedRequest(
         updated_at = GREATEST($4::timestamp, created_at)
       WHERE id = $1 RETURNING *
     `, [request.id, nextRevision, created.appointment.id, utcTimestamp(now)]);
+    await cancelPendingRequestRemindersWithClient(client, request.id, now);
     await insertHistory(client, table, {
       requestId: request.id,
       proposalId: proposal?.id,
@@ -831,6 +852,7 @@ export async function refuseAppointmentRequestWithPool(
       startTime: request.requested_start_time,
       payload: { status: "refused", reasonProvided: Boolean(input.reason?.trim()) },
     });
+    await cancelPendingRequestRemindersWithClient(client, request.id, now);
     await client.query("COMMIT");
     return { request: mapRequest(updated.rows[0], rows), reused: false };
   } catch (error) {
@@ -939,6 +961,7 @@ export async function proposeAppointmentRequestTimeWithPool(
         updated_at = GREATEST($3::timestamp, created_at)
       WHERE id = $1 RETURNING *
     `, [request.id, nextRevision, utcTimestamp(now)]);
+    await cancelPendingRequestRemindersWithClient(client, request.id, now);
     await insertHistory(client, table, {
       requestId: request.id,
       proposalId: proposal.id,
@@ -1036,6 +1059,12 @@ export async function respondToAppointmentRequestProposalWithPool(
       await insertAudit(client, table, request, clientActor, "appointment_request.proposal_expired",
         `Proposta expirada: ${request.customer_name}`,
         { previousStatus: "proposed", newStatus: "pending", proposalId: proposal.id });
+      await schedulePendingRequestReminderWithClient(client, {
+        requestId: request.id,
+        locationId: Number(request.location_id),
+        revision: nextRevision,
+        now,
+      });
       await client.query("COMMIT");
       committedConflict = true;
       throw new AppointmentRequestError(410, "APPOINTMENT_REQUEST_PROPOSAL_EXPIRED", "Esta proposta expirou. Aguarde um novo horário.");
@@ -1070,6 +1099,12 @@ export async function respondToAppointmentRequestProposalWithPool(
         eventKey: `appointment-request:${request.id}:proposal-rejected:${nextRevision}`,
         startTime: proposal.proposed_start_time,
         payload: { status: "pending", proposalId: proposal.id },
+      });
+      await schedulePendingRequestReminderWithClient(client, {
+        requestId: request.id,
+        locationId: Number(request.location_id),
+        revision: nextRevision,
+        now,
       });
       await client.query("COMMIT");
       return { request: mapRequest(updated.rows[0], rows), decision: "rejected" as const, reused: false };

@@ -78,6 +78,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "0024_multi_service_appointment_engine.sql",
       "0025_appointment_request_approval.sql",
       "0026_parallel_service_scheduling.sql",
+      "0027_admin_request_notifications.sql",
     ]) {
       await copyFile(path.resolve("migrations", migration), path.join(migrationsDirectory, migration));
     }
@@ -89,8 +90,16 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         (2, 'Other location', 'other', 'Other address', 'Europe/Lisbon', true, false)
       ON CONFLICT (id) DO UPDATE SET is_active = true, timezone = EXCLUDED.timezone;
       INSERT INTO users (id, display_name, email, password_hash, status) VALUES
-        (1, 'Admin QA', 'admin-qa@example.test', 'test-only-password-hash', 'active')
+        (1, 'Admin QA', 'admin-qa@example.test', 'test-only-password-hash', 'active'),
+        (2, 'Admin QA 2', 'admin-qa-2@example.test', 'test-only-password-hash', 'active')
       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
+      INSERT INTO user_access_scopes (user_id, location_id, preset_key)
+      SELECT candidate.user_id, NULL, 'administrator'
+      FROM (VALUES (1), (2)) AS candidate(user_id)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM user_access_scopes existing
+        WHERE existing.user_id = candidate.user_id AND existing.location_id IS NULL
+      );
       INSERT INTO barbers (id, name, specialty, color, is_visible) VALUES
         (1, 'Ana', 'Unhas', '#111111', true),
         (2, 'Beatriz', 'Estética', '#222222', true),
@@ -127,6 +136,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     `);
 
     const engine = await import("../../server/appointment-request-engine");
+    const adminNotifications = await import("../../server/admin-request-notifications");
     const multiServiceEngine = await import("../../server/multi-service-appointment-engine");
     applicationPool = (await import("../../server/db")).pool;
     const options = {
@@ -191,6 +201,22 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         && error.code === "APPOINTMENT_REQUEST_TIME_INVALID",
     );
 
+    const rolledBackInput = input("2035-01-04T09:00:00.000Z");
+    await assert.rejects(
+      engine.createAppointmentRequestWithPool(pool, 1, rolledBackInput, {
+        ...options,
+        afterRequestNotificationCreated: async () => { throw new Error("forced request notification rollback"); },
+      }),
+      /forced request notification rollback/,
+    );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_requests WHERE idempotency_key = $1",
+      [rolledBackInput.idempotencyKey],
+    )).rows[0].count), 0);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM admin_notifications",
+    )).rows[0].count), 0);
+
     const simpleInput = input("2035-01-04T10:00:00.000Z");
     const simple = await engine.createAppointmentRequestWithPool(pool, 1, simpleInput, options);
     assert.equal(simple.request.status, "pending");
@@ -202,9 +228,31 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       pendingRequests.find((request) => request.id === simple.request.id)?.segments[0].barberName,
       "Ana",
     );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM admin_notifications WHERE appointment_request_id = $1 AND notification_type = 'new_request'",
+      [simple.request.id],
+    )).rows[0].count), 1);
+    const firstUserFeed = await adminNotifications.getAdminNotificationFeed(pool, 1, 1);
+    const secondUserFeed = await adminNotifications.getAdminNotificationFeed(pool, 1, 2);
+    assert.equal(firstUserFeed.unreadCount, 1);
+    assert.equal(firstUserFeed.pendingDecisionCount, 1);
+    assert.equal(secondUserFeed.unreadCount, 1);
+    assert.equal(firstUserFeed.items[0].requestId, simple.request.id);
+    assert.equal(await adminNotifications.markAdminNotificationRead(
+      pool, 1, 1, firstUserFeed.items[0].id,
+    ), true);
+    assert.equal((await adminNotifications.getAdminNotificationFeed(pool, 1, 1)).unreadCount, 0);
+    assert.equal((await adminNotifications.getAdminNotificationFeed(pool, 1, 2)).unreadCount, 1);
+    assert.equal(await adminNotifications.markAdminNotificationRead(
+      pool, 2, 1, firstUserFeed.items[0].id,
+    ), false, "a user cannot mark a notification from another location");
     const simpleRetry = await engine.createAppointmentRequestWithPool(pool, 1, simpleInput, options);
     assert.equal(simpleRetry.reused, true);
     assert.equal(simpleRetry.request.id, simple.request.id);
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM admin_notifications WHERE appointment_request_id = $1 AND notification_type = 'new_request'",
+      [simple.request.id],
+    )).rows[0].count), 1, "idempotent request retries do not duplicate administrative notifications");
     await assert.rejects(
       engine.createAppointmentRequestWithPool(pool, 1, { ...simpleInput, customerName: "Different" }, options),
       (error: unknown) => error instanceof engine.AppointmentRequestError

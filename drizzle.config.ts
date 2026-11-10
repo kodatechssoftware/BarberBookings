@@ -14,6 +14,8 @@ export default defineConfig({
   schemaFilter: [databaseSchema],
   tablesFilter: [
     "admins",
+    "admin_notifications",
+    "admin_notification_user_states",
     "appointments",
     "appointment_extras",
     "appointment_notification_events",
@@ -30,6 +32,8 @@ export default defineConfig({
     "customer_notes",
     "extra_definitions",
     "locations",
+    "location_request_notification_recipients",
+    "location_request_notification_settings",
     "meta_webhook_receipts",
     "service_categories",
     "service_locations",

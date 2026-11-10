@@ -164,7 +164,7 @@ async function loadContextForUserRow(
 }
 
 export async function loadCanonicalAuthContext(
-  pool: Pool,
+  pool: Pool | PoolClient,
   userId: number,
   options: { schemaName?: string; requireActive?: boolean } = {},
 ): Promise<CanonicalAuthContext | null> {

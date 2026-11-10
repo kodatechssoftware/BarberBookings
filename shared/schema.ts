@@ -36,6 +36,7 @@ export const businessExpenseRecurringVersionsIdSeq = appPgSchema?.sequence("busi
 export const businessExpenseRecurringPausesIdSeq = appPgSchema?.sequence("business_expense_recurring_pauses_id_seq");
 export const whatsappMessagesIdSeq = appPgSchema?.sequence("whatsapp_messages_id_seq");
 export const appointmentNotificationEventsIdSeq = appPgSchema?.sequence("appointment_notification_events_id_seq");
+export const adminNotificationsIdSeq = appPgSchema?.sequence("admin_notifications_id_seq");
 export const metaWebhookReceiptsIdSeq = appPgSchema?.sequence("meta_webhook_receipts_id_seq");
 export const locationsIdSeq = appPgSchema?.sequence("locations_id_seq");
 export const businessFeatureSettingsIdSeq = appPgSchema?.sequence("business_feature_settings_id_seq");
@@ -82,6 +83,17 @@ export const appointmentRequestProposalStatuses = [
   "replaced",
   "expired",
   "unavailable",
+] as const;
+
+export const adminNotificationTypes = ["new_request", "pending_reminder"] as const;
+export const adminNotificationEmailStatuses = [
+  "not_needed",
+  "pending",
+  "sending",
+  "retry",
+  "sent",
+  "failed",
+  "skipped",
 ] as const;
 
 export const userStatuses = ["invited", "active", "disabled"] as const;
@@ -1100,6 +1112,7 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   id: idColumn("appointment_notification_events_id_seq"),
   appointmentId: integer("appointment_id").references(() => appointments.id, { onDelete: "cascade" }),
   seriesId: text("series_id").references(() => appointmentSeries.id, { onDelete: "cascade" }),
+  appointmentRequestId: integer("appointment_request_id").references(() => appointmentRequests.id, { onDelete: "cascade" }),
   eventType: text("event_type").notNull(),
   eventRevision: integer("event_revision").notNull(),
   eventKey: text("event_key").notNull(),
@@ -1138,7 +1151,87 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   duePendingIdx: index("appointment_notification_events_due_pending_idx")
     .on(table.availableAt, table.id)
     .where(sql`${table.processingCompletedAt} IS NULL`),
-  subjectCheck: check("appointment_notification_events_subject_check", sql`num_nonnulls(${table.appointmentId}, ${table.seriesId}) = 1`),
+  subjectCheck: check("appointment_notification_events_subject_check", sql`num_nonnulls(${table.appointmentId}, ${table.seriesId}, ${table.appointmentRequestId}) = 1`),
+}));
+
+export const locationRequestNotificationSettings = appPgTable("location_request_notification_settings", {
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "cascade" }).primaryKey(),
+  emailEnabled: boolean("email_enabled").notNull().default(false),
+  reminderEnabled: boolean("reminder_enabled").notNull().default(false),
+  reminderDelayMinutes: integer("reminder_delay_minutes").notNull().default(30),
+  respectOpeningHours: boolean("respect_opening_hours").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  delayCheck: check("location_request_notification_settings_delay_check", sql`${table.reminderDelayMinutes} BETWEEN 5 AND 1440`),
+  timestampsCheck: check("location_request_notification_settings_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+}));
+
+export const locationRequestNotificationRecipients = appPgTable("location_request_notification_recipients", {
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "cascade" }).notNull(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  newRequestEmail: boolean("new_request_email").notNull().default(true),
+  pendingReminderEmail: boolean("pending_reminder_email").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.locationId, table.userId] }),
+  userIdx: index("location_request_notification_recipients_user_idx")
+    .on(table.userId, table.locationId)
+    .where(sql`${table.isActive} = true`),
+  timestampsCheck: check("location_request_notification_recipients_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+}));
+
+export const adminNotifications = appPgTable("admin_notifications", {
+  id: idColumn("admin_notifications_id_seq"),
+  locationId: integer("location_id").references(() => locations.id, { onDelete: "cascade" }).notNull(),
+  appointmentRequestId: integer("appointment_request_id").references(() => appointmentRequests.id, { onDelete: "cascade" }).notNull(),
+  notificationType: text("notification_type", { enum: adminNotificationTypes }).notNull(),
+  eventKey: text("event_key").notNull(),
+  availableAt: timestamp("available_at").defaultNow().notNull(),
+  emailDeliveryEnabled: boolean("email_delivery_enabled").notNull().default(false),
+  recipientsPreparedAt: timestamp("recipients_prepared_at"),
+  cancelledAt: timestamp("cancelled_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  typeCheck: check("admin_notifications_type_check", sql`${table.notificationType} IN ('new_request', 'pending_reminder')`),
+  eventKeyCheck: check("admin_notifications_event_key_check", sql`btrim(${table.eventKey}) <> '' AND char_length(${table.eventKey}) <= 180`),
+  eventKeyUnique: uniqueIndex("admin_notifications_event_key_unique").on(table.eventKey),
+  locationAvailableIdx: index("admin_notifications_location_available_idx")
+    .on(table.locationId, table.availableAt, table.id)
+    .where(sql`${table.cancelledAt} IS NULL`),
+  emailPendingIdx: index("admin_notifications_email_pending_idx")
+    .on(table.availableAt, table.id)
+    .where(sql`${table.emailDeliveryEnabled} = true AND ${table.recipientsPreparedAt} IS NULL AND ${table.cancelledAt} IS NULL`),
+  requestIdx: index("admin_notifications_request_idx")
+    .on(table.appointmentRequestId, table.notificationType, table.id),
+}));
+
+export const adminNotificationUserStates = appPgTable("admin_notification_user_states", {
+  notificationId: integer("notification_id").references(() => adminNotifications.id, { onDelete: "cascade" }).notNull(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  readAt: timestamp("read_at"),
+  emailStatus: text("email_status", { enum: adminNotificationEmailStatuses }).notNull().default("not_needed"),
+  emailAttempts: integer("email_attempts").notNull().default(0),
+  nextEmailAttemptAt: timestamp("next_email_attempt_at"),
+  emailLeaseStartedAt: timestamp("email_lease_started_at"),
+  emailProviderMessageId: text("email_provider_message_id"),
+  emailErrorCode: text("email_error_code"),
+  emailSentAt: timestamp("email_sent_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.notificationId, table.userId] }),
+  emailStatusCheck: check("admin_notification_user_states_email_status_check", sql`${table.emailStatus} IN ('not_needed', 'pending', 'sending', 'retry', 'sent', 'failed', 'skipped')`),
+  attemptsCheck: check("admin_notification_user_states_attempts_check", sql`${table.emailAttempts} BETWEEN 0 AND 20`),
+  timestampsCheck: check("admin_notification_user_states_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+  unreadIdx: index("admin_notification_user_states_user_unread_idx")
+    .on(table.userId, table.notificationId)
+    .where(sql`${table.readAt} IS NULL`),
+  emailDueIdx: index("admin_notification_user_states_email_due_idx")
+    .on(table.nextEmailAttemptAt, table.notificationId, table.userId)
+    .where(sql`${table.emailStatus} IN ('pending', 'retry', 'sending')`),
 }));
 
 export const metaWebhookReceipts = appPgTable("meta_webhook_receipts", {
@@ -1677,6 +1770,12 @@ export type BusinessExpenseRecurringPause = typeof businessExpenseRecurringPause
 export type BusinessExpense = typeof businessExpenses.$inferSelect;
 export type WhatsappMessage = typeof whatsappMessages.$inferSelect;
 export type AppointmentNotificationEvent = typeof appointmentNotificationEvents.$inferSelect;
+export type AdminNotification = typeof adminNotifications.$inferSelect;
+export type AdminNotificationUserState = typeof adminNotificationUserStates.$inferSelect;
+export type LocationRequestNotificationSetting = typeof locationRequestNotificationSettings.$inferSelect;
+export type LocationRequestNotificationRecipient = typeof locationRequestNotificationRecipients.$inferSelect;
+export type AdminNotificationType = typeof adminNotificationTypes[number];
+export type AdminNotificationEmailStatus = typeof adminNotificationEmailStatuses[number];
 export type MetaWebhookReceipt = typeof metaWebhookReceipts.$inferSelect;
 export type BarberCompensationModel = typeof barberCompensationModels[number];
 export type ChairRentPeriod = typeof chairRentPeriods[number];
