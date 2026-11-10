@@ -39,6 +39,11 @@ export type CreateMultiServiceAppointmentInput = {
   services: MultiServiceSelection[];
 };
 
+export type ValidateMultiServiceAppointmentAvailabilityInput = Pick<
+  CreateMultiServiceAppointmentInput,
+  "locationId" | "startTime" | "manualOutsideHours" | "services"
+>;
+
 export type StoredMultiServiceSegment = {
   id: number;
   appointmentId: number;
@@ -588,11 +593,11 @@ export async function previewSequentialAppointmentAvailabilityWithPool(
   }
 }
 
-export async function createSequentialAppointmentInTransaction(
+export async function validateMultiServiceAppointmentAvailabilityInTransaction(
   client: PoolClient,
-  input: CreateMultiServiceAppointmentInput,
+  input: ValidateMultiServiceAppointmentAvailabilityInput,
   options: MultiServiceEngineOptions = {},
-): Promise<CreatedMultiServiceAppointment> {
+): Promise<MultiServiceAppointmentPlan> {
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
   const schema = quoteIdentifier(schemaName);
   const table = (name: string) => `${schema}.${quoteIdentifier(name)}`;
@@ -657,6 +662,19 @@ export async function createSequentialAppointmentInTransaction(
     `, [period.barberId, utcTimestamp(period.endTime), utcTimestamp(period.startTime)]);
     if (conflict.rowCount) throw new MultiServiceConflictError();
   }
+
+  return plan;
+}
+
+export async function createSequentialAppointmentInTransaction(
+  client: PoolClient,
+  input: CreateMultiServiceAppointmentInput,
+  options: MultiServiceEngineOptions = {},
+): Promise<CreatedMultiServiceAppointment> {
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const schema = quoteIdentifier(schemaName);
+  const table = (name: string) => `${schema}.${quoteIdentifier(name)}`;
+  const plan = await validateMultiServiceAppointmentAvailabilityInTransaction(client, input, options);
 
   const customerName = input.customerName.trim();
   const customerPhone = input.customerPhone.trim();

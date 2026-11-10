@@ -21,6 +21,7 @@ import {
   MultiServiceScopeError,
   resolveAppointmentServiceTermsWithClient,
   resolveExecutionTermsWithClient,
+  validateMultiServiceAppointmentAvailabilityInTransaction,
   type MultiServiceEngineOptions,
   type MultiServiceSelection,
 } from "./multi-service-appointment-engine";
@@ -103,8 +104,8 @@ export class AppointmentRequestError extends Error {
   }
 }
 export class AppointmentRequestAvailabilityError extends AppointmentRequestError {
-  constructor() {
-    super(409, "APPOINTMENT_REQUEST_TIME_UNAVAILABLE", "O horário deixou de estar disponível. A equipa terá de analisar outra opção.");
+  constructor(message = "O horário deixou de estar disponível. A equipa terá de analisar outra opção.") {
+    super(409, "APPOINTMENT_REQUEST_TIME_UNAVAILABLE", message);
   }
 }
 
@@ -875,6 +876,29 @@ export async function proposeAppointmentRequestTimeWithPool(
       const token = proposalToken(tokenSecret(options), request.id, duplicate.rows[0].revision, input.commandKey, fingerprint);
       await client.query("COMMIT");
       return { request: mapRequest(request, rows, duplicate.rows[0]), proposal: mapRequest(request, rows, duplicate.rows[0]).activeProposal, responseToken: token, reused: true };
+    }
+    try {
+      await validateMultiServiceAppointmentAvailabilityInTransaction(client, {
+        locationId: Number(request.location_id),
+        startTime: input.startTime,
+        manualOutsideHours: false,
+        services: selections(rows),
+      }, {
+        masterEnabled: options.masterEnabled,
+        businessVertical: options.businessVertical,
+        requiredFeatures: rows.length > 1
+          ? ["appointmentRequests", "multiServiceAppointments"]
+          : ["appointmentRequests"],
+        minimumSegments: 1,
+        termsSnapshot: segmentTerms(rows),
+      });
+    } catch (error) {
+      if (isAvailabilityError(error)) {
+        throw new AppointmentRequestAvailabilityError(
+          "O horário proposto não está disponível para todos os profissionais. Escolha outro horário.",
+        );
+      }
+      throw error;
     }
     const active = await loadActiveProposal(client, request.id, table, true);
     if (active) {

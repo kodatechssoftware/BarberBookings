@@ -307,8 +307,19 @@ test("authorized Admin can review and approve a request from the location-scoped
   };
   let currentRequest = request;
   let approvalCount = 0;
+  let rejectedProposalCount = 0;
   await page.route("**/api/admin/appointment-requests**", async (route) => {
     const url = new URL(route.request().url());
+    if (route.request().method() === "POST" && url.pathname.endsWith("/propose")) {
+      rejectedProposalCount += 1;
+      return route.fulfill({
+        status: 409,
+        json: {
+          code: "APPOINTMENT_REQUEST_TIME_UNAVAILABLE",
+          message: "O horário proposto não está disponível para todos os profissionais. Escolha outro horário.",
+        },
+      });
+    }
     if (route.request().method() === "POST" && url.pathname.endsWith("/approve")) {
       approvalCount += 1;
       currentRequest = {
@@ -347,6 +358,18 @@ test("authorized Admin can review and approve a request from the location-scoped
   await expect(page.getByRole("list", { name: "Histórico do pedido" })).toContainText("Pedido recebido");
   await expect(page.getByRole("list", { name: "Histórico do pedido" })).toContainText("Enviado pelo cliente");
   await expect(page.getByText("Em simultâneo")).toBeVisible();
+  await page.getByRole("button", { name: "Propor horário" }).click();
+  const proposalDialog = page.getByRole("dialog", { name: "Propor outro horário" });
+  await expect(proposalDialog).toContainText("Confirmamos agora a disponibilidade de todos os profissionais");
+  await proposalDialog.getByLabel("Data").fill("2030-06-03");
+  await proposalDialog.getByLabel("Hora").fill("10:00");
+  await proposalDialog.getByRole("button", { name: "Confirmar" }).click();
+  await expect(page.getByText("Horário indisponível", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Notifications (F8)").getByText(
+    "O horário proposto não está disponível para todos os profissionais. Escolha outro horário.",
+  )).toBeVisible();
+  expect(rejectedProposalCount).toBe(1);
+  await proposalDialog.getByRole("button", { name: "Cancelar" }).click();
   await page.getByRole("button", { name: "Aprovar" }).click();
   await expect.poll(() => approvalCount).toBe(1);
   await expect(page.getByText("Pedido aprovado — marcação confirmada.")).toBeVisible();

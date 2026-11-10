@@ -457,6 +457,103 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       [[0, "2035-01-15T12:00:00.000Z"], [0, "2035-01-15T12:00:00.000Z"]],
     );
 
+    const blockedParallelProposalRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-21T10:00:00.000Z", true, "parallel"), options,
+    );
+    await pool.query(`
+      INSERT INTO appointments (
+        location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES (1, 2, 2, '2035-01-21 12:00:00', 'Parallel proposal blocker', '+351910000091', 45, 'booked', 'parallel-proposal-blocker')
+    `);
+    await assert.rejects(
+      engine.proposeAppointmentRequestTimeWithPool(pool, blockedParallelProposalRequest.request.id, 1, {
+        startTime: new Date("2035-01-21T12:00:00.000Z"),
+        expiresAt: new Date("2035-01-21T11:00:00.000Z"),
+        commandKey: "parallel-proposal-preflight-conflict",
+      }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") }),
+      (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError
+        && error.code === "APPOINTMENT_REQUEST_TIME_UNAVAILABLE"
+        && /todos os profissionais/i.test(error.message),
+      "a conflict with one professional prevents a parallel proposal from being recorded",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM appointment_requests WHERE id = $1", [blockedParallelProposalRequest.request.id])).rows[0].status,
+      "pending",
+    );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_request_proposals WHERE request_id = $1",
+      [blockedParallelProposalRequest.request.id],
+    )).rows[0].count), 0);
+
+    const blockedSequentialProposalRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-23T10:00:00.000Z", true, "sequential"), options,
+    );
+    await pool.query(`
+      INSERT INTO appointments (
+        location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES (1, 2, 2, '2035-01-23 12:15:00', 'Sequential proposal blocker', '+351910000092', 12, 'booked', 'sequential-proposal-blocker')
+    `);
+    await assert.rejects(
+      engine.proposeAppointmentRequestTimeWithPool(pool, blockedSequentialProposalRequest.request.id, 1, {
+        startTime: new Date("2035-01-23T12:00:00.000Z"),
+        expiresAt: new Date("2035-01-23T11:00:00.000Z"),
+        commandKey: "sequential-proposal-preflight-conflict",
+      }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") }),
+      (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError,
+      "the proposal preflight validates every sequential offset and its buffers",
+    );
+    assert.equal(Number((await pool.query(
+      "SELECT count(*) AS count FROM appointment_request_proposals WHERE request_id = $1",
+      [blockedSequentialProposalRequest.request.id],
+    )).rows[0].count), 0);
+
+    const outsideHoursProposalRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-25T10:00:00.000Z", true, "sequential"), options,
+    );
+    await assert.rejects(
+      engine.proposeAppointmentRequestTimeWithPool(pool, outsideHoursProposalRequest.request.id, 1, {
+        startTime: new Date("2035-01-25T19:30:00.000Z"),
+        expiresAt: new Date("2035-01-25T18:00:00.000Z"),
+        commandKey: "sequential-proposal-outside-hours",
+      }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") }),
+      (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError,
+      "proposal preflight respects working periods and complete service duration",
+    );
+
+    const activeProposalRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-01-24T09:00:00.000Z", true, "parallel"), options,
+    );
+    const activeProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, activeProposalRequest.request.id, 1, {
+      startTime: new Date("2035-01-24T10:00:00.000Z"),
+      expiresAt: new Date("2035-01-24T09:30:00.000Z"),
+      commandKey: "active-proposal-before-invalid-replacement",
+    }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") });
+    await pool.query(`
+      INSERT INTO appointments (
+        location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES (1, 1, 1, '2035-01-24 14:00:00', 'Replacement blocker', '+351910000093', 30, 'booked', 'replacement-proposal-blocker')
+    `);
+    await assert.rejects(
+      engine.proposeAppointmentRequestTimeWithPool(pool, activeProposalRequest.request.id, 1, {
+        startTime: new Date("2035-01-24T14:00:00.000Z"),
+        expiresAt: new Date("2035-01-24T13:00:00.000Z"),
+        commandKey: "invalid-replacement-proposal",
+      }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") }),
+      (error: unknown) => error instanceof engine.AppointmentRequestAvailabilityError,
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM appointment_request_proposals WHERE id = $1", [activeProposal.proposal.id])).rows[0].status,
+      "active",
+      "a failed replacement leaves the previous valid proposal active",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM appointment_requests WHERE id = $1", [activeProposalRequest.request.id])).rows[0].status,
+      "proposed",
+    );
+
     const conflictedParallelProposalRequest = await engine.createAppointmentRequestWithPool(
       pool,
       1,
