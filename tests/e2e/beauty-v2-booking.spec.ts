@@ -22,6 +22,12 @@ const professionals = [
   { id: 23, name: "Carolina", specialty: "Rosto e bem-estar", bio: null, avatar: null, color: "#d6a1ad", isVisible: true, locationCount: 1, serviceIds: [14, 16, 17], allServicesAllowed: false },
 ];
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/admin/request-notifications**", (route) => route.fulfill({
+    json: { items: [], unreadCount: 0, pendingDecisionCount: 0 },
+  }));
+});
+
 async function contrastRatio(locator: ReturnType<Page["locator"]>) {
   return locator.evaluate((element) => {
     const parse = (value: string) => {
@@ -489,6 +495,95 @@ test("authorized Admin can review and approve a request from the location-scoped
   await expect(requestDialog).toContainText("Mariana Silva");
   await expect(requestDialog.getByRole("list", { name: "Histórico do pedido" })).toBeVisible();
   expect(await requestDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+test("Admin notifications keep unread and pending counters separate and open a secure location-scoped deep-link", async ({ page }, testInfo) => {
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({
+    json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true },
+  }));
+  const request = {
+    id: 44, locationId: 1, status: "pending", revision: 1, customerName: "Cliente Notificação",
+    customerPhone: "+351912345678", customerEmail: "notificacao@example.test",
+    requestedStartTime: "2030-06-02T09:00:00.000Z", appointmentId: null, refusalReason: null,
+    createdAt: "2030-06-01T08:00:00.000Z", activeProposal: null,
+    segments: [{ position: 0, executionStage: 0, serviceId: 11, barberId: 21, barberName: "Mariana Silva", startTime: "2030-06-02T09:00:00.000Z", durationMinutes: 45, serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500 }],
+    history: [{ id: 1, event_type: "request_created", actor_type: "client", actor_name: null, from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z" }],
+  };
+  let readAt: string | null = null;
+  let readCalls = 0;
+  await page.route("**/api/admin/request-notifications**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "POST" && url.pathname.endsWith("/77/read")) {
+      readCalls += 1;
+      readAt = "2030-06-01T08:02:00.000Z";
+      return route.fulfill({ json: { read: true } });
+    }
+    if (route.request().method() === "POST" && url.pathname.endsWith("/read-all")) {
+      readAt = "2030-06-01T08:02:00.000Z";
+      return route.fulfill({ json: { updated: 1 } });
+    }
+    return route.fulfill({ json: {
+      unreadCount: readAt ? 0 : 1,
+      pendingDecisionCount: 1,
+      items: [{
+        id: 77, locationId: 1, requestId: 44, type: "new_request",
+        customerName: "Cliente Notificação", requestedStartTime: "2030-06-02T09:00:00.000Z",
+        services: [{ name: "Manicure", professionalName: "Mariana Silva" }],
+        availableAt: "2030-06-01T08:00:00.000Z", createdAt: "2030-06-01T08:00:00.000Z", readAt,
+      }],
+    } });
+  });
+  await page.route("**/api/admin/request-notification-settings", async (route) => {
+    const response = {
+      emailEnabled: false, reminderEnabled: false, reminderDelayMinutes: 30,
+      respectOpeningHours: true, externalEmailRuntimeEnabled: false,
+      recipients: [
+        { userId: 1, displayName: "Admin QA", email: "admin@example.test", eligible: true, configured: true, isActive: true, newRequestEmail: true, pendingReminderEmail: true },
+        { userId: 2, displayName: "Sem acesso", email: "sem-acesso@example.test", eligible: false, configured: false, isActive: false, newRequestEmail: true, pendingReminderEmail: true },
+      ],
+    };
+    return route.fulfill({ json: response });
+  });
+  await page.route("**/api/admin/appointment-requests**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/44")) return route.fulfill({ json: request });
+    return route.fulfill({ json: [request] });
+  });
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto("/admin?tab=appointment-requests&locationId=1&requestId=44");
+  const requestDialog = page.getByRole("dialog", { name: "Pedido de marcação" });
+  await expect(requestDialog).toBeVisible();
+  await expect(requestDialog).toContainText("Cliente Notificação");
+  await requestDialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("pending-request-count")).toHaveText("1");
+  await page.getByTestId("admin-notification-bell").click();
+  const notificationPanel = page.getByTestId("admin-notification-panel");
+  await expect(notificationPanel).toContainText("Novo pedido de marcação");
+  await expect(notificationPanel).toContainText("Cliente Notificação");
+  await page.screenshot({ path: testInfo.outputPath("admin-notifications-desktop.png"), fullPage: true });
+  await page.getByTestId("admin-notification-77").click();
+  await expect(requestDialog).toBeVisible();
+  await expect.poll(() => readCalls).toBe(1);
+  await requestDialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("admin-notification-bell")).toHaveAttribute("aria-label", "Notificações");
+  await expect(page.getByTestId("pending-request-count")).toHaveText("1");
+
+  await page.getByRole("button", { name: "Configurar alertas" }).click();
+  const settingsDialog = page.getByRole("dialog", { name: "Alertas de novos pedidos" });
+  await expect(settingsDialog).toContainText("O envio externo está desligado nesta instalação");
+  await expect(settingsDialog.getByText("Sem acesso ativo a esta localização")).toBeVisible();
+  await settingsDialog.getByRole("button", { name: "Cancelar" }).click();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByTestId("admin-notification-bell").click();
+  await expect(notificationPanel).toBeVisible();
+  expect(await notificationPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("admin-notifications-mobile.png"), fullPage: true });
 });
 
 test("Admin presents proposed and refused requests with state-aware PT-PT history", async ({ page }) => {

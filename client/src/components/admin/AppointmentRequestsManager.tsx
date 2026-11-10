@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
@@ -26,6 +26,7 @@ import { locationHeaders } from "@/lib/location-context";
 import { calendarTimeInTimeZone } from "@/lib/availability";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { RequestNotificationSettingsDialog } from "@/components/admin/RequestNotificationSettingsDialog";
 
 type RequestStatus = "pending" | "proposed" | "approved" | "refused";
 type AppointmentRequest = {
@@ -177,7 +178,19 @@ async function requestJson(url: string, locationId: number) {
   return response.json();
 }
 
-export function AppointmentRequestsManager({ locationId, timeZone }: { locationId: number; timeZone: string }) {
+export function AppointmentRequestsManager({
+  locationId,
+  timeZone,
+  openRequestId = null,
+  onOpenRequestHandled,
+  canManageNotificationSettings = false,
+}: {
+  locationId: number;
+  timeZone: string;
+  openRequestId?: number | null;
+  onOpenRequestHandled?: () => void;
+  canManageNotificationSettings?: boolean;
+}) {
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [action, setAction] = useState<"refuse" | "propose" | null>(null);
@@ -185,6 +198,12 @@ export function AppointmentRequestsManager({ locationId, timeZone }: { locationI
   const [proposalDate, setProposalDate] = useState("");
   const [proposalTime, setProposalTime] = useState("");
   const { toast } = useToast();
+  useEffect(() => {
+    if (!openRequestId) return;
+    setStatus("all");
+    setSelectedId(openRequestId);
+    onOpenRequestHandled?.();
+  }, [onOpenRequestHandled, openRequestId]);
   const listUrl = `/api/admin/appointment-requests${status === "all" ? "" : `?status=${status}`}`;
   const { data: requests = [], isLoading, isError } = useQuery<AppointmentRequest[]>({
     queryKey: ["admin-appointment-requests", locationId, status],
@@ -240,7 +259,8 @@ export function AppointmentRequestsManager({ locationId, timeZone }: { locationI
         <h2 className="text-xl font-bold text-white">Pedidos de marcação</h2>
         <p className="text-sm text-gray-400">Analise cada pedido antes de criar a marcação definitiva.</p>
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {canManageNotificationSettings && <RequestNotificationSettingsDialog locationId={locationId} />}
         {(["pending", "proposed", "approved", "refused", "all"] as const).map((value) => <Button
           key={value}
           size="sm"

@@ -56,6 +56,7 @@ import { ExtrasManager } from "@/components/admin/ExtrasManager";
 import { InternalCostsManager } from "@/components/admin/InternalCostsManager";
 import { UserAccessManager } from "@/components/admin/UserAccessManager";
 import { AppointmentRequestsManager } from "@/components/admin/AppointmentRequestsManager";
+import { AdminRequestNotificationBell } from "@/components/admin/AdminRequestNotificationBell";
 import { ParallelServiceCompatibilityManager } from "@/components/admin/ParallelServiceCompatibilityManager";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import {
@@ -110,6 +111,7 @@ import {
   MAX_APPOINTMENT_SERVICE_NAME_LENGTH,
 } from "@shared/appointment-service-terms";
 import type { EffectiveAccess } from "@shared/auth";
+import type { AdminNotificationFeed, AdminNotificationItem } from "@shared/admin-notifications";
 import { canUseRuntimeCapability } from "@/lib/auth-capabilities";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { useBusinessConfig } from "@/business/use-business-config";
@@ -1567,6 +1569,8 @@ export default function Admin() {
   const [user, setUser] = useState<AdminUser | null>(null);
   const sessionExpiryHandledRef = useRef(false);
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [notificationRequestId, setNotificationRequestId] = useState<number | null>(null);
+  const notificationDeepLinkHandledRef = useRef(false);
   const [isAddingBarber, setIsAddingBarber] = useState(false);
   const [isAddingService, setIsAddingService] = useState(false);
   const addBarberSubmissionRef = useRef(false);
@@ -1840,6 +1844,30 @@ export default function Admin() {
   });
   const canManageAppointmentRequests = canManageTeamAppointments
     && beautyV2Features?.appointmentRequests === true;
+  const canManageRequestNotificationSettings = canUseRuntimeCapability(
+    user,
+    "settings.manage",
+    activeLocation?.id ?? activeLocationId,
+    (role) => role === "admin",
+  );
+  const notificationLocationId = activeLocation?.id ?? activeLocationId;
+  const {
+    data: requestNotificationFeed,
+    isLoading: isLoadingRequestNotifications,
+  } = useQuery<AdminNotificationFeed>({
+    queryKey: ["admin-request-notifications", notificationLocationId],
+    enabled: canManageAppointmentRequests && Boolean(notificationLocationId),
+    queryFn: async () => {
+      const response = await apiFetch("/api/admin/request-notifications", {
+        headers: locationHeaders(notificationLocationId),
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Não foi possível carregar as notificações.");
+      return response.json();
+    },
+    refetchInterval: 12_000,
+    refetchOnWindowFocus: true,
+  });
   const activeBookingLocations = useMemo(
     () => availableLocations.filter((location) => location.isActive),
     [availableLocations],
@@ -1855,6 +1883,28 @@ export default function Admin() {
     if (availableLocations.some((location) => location.id === activeLocationId)) return;
     setActiveLocationId(activeLocation.id);
   }, [activeLocation, activeLocationId, availableLocations]);
+  useEffect(() => {
+    if (notificationDeepLinkHandledRef.current || !user?.authorized || availableLocations.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const requestId = Number(params.get("requestId"));
+    const locationId = Number(params.get("locationId"));
+    const isRequestLink = params.get("tab") === "appointment-requests"
+      && Number.isInteger(requestId) && requestId > 0
+      && Number.isInteger(locationId) && locationId > 0;
+    if (!isRequestLink) return;
+    notificationDeepLinkHandledRef.current = true;
+    if (!availableLocations.some((location) => location.id === locationId)) return;
+    setActiveLocationId(locationId);
+    setActiveTab("appointment-requests");
+    setNotificationRequestId(requestId);
+  }, [availableLocations, user?.authorized]);
+
+  const openRequestFromNotification = (item: AdminNotificationItem) => {
+    if (!availableLocations.some((location) => location.id === item.locationId)) return;
+    setActiveLocationId(item.locationId);
+    setActiveTab("appointment-requests");
+    setNotificationRequestId(item.requestId);
+  };
   const { data: allAvailabilityRows } = useQuery<any[]>({
     queryKey: ["/api/barbers/availability", { locationId: activeLocationId }],
     enabled: user?.authorized === true,
@@ -3914,6 +3964,15 @@ export default function Admin() {
               />
               <h1 className="text-2xl md:text-3xl font-display font-bold">Painel Administrativo</h1>
               <div className="flex items-center gap-2">
+                {canManageAppointmentRequests && notificationLocationId && (
+                  <AdminRequestNotificationBell
+                    locationId={notificationLocationId}
+                    timeZone={activeLocation?.timezone || "Europe/Lisbon"}
+                    feed={requestNotificationFeed}
+                    loading={isLoadingRequestNotifications}
+                    onOpenRequest={openRequestFromNotification}
+                  />
+                )}
                 <Link href="/"><Button variant="outline" size="sm" className="text-primary border-primary/20 hover:bg-primary/10 h-8">Ver Site</Button></Link>
                 <Button variant="ghost" size="sm" onClick={handleLogout} className="text-gray-500 hover:text-white w-fit px-0 sm:px-3"><LogOut className="w-4 h-4 mr-2" /> Sair</Button>
               </div>
@@ -4469,7 +4528,18 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
             <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
-            {canManageAppointmentRequests && <TabsTrigger value="appointment-requests" className={adminTabTriggerClass}><Inbox className="w-4 h-4" /> Pedidos</TabsTrigger>}
+            {canManageAppointmentRequests && <TabsTrigger value="appointment-requests" className={adminTabTriggerClass}>
+              <Inbox className="w-4 h-4" /> Pedidos
+              {(requestNotificationFeed?.pendingDecisionCount ?? 0) > 0 && (
+                <span
+                  className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary"
+                  aria-label={`${requestNotificationFeed!.pendingDecisionCount} pedidos por analisar`}
+                  data-testid="pending-request-count"
+                >
+                  {requestNotificationFeed!.pendingDecisionCount > 99 ? "99+" : requestNotificationFeed!.pendingDecisionCount}
+                </span>
+              )}
+            </TabsTrigger>}
             {canOpenTeamManagement && <TabsTrigger value="barbers" className={adminTabTriggerClass}><Users className="w-4 h-4" /> {adminCopy.team.tabLabel}</TabsTrigger>}
             {canOpenCatalogManagement && <TabsTrigger value="services" className={adminTabTriggerClass}><ServiceIcon className="w-4 h-4" /> {adminCopy.services.tabLabel}</TabsTrigger>}
             {canManageExtras && <TabsTrigger value="extras" className={adminTabTriggerClass}><Sparkles className="w-4 h-4" /> {adminCopy.extras.tabLabel}</TabsTrigger>}
@@ -4607,7 +4677,13 @@ export default function Admin() {
 
           {canManageAppointmentRequests && activeLocation && (
             <TabsContent value="appointment-requests" className="space-y-6 outline-none">
-              <AppointmentRequestsManager locationId={activeLocation.id} timeZone={activeLocation.timezone || "Europe/Lisbon"} />
+              <AppointmentRequestsManager
+                locationId={activeLocation.id}
+                timeZone={activeLocation.timezone || "Europe/Lisbon"}
+                openRequestId={notificationRequestId}
+                onOpenRequestHandled={() => setNotificationRequestId(null)}
+                canManageNotificationSettings={canManageRequestNotificationSettings}
+              />
             </TabsContent>
           )}
 
