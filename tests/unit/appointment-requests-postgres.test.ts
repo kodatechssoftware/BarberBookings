@@ -385,6 +385,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     const multi = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-05T10:00:00.000Z", true), options);
     const multiApproved = await engine.approveAppointmentRequestWithPool(pool, multi.request.id, 1, admin, options);
     assert.equal(multiApproved.request.status, "approved");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
+    `, [multi.request.id])).rows[0].count), 0, "approving a request cancels its pending reminder");
     assert.equal(Number((await pool.query(
       "SELECT count(*) AS count FROM appointment_service_segments WHERE appointment_id = $1",
       [multiApproved.request.appointmentId],

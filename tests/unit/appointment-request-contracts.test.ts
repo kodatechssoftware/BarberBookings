@@ -54,6 +54,19 @@ test("every Admin appointment-request mutation is protected by the team manageme
   }
 });
 
+test("administrative request notifications are authenticated and capability scoped", async () => {
+  const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  for (const route of [
+    'app.get("/api/admin/request-notifications", requireTeamAppointmentsManage',
+    'app.post("/api/admin/request-notifications/read-all", requireTeamAppointmentsManage',
+    'app.post("/api/admin/request-notifications/:id/read", requireTeamAppointmentsManage',
+    'app.get("/api/admin/request-notification-settings", requireSettingsManage',
+    'app.put("/api/admin/request-notification-settings", requireSettingsManage',
+  ]) {
+    assert.ok(source.includes(route), `missing protected notification route fragment: ${route}`);
+  }
+});
+
 test("parallel compatibility configuration is location-scoped and capability protected", async () => {
   const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
   assert.ok(source.includes(

@@ -565,6 +565,7 @@ test("Admin notifications keep unread and pending counters separate and open a s
   const notificationPanel = page.getByTestId("admin-notification-panel");
   await expect(notificationPanel).toContainText("Novo pedido de marcação");
   await expect(notificationPanel).toContainText("Cliente Notificação");
+  await page.waitForTimeout(250);
   await page.screenshot({ path: testInfo.outputPath("admin-notifications-desktop.png"), fullPage: true });
   await page.getByTestId("admin-notification-77").click();
   await expect(requestDialog).toBeVisible();
@@ -583,6 +584,7 @@ test("Admin notifications keep unread and pending counters separate and open a s
   await page.getByTestId("admin-notification-bell").click();
   await expect(notificationPanel).toBeVisible();
   expect(await notificationPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.waitForTimeout(250);
   await page.screenshot({ path: testInfo.outputPath("admin-notifications-mobile.png"), fullPage: true });
 });
 
