@@ -135,6 +135,103 @@ test("Beauty v2 public flow submits a multi-service request without claiming con
   });
 });
 
+test("public multi-service rescheduling moves the complete parallel plan on desktop and mobile", async ({ page }, testInfo) => {
+  await page.clock.setFixedTime(new Date("2030-06-01T08:00:00+01:00"));
+  await mockBeautyV2(page);
+  const token = "multi-reschedule-qa";
+  const appointment = {
+    id: 901,
+    locationId: 1,
+    locationName: "Beauty Studio QA",
+    locationAddress: "Rua QA",
+    locationTimeZone: "Europe/Lisbon",
+    barberId: 21,
+    serviceId: 11,
+    startTime: "2030-06-10T09:00:00.000Z",
+    status: "booked",
+    customerName: "Cliente QA",
+    depositRequired: false,
+    depositReason: null,
+    cancellationPolicyHours: 4,
+    isLateCancellation: false,
+    barberName: "Ana",
+    serviceName: "Manicure + Pedicure spa",
+    duration: 60,
+    price: 5700,
+    extras: [],
+    totalPrice: 5700,
+    manualOutsideHours: false,
+    rescheduleRevision: 3,
+    requiresAssistedReschedule: false,
+    supportsMultiServiceReschedule: true,
+    serviceSegments: [
+      {
+        id: 9101, appointmentId: 901, position: 0, executionStage: 0,
+        serviceId: 11, barberId: 21, barberName: "Ana", startTime: "2030-06-10T09:00:00.000Z",
+        durationMinutes: 45, bufferBeforeMinutesSnapshot: 5, bufferAfterMinutesSnapshot: 5,
+        serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500,
+      },
+      {
+        id: 9102, appointmentId: 901, position: 1, executionStage: 0,
+        serviceId: 13, barberId: 23, barberName: "Carolina", startTime: "2030-06-10T09:00:00.000Z",
+        durationMinutes: 60, bufferBeforeMinutesSnapshot: 10, bufferAfterMinutesSnapshot: 10,
+        serviceNameSnapshot: "Pedicure spa", servicePriceCentsSnapshot: 3200,
+      },
+    ],
+  };
+  await page.route(`**/api/appointments/token/${token}`, (route) => route.fulfill({ json: appointment }));
+  const availabilityRequests: unknown[] = [];
+  const mutationRequests: unknown[] = [];
+  await page.route(`**/api/appointments/reschedule/${token}/availability`, async (route) => {
+    const body = route.request().postDataJSON();
+    availabilityRequests.push(body);
+    await route.fulfill({ json: {
+      date: body.date,
+      timeZone: "Europe/Lisbon",
+      starts: [`${body.date}T14:00:00.000Z`, `${body.date}T16:00:00.000Z`],
+      durationMinutes: 60,
+      totalPriceCents: 5700,
+      segments: [
+        { position: 0, executionStage: 0, serviceId: 11, barberId: 21, startOffsetMinutes: 0, durationMinutes: 45, serviceName: "Manicure", priceCents: 2500 },
+        { position: 1, executionStage: 0, serviceId: 13, barberId: 23, startOffsetMinutes: 0, durationMinutes: 60, serviceName: "Pedicure spa", priceCents: 3200 },
+      ],
+    } });
+  });
+  await page.route(`**/api/appointments/reschedule/${token}`, async (route) => {
+    const body = route.request().postDataJSON();
+    mutationRequests.push(body);
+    await route.fulfill({ json: { ...appointment, startTime: body.startTime, rescheduleRevision: 4 } });
+  });
+
+  for (const viewport of [
+    { name: "mobile", width: 390, height: 844 },
+    { name: "desktop", width: 1366, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`/reschedule/${token}`);
+    const plan = page.getByTestId("multi-service-reschedule-plan");
+    await expect(plan).toContainText("Marcação completa");
+    await expect(plan).toContainText("Em simultâneo");
+    await expect(plan).toContainText("Manicure · Ana · 45 min");
+    await expect(plan).toContainText("Pedicure spa · Carolina · 60 min");
+    await expect(page.getByRole("button", { name: "15:00h" })).toBeVisible();
+    await page.getByRole("button", { name: "15:00h" }).click();
+    await page.getByRole("button", { name: /Confirmar nova data/i }).click();
+    await expect(page.getByRole("heading", { name: /reagendada/i })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`multi-service-reschedule-${viewport.name}.png`), fullPage: true });
+  }
+  expect(availabilityRequests).toHaveLength(2);
+  expect(availabilityRequests).toEqual([
+    { date: "2030-06-10", expectedRevision: 3 },
+    { date: "2030-06-10", expectedRevision: 3 },
+  ]);
+  expect(mutationRequests).toHaveLength(2);
+  expect(mutationRequests).toEqual([
+    { startTime: "2030-06-10T14:00:00.000Z", expectedRevision: 3 },
+    { startTime: "2030-06-10T14:00:00.000Z", expectedRevision: 3 },
+  ]);
+});
+
 test("Beauty v2 booking keeps Beauty contrast, hierarchy and selection states on desktop and mobile", async ({ page }) => {
   await page.clock.setFixedTime(new Date("2030-06-01T08:00:00+01:00"));
   await mockBeautyV2(page);
@@ -493,6 +590,7 @@ test("Admin appointment list keeps one row and filters multi-service appointment
     locationId: 1, customerPhone: "+351912345678", customerEmail: null,
     bufferBeforeMinutesSnapshot: 0, bufferAfterMinutesSnapshot: 0,
     manualOutsideHours: false, paymentMethod: "pending", canManage: true,
+    rescheduleRevision: 0, notificationRevision: 0,
   };
   const appointments = [
     {
@@ -530,6 +628,8 @@ test("Admin appointment list keeps one row and filters multi-service appointment
     },
   ];
   const requestedProfessionalIds: Array<string | null> = [];
+  const adminRescheduleAvailabilityRequests: unknown[] = [];
+  const adminRescheduleMutations: unknown[] = [];
   await page.route("**/api/beauty-v2/features", (route) => route.fulfill({
     json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true, parallelServiceScheduling: true },
   }));
@@ -537,6 +637,7 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await page.route("**/api/services?*", (route) => route.fulfill({ json: listServices }));
   await page.route("**/api/appointments*", (route) => {
     const url = new URL(route.request().url());
+    if (route.request().method() !== "GET") return route.continue();
     const professionalId = url.searchParams.get("barberId");
     if (url.searchParams.get("scope") !== "team") requestedProfessionalIds.push(professionalId);
     const filtered = professionalId
@@ -544,6 +645,27 @@ test("Admin appointment list keeps one row and filters multi-service appointment
         || appointment.serviceSegments.some((item) => item.barberId === Number(professionalId)))
       : appointments;
     return route.fulfill({ json: filtered });
+  });
+  await page.route("**/api/appointments/103/reschedule-availability", (route) => {
+    const body = route.request().postDataJSON();
+    adminRescheduleAvailabilityRequests.push(body);
+    return route.fulfill({ json: {
+      date: body.date,
+      timeZone: "Europe/Lisbon",
+      starts: ["2030-06-01T13:30:00.000Z", "2030-06-01T15:30:00.000Z"],
+      durationMinutes: 210,
+      totalPriceCents: 11300,
+      segments: [
+        { position: 0, executionStage: 0, serviceId: 11, barberId: 21, startOffsetMinutes: 0, durationMinutes: 60, serviceName: "Manicure gel", priceCents: 3500 },
+        { position: 1, executionStage: 1, serviceId: 12, barberId: 22, startOffsetMinutes: 60, durationMinutes: 60, serviceName: "Limpeza de pele", priceCents: 4500 },
+        { position: 2, executionStage: 2, serviceId: 13, barberId: 23, startOffsetMinutes: 120, durationMinutes: 90, serviceName: "Extensão de pestanas", priceCents: 3300 },
+      ],
+    } });
+  });
+  await page.route("**/api/appointments/103", (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    adminRescheduleMutations.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ...appointments[2], startTime: "2030-06-01T15:30:00.000Z", rescheduleRevision: 1 } });
   });
 
   await page.goto("/admin");
@@ -597,6 +719,20 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await expect(details).toContainText("Extensão de pestanas · Beatriz Costa");
   await expect(details).toContainText("16:30–18:00 · 90 min");
   await expect(details).toContainText("33,00 €");
+  await details.getByTestId("appointment-action-edit").click();
+  const editor = page.getByRole("dialog", { name: "Editar marcação" });
+  await expect(editor.getByTestId("multi-service-reschedule-editor")).toContainText("Reagendar a marcação completa");
+  await expect(editor.getByTestId("multi-service-reschedule-editor")).toContainText("Manicure gel · Mariana Silva · 60 min");
+  await expect(editor.getByText("Permitir horários fora do horário normal")).toHaveCount(0);
+  await editor.getByRole("combobox", { name: "Hora" }).click();
+  await page.getByRole("option", { name: "16:30" }).click();
+  await editor.getByTestId("edit-appointment-save").click();
+  await expect(editor).toBeHidden();
+  expect(adminRescheduleAvailabilityRequests).toContainEqual({ date: "2030-06-01", expectedRevision: 0 });
+  expect(adminRescheduleMutations).toEqual([{
+    startTime: "2030-06-01T15:30:00.000Z",
+    expectedRevision: 0,
+  }]);
   await details.getByRole("button", { name: "Close" }).click();
 
   await professionalFilter.click();

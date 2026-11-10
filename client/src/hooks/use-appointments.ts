@@ -77,6 +77,7 @@ export type AppointmentServiceSegmentSnapshot = {
   bufferAfterMinutesSnapshot: number;
   serviceNameSnapshot: string;
   servicePriceCentsSnapshot: number;
+  barberName?: string;
 };
 
 export type PublicAppointment = {
@@ -114,8 +115,28 @@ export type AppointmentByToken = {
   extras: Array<Pick<AppointmentExtraSnapshot, "nameSnapshot" | "amountCentsSnapshot" | "quantity" | "position">>;
   totalPrice: number;
   manualOutsideHours: boolean;
+  rescheduleRevision: number;
   requiresAssistedReschedule?: boolean;
+  supportsMultiServiceReschedule?: boolean;
   serviceSegments?: AppointmentServiceSegmentSnapshot[];
+};
+
+export type MultiServiceRescheduleAvailability = {
+  date: string;
+  timeZone: string;
+  starts: string[];
+  durationMinutes: number;
+  totalPriceCents: number;
+  segments: Array<{
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    startOffsetMinutes: number;
+    durationMinutes: number;
+    serviceName: string;
+    priceCents: number;
+  }>;
 };
 
 export type CancelAppointmentResponse = {
@@ -315,14 +336,84 @@ export function useAppointmentByToken(token?: string) {
   });
 }
 
+export function useMultiServiceRescheduleAvailability({
+  token,
+  date,
+  expectedRevision,
+  enabled,
+}: {
+  token?: string;
+  date?: string;
+  expectedRevision?: number;
+  enabled: boolean;
+}) {
+  return useQuery<MultiServiceRescheduleAvailability>({
+    queryKey: ["/api/appointments/reschedule/availability", token, date, expectedRevision],
+    enabled: enabled && Boolean(token && date && expectedRevision !== undefined),
+    queryFn: async ({ signal }) => {
+      const response = await apiFetch(`/api/appointments/reschedule/${token}/availability`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, expectedRevision }),
+        signal,
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.message || "Não foi possível consultar a disponibilidade conjunta.");
+      }
+      return response.json() as Promise<MultiServiceRescheduleAvailability>;
+    },
+  });
+}
+
+export function useAdminMultiServiceRescheduleAvailability({
+  appointmentId,
+  locationId,
+  date,
+  expectedRevision,
+  enabled,
+}: {
+  appointmentId: number;
+  locationId?: number;
+  date?: string;
+  expectedRevision?: number;
+  enabled: boolean;
+}) {
+  return useQuery<MultiServiceRescheduleAvailability>({
+    queryKey: ["/api/appointments/reschedule-availability", appointmentId, date, expectedRevision, { locationId }],
+    enabled: enabled && Boolean(locationId && date && expectedRevision !== undefined),
+    queryFn: async ({ signal }) => {
+      const response = await apiFetch(`/api/appointments/${appointmentId}/reschedule-availability`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...locationHeaders(locationId) },
+        body: JSON.stringify({ date, expectedRevision }),
+        signal,
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.message || "Não foi possível consultar a disponibilidade conjunta.");
+      }
+      return response.json() as Promise<MultiServiceRescheduleAvailability>;
+    },
+  });
+}
+
 export function useRescheduleAppointment() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ token, startTime }: { token: string; startTime: Date }) => {
+    mutationFn: async ({
+      token,
+      startTime,
+      expectedRevision,
+    }: {
+      token: string;
+      startTime: Date;
+      expectedRevision?: number;
+    }) => {
       const res = await apiFetch(`/api/appointments/reschedule/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startTime }),
+        body: JSON.stringify({ startTime, expectedRevision }),
       });
       if (!res.ok) {
         const err = await res.json();

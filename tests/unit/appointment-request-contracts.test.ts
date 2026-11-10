@@ -67,12 +67,15 @@ test("parallel compatibility configuration is location-scoped and capability pro
   assert.match(source, /parallel_service_compatibilities_updated/);
 });
 
-test("multi-service agenda reads every professional segment and rescheduling fails safely", async () => {
+test("multi-service agenda and rescheduling use every professional segment safely", async () => {
   const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
   assert.match(source, /attachAppointmentServiceSegments\([\s\S]*?appointmentIncludesProfessional/);
   assert.match(source, /serviceSegments[\s\S]*?segment\.barberId === effectiveBarberId/);
-  assert.match(source, /app\.post\("\/api\/appointments\/reschedule\/:token"[\s\S]*?MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE/);
-  assert.match(source, /app\.patch\("\/api\/appointments\/:id"[\s\S]*?MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE/);
+  assert.match(source, /app\.post\("\/api\/appointments\/reschedule\/:token\/availability"[\s\S]*?previewMultiServiceRescheduleAvailabilityWithPool/);
+  assert.match(source, /app\.post\("\/api\/appointments\/reschedule\/:token"[\s\S]*?rescheduleMultiServiceAppointmentWithPool/);
+  assert.match(source, /app\.post\("\/api\/appointments\/:id\/reschedule-availability"[\s\S]*?professionalIds\.length > 1[\s\S]*?appointments\.manage_team[\s\S]*?enforceCanonicalOwnOrTeamCapability/);
+  assert.match(source, /app\.patch\("\/api\/appointments\/:id"[\s\S]*?expectedRevision[\s\S]*?rescheduleMultiServiceAppointmentWithPool/);
+  assert.doesNotMatch(source, /MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE/);
 });
 
 test("public appointment-request routes are no-store, rate-limited and return safe proposal errors", async () => {

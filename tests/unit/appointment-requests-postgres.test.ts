@@ -93,26 +93,29 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
       INSERT INTO barbers (id, name, specialty, color, is_visible) VALUES
         (1, 'Ana', 'Unhas', '#111111', true),
-        (2, 'Beatriz', 'Estética', '#222222', true)
+        (2, 'Beatriz', 'Estética', '#222222', true),
+        (3, 'Carla', 'Cabelo', '#333333', true)
       ON CONFLICT (id) DO NOTHING;
       INSERT INTO services (id, name, price, duration, is_visible) VALUES
         (1, 'Manicure', 2000, 30, true),
-        (2, 'Nail art', 1000, 45, true)
+        (2, 'Nail art', 1000, 45, true),
+        (3, 'Penteado', 3000, 60, true)
       ON CONFLICT (id) DO NOTHING;
       INSERT INTO barber_locations (barber_id, location_id, is_active) VALUES
-        (1, 1, true), (2, 1, true)
+        (1, 1, true), (2, 1, true), (3, 1, true)
       ON CONFLICT (barber_id, location_id) DO UPDATE SET is_active = true;
       INSERT INTO service_locations (
         service_id, location_id, is_active, buffer_before_minutes, buffer_after_minutes
       ) VALUES
         (1, 1, true, 10, 5),
-        (2, 1, true, 5, 10)
+        (2, 1, true, 5, 10),
+        (3, 1, true, 15, 5)
       ON CONFLICT (service_id, location_id) DO UPDATE SET
         is_active = true,
         buffer_before_minutes = EXCLUDED.buffer_before_minutes,
         buffer_after_minutes = EXCLUDED.buffer_after_minutes;
       INSERT INTO barber_services (barber_id, service_id, location_id) VALUES
-        (1, 1, 1), (2, 2, 1)
+        (1, 1, 1), (2, 2, 1), (3, 3, 1)
       ON CONFLICT (barber_id, service_id, location_id) DO NOTHING;
       INSERT INTO shop_availability (location_id, day_of_week, start_time, end_time, is_open)
       SELECT 1, day, '08:00', '20:00', true FROM generate_series(0, 6) day;
@@ -632,6 +635,290 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "SELECT count(*) AS count FROM appointment_occupancy_periods WHERE appointment_id = $1",
       [concurrentParallelAppointments.rows[0].id],
     )).rows[0].count), 2);
+
+    const threeServiceInput = {
+      ...input("2035-02-01T10:00:00.000Z", true, "sequential"),
+      services: [
+        { serviceId: 1, barberId: 1 },
+        { serviceId: 2, barberId: 2 },
+        { serviceId: 3, barberId: 3 },
+      ],
+    };
+    const threeServiceRequest = await engine.createAppointmentRequestWithPool(pool, 1, threeServiceInput, options);
+    const threeServiceApproved = await engine.approveAppointmentRequestWithPool(
+      pool, threeServiceRequest.request.id, 1, admin, options,
+    );
+    assert.equal(threeServiceApproved.appointment.durationMinutes, 135);
+    const threeServiceId = threeServiceApproved.appointment.id;
+    const threeServicePreview = await multiServiceEngine.previewMultiServiceRescheduleAvailabilityWithPool(pool, {
+      appointmentId: threeServiceId,
+      locationId: 1,
+      expectedRevision: 0,
+      date: "2035-02-02",
+      slotIntervalMinutes: 30,
+      now: new Date("2035-01-01T00:00:00.000Z"),
+    }, options);
+    assert.ok(threeServicePreview.starts.includes("2035-02-02T12:00:00.000Z"));
+    assert.equal(threeServicePreview.durationMinutes, 135);
+    assert.equal(threeServicePreview.totalPriceCents, 6000);
+    assert.deepEqual(threeServicePreview.segments.map((segment) => segment.startOffsetMinutes), [0, 30, 75]);
+
+    const rescheduledSequential = await multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+      appointmentId: threeServiceId,
+      locationId: 1,
+      expectedRevision: 0,
+      startTime: new Date("2035-02-02T12:00:00.000Z"),
+      reminderAvailableAt: new Date("2035-02-01T12:00:00.000Z"),
+      actor: admin,
+    }, options);
+    assert.equal(rescheduledSequential.reused, false);
+    assert.equal(rescheduledSequential.rescheduleRevision, 1);
+    assert.ok(rescheduledSequential.notificationEventId);
+    assert.deepEqual(
+      rescheduledSequential.segments.map((segment) => [segment.executionStage, segment.startTime.toISOString()]),
+      [
+        [0, "2035-02-02T12:00:00.000Z"],
+        [1, "2035-02-02T12:30:00.000Z"],
+        [2, "2035-02-02T13:15:00.000Z"],
+      ],
+    );
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM appointment_occupancy_periods
+      WHERE appointment_id = $1 AND start_time < '2035-02-02 00:00:00'
+    `, [threeServiceId])).rows[0].count), 0, "old occupancy is released atomically");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM appointment_notification_events
+      WHERE appointment_id = $1 AND event_type = 'appointment_rescheduled'
+    `, [threeServiceId])).rows[0].count), 1);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM appointment_notification_events
+      WHERE appointment_id = $1 AND event_type = 'appointment_reminder_day_before'
+        AND event_revision = 2 AND available_at = '2035-02-01 12:00:00'
+    `, [threeServiceId])).rows[0].count), 1, "the replacement reminder is created in the same transaction");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM audit_logs
+      WHERE entity_type = 'appointment' AND entity_id = $1 AND action = 'appointment.rescheduled'
+    `, [threeServiceId])).rows[0].count), 1);
+
+    const idempotentSequentialRetry = await multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+      appointmentId: threeServiceId,
+      locationId: 1,
+      expectedRevision: 0,
+      startTime: new Date("2035-02-02T12:00:00.000Z"),
+      actor: admin,
+    }, options);
+    assert.equal(idempotentSequentialRetry.reused, true);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM appointment_notification_events
+      WHERE appointment_id = $1 AND event_type = 'appointment_rescheduled'
+    `, [threeServiceId])).rows[0].count), 1, "an identical retry does not duplicate the outbox event");
+    await assert.rejects(
+      multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+        appointmentId: threeServiceId,
+        locationId: 1,
+        expectedRevision: 0,
+        startTime: new Date("2035-02-03T12:00:00.000Z"),
+        actor: admin,
+      }, options),
+      (error: unknown) => error instanceof multiServiceEngine.MultiServiceRescheduleError
+        && error.code === "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT",
+      "a stale revision cannot reuse the management token for a different change",
+    );
+
+    const concurrentReschedules = await Promise.allSettled([
+      multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+        appointmentId: threeServiceId,
+        locationId: 1,
+        expectedRevision: 1,
+        startTime: new Date("2035-02-06T10:00:00.000Z"),
+        actor: admin,
+      }, options),
+      multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+        appointmentId: threeServiceId,
+        locationId: 1,
+        expectedRevision: 1,
+        startTime: new Date("2035-02-07T10:00:00.000Z"),
+        actor: admin,
+      }, options),
+    ]);
+    assert.equal(concurrentReschedules.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(concurrentReschedules.filter((result) => result.status === "rejected"
+      && result.reason instanceof multiServiceEngine.MultiServiceRescheduleError
+      && result.reason.code === "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT").length, 1);
+    const afterConcurrent = await pool.query<{
+      start_time: Date;
+      reschedule_revision: number;
+      notification_revision: number;
+    }>(`SELECT start_time, reschedule_revision, notification_revision FROM appointments WHERE id = $1`, [threeServiceId]);
+    assert.equal(Number(afterConcurrent.rows[0].reschedule_revision), 2);
+    assert.equal(Number(afterConcurrent.rows[0].notification_revision), 3);
+    const afterConcurrentSegments = await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, threeServiceId);
+    assert.deepEqual(afterConcurrentSegments.map((segment) => segment.executionStage), [0, 1, 2]);
+    assert.deepEqual(afterConcurrentSegments.map((segment) =>
+      Math.round((segment.startTime.getTime() - new Date(afterConcurrent.rows[0].start_time).getTime()) / 60_000)), [0, 30, 75]);
+
+    const beforeForcedRollback = await pool.query<{
+      start_time: Date;
+      reschedule_revision: number;
+      notification_revision: number;
+    }>(`SELECT start_time, reschedule_revision, notification_revision FROM appointments WHERE id = $1`, [threeServiceId]);
+    const beforeForcedRollbackSegments = await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, threeServiceId);
+    await assert.rejects(
+      multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+        appointmentId: threeServiceId,
+        locationId: 1,
+        expectedRevision: 2,
+        startTime: new Date("2035-02-08T10:00:00.000Z"),
+        actor: admin,
+      }, {
+        ...options,
+        afterSegmentsRescheduled: async () => { throw new Error("forced multi-service reschedule rollback"); },
+      }),
+      /forced multi-service reschedule rollback/,
+    );
+    const afterForcedRollback = await pool.query<{
+      start_time: Date;
+      reschedule_revision: number;
+      notification_revision: number;
+    }>(`SELECT start_time, reschedule_revision, notification_revision FROM appointments WHERE id = $1`, [threeServiceId]);
+    assert.deepEqual(afterForcedRollback.rows[0], beforeForcedRollback.rows[0]);
+    assert.deepEqual(
+      (await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, threeServiceId))
+        .map((segment) => segment.startTime.toISOString()),
+      beforeForcedRollbackSegments.map((segment) => segment.startTime.toISOString()),
+      "a failed mutation rolls back every segment",
+    );
+
+    const parallelRescheduleRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, input("2035-02-10T10:00:00.000Z", true, "parallel"), options,
+    );
+    const parallelRescheduleApproved = await engine.approveAppointmentRequestWithPool(
+      pool, parallelRescheduleRequest.request.id, 1, admin, options,
+    );
+    const parallelRescheduleId = parallelRescheduleApproved.appointment.id;
+    const rescheduledParallel = await multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+      appointmentId: parallelRescheduleId,
+      locationId: 1,
+      expectedRevision: 0,
+      startTime: new Date("2035-02-11T12:00:00.000Z"),
+      actor: admin,
+    }, options);
+    assert.deepEqual(
+      rescheduledParallel.segments.map((segment) => [segment.executionStage, segment.startTime.toISOString()]),
+      [[0, "2035-02-11T12:00:00.000Z"], [0, "2035-02-11T12:00:00.000Z"]],
+      "parallel groups remain intact",
+    );
+    await pool.query(`
+      INSERT INTO parallel_service_compatibilities (location_id, first_service_id, second_service_id)
+      VALUES (1, 1, 3), (1, 2, 3)
+      ON CONFLICT DO NOTHING
+    `);
+    const threeProfessionalParallelInput = {
+      ...input("2035-02-15T10:00:00.000Z", true, "parallel"),
+      services: [
+        { serviceId: 1, barberId: 1 },
+        { serviceId: 2, barberId: 2 },
+        { serviceId: 3, barberId: 3 },
+      ],
+    };
+    const threeProfessionalParallelRequest = await engine.createAppointmentRequestWithPool(
+      pool, 1, threeProfessionalParallelInput, options,
+    );
+    const threeProfessionalParallelApproved = await engine.approveAppointmentRequestWithPool(
+      pool, threeProfessionalParallelRequest.request.id, 1, admin, options,
+    );
+    const threeProfessionalParallelRescheduled = await multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+      appointmentId: threeProfessionalParallelApproved.appointment.id,
+      locationId: 1,
+      expectedRevision: 0,
+      startTime: new Date("2035-02-16T10:00:00.000Z"),
+      actor: admin,
+    }, options);
+    assert.equal(threeProfessionalParallelApproved.appointment.durationMinutes, 60);
+    assert.deepEqual(
+      threeProfessionalParallelRescheduled.segments.map((segment) => [
+        segment.barberId,
+        segment.executionStage,
+        segment.startTime.toISOString(),
+      ]),
+      [
+        [1, 0, "2035-02-16T10:00:00.000Z"],
+        [2, 0, "2035-02-16T10:00:00.000Z"],
+        [3, 0, "2035-02-16T10:00:00.000Z"],
+      ],
+      "three different professionals remain in the same parallel execution stage",
+    );
+    await pool.query(`
+      INSERT INTO appointments (
+        location_id, barber_id, service_id, start_time, customer_name, customer_phone,
+        duration_minutes, status, cancel_token
+      ) VALUES (1, 2, 2, '2035-02-12 12:00:00', 'Reschedule blocker', '+351910000094', 45, 'booked', 'reschedule-blocker')
+    `);
+    const parallelBeforeConflict = await pool.query(`
+      SELECT start_time, reschedule_revision, notification_revision
+      FROM appointments WHERE id = $1
+    `, [parallelRescheduleId]);
+    const parallelSegmentsBeforeConflict = await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, parallelRescheduleId);
+    await assert.rejects(
+      multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+        appointmentId: parallelRescheduleId,
+        locationId: 1,
+        expectedRevision: 1,
+        startTime: new Date("2035-02-12T12:00:00.000Z"),
+        actor: admin,
+      }, options),
+      (error: unknown) => error instanceof multiServiceEngine.MultiServiceConflictError,
+      "a conflict affecting one professional rejects the complete parallel move",
+    );
+    assert.deepEqual((await pool.query(`
+      SELECT start_time, reschedule_revision, notification_revision
+      FROM appointments WHERE id = $1
+    `, [parallelRescheduleId])).rows[0], parallelBeforeConflict.rows[0]);
+    assert.deepEqual(
+      (await multiServiceEngine.getMultiServiceAppointmentSegmentsWithPool(pool, parallelRescheduleId))
+        .map((segment) => segment.startTime.toISOString()),
+      parallelSegmentsBeforeConflict.map((segment) => segment.startTime.toISOString()),
+    );
+
+    const calendar = await import("../../server/calendar-timezone");
+    const postDstStart = calendar.calendarDateTimeToInstant({
+      year: 2035, month: 3, day: 25, hour: 9, minute: 0, second: 0,
+    }, "Europe/Lisbon");
+    const dstReschedule = await multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+      appointmentId: parallelRescheduleId,
+      locationId: 1,
+      expectedRevision: 1,
+      startTime: postDstStart,
+      actor: admin,
+    }, options);
+    assert.equal(new Intl.DateTimeFormat("pt-PT", {
+      timeZone: "Europe/Lisbon", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).format(dstReschedule.startTime), "09:00");
+    assert.ok(dstReschedule.segments.every((segment) => segment.startTime.getTime() === postDstStart.getTime()));
+    const beforeExpiredTokenAttempt = await pool.query(`
+      SELECT start_time, reschedule_revision, notification_revision
+      FROM appointments WHERE id = $1
+    `, [parallelRescheduleId]);
+    await assert.rejects(
+      multiServiceEngine.rescheduleMultiServiceAppointmentWithPool(pool, {
+        appointmentId: parallelRescheduleId,
+        locationId: 1,
+        expectedRevision: 2,
+        startTime: new Date("2035-03-27T10:00:00.000Z"),
+        requireFutureCurrentStart: true,
+        actor: { actorType: "client", actorName: "Cliente" },
+      }, {
+        ...options,
+        now: () => new Date("2035-03-26T10:00:00.000Z"),
+      }),
+      (error: unknown) => error instanceof multiServiceEngine.MultiServiceRescheduleError
+        && error.code === "MULTI_SERVICE_RESCHEDULE_TOKEN_EXPIRED",
+      "a public reschedule token expires when the current appointment starts",
+    );
+    assert.deepEqual((await pool.query(`
+      SELECT start_time, reschedule_revision, notification_revision
+      FROM appointments WHERE id = $1
+    `, [parallelRescheduleId])).rows, beforeExpiredTokenAttempt.rows);
 
     const partiallyOccupied = await engine.createAppointmentRequestWithPool(
       pool,

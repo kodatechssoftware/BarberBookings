@@ -3,6 +3,7 @@ import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
 import { AlertTriangle, CheckCircle, ChevronDown, Pencil, Phone, Plus, User, XCircle } from "lucide-react";
 import {
+  useAdminMultiServiceRescheduleAvailability,
   type AppointmentExtraSnapshot,
   type AppointmentInternalCostSnapshot,
   type AppointmentPaymentMethod,
@@ -92,6 +93,7 @@ type AdminAppointment = {
   internalCosts?: AppointmentInternalCostSnapshot[];
   availabilityWindows?: Array<{ startTime: string; endTime: string }>;
   notificationRevision?: number;
+  rescheduleRevision?: number;
   seriesId?: string | null;
   serviceSegments?: Array<{
     id: number;
@@ -211,12 +213,16 @@ function EditAppointmentDialog({
   const extrasCopy = businessCopy.admin.extras;
   const internalCostsCopy = businessCopy.admin.internalCosts;
   const businessConfig = useBusinessConfig();
+  const multiServiceSegments = [...(appointment.serviceSegments ?? [])]
+    .sort((left, right) => left.position - right.position);
+  const isMultiServiceAppointment = multiServiceSegments.length >= 2;
   const isCustomAppointment = appointment.serviceId === null
     && appointment.serviceNameSnapshot != null
     && appointment.servicePriceCentsSnapshot != null;
   const [open, setOpen] = useState(false);
   const [dateValue, setDateValue] = useState(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
   const [timeValue, setTimeValue] = useState(format(parseISO(appointment.startTime), "HH:mm"));
+  const [multiServiceStartTime, setMultiServiceStartTime] = useState(appointment.startTime);
   const [barberId, setBarberId] = useState(String(appointment.barberId));
   const [serviceId, setServiceId] = useState(
     isCustomAppointment ? "custom" : appointment.serviceId ? String(appointment.serviceId) : "none",
@@ -256,6 +262,26 @@ function EditAppointmentDialog({
     currentTime: originalTime,
     intervalMinutes: bookingSlotIntervalMinutes,
   }), [bookingSlotIntervalMinutes, originalTime]);
+  const {
+    data: multiServiceAvailability,
+    isLoading: isLoadingMultiServiceAvailability,
+    isError: isMultiServiceAvailabilityError,
+  } = useAdminMultiServiceRescheduleAvailability({
+    appointmentId: appointment.id,
+    locationId: appointment.locationId,
+    date: dateValue,
+    expectedRevision: appointment.rescheduleRevision,
+    enabled: open && isMultiServiceAppointment,
+  });
+  const multiServiceTimeOptions = useMemo(() => (multiServiceAvailability?.starts ?? []).map((startTime) => ({
+    value: startTime,
+    label: new Intl.DateTimeFormat("pt-PT", {
+      timeZone: multiServiceAvailability?.timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date(startTime)),
+  })), [multiServiceAvailability?.starts, multiServiceAvailability?.timeZone]);
   const serviceList = (services || []).filter((service) =>
     service.isVisible !== false || service.id === appointment.serviceId,
   );
@@ -477,6 +503,7 @@ function EditAppointmentDialog({
   const resetForm = () => {
     setDateValue(format(parseISO(appointment.startTime), "yyyy-MM-dd"));
     setTimeValue(format(parseISO(appointment.startTime), "HH:mm"));
+    setMultiServiceStartTime(appointment.startTime);
     setBarberId(String(appointment.barberId));
     setServiceId(isCustomAppointment ? "custom" : appointment.serviceId ? String(appointment.serviceId) : "none");
     setCustomServiceName(appointment.serviceNameSnapshot || "");
@@ -501,19 +528,24 @@ function EditAppointmentDialog({
 
   const handleSave = async () => {
     if (isSavingRef.current) return;
-    const newStartTime = new Date(`${dateValue}T${timeValue}`);
+    const newStartTime = isMultiServiceAppointment
+      ? new Date(multiServiceStartTime)
+      : new Date(`${dateValue}T${timeValue}`);
     const parsedBarberId = Number(barberId);
     const parsedServiceId = serviceId === "none" || serviceId === "custom" ? null : Number(serviceId);
     const priceCents = parseAppointmentPriceInput(priceValue);
 
-    if (Number.isNaN(newStartTime.getTime()) || !Number.isFinite(parsedBarberId)) {
+    if (Number.isNaN(newStartTime.getTime()) || (!isMultiServiceAppointment && !Number.isFinite(parsedBarberId))) {
       toast({ title: "Erro", description: agendaCopy.professional.invalidAppointment, variant: "destructive" });
       return;
     }
 
     const originalDate = format(parseISO(appointment.startTime), "yyyy-MM-dd");
-    const startTimeChanged = dateValue !== originalDate || timeValue !== originalTime;
-    if (startTimeChanged && !isClockTimeAligned(timeValue, bookingSlotIntervalMinutes)) {
+    const startTimeChanged = newStartTime.getTime() !== parseISO(appointment.startTime).getTime();
+    const selectedClockTime = isMultiServiceAppointment
+      ? multiServiceTimeOptions.find((option) => option.value === multiServiceStartTime)?.label ?? ""
+      : timeValue;
+    if (startTimeChanged && !isClockTimeAligned(selectedClockTime, bookingSlotIntervalMinutes)) {
       toast({
         title: "Hora não permitida",
         description: bookingSlotIntervalMinutes === 60
@@ -521,6 +553,34 @@ function EditAppointmentDialog({
           : `Escolha uma hora alinhada em intervalos de ${bookingSlotIntervalMinutes} minutos.`,
         variant: "destructive",
       });
+      return;
+    }
+
+    if (isMultiServiceAppointment) {
+      isSavingRef.current = true;
+      setIsSaving(true);
+      try {
+        await apiRequest("PATCH", `/api/appointments/${appointment.id}`, {
+          startTime: newStartTime,
+          expectedRevision: appointment.rescheduleRevision,
+        }, appointment.locationId ? { headers: locationHeaders(appointment.locationId) } : undefined);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["/api/appointments"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/appointments/public"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/admin/audit-logs"] }),
+        ]);
+        toast({ title: "Marcação reagendada", description: "Todos os serviços e profissionais foram atualizados em conjunto." });
+        setOpen(false);
+      } catch (err: any) {
+        toast({
+          title: "Não foi possível reagendar",
+          description: err.message || "Escolha outro horário e tente novamente.",
+          variant: "destructive",
+        });
+      } finally {
+        isSavingRef.current = false;
+        setIsSaving(false);
+      }
       return;
     }
 
@@ -654,11 +714,23 @@ function EditAppointmentDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Data</Label>
-              <Input type="date" value={dateValue} onChange={(event) => setDateValue(event.target.value)} className="bg-background border-white/10 text-white" />
+              <Input
+                type="date"
+                value={dateValue}
+                onChange={(event) => {
+                  setDateValue(event.target.value);
+                  if (isMultiServiceAppointment) setMultiServiceStartTime("");
+                }}
+                className="bg-background border-white/10 text-white"
+              />
             </div>
             <div className="space-y-2">
               <Label>Hora</Label>
-              <Select value={timeValue} onValueChange={setTimeValue}>
+              <Select
+                value={isMultiServiceAppointment ? multiServiceStartTime : timeValue}
+                onValueChange={isMultiServiceAppointment ? setMultiServiceStartTime : setTimeValue}
+                disabled={isMultiServiceAppointment && (isLoadingMultiServiceAvailability || isMultiServiceAvailabilityError)}
+              >
                 <SelectTrigger
                   aria-label="Hora"
                   className="border-white/10 bg-background text-white focus:ring-primary"
@@ -666,15 +738,56 @@ function EditAppointmentDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="z-[70] max-h-[min(20rem,70dvh)] border-white/10 bg-card text-white">
-                  {timeOptions.map((option) => (
+                  {(isMultiServiceAppointment ? multiServiceTimeOptions : timeOptions).map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {isMultiServiceAppointment && isLoadingMultiServiceAvailability && (
+                <p className="text-xs text-gray-400">A confirmar a disponibilidade de todos os profissionais...</p>
+              )}
+              {isMultiServiceAppointment && !isLoadingMultiServiceAvailability && isMultiServiceAvailabilityError && (
+                <p role="alert" className="text-xs text-red-300">Não foi possível carregar os horários válidos. Atualize e tente novamente.</p>
+              )}
+              {isMultiServiceAppointment && !isLoadingMultiServiceAvailability && !isMultiServiceAvailabilityError
+                && multiServiceTimeOptions.length === 0 && (
+                  <p className="text-xs text-amber-300">Não existe um horário em que todos os profissionais estejam disponíveis neste dia.</p>
+                )}
             </div>
           </div>
+          {isMultiServiceAppointment && (
+            <div className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-3" data-testid="multi-service-reschedule-editor">
+              <div>
+                <p className="font-semibold text-white">Reagendar a marcação completa</p>
+                <p className="mt-1 text-xs leading-relaxed text-gray-300">
+                  Os serviços, profissionais, preços, durações e grupos simultâneos serão preservados.
+                </p>
+              </div>
+              {Array.from(new Set(multiServiceSegments.map((segment) => segment.executionStage)))
+                .sort((left, right) => left - right)
+                .map((stage, stageIndex) => {
+                  const segments = multiServiceSegments.filter((segment) => segment.executionStage === stage);
+                  return <div key={stage} className="rounded-lg border border-white/10 bg-background/50 px-3 py-2">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                      {segments.length > 1 ? "Em simultâneo" : stageIndex === 0 ? "Primeiro serviço" : "Serviço seguinte"}
+                    </p>
+                    {segments.map((segment) => {
+                      const professional = barbers?.find((candidate) => candidate.id === segment.barberId)?.name || "Profissional";
+                      return <p key={segment.id} className="mt-1 text-sm text-gray-200">
+                        <strong className="text-white">{segment.serviceNameSnapshot}</strong> · {professional} · {segment.durationMinutes} min
+                      </p>;
+                    })}
+                  </div>;
+                })}
+              <div className="flex flex-wrap justify-between gap-2 border-t border-white/10 pt-2 text-sm">
+                <span className="text-gray-300">Duração real: <strong className="text-white">{appointment.durationMinutes} min</strong></span>
+                <span className="text-gray-300">Total: <strong className="text-primary">{formatAppointmentPrice(appointment.servicePriceCentsSnapshot ?? 0)}</strong></span>
+              </div>
+            </div>
+          )}
+          {!isMultiServiceAppointment && <>
           <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
             <div>
               <Label htmlFor="edit-outside-hours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
@@ -1085,14 +1198,17 @@ function EditAppointmentDialog({
               </div>
             </div>
           )}
+          </>}
           <Button
             data-testid="edit-appointment-save"
             variant="gold"
             className="w-full"
-            disabled={isSaving || !hasCompatibleService || availableBarbers.length === 0}
+            disabled={isSaving || (isMultiServiceAppointment
+              ? !multiServiceStartTime || isLoadingMultiServiceAvailability || isMultiServiceAvailabilityError
+              : !hasCompatibleService || availableBarbers.length === 0)}
             onClick={handleSave}
           >
-            {isSaving ? "A guardar..." : "Guardar alterações"}
+            {isSaving ? "A guardar..." : isMultiServiceAppointment ? "Reagendar marcação completa" : "Guardar alterações"}
           </Button>
         </div>
         <MutationPendingOverlay active={isSaving} label="A guardar marcação..." logoUrl={locationLogoUrl} />

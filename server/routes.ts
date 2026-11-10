@@ -103,10 +103,14 @@ import {
   MultiServiceAppointmentValidationError,
 } from "@shared/multi-service-appointments";
 import {
+  canRescheduleMultiServiceAppointmentWithPool,
   MultiServiceConflictError,
   MultiServiceFeatureDisabledError,
+  MultiServiceRescheduleError,
   MultiServiceScopeError,
+  previewMultiServiceRescheduleAvailabilityWithPool,
   previewSequentialAppointmentAvailabilityWithPool,
+  rescheduleMultiServiceAppointmentWithPool,
 } from "./multi-service-appointment-engine";
 import { startupTimings } from "./startup-timings";
 import {
@@ -193,7 +197,7 @@ import {
   getAppointmentOccupancyPeriods,
   getOperationalAppointmentBounds,
 } from "@shared/appointment-occupancy";
-import { getCalendarDateBounds } from "./calendar-timezone";
+import { calendarDateTimeToInstant, getCalendarDateBounds } from "./calendar-timezone";
 import {
   acceptLegacyProfessionalInviteCanonical,
   authenticateCanonicalUser,
@@ -723,6 +727,17 @@ function sendAppointmentRequestError(res: Response, error: unknown, publicRespon
     return res.status(error.status).json({ code: error.code, message: error.message });
   }
   if (error instanceof MultiServiceScopeError || error instanceof MultiServiceConflictError
+    || error instanceof MultiServiceAppointmentValidationError) {
+    return res.status(error.status).json({ code: error.code, message: error.message });
+  }
+  return null;
+}
+
+function sendMultiServiceRescheduleError(res: Response, error: unknown) {
+  if (error instanceof MultiServiceRescheduleError
+    || error instanceof MultiServiceScopeError
+    || error instanceof MultiServiceConflictError
+    || error instanceof MultiServiceFeatureDisabledError
     || error instanceof MultiServiceAppointmentValidationError) {
     return res.status(error.status).json({ code: error.code, message: error.message });
   }
@@ -6499,6 +6514,58 @@ export async function registerRoutes(
       });
     res.json(publicAppointments);
   });
+
+  app.post("/api/appointments/:id/reschedule-availability", requireAuth, async (req, res) => {
+    try {
+      const appointmentId = parsePositiveInteger(req.params.id);
+      if (appointmentId === null) return res.status(400).json({ message: "Marcação inválida." });
+      const locationId = Number(res.locals.locationId);
+      const appointment = await storage.getAppointment(appointmentId);
+      if (!appointment || appointment.locationId !== locationId) {
+        return res.status(404).json({ message: "Marcação não encontrada." });
+      }
+      const segments = await loadAppointmentServiceSegments([appointmentId]);
+      if (segments.length < 2) {
+        return res.status(400).json({ message: "Esta marcação não tem vários serviços." });
+      }
+      const professionalIds = Array.from(new Set(segments.map((segment) => segment.barberId)));
+      if (authRuntimeMode === "canonical") {
+        if (professionalIds.length > 1) {
+          if (!enforceCanonicalCapability(req, res, "appointments.manage_team", locationId)) return;
+        } else if (!enforceCanonicalOwnOrTeamCapability(req, res, {
+          ownCapability: "appointments.manage_own",
+          teamCapability: "appointments.manage_team",
+          ownerProfessionalId: professionalIds[0],
+          locationId,
+        })) return;
+      } else {
+        const appSession = getAppSession(req);
+        if (appSession.role !== "admin" || !appSession.adminId) {
+          return res.status(401).json({ message: "Não autorizado" });
+        }
+      }
+      const input = z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        expectedRevision: z.number().int().min(0),
+      }).parse(req.body);
+      return res.json(await previewMultiServiceRescheduleAvailabilityWithPool(pool, {
+        appointmentId,
+        locationId,
+        expectedRevision: input.expectedRevision,
+        date: input.date,
+        slotIntervalMinutes: bookingSlotIntervalMinutes,
+      }, {
+        masterEnabled: beautyV2MasterEnabled,
+        businessVertical: resolvedBusinessConfig.vertical,
+      }));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Escolha uma data válida." });
+      }
+      if (sendMultiServiceRescheduleError(res, error)) return;
+      throw error;
+    }
+  });
   
   app.patch("/api/appointments/:id", requireAuth, async (req, res) => {
     try {
@@ -6548,6 +6615,10 @@ export async function registerRoutes(
 
       const locationId = Number(res.locals.locationId);
       if (!currentApp || currentApp.locationId !== locationId) return res.status(404).json({ message: "Marcação não encontrada" });
+      const multiServiceSegments = await loadAppointmentServiceSegments([appointmentId]);
+      const appointmentProfessionalIds = multiServiceSegments.length > 0
+        ? Array.from(new Set(multiServiceSegments.map((segment) => segment.barberId)))
+        : [currentApp.barberId];
       if (hasExtrasPatch && (currentApp.status !== "booked" || currentApp.seriesId)) {
         throw new AppointmentExtrasError(appointmentExtrasNotEditableCode);
       }
@@ -6576,7 +6647,10 @@ export async function registerRoutes(
         || hasServicePricePatch || hasAllowOutsideHoursPatch || hasExtrasPatch || hasInternalCostsPatch
         || hasAvailabilityWindowsPatch;
       if (authRuntimeMode === "canonical") {
-        if ((hasAppointmentDetailsPatch || !hasStatusPatch) && !enforceCanonicalOwnOrTeamCapability(req, res, {
+        const isMultiServiceReschedule = multiServiceSegments.length > 0 && hasStartTimePatch;
+        if (isMultiServiceReschedule && appointmentProfessionalIds.length > 1) {
+          if (!enforceCanonicalCapability(req, res, "appointments.manage_team", locationId)) return;
+        } else if ((hasAppointmentDetailsPatch || !hasStatusPatch) && !enforceCanonicalOwnOrTeamCapability(req, res, {
           ownCapability: "appointments.manage_own",
           teamCapability: "appointments.manage_team",
           ownerProfessionalId: currentApp.barberId,
@@ -6611,6 +6685,68 @@ export async function registerRoutes(
       if (currentApp.status !== "booked" && hasAppointmentDetailsPatch) {
         return res.status(409).json({
           message: "Apenas marcações ativas podem ser editadas.",
+        });
+      }
+
+      if (multiServiceSegments.length > 0 && (hasStartTimePatch || hasBarberPatch
+        || hasServicePatch || hasServiceModePatch || hasCustomNamePatch || hasCustomDurationPatch
+        || hasServicePricePatch || hasAllowOutsideHoursPatch)) {
+        if (!hasStartTimePatch || hasBarberPatch || hasServicePatch || hasServiceModePatch
+          || hasCustomNamePatch || hasCustomDurationPatch || hasServicePricePatch || hasAllowOutsideHoursPatch
+          || hasStatusPatch || hasExtrasPatch || hasInternalCostsPatch || hasAvailabilityWindowsPatch) {
+          return res.status(409).json({
+            code: "MULTI_SERVICE_TERMS_IMMUTABLE",
+            message: "Para preservar todos os serviços e profissionais, reagende apenas a data e a hora da marcação completa.",
+          });
+        }
+        const newStartTime = new Date(startTime);
+        if (Number.isNaN(newStartTime.getTime())) {
+          return res.status(400).json({ message: "Data ou hora inválida." });
+        }
+        const slotValidationError = getBookingSlotValidationError(newStartTime, requestLocationTimeZone(res));
+        if (slotValidationError) {
+          return res.status(400).json({ message: slotValidationError, field: "startTime" });
+        }
+        if (isBeforeNow(newStartTime)) {
+          return res.status(400).json({ message: "Escolha uma data e hora futuras." });
+        }
+        const expectedRevision = Number(req.body.expectedRevision);
+        if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+          return res.status(400).json({
+            code: "MULTI_SERVICE_RESCHEDULE_REVISION_REQUIRED",
+            message: "Atualize a marcação antes de a reagendar.",
+          });
+        }
+        const actor = await getAuditActor(req);
+        const result = await rescheduleMultiServiceAppointmentWithPool(pool, {
+          appointmentId,
+          locationId,
+          expectedRevision,
+          startTime: newStartTime,
+          reminderAvailableAt: appointmentRemindersEnabled
+            ? getAppointmentReminderAvailableAt(newStartTime, requestLocationTimeZone(res))
+            : null,
+          actor: {
+            actorType: actor.actorType === "barber" ? "barber"
+              : actor.actorType === "admin" ? "admin" : "system",
+            actorId: actor.actorId,
+            actorName: actor.actorName,
+            actorUserId: "actorUserId" in actor ? actor.actorUserId : null,
+            actorProfessionalId: "actorProfessionalId" in actor ? actor.actorProfessionalId : null,
+          },
+        }, {
+          masterEnabled: beautyV2MasterEnabled,
+          businessVertical: resolvedBusinessConfig.vertical,
+          appointmentNotificationsEnabled: appointmentNotificationEventsEnabled,
+        });
+        const updated = await storage.getAppointment(appointmentId);
+        if (!updated) return res.status(409).json({ message: "A marcação foi alterada entretanto." });
+        const [withExtras] = await attachAppointmentExtras([updated]);
+        return res.json({
+          ...withExtras,
+          serviceSegments: result.segments,
+          notificationEventId: result.notificationEventId ?? undefined,
+          reused: result.reused,
         });
       }
       const previousExtras = hasExtrasPatch
@@ -6652,13 +6788,6 @@ export async function registerRoutes(
         || hasCustomDurationPatch || hasServicePricePatch;
       const hasScheduleOrTermsPatch = hasStartTimePatch || hasBarberPatch || hasAppointmentTermsPatch
         || hasAllowOutsideHoursPatch;
-
-      if (hasScheduleOrTermsPatch && (await loadAppointmentServiceSegments([appointmentId])).length > 0) {
-        return res.status(409).json({
-          code: "MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE",
-          message: "Esta marcação inclui vários serviços. Cancele-a ou crie uma nova marcação para garantir que todos os profissionais são atualizados em conjunto.",
-        });
-      }
 
       if (Number.isNaN(newStartTime.getTime())) {
         return res.status(400).json({ message: "Data ou hora inválida." });
@@ -7011,6 +7140,7 @@ export async function registerRoutes(
         : updated;
       res.json(responseAppointment);
     } catch (error) {
+      if (sendMultiServiceRescheduleError(res, error)) return;
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: AGENDA_PUBLIC_COPY.backend.appointmentConflict });
       }
@@ -7290,6 +7420,20 @@ export async function registerRoutes(
       storage.getAppointmentExtras([appointment.id]),
       loadAppointmentServiceSegments([appointment.id]),
     ]);
+    const [multiServiceRescheduleSupported, segmentProfessionals] = await Promise.all([
+      serviceSegments.length > 0
+        ? canRescheduleMultiServiceAppointmentWithPool(pool, {
+            appointmentId: appointment.id,
+            locationId: appointment.locationId,
+          }, {
+            masterEnabled: beautyV2MasterEnabled,
+            businessVertical: resolvedBusinessConfig.vertical,
+          })
+        : Promise.resolve(false),
+      Promise.all(Array.from(new Set(serviceSegments.map((segment) => segment.barberId)))
+        .map(async (professionalId) => [professionalId, (await storage.getBarber(professionalId))?.name || "Profissional"] as const)),
+    ]);
+    const segmentProfessionalNames = new Map(segmentProfessionals);
     const price = resolveAppointmentPriceCents(
       appointment,
       new Map(service ? [[service.id, service.price]] : []),
@@ -7330,9 +7474,79 @@ export async function registerRoutes(
       })),
       totalPrice: price + sumAppointmentExtras(appointmentExtras),
       manualOutsideHours: appointment.manualOutsideHours,
-      requiresAssistedReschedule: serviceSegments.length > 0,
-      serviceSegments,
+      rescheduleRevision: appointment.rescheduleRevision,
+      requiresAssistedReschedule: appointment.manualOutsideHours
+        || (serviceSegments.length > 0 && !multiServiceRescheduleSupported),
+      supportsMultiServiceReschedule: serviceSegments.length > 0 && multiServiceRescheduleSupported,
+      serviceSegments: serviceSegments.map((segment) => ({
+        ...segment,
+        barberName: segmentProfessionalNames.get(segment.barberId) || "Profissional",
+      })),
     });
+  });
+
+  app.post("/api/appointments/reschedule/:token/availability", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const appointment = await storage.getAppointmentByToken(req.params.token);
+    if (!appointment) {
+      return res.status(404).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.notFound });
+    }
+    if (!applyPublicRequestRateLimit(
+      req,
+      res,
+      publicAppointmentAvailabilityRateLimiter,
+      "multi-service-reschedule-availability",
+      appointment.locationId,
+    )) return;
+    try {
+      const input = z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        expectedRevision: z.number().int().min(0),
+      }).parse(req.body);
+      if (appointment.status !== "booked" || appointment.manualOutsideHours) {
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
+      }
+      if (new Date(appointment.startTime) <= new Date()) {
+        return res.status(410).json({
+          code: "MULTI_SERVICE_RESCHEDULE_TOKEN_EXPIRED",
+          message: "A ligação de reagendamento já não está disponível.",
+        });
+      }
+      const location = await getLocation(appointment.locationId);
+      if (!location) {
+        return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.locationUnavailable });
+      }
+      const window = currentPublicBookingWindow();
+      const [year, month, day] = input.date.split("-").map(Number);
+      const requestedDate = calendarDateTimeToInstant({
+        year,
+        month,
+        day,
+        hour: 12,
+        minute: 0,
+        second: 0,
+      }, location.timezone || SHOP_TIME_ZONE);
+      if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED
+        && !isDateWithinPublicBookingWindow(requestedDate, window, location.timezone || SHOP_TIME_ZONE)) {
+        return sendPublicBookingWindowClosed(res);
+      }
+      return res.json(await previewMultiServiceRescheduleAvailabilityWithPool(pool, {
+        appointmentId: appointment.id,
+        locationId: appointment.locationId,
+        expectedRevision: input.expectedRevision,
+        date: input.date,
+        slotIntervalMinutes: bookingSlotIntervalMinutes,
+      }, {
+        masterEnabled: beautyV2MasterEnabled,
+        businessVertical: resolvedBusinessConfig.vertical,
+      }));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Escolha uma data válida." });
+      }
+      if (sendMultiServiceRescheduleError(res, error)) return;
+      throw error;
+    }
   });
 
   app.post("/api/appointments/reschedule/:token", async (req, res) => {
@@ -7345,12 +7559,7 @@ export async function registerRoutes(
       if (appointment.status !== "booked") {
         return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
       }
-      if ((await loadAppointmentServiceSegments([appointment.id])).length > 0) {
-        return res.status(409).json({
-          code: "MULTI_SERVICE_RESCHEDULE_REQUIRES_ASSISTANCE",
-          message: PUBLIC_CYCLE_COPY.reschedule.backend.assistedContact,
-        });
-      }
+      const multiServiceSegments = await loadAppointmentServiceSegments([appointment.id]);
       if (appointment.manualOutsideHours) {
         return res.status(409).json({
           code: "MANUAL_OUTSIDE_HOURS_RESCHEDULE_UNAVAILABLE",
@@ -7376,8 +7585,48 @@ export async function registerRoutes(
       if (isBeforeNow(startTime)) {
         return res.status(400).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.futureDate });
       }
-      if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED && !isDateWithinPublicBookingWindow(startTime, currentPublicBookingWindow(), SHOP_TIME_ZONE)) {
+      if (PUBLIC_BOOKING_MONTHLY_WINDOW_ENABLED && !isDateWithinPublicBookingWindow(
+        startTime,
+        currentPublicBookingWindow(),
+        location.timezone || SHOP_TIME_ZONE,
+      )) {
         return sendPublicBookingWindowClosed(res);
+      }
+
+      if (multiServiceSegments.length > 0) {
+        const expectedRevision = Number(req.body?.expectedRevision);
+        if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+          return res.status(400).json({
+            code: "MULTI_SERVICE_RESCHEDULE_REVISION_REQUIRED",
+            message: "Atualize a página antes de confirmar o reagendamento.",
+          });
+        }
+        const result = await rescheduleMultiServiceAppointmentWithPool(pool, {
+          appointmentId: appointment.id,
+          locationId: appointment.locationId,
+          expectedRevision,
+          startTime,
+          requireFutureCurrentStart: true,
+          reminderAvailableAt: appointmentRemindersEnabled
+            ? getAppointmentReminderAvailableAt(startTime, location.timezone || SHOP_TIME_ZONE)
+            : null,
+          actor: { actorType: "client", actorName: "Cliente" },
+        }, {
+          masterEnabled: beautyV2MasterEnabled,
+          businessVertical: resolvedBusinessConfig.vertical,
+          appointmentNotificationsEnabled: appointmentNotificationEventsEnabled,
+        });
+        const updated = await storage.getAppointment(appointment.id);
+        if (!updated) {
+          return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
+        }
+        const updatedWithExtras = (await attachAppointmentExtras([updated]))[0];
+        return res.json({
+          ...updatedWithExtras,
+          serviceSegments: result.segments,
+          notificationEventId: result.notificationEventId ?? undefined,
+          reused: result.reused,
+        });
       }
 
       const services = await loadLocationServiceCatalogue(appointment.locationId, true);
@@ -7466,6 +7715,7 @@ export async function registerRoutes(
         ...(result ? { notificationEventId: result.notificationEvent.id } : {}),
       });
     } catch (error) {
+      if (sendMultiServiceRescheduleError(res, error)) return;
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.slotReserved });
       }

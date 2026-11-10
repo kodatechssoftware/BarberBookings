@@ -2,16 +2,21 @@
 import { Link, useRoute } from "wouter";
 import { format, parseISO, startOfToday } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Calendar as CalendarIcon, Check, Clock, Loader2, XCircle } from "lucide-react";
+import { Calendar as CalendarIcon, Check, Clock, Layers3, Loader2, XCircle } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button-custom";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { preloadCancellationPage } from "@/lib/page-preloads";
 import { useToast } from "@/hooks/use-toast";
-import { useAppointmentByToken, usePublicAppointments, useRescheduleAppointment } from "@/hooks/use-appointments";
+import {
+  useAppointmentByToken,
+  useMultiServiceRescheduleAvailability,
+  usePublicAppointments,
+  useRescheduleAppointment,
+} from "@/hooks/use-appointments";
 import { useBarberAvailability, useShopAvailability } from "@/hooks/use-barbers";
-import { calendarTimeInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
+import { calendarTimeInTimeZone, dateKeyInTimeZone, type AvailabilityRow, type ShopAvailabilityRow, getAvailableTimeSlots } from "@/lib/availability";
 import { usePublicBookingWindow } from "@/hooks/use-public-booking-window";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import { DEFAULT_BOOKING_SLOT_INTERVAL_MINUTES } from "@shared/booking-slot-interval";
@@ -34,20 +39,31 @@ function formatPublicDateTime(value: Date | string, timeZone: string, dateStyle:
   return `${formattedDate} às ${time}h`;
 }
 
+function formatPrice(amountCents: number) {
+  return new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(amountCents / 100);
+}
+
 export default function Reschedule() {
   const copy = useBusinessCopy().publicCycle;
   const [, params] = useRoute("/reschedule/:token");
   const token = params?.token;
   const { toast } = useToast();
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(startOfToday());
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>();
   const [visibleCalendarMonth, setVisibleCalendarMonth] = useState<Date>(startOfToday());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [rescheduledStart, setRescheduledStart] = useState<Date | null>(null);
 
   const { data: appointment, isLoading: loadingAppointment, isError: appointmentLoadError } = useAppointmentByToken(token);
-  const { data: availabilityRows, isLoading: loadingAvailability } = useBarberAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
-  const { data: shopAvailabilityRows, isLoading: loadingShopAvailability } = useShopAvailability({ locationId: appointment?.locationId, enabled: Boolean(appointment) });
+  const isMultiServiceAppointment = (appointment?.serviceSegments?.length ?? 0) >= 2;
+  const { data: availabilityRows, isLoading: loadingAvailability } = useBarberAvailability({
+    locationId: appointment?.locationId,
+    enabled: Boolean(appointment && !isMultiServiceAppointment),
+  });
+  const { data: shopAvailabilityRows, isLoading: loadingShopAvailability } = useShopAvailability({
+    locationId: appointment?.locationId,
+    enabled: Boolean(appointment && !isMultiServiceAppointment),
+  });
   const { data: publicBookingWindow, isLoading: loadingPublicBookingWindow } = usePublicBookingWindow();
   const { data: runtimeConfig, isLoading: loadingRuntimeConfig } = useRuntimeConfig();
   const bookingSlotIntervalMinutes = runtimeConfig?.bookingSlotIntervalMinutes
@@ -72,7 +88,10 @@ export default function Reschedule() {
 
   useEffect(() => {
     if (appointment?.startTime && publicBookingWindow) {
-      const appointmentDate = parseISO(appointment.startTime);
+      const appointmentDate = parseISO(`${dateKeyInTimeZone(
+        parseISO(appointment.startTime),
+        appointment.locationTimeZone,
+      )}T12:00:00`);
       const initialDate = isPublicDateAllowed(appointmentDate) ? appointmentDate : parseISO(publicBookingWindow.today);
       setSelectedDate(initialDate);
       setVisibleCalendarMonth(initialDate);
@@ -90,11 +109,47 @@ export default function Reschedule() {
     locationId: appointment?.locationId,
     barberId: appointment?.barberId ? String(appointment.barberId) : undefined,
     date: selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined,
-    enabled: Boolean(appointment?.barberId && selectedDate && isPublicDateAllowed(selectedDate)),
+    enabled: Boolean(!isMultiServiceAppointment && appointment?.barberId && selectedDate && isPublicDateAllowed(selectedDate)),
+  });
+  const selectedDateKey = selectedDate ? format(selectedDate, "yyyy-MM-dd") : undefined;
+  const {
+    data: multiServiceAvailability,
+    isLoading: loadingMultiServiceAvailability,
+    isError: multiServiceAvailabilityError,
+  } = useMultiServiceRescheduleAvailability({
+    token,
+    date: selectedDateKey,
+    expectedRevision: appointment?.rescheduleRevision,
+    enabled: Boolean(
+      isMultiServiceAppointment
+      && appointment?.supportsMultiServiceReschedule
+      && selectedDate
+      && isPublicDateAllowed(selectedDate),
+    ),
   });
 
-  const timeSlots = useMemo(() => {
-    if (!runtimeConfig || !appointment || !existingAppointments || !selectedDate || !availabilityRows || !shopAvailabilityRows) return [];
+  const timeSlots = useMemo<Array<{
+    key: string;
+    label: string;
+    available: boolean;
+    startTime?: string;
+  }>>(() => {
+    if (!runtimeConfig || !appointment || !selectedDate) return [];
+
+    if (isMultiServiceAppointment) {
+      return (multiServiceAvailability?.starts ?? []).map((startTime) => ({
+        key: startTime,
+        label: new Intl.DateTimeFormat("pt-PT", {
+          timeZone: appointment.locationTimeZone,
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        }).format(new Date(startTime)),
+        startTime,
+        available: true,
+      }));
+    }
+    if (!existingAppointments || !availabilityRows || !shopAvailabilityRows) return [];
 
     const duration = appointment.duration || 30;
     return getAvailableTimeSlots({
@@ -112,8 +167,8 @@ export default function Reschedule() {
       existingAppointments: existingAppointments.filter((existing) => existing.id !== appointment.id),
       timeZone: appointment.locationTimeZone,
       slotIntervalMinutes: bookingSlotIntervalMinutes,
-    });
-  }, [appointment, availabilityRows, bookingSlotIntervalMinutes, existingAppointments, runtimeConfig, selectedDate, shopAvailabilityRows]);
+    }).map(({ time, available }) => ({ key: time, label: time, available }));
+  }, [appointment, availabilityRows, bookingSlotIntervalMinutes, existingAppointments, isMultiServiceAppointment, multiServiceAvailability, runtimeConfig, selectedDate, shopAvailabilityRows]);
 
   const handleSubmit = async () => {
     if (!token || !selectedDate || !selectedTime) return;
@@ -128,10 +183,17 @@ export default function Reschedule() {
       return;
     }
 
-    const startTime = calendarTimeInTimeZone(selectedDate, selectedTime, appointment?.locationTimeZone || "Europe/Lisbon");
+    const selectedSlot = timeSlots.find((slot) => slot.key === selectedTime);
+    const startTime = selectedSlot?.startTime
+      ? new Date(selectedSlot.startTime)
+      : calendarTimeInTimeZone(selectedDate, selectedSlot?.label || selectedTime, appointment?.locationTimeZone || "Europe/Lisbon");
 
     try {
-      await rescheduleAppointment.mutateAsync({ token, startTime });
+      await rescheduleAppointment.mutateAsync({
+        token,
+        startTime,
+        expectedRevision: isMultiServiceAppointment ? appointment?.rescheduleRevision : undefined,
+      });
       setRescheduledStart(startTime);
       setSuccess(true);
     } catch (error: any) {
@@ -222,6 +284,38 @@ export default function Reschedule() {
               dateTime: formatPublicDateTime(appointment.startTime, appointment.locationTimeZone, "short"),
             })}
           </p>
+          {isMultiServiceAppointment && (
+            <div className="mx-auto mt-4 max-w-xl rounded-2xl border border-primary/20 bg-primary/5 p-4 text-left" data-testid="multi-service-reschedule-plan">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="flex items-center gap-2 font-semibold text-foreground">
+                  <Layers3 className="h-4 w-4 text-primary" aria-hidden="true" />
+                  Marcação completa
+                </p>
+                <span className="text-sm text-muted-foreground">
+                  {appointment.duration} min · {formatPrice(appointment.price)}
+                </span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {Array.from(new Set((appointment.serviceSegments ?? []).map((segment) => segment.executionStage)))
+                  .sort((left, right) => left - right)
+                  .map((stage, stageIndex) => {
+                    const stageSegments = (appointment.serviceSegments ?? []).filter((segment) => segment.executionStage === stage);
+                    return <div key={stage} className="rounded-xl border border-border/70 bg-card/70 px-3 py-2">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                        {stageSegments.length > 1 ? "Em simultâneo" : stageIndex === 0 ? "Primeiro serviço" : "Serviço seguinte"}
+                      </p>
+                      {stageSegments.map((segment) => <p key={segment.id} className="mt-1 text-sm text-foreground">
+                        <strong>{segment.serviceNameSnapshot}</strong>
+                        <span className="text-muted-foreground"> · {segment.barberName || "Profissional"} · {segment.durationMinutes} min</span>
+                      </p>)}
+                    </div>;
+                  })}
+              </div>
+              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                Ao reagendar, todos os serviços e profissionais são deslocados em conjunto.
+              </p>
+            </div>
+          )}
           <AppointmentCommercialSummary
             serviceName={appointment.serviceName}
             servicePriceCents={appointment.price}
@@ -267,28 +361,38 @@ export default function Reschedule() {
 
           <div className="bg-card border border-white/10 rounded-xl p-4">
             <h2 className="font-bold mb-4 flex items-center gap-2"><Clock className="w-5 h-5 text-primary" aria-hidden="true" /> {copy.reschedule.newTimeHeading}</h2>
-            {loadingAppointments || loadingAvailability || loadingShopAvailability || loadingRuntimeConfig ? (
+            {loadingRuntimeConfig || (isMultiServiceAppointment
+              ? loadingMultiServiceAvailability
+              : loadingAppointments || loadingAvailability || loadingShopAvailability) ? (
               <div role="status" aria-label={copy.reschedule.loadingWindow} className="flex justify-center py-10"><Loader2 aria-hidden="true" className="w-6 h-6 animate-spin text-primary" /></div>
+            ) : isMultiServiceAppointment && multiServiceAvailabilityError ? (
+              <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-4 text-center text-sm text-destructive">
+                Não foi possível confirmar a disponibilidade conjunta. Atualize a página e tente novamente.
+              </p>
             ) : timeSlots.length === 0 ? (
-              <p className="text-gray-500 text-sm text-center py-10">{copy.reschedule.noSlots}</p>
+              <p className="text-gray-500 text-sm text-center py-10">
+                {isMultiServiceAppointment
+                  ? "Não existe um horário em que todos os profissionais estejam disponíveis neste dia."
+                  : copy.reschedule.noSlots}
+              </p>
             ) : (
               <div className="grid grid-cols-3 gap-2">
-                {timeSlots.map(({ time, available }) => (
+                {timeSlots.map(({ key, label, available }) => (
                   <button
-                    key={time}
-                    aria-label={`${time}h`}
+                    key={key}
+                    aria-label={`${label}h`}
                     disabled={!available}
-                    aria-pressed={selectedTime === time}
-                    data-slot-state={!available ? "unavailable" : selectedTime === time ? "selected" : "available"}
-                    onClick={() => setSelectedTime(time)}
+                    aria-pressed={selectedTime === key}
+                    data-slot-state={!available ? "unavailable" : selectedTime === key ? "selected" : "available"}
+                    onClick={() => setSelectedTime(key)}
                     className={cn(
                       "booking-time-slot py-3 rounded-lg text-sm border transition-colors",
                       !available ? "booking-time-slot-unavailable bg-white/5 text-gray-600 border-transparent cursor-not-allowed" :
-                        selectedTime === time ? "booking-time-slot-selected bg-primary text-background border-primary" :
+                        selectedTime === key ? "booking-time-slot-selected bg-primary text-background border-primary" :
                           "booking-time-slot-available border-white/10 text-gray-300 hover:border-primary/50",
                     )}
                   >
-                    {time}h
+                    {label}h
                   </button>
                 ))}
               </div>

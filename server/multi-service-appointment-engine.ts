@@ -21,6 +21,7 @@ import {
   getCalendarDateTimeParts,
 } from "./calendar-timezone";
 import type { AppointmentRequestExecutionMode } from "@shared/appointment-requests";
+import { serializeSafeAuditMetadata } from "./audit-log-security";
 
 export type MultiServiceSelection = {
   serviceId: number;
@@ -42,7 +43,56 @@ export type CreateMultiServiceAppointmentInput = {
 export type ValidateMultiServiceAppointmentAvailabilityInput = Pick<
   CreateMultiServiceAppointmentInput,
   "locationId" | "startTime" | "manualOutsideHours" | "services"
->;
+> & {
+  excludeAppointmentId?: number;
+};
+
+export type MultiServiceRescheduleActor = {
+  actorType: "client" | "admin" | "barber" | "system";
+  actorId?: number | null;
+  actorName?: string | null;
+  actorUserId?: number | null;
+  actorProfessionalId?: number | null;
+};
+
+export type RescheduleMultiServiceAppointmentInput = {
+  appointmentId: number;
+  locationId: number;
+  expectedRevision: number;
+  startTime: Date | string;
+  requireFutureCurrentStart?: boolean;
+  reminderAvailableAt?: Date | null;
+  actor?: MultiServiceRescheduleActor;
+};
+
+export type MultiServiceReschedulePreview = {
+  date: string;
+  timeZone: string;
+  starts: string[];
+  durationMinutes: number;
+  totalPriceCents: number;
+  segments: Array<{
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    startOffsetMinutes: number;
+    durationMinutes: number;
+    serviceName: string;
+    priceCents: number;
+  }>;
+};
+
+export type RescheduledMultiServiceAppointment = {
+  appointmentId: number;
+  previousStartTime: Date;
+  startTime: Date;
+  rescheduleRevision: number;
+  notificationRevision: number;
+  notificationEventId: number | null;
+  reused: boolean;
+  segments: StoredMultiServiceSegment[];
+};
 
 export type StoredMultiServiceSegment = {
   id: number;
@@ -135,6 +185,21 @@ export class MultiServiceConflictError extends Error {
   }
 }
 
+export class MultiServiceRescheduleError extends Error {
+  constructor(
+    public code:
+      | "MULTI_SERVICE_RESCHEDULE_NOT_FOUND"
+      | "MULTI_SERVICE_RESCHEDULE_UNAVAILABLE"
+      | "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT"
+      | "MULTI_SERVICE_RESCHEDULE_TOKEN_EXPIRED",
+    message: string,
+    public status = 409,
+  ) {
+    super(message);
+    this.name = "MultiServiceRescheduleError";
+  }
+}
+
 export type MultiServiceEngineOptions = {
   masterEnabled?: boolean;
   businessVertical?: string;
@@ -142,6 +207,9 @@ export type MultiServiceEngineOptions = {
   minimumSegments?: number;
   termsSnapshot?: readonly MultiServiceSegmentTerms[];
   afterSegmentsInserted?: (client: PoolClient, appointmentId: number) => Promise<void>;
+  afterSegmentsRescheduled?: (client: PoolClient, appointmentId: number) => Promise<void>;
+  appointmentNotificationsEnabled?: boolean;
+  now?: () => Date;
 };
 
 const defaultWorkingPeriods = (weekday: number): MultiServiceWorkingPeriod[] => {
@@ -658,8 +726,14 @@ export async function validateMultiServiceAppointmentAvailabilityInTransaction(
       SELECT appointment_id
       FROM ${table("appointment_occupancy_periods")}
       WHERE barber_id = $1 AND start_time < $2 AND end_time > $3
+        AND ($4::int IS NULL OR appointment_id <> $4)
       LIMIT 1
-    `, [period.barberId, utcTimestamp(period.endTime), utcTimestamp(period.startTime)]);
+    `, [
+      period.barberId,
+      utcTimestamp(period.endTime),
+      utcTimestamp(period.startTime),
+      input.excludeAppointmentId ?? null,
+    ]);
     if (conflict.rowCount) throw new MultiServiceConflictError();
   }
 
@@ -842,4 +916,492 @@ export async function getMultiServiceAppointmentSegmentsWithPool(
 
 export function getMultiServiceAppointmentSegments(appointmentId: number) {
   return getMultiServiceAppointmentSegmentsWithPool(applicationPool, appointmentId);
+}
+
+type MultiServiceRescheduleAppointmentRow = {
+  id: number;
+  location_id: number;
+  status: string;
+  start_time: Date;
+  reschedule_revision: number;
+  notification_revision: number;
+  manual_outside_hours: boolean;
+  customer_name: string;
+};
+
+function schemaTables() {
+  const schemaName = process.env.DATABASE_SCHEMA?.trim() || "public";
+  const schema = quoteIdentifier(schemaName);
+  return (name: string) => `${schema}.${quoteIdentifier(name)}`;
+}
+
+async function loadMultiServiceRescheduleContextWithClient(
+  client: PoolClient,
+  input: {
+    appointmentId: number;
+    locationId: number;
+    expectedRevision?: number;
+    lock?: "share" | "update";
+  },
+  options: MultiServiceEngineOptions,
+) {
+  const table = schemaTables();
+  const lock = input.lock === "update" ? "FOR UPDATE" : "FOR SHARE";
+  const appointmentResult = await client.query<MultiServiceRescheduleAppointmentRow>(`
+    SELECT id, location_id, status, start_time, reschedule_revision, notification_revision,
+      manual_outside_hours, customer_name
+    FROM ${table("appointments")}
+    WHERE id = $1 AND location_id = $2
+    ${lock}
+  `, [input.appointmentId, input.locationId]);
+  const appointment = appointmentResult.rows[0];
+  if (!appointment) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_NOT_FOUND",
+      "A marcação não foi encontrada neste estabelecimento.",
+      404,
+    );
+  }
+  if (appointment.status !== "booked" || appointment.manual_outside_hours) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_UNAVAILABLE",
+      "Esta marcação não pode ser reagendada online.",
+    );
+  }
+  if (input.expectedRevision !== undefined
+    && Number(appointment.reschedule_revision) !== input.expectedRevision) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT",
+      "A marcação foi alterada entretanto. Atualize a página antes de escolher outro horário.",
+    );
+  }
+
+  const segmentResult = await client.query<Parameters<typeof mapStoredSegment>[0]>(`
+    SELECT id, appointment_id, position, execution_stage, service_id, barber_id, start_time,
+      duration_minutes, buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
+      service_name_snapshot, service_price_cents_snapshot
+    FROM ${table("appointment_service_segments")}
+    WHERE appointment_id = $1
+    ORDER BY position
+    ${lock}
+  `, [input.appointmentId]);
+  const segments = segmentResult.rows.map(mapStoredSegment);
+  if (segments.length < MIN_MULTI_SERVICE_SEGMENTS) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_UNAVAILABLE",
+      "Esta marcação não contém um plano multi-serviço válido.",
+    );
+  }
+
+  const snapshots: MultiServiceSegmentTerms[] = segments.map((segment) => ({
+    serviceId: segment.serviceId,
+    barberId: segment.barberId,
+    serviceName: segment.serviceNameSnapshot,
+    priceCents: segment.servicePriceCentsSnapshot,
+    durationMinutes: segment.durationMinutes,
+    bufferBeforeMinutes: segment.bufferBeforeMinutesSnapshot,
+    bufferAfterMinutes: segment.bufferAfterMinutesSnapshot,
+    executionStage: segment.executionStage,
+  }));
+  await assertBeautyV2FeaturesEnabledWithClient(client, input.locationId, {
+    ...options,
+    requiredFeatures: ["multiServiceAppointments"],
+  }, table);
+  const currentTerms = await resolveAppointmentServiceTermsWithClient(
+    client,
+    input.locationId,
+    snapshots.map(({ serviceId, barberId }) => ({ serviceId, barberId })),
+    table,
+  );
+  currentTerms.forEach((current, index) => {
+    const snapshot = snapshots[index];
+    if (current.serviceId !== snapshot.serviceId || current.barberId !== snapshot.barberId) {
+      throw new MultiServiceScopeError();
+    }
+  });
+  await resolveExecutionTermsWithClient(client, input.locationId, snapshots, options, table, true);
+  return { appointment, segments, snapshots, table };
+}
+
+export async function canRescheduleMultiServiceAppointmentWithPool(
+  databasePool: Pool,
+  input: { appointmentId: number; locationId: number },
+  options: MultiServiceEngineOptions = {},
+) {
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN");
+    await loadMultiServiceRescheduleContextWithClient(client, input, options);
+    await client.query("COMMIT");
+    return true;
+  } catch {
+    await client.query("ROLLBACK").catch(() => undefined);
+    return false;
+  } finally {
+    client.release();
+  }
+}
+
+export async function previewMultiServiceRescheduleAvailabilityWithPool(
+  databasePool: Pool,
+  input: {
+    appointmentId: number;
+    locationId: number;
+    expectedRevision: number;
+    date: string;
+    slotIntervalMinutes: number;
+    now?: Date;
+  },
+  options: MultiServiceEngineOptions = {},
+): Promise<MultiServiceReschedulePreview> {
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN");
+    const context = await loadMultiServiceRescheduleContextWithClient(client, input, options);
+    const location = await client.query<{ timezone: string }>(`
+      SELECT timezone FROM ${context.table("locations")}
+      WHERE id = $1 AND is_active = true
+      FOR SHARE
+    `, [input.locationId]);
+    if (!location.rows[0]) throw new MultiServiceScopeError("A localização não está disponível.");
+    const timeZone = location.rows[0].timezone;
+    const [year, month, day] = input.date.split("-").map(Number);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)
+      || !Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+      throw new MultiServiceRescheduleError(
+        "MULTI_SERVICE_RESCHEDULE_UNAVAILABLE",
+        "A data escolhida é inválida.",
+        400,
+      );
+    }
+    const bounds = getCalendarDateBounds(input.date, timeZone);
+    const barberIds = Array.from(new Set(context.snapshots.map((segment) => segment.barberId)));
+    const [occupied, shopAvailability, professionalAvailability] = await Promise.all([
+      client.query<{ barber_id: number; start_time: Date; end_time: Date }>(`
+        SELECT barber_id, start_time, end_time
+        FROM ${context.table("appointment_occupancy_periods")}
+        WHERE barber_id = ANY($1::int[])
+          AND appointment_id <> $2
+          AND start_time < $4 AND end_time > $3
+      `, [barberIds, input.appointmentId, bounds.start, bounds.endExclusive]),
+      client.query<{ day_of_week: number; start_time: string; end_time: string; is_open: boolean }>(`
+        SELECT day_of_week, start_time, end_time, is_open
+        FROM ${context.table("shop_availability")}
+        WHERE location_id = $1
+        ORDER BY day_of_week, start_time, end_time
+      `, [input.locationId]),
+      client.query<{ barber_id: number; day_of_week: number; start_time: string; end_time: string; is_working: boolean }>(`
+        SELECT barber_id, day_of_week, start_time, end_time, is_working
+        FROM ${context.table("barber_availability")}
+        WHERE location_id = $1 AND barber_id = ANY($2::int[])
+        ORDER BY barber_id, day_of_week, start_time, end_time
+      `, [input.locationId, barberIds]),
+    ]);
+    const starts: string[] = [];
+    const now = input.now ?? options.now?.() ?? new Date();
+    for (let minute = 0; minute < 24 * 60; minute += input.slotIntervalMinutes) {
+      const startTime = calendarDateTimeToInstant({
+        year,
+        month,
+        day,
+        hour: Math.floor(minute / 60),
+        minute: minute % 60,
+        second: 0,
+      }, timeZone);
+      const represented = getCalendarDateTimeParts(startTime, timeZone);
+      if (represented.year !== year || represented.month !== month || represented.day !== day
+        || represented.hour !== Math.floor(minute / 60) || represented.minute !== minute % 60
+        || startTime <= now) continue;
+      const plan = planAppointmentServices(startTime, context.snapshots, MIN_MULTI_SERVICE_SEGMENTS);
+      try {
+        const periods = await resolveWorkingPeriods(client, plan, input.locationId, timeZone, context.table, {
+          shopRows: shopAvailability.rows,
+          barberRows: professionalAvailability.rows,
+        });
+        assertMultiServicePlanFitsWorkingPeriods(plan, timeZone, periods);
+      } catch (error) {
+        if (error instanceof MultiServiceAppointmentValidationError) continue;
+        throw error;
+      }
+      const conflict = plan.occupancyPeriods.some((period) => occupied.rows.some((row) =>
+        row.barber_id === period.barberId
+        && new Date(row.start_time) < period.endTime
+        && new Date(row.end_time) > period.startTime));
+      if (!conflict) starts.push(startTime.toISOString());
+    }
+    const referenceStart = calendarDateTimeToInstant({ year, month, day, hour: 12, minute: 0, second: 0 }, timeZone);
+    const referencePlan = planAppointmentServices(referenceStart, context.snapshots, MIN_MULTI_SERVICE_SEGMENTS);
+    await client.query("COMMIT");
+    return {
+      date: input.date,
+      timeZone,
+      starts,
+      durationMinutes: referencePlan.durationMinutes,
+      totalPriceCents: referencePlan.totalPriceCents,
+      segments: referencePlan.segments.map((segment) => ({
+        position: segment.position,
+        executionStage: segment.executionStage,
+        serviceId: segment.serviceId,
+        barberId: segment.barberId,
+        startOffsetMinutes: Math.round((segment.startTime.getTime() - referencePlan.startTime.getTime()) / 60_000),
+        durationMinutes: segment.durationMinutes,
+        serviceName: segment.serviceNameSnapshot,
+        priceCents: segment.servicePriceCentsSnapshot,
+      })),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function rescheduleMultiServiceAppointmentInTransaction(
+  client: PoolClient,
+  input: RescheduleMultiServiceAppointmentInput,
+  options: MultiServiceEngineOptions = {},
+): Promise<RescheduledMultiServiceAppointment> {
+  const requestedStartTime = input.startTime instanceof Date ? new Date(input.startTime) : new Date(input.startTime);
+  if (Number.isNaN(requestedStartTime.getTime())) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_UNAVAILABLE",
+      "A data escolhida é inválida.",
+      400,
+    );
+  }
+  await client.query("SELECT pg_advisory_xact_lock(-2, $1)", [input.appointmentId]);
+  const table = schemaTables();
+  const currentResult = await client.query<MultiServiceRescheduleAppointmentRow>(`
+    SELECT id, location_id, status, start_time, reschedule_revision, notification_revision,
+      manual_outside_hours, customer_name
+    FROM ${table("appointments")}
+    WHERE id = $1 AND location_id = $2
+    FOR UPDATE
+  `, [input.appointmentId, input.locationId]);
+  const current = currentResult.rows[0];
+  if (!current) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_NOT_FOUND",
+      "A marcação não foi encontrada neste estabelecimento.",
+      404,
+    );
+  }
+  const currentRevision = Number(current.reschedule_revision);
+  if (currentRevision !== input.expectedRevision) {
+    if (currentRevision === input.expectedRevision + 1
+      && new Date(current.start_time).getTime() === requestedStartTime.getTime()) {
+      const segments = await getMultiServiceAppointmentSegmentsWithClient(client, input.appointmentId, table, "FOR SHARE");
+      return {
+        appointmentId: input.appointmentId,
+        previousStartTime: new Date(current.start_time),
+        startTime: new Date(current.start_time),
+        rescheduleRevision: currentRevision,
+        notificationRevision: Number(current.notification_revision),
+        notificationEventId: null,
+        reused: true,
+        segments,
+      };
+    }
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT",
+      "A marcação foi alterada entretanto. Atualize a página antes de escolher outro horário.",
+    );
+  }
+  if (current.status !== "booked" || current.manual_outside_hours) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_UNAVAILABLE",
+      "Esta marcação não pode ser reagendada online.",
+    );
+  }
+  if (new Date(current.start_time).getTime() === requestedStartTime.getTime()) {
+    return {
+      appointmentId: input.appointmentId,
+      previousStartTime: new Date(current.start_time),
+      startTime: new Date(current.start_time),
+      rescheduleRevision: currentRevision,
+      notificationRevision: Number(current.notification_revision),
+      notificationEventId: null,
+      reused: true,
+      segments: await getMultiServiceAppointmentSegmentsWithClient(client, input.appointmentId, table, "FOR SHARE"),
+    };
+  }
+  const now = options.now?.() ?? new Date();
+  if (input.requireFutureCurrentStart && new Date(current.start_time) <= now) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_TOKEN_EXPIRED",
+      "A ligação de reagendamento já não está disponível.",
+      410,
+    );
+  }
+  const context = await loadMultiServiceRescheduleContextWithClient(client, {
+    appointmentId: input.appointmentId,
+    locationId: input.locationId,
+    expectedRevision: input.expectedRevision,
+    lock: "update",
+  }, options);
+  const plan = await validateMultiServiceAppointmentAvailabilityInTransaction(client, {
+    locationId: input.locationId,
+    startTime: requestedStartTime,
+    manualOutsideHours: false,
+    services: context.snapshots.map(({ serviceId, barberId }) => ({ serviceId, barberId })),
+    excludeAppointmentId: input.appointmentId,
+  }, {
+    ...options,
+    requiredFeatures: ["multiServiceAppointments"],
+    minimumSegments: MIN_MULTI_SERVICE_SEGMENTS,
+    termsSnapshot: context.snapshots,
+  });
+
+  await client.query("SET CONSTRAINTS ALL DEFERRED");
+  const values: unknown[] = [];
+  const plannedRows = plan.segments.map((segment, index) => {
+    values.push(context.segments[index].id, utcTimestamp(segment.startTime));
+    const offset = index * 2;
+    return `($${offset + 1}::int, $${offset + 2}::timestamp)`;
+  });
+  const updatedSegments = await client.query(`
+    UPDATE ${table("appointment_service_segments")} AS segment
+    SET start_time = planned.start_time
+    FROM (VALUES ${plannedRows.join(", ")}) AS planned(id, start_time)
+    WHERE segment.id = planned.id AND segment.appointment_id = $${values.length + 1}
+  `, [...values, input.appointmentId]);
+  if (updatedSegments.rowCount !== plan.segments.length) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT",
+      "A marcação foi alterada entretanto. Atualize a página antes de escolher outro horário.",
+    );
+  }
+
+  const nextRescheduleRevision = currentRevision + 1;
+  const nextNotificationRevision = Number(current.notification_revision) + 1;
+  const updated = await client.query<MultiServiceRescheduleAppointmentRow>(`
+    UPDATE ${table("appointments")}
+    SET start_time = $1,
+      reschedule_revision = $2,
+      notification_revision = $3
+    WHERE id = $4 AND location_id = $5 AND status = 'booked' AND reschedule_revision = $6
+    RETURNING id, location_id, status, start_time, reschedule_revision, notification_revision,
+      manual_outside_hours, customer_name
+  `, [
+    utcTimestamp(plan.startTime),
+    nextRescheduleRevision,
+    nextNotificationRevision,
+    input.appointmentId,
+    input.locationId,
+    input.expectedRevision,
+  ]);
+  if (!updated.rows[0]) {
+    throw new MultiServiceRescheduleError(
+      "MULTI_SERVICE_RESCHEDULE_REVISION_CONFLICT",
+      "A marcação foi alterada entretanto. Atualize a página antes de escolher outro horário.",
+    );
+  }
+
+  let notificationEventId: number | null = null;
+  if (options.appointmentNotificationsEnabled) {
+    const notification = await client.query<{ id: number }>(`
+      INSERT INTO ${table("appointment_notification_events")} (
+        appointment_id, event_type, event_revision, event_key, appointment_start_time,
+        previous_start_time, new_start_time
+      ) VALUES ($1, 'appointment_rescheduled', $2, $3, $4, $5, $4)
+      RETURNING id
+    `, [
+      input.appointmentId,
+      nextNotificationRevision,
+      `appointment:${input.appointmentId}:rescheduled:${nextNotificationRevision}`,
+      utcTimestamp(plan.startTime),
+      utcTimestamp(new Date(current.start_time)),
+    ]);
+    notificationEventId = Number(notification.rows[0].id);
+    if (input.reminderAvailableAt) {
+      await client.query(`
+        INSERT INTO ${table("appointment_notification_events")} (
+          appointment_id, event_type, event_revision, event_key, available_at, appointment_start_time
+        ) VALUES ($1, 'appointment_reminder_day_before', $2, $3, $4, $5)
+      `, [
+        input.appointmentId,
+        nextNotificationRevision,
+        `appointment:${input.appointmentId}:reminder_day_before:${nextNotificationRevision}`,
+        utcTimestamp(input.reminderAvailableAt),
+        utcTimestamp(plan.startTime),
+      ]);
+    }
+  }
+
+  const actor = input.actor ?? { actorType: "system" as const, actorName: "Sistema" };
+  await client.query(`
+    INSERT INTO ${table("audit_logs")} (
+      actor_type, actor_id, actor_name, actor_user_id, actor_professional_id,
+      location_id, action, entity_type, entity_id, summary, metadata
+    ) VALUES ($1, $2, $3, $4, $5, $6, 'appointment.rescheduled', 'appointment', $7, $8, $9)
+  `, [
+    actor.actorType,
+    actor.actorId ?? null,
+    actor.actorName ?? null,
+    actor.actorUserId ?? null,
+    actor.actorProfessionalId ?? null,
+    input.locationId,
+    input.appointmentId,
+    `Marcação multi-serviço reagendada: ${current.customer_name}`,
+    serializeSafeAuditMetadata({
+      previousStartTime: new Date(current.start_time).toISOString(),
+      newStartTime: plan.startTime.toISOString(),
+      serviceCount: plan.segments.length,
+      professionalCount: new Set(plan.segments.map((segment) => segment.barberId)).size,
+      executionStages: plan.segments.map((segment) => segment.executionStage),
+      rescheduleRevision: nextRescheduleRevision,
+    }),
+  ]);
+
+  await options.afterSegmentsRescheduled?.(client, input.appointmentId);
+  await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+  return {
+    appointmentId: input.appointmentId,
+    previousStartTime: new Date(current.start_time),
+    startTime: new Date(updated.rows[0].start_time),
+    rescheduleRevision: nextRescheduleRevision,
+    notificationRevision: nextNotificationRevision,
+    notificationEventId,
+    reused: false,
+    segments: await getMultiServiceAppointmentSegmentsWithClient(client, input.appointmentId, table, "FOR SHARE"),
+  };
+}
+
+async function getMultiServiceAppointmentSegmentsWithClient(
+  client: PoolClient,
+  appointmentId: number,
+  table: (name: string) => string,
+  lock = "",
+) {
+  const result = await client.query<Parameters<typeof mapStoredSegment>[0]>(`
+    SELECT id, appointment_id, position, execution_stage, service_id, barber_id, start_time,
+      duration_minutes, buffer_before_minutes_snapshot, buffer_after_minutes_snapshot,
+      service_name_snapshot, service_price_cents_snapshot
+    FROM ${table("appointment_service_segments")}
+    WHERE appointment_id = $1
+    ORDER BY position
+    ${lock}
+  `, [appointmentId]);
+  return result.rows.map(mapStoredSegment);
+}
+
+export async function rescheduleMultiServiceAppointmentWithPool(
+  databasePool: Pool,
+  input: RescheduleMultiServiceAppointmentInput,
+  options: MultiServiceEngineOptions = {},
+) {
+  const client = await databasePool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await rescheduleMultiServiceAppointmentInTransaction(client, input, options);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    if (databaseCode(error) === "23P01") throw new MultiServiceConflictError();
+    throw error;
+  } finally {
+    client.release();
+  }
 }
