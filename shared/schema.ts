@@ -1182,7 +1182,33 @@ export const appointmentNotificationEvents = appPgTable("appointment_notificatio
   duePendingIdx: index("appointment_notification_events_due_pending_idx")
     .on(table.availableAt, table.id)
     .where(sql`${table.processingCompletedAt} IS NULL`),
+  appointmentFailedIdx: index("appointment_notification_events_appointment_failed_idx")
+    .on(table.appointmentId, table.eventRevision, table.appointmentStartTime, table.id)
+    .where(sql`${table.whatsappStatus} = 'failed' AND ${table.appointmentId} IS NOT NULL`),
   subjectCheck: check("appointment_notification_events_subject_check", sql`num_nonnulls(${table.appointmentId}, ${table.seriesId}, ${table.appointmentRequestId}) = 1`),
+}));
+
+export const appointmentCommunicationFollowups = appPgTable("appointment_communication_followups", {
+  appointmentNotificationEventId: integer("appointment_notification_event_id")
+    .references(() => appointmentNotificationEvents.id, { onDelete: "cascade" })
+    .primaryKey(),
+  contactedByUserId: integer("contacted_by_user_id")
+    .references(() => users.id, { onDelete: "restrict" })
+    .notNull(),
+  contactMethod: text("contact_method", { enum: ["sms", "phone", "other"] }).notNull(),
+  contactedAt: timestamp("contacted_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  methodCheck: check(
+    "appointment_communication_followups_method_check",
+    sql`${table.contactMethod} IN ('sms', 'phone', 'other')`,
+  ),
+  timestampsCheck: check(
+    "appointment_communication_followups_timestamps_check",
+    sql`${table.contactedAt} <= ${table.createdAt}`,
+  ),
+  userContactedIdx: index("appointment_communication_followups_user_contacted_idx")
+    .on(table.contactedByUserId, table.contactedAt),
 }));
 
 export const locationRequestNotificationSettings = appPgTable("location_request_notification_settings", {

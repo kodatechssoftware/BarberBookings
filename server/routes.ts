@@ -42,6 +42,7 @@ import {
   appointmentRequestRefusalSchema,
   createAppointmentRequestSchema,
 } from "@shared/appointment-requests";
+import { appointmentManualContactMethodSchema } from "@shared/appointment-communications";
 import {
   adminNotificationListQuerySchema,
   requestNotificationSettingsSchema,
@@ -117,6 +118,11 @@ import {
   markAllAdminNotificationsRead,
   updateRequestNotificationSettings,
 } from "./admin-request-notifications";
+import {
+  AppointmentCommunicationFollowupError,
+  attachAppointmentCommunicationFailures,
+  markAppointmentCommunicationContacted,
+} from "./appointment-communication-followups";
 import {
   MultiServiceAppointmentValidationError,
 } from "@shared/multi-service-appointments";
@@ -2824,6 +2830,10 @@ export async function registerRoutes(
     appointmentNotificationsEnabled: appointmentNotificationEventsEnabled,
     proposalEmailsEnabled: appointmentRequestProposalEmailsEnabled,
   } as const;
+  const appointmentCommunicationOptions = {
+    masterEnabled: beautyV2MasterEnabled,
+    businessVertical: resolvedBusinessConfig.vertical,
+  } as const;
 
   app.get("/api/beauty-v2/features", async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -2839,6 +2849,7 @@ export async function registerRoutes(
       appointmentRequests: effective.appointmentRequests,
       multiServiceAppointments: effective.multiServiceAppointments,
       parallelServiceScheduling: effective.parallelServiceScheduling,
+      notificationDeliveryStatus: effective.notificationDeliveryStatus,
       appointmentRequestsAvailable: beautyV2MasterEnabled
         && resolvedBusinessConfig.vertical === "beauty"
         && settings.some((setting) => setting.featureName === "appointmentRequests" && setting.enabled),
@@ -3075,6 +3086,39 @@ export async function registerRoutes(
       ? res.json({ read: true })
       : res.status(404).json({ message: "Notificação não encontrada." });
   });
+
+  app.post(
+    "/api/admin/appointments/:appointmentId/communication-failures/:eventId/contacted",
+    requireTeamAppointmentsManage,
+    async (req, res) => {
+      const appointmentId = parsePositiveInteger(req.params.appointmentId);
+      const eventId = parsePositiveInteger(req.params.eventId);
+      const contactMethod = appointmentManualContactMethodSchema.safeParse(req.body?.contactMethod);
+      if (appointmentId === null || eventId === null || !contactMethod.success) {
+        return res.status(400).json({ message: "Indique uma falha e um método de contacto válidos." });
+      }
+      const user = await getAdministrativeNotificationUser(req);
+      if (!user) return res.status(403).json({ message: "A sua conta não pode registar este contacto." });
+      try {
+        return res.json(await markAppointmentCommunicationContacted(pool, {
+          locationId: Number(res.locals.locationId),
+          appointmentId,
+          eventId,
+          contactMethod: contactMethod.data,
+          actor: {
+            userId: user.id,
+            displayName: user.displayName,
+            actorType: getAppSession(req).role === "barber" ? "barber" : "admin",
+          },
+        }, appointmentCommunicationOptions));
+      } catch (error) {
+        if (error instanceof AppointmentCommunicationFollowupError) {
+          return res.status(error.status).json({ code: error.code, message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
 
   app.get("/api/admin/request-notification-settings", requireSettingsManage, async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -5750,6 +5794,12 @@ export async function registerRoutes(
     const appointments = effectiveBarberId
       ? locationAppointments.filter((appointment) => appointmentIncludesProfessional(appointment, effectiveBarberId))
       : locationAppointments;
+    const appointmentsWithCommunicationFailures = await attachAppointmentCommunicationFailures(
+      pool,
+      locationId,
+      appointments,
+      appointmentCommunicationOptions,
+    );
 
     const canonicalProfessionalId = canonicalContext?.professionalId ?? undefined;
     const canViewAllCustomerData = Boolean(canonicalContext && hasCanonicalCapability(
@@ -5758,7 +5808,7 @@ export async function registerRoutes(
       locationId,
     ));
     if (authRuntimeMode === "canonical" && canViewAllCustomerData) {
-      const appointmentsWithExtras = await attachAppointmentExtras(appointments);
+      const appointmentsWithExtras = await attachAppointmentExtras(appointmentsWithCommunicationFailures);
       return res.json(appointmentsWithExtras.map((appointment) => ({
         ...appointment,
         canManage: hasCanonicalCapability(canonicalContext!, "appointments.manage_team", locationId)
@@ -5771,7 +5821,7 @@ export async function registerRoutes(
       })));
     }
     if (authRuntimeMode !== "canonical" && appSession.role !== "barber") {
-      const appointmentsWithExtras = await attachAppointmentExtras(appointments);
+      const appointmentsWithExtras = await attachAppointmentExtras(appointmentsWithCommunicationFailures);
       return res.json(appointmentsWithExtras.map((appointment) => ({ ...appointment, canManage: true })));
     }
 
@@ -5779,10 +5829,10 @@ export async function registerRoutes(
       ? Number(canonicalProfessionalId)
       : Number(appSession.barberId);
     const ownAppointments = await attachCommercialAppointmentExtras(
-      appointments.filter((appointment) => appointmentIncludesProfessional(appointment, ownBarberId)),
+      appointmentsWithCommunicationFailures.filter((appointment) => appointmentIncludesProfessional(appointment, ownBarberId)),
     );
     const ownAppointmentsById = new Map(ownAppointments.map((appointment) => [appointment.id, appointment]));
-    return res.json(appointments.map((appointment) => {
+    return res.json(appointmentsWithCommunicationFailures.map((appointment) => {
       const isOwnAppointment = appointmentIncludesProfessional(appointment, ownBarberId);
       const canViewCustomer = authRuntimeMode === "canonical"
         ? Boolean(canonicalContext && hasCanonicalOwnCapability(
