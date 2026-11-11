@@ -93,6 +93,25 @@ test("administrative request notifications are authenticated and capability scop
   }
 });
 
+test("manual WhatsApp follow-ups are feature-gated, team-scoped and omit customer PII from audit metadata", async () => {
+  const routes = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  const followups = await readFile(new URL("../../server/appointment-communication-followups.ts", import.meta.url), "utf8");
+  assert.match(
+    routes,
+    /"\/api\/admin\/appointments\/:appointmentId\/communication-failures\/:eventId\/contacted",\s*requireTeamAppointmentsManage/,
+  );
+  assert.match(routes, /notificationDeliveryStatus: effective\.notificationDeliveryStatus/);
+  assert.match(followups, /"notificationDeliveryStatus"/);
+  assert.match(followups, /event\.whatsapp_status = 'failed'/);
+  assert.match(followups, /event\.event_revision = appointment\.notification_revision/);
+  assert.match(followups, /event\.appointment_start_time = appointment\.start_time/);
+  const auditMetadata = followups.slice(
+    followups.indexOf("serializeSafeAuditMetadata({"),
+    followups.indexOf("timestamp,", followups.indexOf("serializeSafeAuditMetadata({")),
+  );
+  assert.doesNotMatch(auditMetadata, /customer|phone|email|token/i);
+});
+
 test("parallel compatibility configuration is location-scoped and capability protected", async () => {
   const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
   assert.ok(source.includes(

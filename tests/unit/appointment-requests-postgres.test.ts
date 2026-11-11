@@ -80,6 +80,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "0026_parallel_service_scheduling.sql",
       "0027_admin_request_notifications.sql",
       "0028_appointment_request_proposal_communications.sql",
+      "0029_appointment_communication_followups.sql",
     ]) {
       await copyFile(path.resolve("migrations", migration), path.join(migrationsDirectory, migration));
     }
@@ -132,7 +133,8 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       SELECT 1, day, '08:00', '20:00', true FROM generate_series(0, 6) day;
       INSERT INTO business_feature_settings (feature_name, location_id, enabled) VALUES
         ('appointmentRequests', 1, true),
-        ('multiServiceAppointments', 1, true)
+        ('multiServiceAppointments', 1, true),
+        ('notificationDeliveryStatus', 1, true)
       ON CONFLICT (feature_name, location_id) WHERE location_id IS NOT NULL
       DO UPDATE SET enabled = true;
     `);
@@ -141,6 +143,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     const adminNotifications = await import("../../server/admin-request-notifications");
     const adminNotificationWorker = await import("../../server/admin-notification-worker");
     const proposalEmailWorker = await import("../../server/appointment-request-proposal-emails");
+    const communicationFollowups = await import("../../server/appointment-communication-followups");
     const multiServiceEngine = await import("../../server/multi-service-appointment-engine");
     applicationPool = (await import("../../server/db")).pool;
     const options = {
@@ -383,6 +386,106 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         .some((request) => request.id === simple.request.id),
       false,
     );
+
+    const approvedAppointmentId = Number(approved.request.appointmentId);
+    const confirmationEventId = Number((await pool.query(`
+      SELECT id FROM appointment_notification_events
+      WHERE appointment_id = $1 AND event_type = 'appointment_confirmation'
+    `, [approvedAppointmentId])).rows[0].id);
+    for (const nonFailureStatus of ["pending", "accepted", "sent", "delivered", "read", "unknown", "skipped"]) {
+      await pool.query(`
+        UPDATE appointment_notification_events
+        SET whatsapp_status = $2, failed_at = NULL, updated_at = '2035-01-04 09:00:00'
+        WHERE id = $1
+      `, [confirmationEventId, nonFailureStatus]);
+      assert.equal(
+        (await communicationFollowups.getAppointmentCommunicationFailures(
+          pool, 1, [approvedAppointmentId], options,
+        )).size,
+        0,
+        `${nonFailureStatus} is not a definitive WhatsApp failure`,
+      );
+    }
+    await pool.query(`
+      UPDATE appointment_notification_events
+      SET whatsapp_status = 'failed', failed_at = '2035-01-04 09:01:00',
+        email_status = 'sent', email_sent_at = '2035-01-04 09:02:00', updated_at = '2035-01-04 09:01:00'
+      WHERE id = $1
+    `, [confirmationEventId]);
+    const failedCommunication = await communicationFollowups.getAppointmentCommunicationFailures(
+      pool, 1, [approvedAppointmentId], options,
+    );
+    assert.equal(failedCommunication.get(approvedAppointmentId)?.length, 1);
+    assert.equal(failedCommunication.get(approvedAppointmentId)?.[0].emailStatus, "sent");
+    assert.equal(
+      (await communicationFollowups.getAppointmentCommunicationFailures(pool, 2, [approvedAppointmentId], options)).size,
+      0,
+      "communication failures are isolated by location",
+    );
+    await pool.query("UPDATE appointments SET notification_revision = 2 WHERE id = $1", [approvedAppointmentId]);
+    assert.equal(
+      (await communicationFollowups.getAppointmentCommunicationFailures(pool, 1, [approvedAppointmentId], options)).size,
+      0,
+      "a failure from an obsolete notification revision is excluded",
+    );
+    await pool.query("UPDATE appointments SET notification_revision = 1 WHERE id = $1", [approvedAppointmentId]);
+    await pool.query(`
+      UPDATE business_feature_settings SET enabled = false
+      WHERE feature_name = 'notificationDeliveryStatus' AND location_id = 1
+    `);
+    assert.equal(
+      (await communicationFollowups.getAppointmentCommunicationFailures(pool, 1, [approvedAppointmentId], options)).size,
+      0,
+      "the location feature flag hides communication follow-ups",
+    );
+    await assert.rejects(
+      communicationFollowups.markAppointmentCommunicationContacted(pool, {
+        locationId: 1,
+        appointmentId: approvedAppointmentId,
+        eventId: confirmationEventId,
+        contactMethod: "sms",
+        actor: { userId: 1, displayName: "Admin QA" },
+      }, options),
+      (error: unknown) => error instanceof communicationFollowups.AppointmentCommunicationFollowupError
+        && error.code === "APPOINTMENT_COMMUNICATION_FOLLOWUPS_DISABLED",
+    );
+    await pool.query(`
+      UPDATE business_feature_settings SET enabled = true
+      WHERE feature_name = 'notificationDeliveryStatus' AND location_id = 1
+    `);
+    const manualContact = await communicationFollowups.markAppointmentCommunicationContacted(pool, {
+      locationId: 1,
+      appointmentId: approvedAppointmentId,
+      eventId: confirmationEventId,
+      contactMethod: "sms",
+      actor: { userId: 1, displayName: "Admin QA" },
+      now: new Date("2035-01-04T09:03:00.000Z"),
+    }, options);
+    assert.equal(manualContact.created, true);
+    const manualContactRetry = await communicationFollowups.markAppointmentCommunicationContacted(pool, {
+      locationId: 1,
+      appointmentId: approvedAppointmentId,
+      eventId: confirmationEventId,
+      contactMethod: "phone",
+      actor: { userId: 2, displayName: "Admin QA 2" },
+      now: new Date("2035-01-04T09:04:00.000Z"),
+    }, options);
+    assert.equal(manualContactRetry.created, false, "manual contact registration is idempotent per failed event");
+    assert.equal(manualContactRetry.contactMethod, "sms", "an idempotent retry preserves the original audit fact");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM appointment_communication_followups
+      WHERE appointment_notification_event_id = $1
+    `, [confirmationEventId])).rows[0].count), 1);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM audit_logs
+      WHERE action = 'appointment.communication_manual_contact_recorded'
+        AND entity_type = 'appointment_notification_event' AND entity_id = $1
+    `, [confirmationEventId])).rows[0].count), 1, "an idempotent retry does not duplicate the audit log");
+    const contactedCommunication = await communicationFollowups.getAppointmentCommunicationFailures(
+      pool, 1, [approvedAppointmentId], options,
+    );
+    assert.equal(contactedCommunication.get(approvedAppointmentId)?.[0].contactMethod, "sms");
+    assert.equal(contactedCommunication.get(approvedAppointmentId)?.[0].contactedByName, "Admin QA");
 
     const multi = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-05T10:00:00.000Z", true), options);
     const multiApproved = await engine.approveAppointmentRequestWithPool(pool, multi.request.id, 1, admin, options);

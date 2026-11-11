@@ -297,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 27,
-    "an empty legacy baseline must apply every migration through 0028");
+  assert.equal(freshRun.applied.length, 28,
+    "an empty legacy baseline must apply every migration through 0029");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -394,7 +394,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 27);
+  assert.equal(secondFreshRun.alreadyApplied, 28);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1213,6 +1213,7 @@ try {
     "0026_parallel_service_scheduling.sql",
     "0027_admin_request_notifications.sql",
     "0028_appointment_request_proposal_communications.sql",
+    "0029_appointment_communication_followups.sql",
   ]);
   assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
   assert.deepEqual((await pool.query(`
@@ -1240,6 +1241,22 @@ try {
     SELECT count(*) AS count FROM ${table("appointment_request_proposals")}
     WHERE email_status <> 'disabled' OR email_delivery_revision <> 1 OR email_attempts <> 0
   `)).rows[0].count), 0, "existing proposals remain disabled and are not queued by the migration");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM ${table("appointment_communication_followups")}
+  `)).rows[0].count), 0, "the 0029 upgrade must not infer or create manual contacts");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count
+    FROM pg_constraint constraint_entry
+    INNER JOIN pg_class table_entry ON table_entry.oid = constraint_entry.conrelid
+    INNER JOIN pg_namespace namespace_entry ON namespace_entry.oid = table_entry.relnamespace
+    WHERE namespace_entry.nspname = $1
+      AND table_entry.relname = 'appointment_communication_followups'
+      AND constraint_entry.contype IN ('p', 'f', 'c')
+  `, [schema])).rows[0].count), 5, "the follow-up table has one primary key, two foreign keys and two checks");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM pg_indexes
+    WHERE schemaname = $1 AND indexname = 'appointment_notification_events_appointment_failed_idx'
+  `, [schema])).rows[0].count), 1, "definitive appointment failures have a targeted partial index");
   const compatibilityOnlyLocation = (await pool.query(`
     INSERT INTO ${table("locations")} (name, slug, address, timezone, is_active, is_default)
     VALUES ('QA compatibility scope', 'qa-compatibility-scope', 'QA address', 'Europe/Lisbon', true, false)
@@ -1531,7 +1548,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 27);
+  assert.equal(secondCompensationRun.alreadyApplied, 28);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2303,7 +2320,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0028, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0029, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

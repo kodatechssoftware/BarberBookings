@@ -802,6 +802,17 @@ test("Admin appointment list keeps one row and filters multi-service appointment
       ...common, id: 103, barberId: 21, serviceId: 11, startTime: "2030-06-01T13:30:00.000Z",
       durationMinutes: 210, serviceNameSnapshot: "Manicure gel + Limpeza de pele + Extensão de pestanas",
       servicePriceCentsSnapshot: 11300, status: "booked", customerName: "Cliente Multi Profissional",
+      communicationFailures: [{
+        eventId: 8801,
+        eventType: "appointment_confirmation",
+        failedAt: "2030-06-01T13:20:00.000Z",
+        emailStatus: "sent",
+        emailSentAt: "2030-06-01T13:21:00.000Z",
+        contactedAt: null,
+        contactedByUserId: null,
+        contactedByName: null,
+        contactMethod: null,
+      }],
       serviceSegments: [
         segment(1031, 0, 0, 11, 21, "2030-06-01T13:30:00.000Z", 60, "Manicure gel", 3500),
         segment(1032, 1, 1, 12, 22, "2030-06-01T14:30:00.000Z", 60, "Limpeza de pele", 4500),
@@ -822,7 +833,13 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   const adminRescheduleAvailabilityRequests: unknown[] = [];
   const adminRescheduleMutations: unknown[] = [];
   await page.route("**/api/beauty-v2/features", (route) => route.fulfill({
-    json: { enabled: true, appointmentRequests: true, multiServiceAppointments: true, parallelServiceScheduling: true },
+    json: {
+      enabled: true,
+      appointmentRequests: true,
+      multiServiceAppointments: true,
+      parallelServiceScheduling: true,
+      notificationDeliveryStatus: true,
+    },
   }));
   await page.route("**/api/barbers?*", (route) => route.fulfill({ json: listProfessionals }));
   await page.route("**/api/services?*", (route) => route.fulfill({ json: listServices }));
@@ -858,8 +875,27 @@ test("Admin appointment list keeps one row and filters multi-service appointment
     adminRescheduleMutations.push(route.request().postDataJSON());
     return route.fulfill({ json: { ...appointments[2], startTime: "2030-06-01T15:30:00.000Z", rescheduleRevision: 1 } });
   });
+  const manualContactRequests: unknown[] = [];
+  await page.route("**/api/admin/appointments/103/communication-failures/8801/contacted", (route) => {
+    manualContactRequests.push(route.request().postDataJSON());
+    const failure = appointments[2].communicationFailures[0];
+    failure.contactedAt = "2030-06-01T13:25:00.000Z";
+    failure.contactedByUserId = 1;
+    failure.contactedByName = "Admin QA";
+    failure.contactMethod = "sms";
+    return route.fulfill({ json: {
+      created: true,
+      eventId: 8801,
+      contactedAt: failure.contactedAt,
+      contactedByUserId: 1,
+      contactedByName: "Admin QA",
+      contactMethod: "sms",
+    } });
+  });
 
   await page.goto("/admin");
+  await page.getByRole("tab", { name: "Agenda" }).click();
+  await expect(page.locator('[data-testid="appointment-whatsapp-failure-badge"]:visible').first()).toBeVisible();
   await page.getByRole("tab", { name: "Marcações" }).click();
   await expect(page.getByText("4 registos")).toBeVisible();
   await expect(page.getByRole("button", { name: /Cliente Legacy/ })).toHaveCount(1);
@@ -872,6 +908,9 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await expect(page.getByTestId("appointment-101-service-assignment")).toHaveCount(2);
   let multiRow = page.getByRole("button", { name: /Cliente Multi Profissional/ });
   await expect(multiRow).toHaveCount(1);
+  const listFailureBadge = page.getByTestId("appointment-103-whatsapp-failure");
+  await expect(listFailureBadge).toContainText("WhatsApp não entregue");
+  expect(await contrastRatio(listFailureBadge)).toBeGreaterThanOrEqual(4.5);
   await expect(multiRow).toContainText("14:30–18:00");
   await expect(multiRow).toContainText("210 min");
   const multiAssignments = page.getByTestId("appointment-103-service-assignment");
@@ -910,6 +949,24 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await expect(details).toContainText("Extensão de pestanas · Beatriz Costa");
   await expect(details).toContainText("16:30–18:00 · 90 min");
   await expect(details).toContainText("33,00 €");
+  const communicationFailure = details.getByTestId("appointment-communication-failure-8801");
+  await expect(communicationFailure).toContainText("WhatsApp não entregue — contactar cliente");
+  expect(await contrastRatio(communicationFailure.getByText("WhatsApp não entregue — contactar cliente"))).toBeGreaterThanOrEqual(4.5);
+  await expect(communicationFailure).toContainText("Confirmação da marcação");
+  await expect(communicationFailure).toContainText("Email alternativo enviado");
+  await expect(communicationFailure.getByTestId("appointment-open-sms")).toHaveAttribute("href", "sms:+351912345678");
+  await details.screenshot({ path: testInfo.outputPath("appointment-whatsapp-failure-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await details.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await details.screenshot({ path: testInfo.outputPath("appointment-whatsapp-failure-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await communicationFailure.getByTestId("appointment-mark-contacted-sms").click();
+  await expect(communicationFailure).toContainText("Cliente contactada manualmente");
+  await expect(communicationFailure.getByTestId("appointment-manual-contact-summary")).toContainText("Admin QA");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await details.screenshot({ path: testInfo.outputPath("appointment-whatsapp-followup-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  expect(manualContactRequests).toEqual([{ contactMethod: "sms" }]);
   await details.getByTestId("appointment-action-edit").click();
   const editor = page.getByRole("dialog", { name: "Editar marcação" });
   await expect(editor.getByTestId("multi-service-reschedule-editor")).toContainText("Reagendar a marcação completa");
@@ -925,6 +982,7 @@ test("Admin appointment list keeps one row and filters multi-service appointment
     expectedRevision: 0,
   }]);
   await details.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("appointment-103-whatsapp-failure")).toHaveCount(0);
 
   await professionalFilter.click();
   await page.getByRole("option", { name: "Todos os profissionais" }).click();
@@ -946,6 +1004,7 @@ test("Admin appointment list keeps one row and filters multi-service appointment
   await expect(details).toContainText("18:00–19:00 · 60 min");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await details.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await details.screenshot({ path: testInfo.outputPath("appointment-simultaneous-mobile.png") });
   await details.getByRole("button", { name: "Close" }).click();
   await expect(page.getByTestId("appointments-list")).toBeVisible();
   expect(await page.getByTestId("appointments-list").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
