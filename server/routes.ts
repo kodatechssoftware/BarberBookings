@@ -35,6 +35,7 @@ import { z } from "zod";
 import {
   appointmentRequestListQuerySchema,
   appointmentRequestAvailabilitySchema,
+  appointmentRequestProposalAvailabilitySchema,
   appointmentRequestProposalResponseSchema,
   appointmentRequestProposalTokenSchema,
   appointmentRequestProposalSchema,
@@ -98,6 +99,7 @@ import {
   getAppointmentRequestWithPool,
   inspectAppointmentRequestProposalWithPool,
   listAppointmentRequestsWithPool,
+  previewAppointmentRequestProposalAvailabilityWithPool,
   proposeAppointmentRequestTimeWithPool,
   refuseAppointmentRequestWithPool,
   respondToAppointmentRequestProposalWithPool,
@@ -3136,6 +3138,33 @@ export async function registerRoutes(
         Number(res.locals.locationId),
         input,
         await getAppointmentRequestActor(req),
+        appointmentRequestOptions,
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/admin/appointment-requests/:id/proposal-availability", requireTeamAppointmentsManage, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const requestId = parsePositiveInteger(req.params.id);
+      if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+      const input = appointmentRequestProposalAvailabilitySchema.parse(req.body);
+      const window = currentPublicBookingWindow();
+      if (input.date < window.today || input.date > window.maxDate) {
+        return sendPublicBookingWindowClosed(res);
+      }
+      return res.json(await previewAppointmentRequestProposalAvailabilityWithPool(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        {
+          date: input.date,
+          slotIntervalMinutes: bookingSlotIntervalMinutes,
+        },
         appointmentRequestOptions,
       ));
     } catch (error) {

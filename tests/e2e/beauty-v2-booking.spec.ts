@@ -391,7 +391,7 @@ test("invalid proposal links and submit failures use safe public copy", async ({
   await expect(page.getByText(/internal provider wording/i)).toHaveCount(0);
 });
 
-test("authorized Admin can review and approve a request from the location-scoped inbox", async ({ page }) => {
+test("authorized Admin can review and approve a request from the location-scoped inbox", async ({ page }, testInfo) => {
   const login = await page.request.post("/api/admin/login", {
     data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
   });
@@ -411,10 +411,36 @@ test("authorized Admin can review and approve a request from the location-scoped
   let currentRequest = request;
   let approvalCount = 0;
   let rejectedProposalCount = 0;
+  let proposedStartTime: string | null = null;
+  const proposalAvailabilityDates: string[] = [];
   await page.route("**/api/admin/appointment-requests**", async (route) => {
     const url = new URL(route.request().url());
+    if (route.request().method() === "POST" && url.pathname.endsWith("/proposal-availability")) {
+      const body = route.request().postDataJSON() as { date: string };
+      proposalAvailabilityDates.push(body.date);
+      if (body.date === "2030-06-05") {
+        return route.fulfill({ status: 503, json: { message: "Não foi possível consultar a disponibilidade." } });
+      }
+      const starts = body.date === "2030-06-04"
+        ? []
+        : body.date === "2030-06-03"
+          ? ["2030-06-03T09:00:00.000Z", "2030-06-03T10:30:00.000Z"]
+          : ["2030-06-02T09:00:00.000Z"];
+      return route.fulfill({ json: {
+        date: body.date,
+        timeZone: "Europe/Lisbon",
+        starts,
+        durationMinutes: 45,
+        totalPriceCents: 3400,
+        segments: [
+          { position: 0, executionStage: 0, serviceId: 11, barberId: 21, barberName: "Mariana Silva", startOffsetMinutes: 0, durationMinutes: 45, serviceName: "Manicure", priceCents: 2500 },
+          { position: 1, executionStage: 0, serviceId: 12, barberId: 22, barberName: "Beatriz Costa", startOffsetMinutes: 0, durationMinutes: 30, serviceName: "Nail art", priceCents: 900 },
+        ],
+      } });
+    }
     if (route.request().method() === "POST" && url.pathname.endsWith("/propose")) {
       rejectedProposalCount += 1;
+      proposedStartTime = (route.request().postDataJSON() as { startTime: string }).startTime;
       return route.fulfill({
         status: 409,
         json: {
@@ -463,15 +489,43 @@ test("authorized Admin can review and approve a request from the location-scoped
   await expect(page.getByText("Em simultâneo")).toBeVisible();
   await page.getByRole("button", { name: "Propor horário" }).click();
   const proposalDialog = page.getByRole("dialog", { name: "Propor outro horário" });
-  await expect(proposalDialog).toContainText("Confirmamos agora a disponibilidade de todos os profissionais");
+  await expect(proposalDialog).toContainText("Escolha uma data e um dos horários disponíveis");
+  await expect(proposalDialog.getByLabel("Hora")).toHaveCount(0);
+  await expect(proposalDialog.getByRole("button", { name: "Escolher 10:00" })).toBeVisible();
+
+  await proposalDialog.getByLabel("Data").fill("2030-06-04");
+  await expect(proposalDialog.getByText("Não existem horários disponíveis nesta data. Escolha outro dia.")).toBeVisible();
+  await expect(proposalDialog.getByRole("button", { name: "Enviar proposta" })).toBeDisabled();
+
+  await proposalDialog.getByLabel("Data").fill("2030-06-05");
+  await expect(proposalDialog.getByText("Não foi possível consultar a disponibilidade.")).toBeVisible();
+  await expect(proposalDialog.getByRole("button", { name: "Tentar novamente" })).toBeVisible();
+
   await proposalDialog.getByLabel("Data").fill("2030-06-03");
-  await proposalDialog.getByLabel("Hora").fill("10:00");
-  await proposalDialog.getByRole("button", { name: "Confirmar" }).click();
+  await expect(proposalDialog.getByRole("button", { name: "Escolher 10:00" })).toBeVisible();
+  await expect(proposalDialog.getByRole("button", { name: "Escolher 11:30" })).toBeVisible();
+  await expect(proposalDialog.getByRole("button", { name: "Escolher 10:15" })).toHaveCount(0);
+  await proposalDialog.getByRole("button", { name: "Escolher 10:00" }).click();
+  const proposalSummary = proposalDialog.getByTestId("proposal-summary");
+  await expect(proposalSummary).toContainText("3 de junho de 2030 às 10:00");
+  await expect(proposalSummary).toContainText("45 min");
+  await expect(proposalSummary).toContainText("34,00 €");
+  await expect(proposalSummary).toContainText("Manicure");
+  await expect(proposalSummary).toContainText("Mariana Silva · em simultâneo");
+  await expect(proposalSummary).toContainText("Nail art");
+  await expect(proposalSummary).toContainText("Beatriz Costa · em simultâneo");
+  await page.screenshot({ path: testInfo.outputPath("proposal-availability-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await proposalDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("proposal-availability-mobile.png"), fullPage: true });
+  await proposalDialog.getByRole("button", { name: "Enviar proposta" }).click();
   await expect(page.getByText("Horário indisponível", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Notifications (F8)").getByText(
     "O horário proposto não está disponível para todos os profissionais. Escolha outro horário.",
   )).toBeVisible();
   expect(rejectedProposalCount).toBe(1);
+  expect(proposedStartTime).toBe("2030-06-03T09:00:00.000Z");
+  expect(proposalAvailabilityDates).toEqual(expect.arrayContaining(["2030-06-02", "2030-06-04", "2030-06-05", "2030-06-03"]));
   await proposalDialog.getByRole("button", { name: "Cancelar" }).click();
   await page.getByRole("button", { name: "Aprovar" }).click();
   await expect.poll(() => approvalCount).toBe(1);

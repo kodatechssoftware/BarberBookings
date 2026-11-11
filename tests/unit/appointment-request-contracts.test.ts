@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   appointmentRequestAvailabilitySchema,
+  appointmentRequestProposalAvailabilitySchema,
   appointmentRequestProposalResponseSchema,
   createAppointmentRequestSchema,
 } from "../../shared/appointment-requests";
@@ -22,6 +23,13 @@ test("appointment request contracts normalize international phones and reject ma
     date: "2035-06-01",
     services: [{ serviceId: 1, barberId: 2 }],
   }).executionMode, "sequential");
+  assert.deepEqual(appointmentRequestProposalAvailabilitySchema.parse({
+    date: "2035-06-01",
+  }), { date: "2035-06-01" });
+  assert.throws(() => appointmentRequestProposalAvailabilitySchema.parse({
+    date: "01-06-2035",
+    services: [{ serviceId: 1, barberId: 2 }],
+  }));
   assert.equal(createAppointmentRequestSchema.parse({
     ...parsed,
     executionMode: "parallel",
@@ -48,6 +56,7 @@ test("every Admin appointment-request mutation is protected by the team manageme
     "/api/admin/appointment-requests/:id\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/approve\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/refuse\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id/proposal-availability\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/propose\", requireTeamAppointmentsManage",
   ]) {
     assert.ok(source.includes(route), `missing protected route fragment: ${route}`);

@@ -23,7 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/lib/api";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { locationHeaders } from "@/lib/location-context";
-import { calendarTimeInTimeZone } from "@/lib/availability";
+import { dateKeyInTimeZone } from "@/lib/availability";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { RequestNotificationSettingsDialog } from "@/components/admin/RequestNotificationSettingsDialog";
@@ -66,6 +66,25 @@ type AppointmentRequest = {
     to_status?: string | null;
     reason?: string | null;
     created_at: string;
+  }>;
+};
+
+type ProposalAvailability = {
+  date: string;
+  timeZone: string;
+  starts: string[];
+  durationMinutes: number;
+  totalPriceCents: number;
+  segments: Array<{
+    position: number;
+    executionStage: number;
+    serviceId: number;
+    barberId: number;
+    barberName?: string | null;
+    startOffsetMinutes: number;
+    durationMinutes: number;
+    serviceName: string;
+    priceCents: number;
   }>;
 };
 
@@ -159,6 +178,22 @@ function dateTime(value: string) {
   return format(parseISO(value), "d MMM yyyy, HH:mm", { locale: pt });
 }
 
+function dateTimeInTimeZone(value: string, timeZone: string) {
+  return new Intl.DateTimeFormat("pt-PT", {
+    timeZone,
+    dateStyle: "long",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function timeInTimeZone(value: string | Date, timeZone: string) {
+  return new Intl.DateTimeFormat("pt-PT", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 function historyDateTime(value: string) {
   return format(parseISO(value), "d 'de' MMMM 'de' yyyy, 'às' HH:mm", { locale: pt });
 }
@@ -215,7 +250,40 @@ export function AppointmentRequestsManager({
     queryFn: () => requestJson(`/api/admin/appointment-requests/${selectedId}`, locationId),
     enabled: selectedId !== null,
   });
+  const proposalAvailability = useQuery<ProposalAvailability>({
+    queryKey: ["admin-appointment-request-proposal-availability", locationId, selectedId, detail?.revision, proposalDate],
+    enabled: action === "propose" && selectedId !== null && Boolean(proposalDate),
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const response = await apiRequest(
+        "POST",
+        `/api/admin/appointment-requests/${selectedId}/proposal-availability`,
+        { date: proposalDate },
+        { headers: locationHeaders(locationId) },
+      );
+      return response.json();
+    },
+  });
   const total = useMemo(() => detail?.segments.reduce((sum, segment) => sum + segment.servicePriceCentsSnapshot, 0) ?? 0, [detail]);
+  const selectedProposalStart = proposalAvailability.data?.starts.includes(proposalTime)
+    ? proposalTime
+    : null;
+
+  useEffect(() => {
+    if (proposalTime && !proposalAvailability.data?.starts.includes(proposalTime)) {
+      setProposalTime("");
+    }
+  }, [proposalAvailability.data?.starts, proposalTime]);
+
+  const openProposalDialog = () => {
+    const today = dateKeyInTimeZone(new Date(), timeZone);
+    const reference = detail?.activeProposal?.proposedStartTime ?? detail?.requestedStartTime;
+    const requestedDate = reference ? dateKeyInTimeZone(new Date(reference), timeZone) : today;
+    setProposalDate(requestedDate >= today ? requestedDate : today);
+    setProposalTime("");
+    setAction("propose");
+  };
 
   const mutation = useMutation({
     mutationFn: async (kind: "approve" | "refuse" | "propose") => {
@@ -224,7 +292,10 @@ export function AppointmentRequestsManager({
       if (kind === "refuse") body = { reason: reason.trim() || null };
       if (kind === "propose") {
         if (!proposalDate || !proposalTime) throw new Error("Escolha a data e a hora propostas.");
-        const startTime = calendarTimeInTimeZone(new Date(`${proposalDate}T12:00:00`), proposalTime, timeZone);
+        const startTime = new Date(proposalTime);
+        if (Number.isNaN(startTime.getTime()) || !proposalAvailability.data?.starts.includes(proposalTime)) {
+          throw new Error("Escolha um dos horários disponíveis.");
+        }
         body = {
           startTime: startTime.toISOString(),
           expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1_000).toISOString(),
@@ -245,12 +316,20 @@ export function AppointmentRequestsManager({
       });
       setAction(null);
       setReason("");
+      setProposalDate("");
+      setProposalTime("");
     },
-    onError: (error: Error & { code?: string }) => toast({
-      title: error.code === "APPOINTMENT_REQUEST_TIME_UNAVAILABLE" ? "Horário indisponível" : "Não foi possível concluir",
-      description: error.message,
-      variant: "destructive",
-    }),
+    onError: (error: Error & { code?: string }) => {
+      if (error.code === "APPOINTMENT_REQUEST_TIME_UNAVAILABLE") {
+        setProposalTime("");
+        void proposalAvailability.refetch();
+      }
+      toast({
+        title: error.code === "APPOINTMENT_REQUEST_TIME_UNAVAILABLE" ? "Horário indisponível" : "Não foi possível concluir",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
 
   return <div className="space-y-5" data-testid="appointment-requests-manager">
@@ -328,7 +407,7 @@ export function AppointmentRequestsManager({
           </div>}
           {(detail.status === "pending" || detail.status === "proposed") && <div className="grid gap-2 sm:grid-cols-3">
             <Button disabled={mutation.isPending || detail.status !== "pending"} onClick={() => mutation.mutate("approve")}><Check className="mr-2 h-4 w-4" />Aprovar</Button>
-            <Button variant="outline" disabled={mutation.isPending} onClick={() => setAction("propose")}><MessageSquare className="mr-2 h-4 w-4" />Propor horário</Button>
+            <Button variant="outline" disabled={mutation.isPending} onClick={openProposalDialog}><MessageSquare className="mr-2 h-4 w-4" />Propor horário</Button>
             <Button variant="outline" className="border-red-400/30 text-red-300" disabled={mutation.isPending} onClick={() => setAction("refuse")}><X className="mr-2 h-4 w-4" />Recusar</Button>
           </div>}
         </div>}
@@ -336,11 +415,95 @@ export function AppointmentRequestsManager({
     </Dialog>
 
     <Dialog open={action !== null} onOpenChange={(open) => { if (!open && !mutation.isPending) setAction(null); }}>
-      <DialogContent className="border-white/10 bg-card text-white">
-        <DialogHeader><DialogTitle>{action === "refuse" ? "Recusar pedido" : "Propor outro horário"}</DialogTitle><DialogDescription className="text-gray-400">A decisão fica registada no histórico do pedido.</DialogDescription></DialogHeader>
+      <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto border-white/10 bg-card text-white">
+        <DialogHeader>
+          <DialogTitle>{action === "refuse" ? "Recusar pedido" : "Propor outro horário"}</DialogTitle>
+          <DialogDescription className="text-gray-400">
+            {action === "refuse"
+              ? "A decisão fica registada no histórico do pedido."
+              : "Escolha uma data e um dos horários disponíveis para todos os serviços e profissionais."}
+          </DialogDescription>
+        </DialogHeader>
         {action === "refuse" ? <div className="space-y-2"><Label htmlFor="request-refusal-reason">Motivo opcional</Label><Textarea id="request-refusal-reason" maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></div>
-          : <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="proposal-date">Data</Label><Input id="proposal-date" type="date" value={proposalDate} onChange={(event) => setProposalDate(event.target.value)} /></div><div className="space-y-2"><Label htmlFor="proposal-time">Hora</Label><Input id="proposal-time" type="time" value={proposalTime} onChange={(event) => setProposalTime(event.target.value)} /></div><p className="text-xs text-gray-400 sm:col-span-2">Confirmamos agora a disponibilidade de todos os profissionais e voltamos a validá-la quando a cliente aceitar. A ligação será válida durante 72 horas.</p></div>}
-        <DialogFooter><Button variant="outline" onClick={() => setAction(null)}>Cancelar</Button><Button disabled={mutation.isPending} onClick={() => action && mutation.mutate(action)}>{mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirmar"}</Button></DialogFooter>
+          : <div className="space-y-5 pb-24 sm:pb-0">
+            <div className="space-y-2">
+              <Label htmlFor="proposal-date">Data</Label>
+              <Input
+                id="proposal-date"
+                type="date"
+                min={dateKeyInTimeZone(new Date(), timeZone)}
+                value={proposalDate}
+                onChange={(event) => {
+                  setProposalDate(event.target.value);
+                  setProposalTime("");
+                }}
+              />
+            </div>
+
+            <section className="space-y-3" aria-labelledby="proposal-times-heading">
+              <div>
+                <h3 id="proposal-times-heading" className="text-sm font-semibold">Horários disponíveis</h3>
+                <p className="text-xs text-gray-400">A disponibilidade inclui os profissionais, buffers e a organização dos serviços.</p>
+              </div>
+              {proposalAvailability.isFetching ? <div className="flex min-h-24 items-center justify-center gap-2 rounded-xl border border-white/10 text-sm text-gray-300" role="status">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" /> A consultar disponibilidade…
+              </div> : proposalAvailability.isError ? <div className="space-y-3 rounded-xl border border-red-400/25 bg-red-400/10 p-4 text-sm text-red-100" role="alert">
+                <p>{proposalAvailability.error instanceof Error ? proposalAvailability.error.message : "Não foi possível consultar os horários."}</p>
+                <Button size="sm" variant="outline" onClick={() => proposalAvailability.refetch()}>Tentar novamente</Button>
+              </div> : proposalAvailability.data?.starts.length === 0 ? <p className="rounded-xl border border-dashed border-white/15 p-5 text-center text-sm text-gray-300" role="status">
+                Não existem horários disponíveis nesta data. Escolha outro dia.
+              </p> : <div className="grid grid-cols-3 gap-2 sm:grid-cols-4" data-testid="proposal-available-times">
+                {proposalAvailability.data?.starts.map((start) => {
+                  const label = timeInTimeZone(start, timeZone);
+                  const selected = proposalTime === start;
+                  return <Button
+                    key={start}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className={cn(selected && "border-primary bg-primary font-semibold text-foreground hover:bg-primary/90 hover:text-foreground")}
+                    aria-pressed={selected}
+                    aria-label={`Escolher ${label}`}
+                    onClick={() => setProposalTime(start)}
+                  >{label}</Button>;
+                })}
+              </div>}
+            </section>
+
+            {selectedProposalStart && proposalAvailability.data && <section className="space-y-3 rounded-xl border border-primary/25 bg-primary/5 p-4" aria-labelledby="proposal-summary-heading" data-testid="proposal-summary">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                <div>
+                  <h3 id="proposal-summary-heading" className="font-semibold">Resumo da proposta</h3>
+                  <p className="text-sm text-gray-200">{dateTimeInTimeZone(selectedProposalStart, timeZone)}</p>
+                </div>
+                <div className="text-sm sm:text-right">
+                  <p>{proposalAvailability.data.durationMinutes} min</p>
+                  <strong className="text-primary">{money(proposalAvailability.data.totalPriceCents)}</strong>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {proposalAvailability.data.segments.map((segment) => {
+                  const segmentStart = new Date(new Date(selectedProposalStart).getTime() + segment.startOffsetMinutes * 60_000);
+                  const isParallel = proposalAvailability.data!.segments.filter((candidate) => candidate.executionStage === segment.executionStage).length > 1;
+                  return <div key={`${segment.position}-${segment.serviceId}`} className="flex items-start justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm">
+                    <span className="min-w-0">
+                      <strong className="block truncate">{segment.serviceName}</strong>
+                      <small className="text-gray-400">{segment.barberName || "Profissional"}{isParallel ? " · em simultâneo" : ""}</small>
+                    </span>
+                    <span className="shrink-0 font-medium">{timeInTimeZone(segmentStart, timeZone)}</span>
+                  </div>;
+                })}
+              </div>
+              <p className="text-xs text-gray-400">A disponibilidade será novamente validada ao enviar a proposta e quando a cliente a aceitar.</p>
+            </section>}
+          </div>}
+        <DialogFooter className="sticky bottom-0 -mx-6 -mb-6 mt-1 border-t border-white/10 bg-card p-4 sm:mx-0 sm:mb-0 sm:border-0 sm:p-0">
+          <Button variant="outline" onClick={() => setAction(null)}>Cancelar</Button>
+          <Button
+            disabled={mutation.isPending || (action === "propose" && (!selectedProposalStart || proposalAvailability.isFetching || proposalAvailability.isError))}
+            onClick={() => action && mutation.mutate(action)}
+          >{mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : action === "propose" ? "Enviar proposta" : "Confirmar"}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   </div>;

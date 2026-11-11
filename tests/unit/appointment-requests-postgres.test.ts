@@ -618,12 +618,46 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     const blockedParallelProposalRequest = await engine.createAppointmentRequestWithPool(
       pool, 1, input("2035-01-21T10:00:00.000Z", true, "parallel"), options,
     );
+    const availableParallelProposalTimes = await engine.previewAppointmentRequestProposalAvailabilityWithPool(
+      pool,
+      blockedParallelProposalRequest.request.id,
+      1,
+      { date: "2035-01-21", slotIntervalMinutes: 30, now: new Date("2035-01-01T00:00:00.000Z") },
+      options,
+    );
+    assert.equal(availableParallelProposalTimes.durationMinutes, 45);
+    assert.deepEqual(availableParallelProposalTimes.segments.map((segment) => segment.executionStage), [0, 0]);
+    assert.equal(availableParallelProposalTimes.starts.includes("2035-01-21T12:00:00.000Z"), true);
+    await assert.rejects(
+      engine.previewAppointmentRequestProposalAvailabilityWithPool(
+        pool,
+        blockedParallelProposalRequest.request.id,
+        2,
+        { date: "2035-01-21", slotIntervalMinutes: 30, now: new Date("2035-01-01T00:00:00.000Z") },
+        options,
+      ),
+      (error: unknown) => error instanceof engine.AppointmentRequestError
+        && error.code === "APPOINTMENT_REQUEST_NOT_FOUND",
+      "proposal availability cannot cross the request location boundary",
+    );
     await pool.query(`
       INSERT INTO appointments (
         location_id, barber_id, service_id, start_time, customer_name, customer_phone,
         duration_minutes, status, cancel_token
       ) VALUES (1, 2, 2, '2035-01-21 12:00:00', 'Parallel proposal blocker', '+351910000091', 45, 'booked', 'parallel-proposal-blocker')
     `);
+    const blockedParallelProposalTimes = await engine.previewAppointmentRequestProposalAvailabilityWithPool(
+      pool,
+      blockedParallelProposalRequest.request.id,
+      1,
+      { date: "2035-01-21", slotIntervalMinutes: 30, now: new Date("2035-01-01T00:00:00.000Z") },
+      options,
+    );
+    assert.equal(
+      blockedParallelProposalTimes.starts.includes("2035-01-21T12:00:00.000Z"),
+      false,
+      "a conflict with one professional is removed from the visual proposal choices",
+    );
     await assert.rejects(
       engine.proposeAppointmentRequestTimeWithPool(pool, blockedParallelProposalRequest.request.id, 1, {
         startTime: new Date("2035-01-21T12:00:00.000Z"),
@@ -653,6 +687,16 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         duration_minutes, status, cancel_token
       ) VALUES (1, 2, 2, '2035-01-23 12:15:00', 'Sequential proposal blocker', '+351910000092', 12, 'booked', 'sequential-proposal-blocker')
     `);
+    const blockedSequentialProposalTimes = await engine.previewAppointmentRequestProposalAvailabilityWithPool(
+      pool,
+      blockedSequentialProposalRequest.request.id,
+      1,
+      { date: "2035-01-23", slotIntervalMinutes: 30, now: new Date("2035-01-01T00:00:00.000Z") },
+      options,
+    );
+    assert.equal(blockedSequentialProposalTimes.durationMinutes, 75);
+    assert.deepEqual(blockedSequentialProposalTimes.segments.map((segment) => segment.executionStage), [0, 1]);
+    assert.equal(blockedSequentialProposalTimes.starts.includes("2035-01-23T12:00:00.000Z"), false);
     await assert.rejects(
       engine.proposeAppointmentRequestTimeWithPool(pool, blockedSequentialProposalRequest.request.id, 1, {
         startTime: new Date("2035-01-23T12:00:00.000Z"),

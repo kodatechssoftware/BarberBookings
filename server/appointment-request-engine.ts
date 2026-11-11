@@ -24,6 +24,7 @@ import {
   MultiServiceFeatureDisabledError,
   MultiServiceConflictError,
   MultiServiceScopeError,
+  previewSequentialAppointmentAvailabilityWithPool,
   resolveAppointmentServiceTermsWithClient,
   resolveExecutionTermsWithClient,
   validateMultiServiceAppointmentAvailabilityInTransaction,
@@ -861,6 +862,59 @@ export async function refuseAppointmentRequestWithPool(
   } finally {
     client.release();
   }
+}
+
+export async function previewAppointmentRequestProposalAvailabilityWithPool(
+  databasePool: Pool,
+  requestId: number,
+  locationId: number,
+  input: { date: string; slotIntervalMinutes: number; now?: Date },
+  options: AppointmentRequestEngineOptions = {},
+) {
+  const table = tableFactory();
+  const client = await databasePool.connect();
+  let rows: SegmentRow[] = [];
+  try {
+    await client.query("BEGIN");
+    const request = await loadRequest(client, requestId, table);
+    if (!request || request.location_id !== locationId) {
+      throw new AppointmentRequestError(404, "APPOINTMENT_REQUEST_NOT_FOUND", "Pedido não encontrado.");
+    }
+    rows = await loadSegments(client, request.id, table);
+    await assertRequestFeature(client, locationId, rows.length, options, table);
+    if (!(["pending", "proposed"] as AppointmentRequestStatus[]).includes(request.status)) {
+      throw new AppointmentRequestError(
+        409,
+        "APPOINTMENT_REQUEST_TRANSITION_INVALID",
+        "Este pedido já tem uma decisão final.",
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const preview = await previewSequentialAppointmentAvailabilityWithPool(databasePool, {
+    locationId,
+    date: input.date,
+    services: selections(rows),
+    slotIntervalMinutes: input.slotIntervalMinutes,
+    now: input.now,
+  }, {
+    ...options,
+    minimumSegments: 1,
+    termsSnapshot: segmentTerms(rows),
+  });
+  return {
+    ...preview,
+    segments: preview.segments.map((segment) => ({
+      ...segment,
+      barberName: rows.find((row) => Number(row.position) === segment.position)?.barber_name ?? null,
+    })),
+  };
 }
 
 export async function proposeAppointmentRequestTimeWithPool(
