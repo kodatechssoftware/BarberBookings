@@ -7,8 +7,11 @@ import {
   CalendarClock,
   Check,
   CheckCircle2,
+  Copy,
   Clock,
+  Link2,
   Loader2,
+  Mail,
   MessageSquare,
   Send,
   X,
@@ -53,9 +56,17 @@ type AppointmentRequest = {
     servicePriceCentsSnapshot: number;
   }>;
   activeProposal?: {
+    id: number;
     proposedStartTime: string;
     expiresAt: string;
     status: string;
+    communication: {
+      emailStatus: "disabled" | "missing" | "pending" | "sending" | "retry" | "sent" | "failed";
+      emailDeliveryRevision: number;
+      emailAttempts: number;
+      emailErrorCode?: string | null;
+      emailSentAt?: string | null;
+    };
   } | null;
   history?: Array<{
     id: number;
@@ -90,16 +101,58 @@ type ProposalAvailability = {
 
 const statusLabels: Record<RequestStatus, string> = {
   pending: "Pendente",
-  proposed: "Proposta enviada",
+  proposed: "Proposta registada",
   approved: "Aprovado",
   refused: "Recusado",
 };
 
 const statusDescriptions: Record<RequestStatus, string> = {
   pending: "Pedido recebido — aguarda aprovação do estabelecimento.",
-  proposed: "Foi proposta uma alteração ao horário. Aguarda resposta do cliente.",
+  proposed: "Foi registada uma proposta de alteração. Consulte abaixo o estado da comunicação à cliente.",
   approved: "Pedido aprovado — marcação confirmada.",
   refused: "Pedido recusado pelo estabelecimento.",
+};
+
+const proposalEmailCopy: Record<NonNullable<AppointmentRequest["activeProposal"]>["communication"]["emailStatus"], {
+  label: string;
+  description: string;
+  tone: string;
+}> = {
+  disabled: {
+    label: "Email desativado",
+    description: "A proposta ficou registada, mas o envio de emails está desativado neste ambiente.",
+    tone: "border-gray-400/25 bg-gray-400/10 text-gray-200",
+  },
+  missing: {
+    label: "Sem email",
+    description: "A cliente não indicou um email. Copie a ligação segura e partilhe-a por um canal autorizado.",
+    tone: "border-amber-400/25 bg-amber-400/10 text-amber-100",
+  },
+  pending: {
+    label: "Email pendente",
+    description: "A comunicação está em fila para envio.",
+    tone: "border-sky-400/25 bg-sky-400/10 text-sky-100",
+  },
+  sending: {
+    label: "Email em processamento",
+    description: "O envio está a ser processado.",
+    tone: "border-sky-400/25 bg-sky-400/10 text-sky-100",
+  },
+  retry: {
+    label: "Nova tentativa agendada",
+    description: "A tentativa anterior falhou e será repetida automaticamente.",
+    tone: "border-amber-400/25 bg-amber-400/10 text-amber-100",
+  },
+  sent: {
+    label: "Email aceite pelo fornecedor",
+    description: "O fornecedor aceitou o envio. Isto não confirma que a mensagem tenha sido lida pela cliente.",
+    tone: "border-emerald-400/25 bg-emerald-400/10 text-emerald-100",
+  },
+  failed: {
+    label: "Falha no envio",
+    description: "Não foi possível enviar o email. Pode tentar novamente ou copiar a ligação segura.",
+    tone: "border-red-400/25 bg-red-400/10 text-red-100",
+  },
 };
 
 const historyEventCopy: Record<string, {
@@ -213,6 +266,23 @@ async function requestJson(url: string, locationId: number) {
   return response.json();
 }
 
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.appendChild(field);
+  field.select();
+  const copied = document.execCommand("copy");
+  field.remove();
+  if (!copied) throw new Error("O navegador não permitiu copiar automaticamente.");
+}
+
 export function AppointmentRequestsManager({
   locationId,
   timeZone,
@@ -249,6 +319,8 @@ export function AppointmentRequestsManager({
     queryKey: ["admin-appointment-request", locationId, selectedId],
     queryFn: () => requestJson(`/api/admin/appointment-requests/${selectedId}`, locationId),
     enabled: selectedId !== null,
+    refetchInterval: selectedId !== null ? 10_000 : false,
+    refetchOnWindowFocus: true,
   });
   const proposalAvailability = useQuery<ProposalAvailability>({
     queryKey: ["admin-appointment-request-proposal-availability", locationId, selectedId, detail?.revision, proposalDate],
@@ -311,8 +383,12 @@ export function AppointmentRequestsManager({
       await queryClient.invalidateQueries({ queryKey: ["admin-appointment-requests", locationId] });
       await queryClient.invalidateQueries({ queryKey: ["admin-appointment-request", locationId, selectedId] });
       toast({
-        title: kind === "approve" ? "Pedido aprovado" : kind === "refuse" ? "Pedido recusado" : "Novo horário proposto",
-        description: kind === "approve" ? "A marcação foi criada e a disponibilidade voltou a ser validada." : "A decisão ficou registada no histórico.",
+        title: kind === "approve" ? "Pedido aprovado" : kind === "refuse" ? "Pedido recusado" : "Proposta registada",
+        description: kind === "approve"
+          ? "A marcação foi criada e a disponibilidade voltou a ser validada."
+          : kind === "propose"
+            ? "O novo horário ficou registado. Consulte o estado da comunicação no detalhe do pedido."
+            : "A decisão ficou registada no histórico.",
       });
       setAction(null);
       setReason("");
@@ -330,6 +406,52 @@ export function AppointmentRequestsManager({
         variant: "destructive",
       });
     },
+  });
+
+  const copyProposalLink = useMutation({
+    mutationFn: async () => {
+      if (!selectedId) throw new Error("Pedido inválido.");
+      const response = await apiRequest(
+        "POST",
+        `/api/admin/appointment-requests/${selectedId}/proposal-link`,
+        {},
+        { headers: locationHeaders(locationId) },
+      );
+      const result = await response.json() as { url: string };
+      await copyText(result.url);
+      return result;
+    },
+    onSuccess: () => toast({
+      title: "Ligação copiada",
+      description: "A ligação segura da proposta foi copiada. Partilhe-a apenas com a cliente deste pedido.",
+    }),
+    onError: (error: Error) => toast({
+      title: "Não foi possível copiar",
+      description: error.message,
+      variant: "destructive",
+    }),
+  });
+
+  const resendProposalEmail = useMutation({
+    mutationFn: async () => {
+      if (!selectedId) throw new Error("Pedido inválido.");
+      const response = await apiRequest(
+        "POST",
+        `/api/admin/appointment-requests/${selectedId}/proposal-email/resend`,
+        {},
+        { headers: locationHeaders(locationId) },
+      );
+      return response.json();
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin-appointment-request", locationId, selectedId] });
+      toast({ title: "Reenvio agendado", description: "O email ficou em fila para uma nova tentativa." });
+    },
+    onError: (error: Error) => toast({
+      title: "Não foi possível reenviar",
+      description: error.message,
+      variant: "destructive",
+    }),
   });
 
   return <div className="space-y-5" data-testid="appointment-requests-manager">
@@ -379,7 +501,57 @@ export function AppointmentRequestsManager({
             <div><p className="text-gray-400">Horário pedido</p><p className="font-semibold">{dateTime(detail.requestedStartTime)}</p><p className="mt-2 text-gray-400">Estado</p><p>{statusLabels[detail.status]}</p></div>
           </div>
           <div className="space-y-2"><h3 className="font-semibold">Serviços</h3>{detail.segments.map((segment, index) => <div key={`${segment.position}-${segment.serviceId}`} className="flex justify-between gap-4 rounded-lg bg-background/50 p-3 text-sm"><span>{segment.position + 1}. {segment.serviceNameSnapshot}<small className="block text-gray-400">{segment.durationMinutes} min · {segment.barberName || "Profissional"}{index > 0 && segment.executionStage === detail.segments[index - 1].executionStage ? " · em simultâneo" : ""}</small></span><strong>{money(segment.servicePriceCentsSnapshot)}</strong></div>)}<div className="flex justify-between border-t border-white/10 pt-2 font-bold"><span>Total</span><span className="text-primary">{money(total)}</span></div></div>
-          {detail.activeProposal && <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm"><p className="font-semibold">Proposta ativa</p><p>{dateTime(detail.activeProposal.proposedStartTime)} · expira {dateTime(detail.activeProposal.expiresAt)}</p></div>}
+          {detail.activeProposal && (() => {
+            const email = proposalEmailCopy[detail.activeProposal.communication.emailStatus];
+            return <section className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm" aria-labelledby="active-proposal-heading">
+              <div>
+                <h3 id="active-proposal-heading" className="font-semibold">Proposta ativa</h3>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg bg-background/40 p-3">
+                    <p className="text-xs text-gray-400">Horário originalmente pedido</p>
+                    <p className="mt-1 font-medium">{dateTime(detail.requestedStartTime)}</p>
+                  </div>
+                  <div className="rounded-lg border border-primary/20 bg-background/40 p-3">
+                    <p className="text-xs text-gray-400">Novo horário proposto</p>
+                    <p className="mt-1 font-semibold text-primary">{dateTime(detail.activeProposal.proposedStartTime)}</p>
+                  </div>
+                </div>
+                <p className="mt-2 text-xs text-gray-400">Disponível até {dateTime(detail.activeProposal.expiresAt)}.</p>
+              </div>
+              <div className={cn("rounded-lg border p-3", email.tone)} data-testid="proposal-email-status">
+                <div className="flex items-start gap-2">
+                  <Mail className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <div>
+                    <strong className="block">{email.label}</strong>
+                    <p className="mt-1 text-xs opacity-90">{email.description}</p>
+                    {detail.activeProposal.communication.emailSentAt && <p className="mt-1 text-xs opacity-75">
+                      Processado {dateTime(detail.activeProposal.communication.emailSentAt)}
+                    </p>}
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={copyProposalLink.isPending}
+                  onClick={() => copyProposalLink.mutate()}
+                >{copyProposalLink.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Copy className="mr-2 h-4 w-4" />}Copiar ligação segura</Button>
+                {detail.customerEmail && <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={resendProposalEmail.isPending}
+                  onClick={() => resendProposalEmail.mutate()}
+                >{resendProposalEmail.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}Reenviar email</Button>}
+              </div>
+              <p className="flex items-start gap-2 text-xs text-gray-400">
+                <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                A ligação permite à cliente aceitar ou recusar esta proposta. Não a partilhe com terceiros.
+              </p>
+            </section>;
+          })()}
           {(detail.history?.length ?? 0) > 0 && <div className="space-y-3">
             <h3 className="font-semibold">Histórico</h3>
             <ol className="space-y-3" aria-label="Histórico do pedido">
@@ -502,7 +674,7 @@ export function AppointmentRequestsManager({
           <Button
             disabled={mutation.isPending || (action === "propose" && (!selectedProposalStart || proposalAvailability.isFetching || proposalAvailability.isError))}
             onClick={() => action && mutation.mutate(action)}
-          >{mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : action === "propose" ? "Enviar proposta" : "Confirmar"}</Button>
+          >{mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : action === "propose" ? "Registar proposta" : "Confirmar"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

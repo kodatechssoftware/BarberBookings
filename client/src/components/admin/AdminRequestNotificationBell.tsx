@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { formatDistanceToNowStrict } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Bell, BellRing, CalendarClock, CheckCheck, Loader2 } from "lucide-react";
+import { AlertTriangle, Bell, BellRing, CalendarClock, CheckCheck, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import type { AdminNotificationFeed, AdminNotificationItem } from "@shared/admin-notifications";
 import { Button } from "@/components/ui/button-custom";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -21,6 +21,38 @@ function requestedAt(value: string, timeZone: string) {
 function elapsed(value: string) {
   return formatDistanceToNowStrict(new Date(value), { addSuffix: true, locale: pt });
 }
+
+const notificationPresentation: Record<AdminNotificationItem["type"], {
+  title: string;
+  icon: typeof CalendarClock;
+  tone: string;
+}> = {
+  new_request: {
+    title: "Novo pedido de marcação",
+    icon: CalendarClock,
+    tone: "border-primary/30 bg-primary/10 text-primary",
+  },
+  pending_reminder: {
+    title: "Pedido ainda por analisar",
+    icon: CalendarClock,
+    tone: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+  },
+  proposal_accepted: {
+    title: "Cliente aceitou a proposta",
+    icon: CheckCircle2,
+    tone: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
+  },
+  proposal_rejected: {
+    title: "Cliente recusou a proposta",
+    icon: XCircle,
+    tone: "border-red-400/30 bg-red-400/10 text-red-200",
+  },
+  proposal_unavailable: {
+    title: "Horário proposto indisponível",
+    icon: AlertTriangle,
+    tone: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+  },
+};
 
 export function AdminRequestNotificationBell({
   locationId,
@@ -109,7 +141,7 @@ export function AdminRequestNotificationBell({
         <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
           <div>
             <p className="font-semibold">Notificações</p>
-            <p className="text-xs text-gray-400">Novos pedidos e lembretes pendentes</p>
+            <p className="text-xs text-gray-400">Pedidos, lembretes e respostas das clientes</p>
           </div>
           {unreadCount > 0 && (
             <Button
@@ -134,7 +166,10 @@ export function AdminRequestNotificationBell({
               <p className="text-sm font-medium">Sem notificações recentes</p>
               <p className="mt-1 text-xs text-gray-400">Os novos pedidos aparecerão aqui.</p>
             </div>
-          ) : feed!.items.map((item) => (
+          ) : feed!.items.map((item) => {
+            const presentation = notificationPresentation[item.type];
+            const NotificationIcon = presentation.icon;
+            return (
             <button
               key={item.id}
               type="button"
@@ -149,16 +184,14 @@ export function AdminRequestNotificationBell({
               <div className="flex items-start gap-3">
                 <span className={cn(
                   "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border",
-                  item.type === "pending_reminder"
-                    ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
-                    : "border-primary/30 bg-primary/10 text-primary",
+                  presentation.tone,
                 )}>
-                  <CalendarClock className="h-4 w-4" />
+                  <NotificationIcon className="h-4 w-4" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-start justify-between gap-2">
                     <strong className="text-sm text-white">
-                      {item.type === "pending_reminder" ? "Pedido ainda por analisar" : "Novo pedido de marcação"}
+                      {presentation.title}
                     </strong>
                     {!item.readAt && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" aria-label="Não lida" />}
                   </span>
@@ -174,7 +207,8 @@ export function AdminRequestNotificationBell({
                 {pendingId === item.id && <Loader2 className="mt-2 h-4 w-4 shrink-0 animate-spin text-primary" />}
               </div>
             </button>
-          ))}
+            );
+          })}
         </div>
       </PopoverContent>
     </Popover>
