@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export const adminNotificationTypeSchema = z.enum(["new_request", "pending_reminder"]);
+export const adminNotificationTypeSchema = z.enum([
+  "new_request",
+  "pending_reminder",
+  "proposal_accepted",
+  "proposal_rejected",
+  "proposal_unavailable",
+]);
 
 export const adminNotificationListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),

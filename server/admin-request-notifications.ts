@@ -193,6 +193,32 @@ export async function schedulePendingRequestReminderWithClient(
   ]);
 }
 
+export async function insertProposalResponseAdminNotificationWithClient(
+  client: PoolClient,
+  input: {
+    requestId: number;
+    locationId: number;
+    revision: number;
+    type: "proposal_accepted" | "proposal_rejected" | "proposal_unavailable";
+    createdAt: Date;
+  },
+) {
+  const table = tableFactory();
+  await client.query(`
+    INSERT INTO ${table("admin_notifications")} (
+      location_id, appointment_request_id, notification_type, event_key,
+      available_at, email_delivery_enabled
+    ) VALUES ($1, $2, $3, $4, $5, false)
+    ON CONFLICT (event_key) DO NOTHING
+  `, [
+    input.locationId,
+    input.requestId,
+    input.type,
+    `appointment-request:${input.requestId}:admin:${input.type}:${input.revision}`,
+    utcTimestamp(input.createdAt),
+  ]);
+}
+
 function mapNotificationRow(row: Record<string, unknown>): AdminNotificationItem {
   const services = Array.isArray(row.services) ? row.services : [];
   return {

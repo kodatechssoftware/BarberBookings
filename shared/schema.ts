@@ -85,7 +85,23 @@ export const appointmentRequestProposalStatuses = [
   "unavailable",
 ] as const;
 
-export const adminNotificationTypes = ["new_request", "pending_reminder"] as const;
+export const appointmentRequestProposalEmailStatuses = [
+  "disabled",
+  "missing",
+  "pending",
+  "sending",
+  "retry",
+  "sent",
+  "failed",
+] as const;
+
+export const adminNotificationTypes = [
+  "new_request",
+  "pending_reminder",
+  "proposal_accepted",
+  "proposal_rejected",
+  "proposal_unavailable",
+] as const;
 export const adminNotificationEmailStatuses = [
   "not_needed",
   "pending",
@@ -536,6 +552,15 @@ export const appointmentRequestProposals = appPgTable("appointment_request_propo
   respondedAt: timestamp("responded_at"),
   createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
   createdByProfessionalId: integer("created_by_professional_id").references(() => barbers.id, { onDelete: "set null" }),
+  emailStatus: text("email_status", { enum: appointmentRequestProposalEmailStatuses }).default("disabled").notNull(),
+  emailDeliveryRevision: integer("email_delivery_revision").default(1).notNull(),
+  emailAttempts: integer("email_attempts").default(0).notNull(),
+  nextEmailAttemptAt: timestamp("next_email_attempt_at"),
+  emailLeaseStartedAt: timestamp("email_lease_started_at"),
+  emailProviderMessageId: text("email_provider_message_id"),
+  emailErrorCode: text("email_error_code"),
+  emailLastAttemptAt: timestamp("email_last_attempt_at"),
+  emailSentAt: timestamp("email_sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   revisionCheck: check("appointment_request_proposals_revision_check", sql`${table.revision} > 0`),
@@ -544,6 +569,9 @@ export const appointmentRequestProposals = appPgTable("appointment_request_propo
   commandKeyCheck: check("appointment_request_proposals_command_key_check", sql`btrim(${table.commandKey}) <> '' AND char_length(${table.commandKey}) <= 100`),
   fingerprintCheck: check("appointment_request_proposals_fingerprint_check", sql`${table.proposalFingerprint} ~ '^[0-9a-f]{64}$'`),
   expiryCheck: check("appointment_request_proposals_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+  emailStatusCheck: check("appointment_request_proposals_email_status_check", sql`${table.emailStatus} IN ('disabled', 'missing', 'pending', 'sending', 'retry', 'sent', 'failed')`),
+  emailAttemptsCheck: check("appointment_request_proposals_email_attempts_check", sql`${table.emailAttempts} BETWEEN 0 AND 20`),
+  emailDeliveryRevisionCheck: check("appointment_request_proposals_email_delivery_revision_check", sql`${table.emailDeliveryRevision} > 0`),
   responseCheck: check("appointment_request_proposals_response_check", sql`
     (${table.status} IN ('active', 'replaced', 'unavailable') AND ${table.respondedAt} IS NULL)
     OR (${table.status} IN ('accepted', 'rejected', 'expired') AND ${table.respondedAt} IS NOT NULL)
@@ -555,6 +583,9 @@ export const appointmentRequestProposals = appPgTable("appointment_request_propo
   tokenUnique: uniqueIndex("appointment_request_proposals_token_unique").on(table.responseTokenHash),
   oneActive: uniqueIndex("appointment_request_proposals_one_active")
     .on(table.requestId).where(sql`${table.status} = 'active'`),
+  emailDueIdx: index("appointment_request_proposals_email_due_idx")
+    .on(table.nextEmailAttemptAt, table.id)
+    .where(sql`${table.emailStatus} IN ('pending', 'retry', 'sending')`),
 }));
 
 export const appointmentRequestEvents = appPgTable("appointment_request_events", {
@@ -1195,7 +1226,7 @@ export const adminNotifications = appPgTable("admin_notifications", {
   cancelledAt: timestamp("cancelled_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
-  typeCheck: check("admin_notifications_type_check", sql`${table.notificationType} IN ('new_request', 'pending_reminder')`),
+  typeCheck: check("admin_notifications_type_check", sql`${table.notificationType} IN ('new_request', 'pending_reminder', 'proposal_accepted', 'proposal_rejected', 'proposal_unavailable')`),
   eventKeyCheck: check("admin_notifications_event_key_check", sql`btrim(${table.eventKey}) <> '' AND char_length(${table.eventKey}) <= 180`),
   eventKeyUnique: uniqueIndex("admin_notifications_event_key_unique").on(table.eventKey),
   locationAvailableIdx: index("admin_notifications_location_available_idx")

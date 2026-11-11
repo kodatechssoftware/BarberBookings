@@ -5,12 +5,14 @@ import { hasStaticBuild, serveStatic } from "./static";
 import { createServer } from "http";
 import {
   appointmentNotificationWorkerEnabled,
+  appointmentRequestProposalEmailsEnabled,
   resolvedBusinessConfig,
   staffRequestEmailsEnabled,
   validateRuntimeConfiguration,
 } from "./runtime-environment";
 import { startAppointmentNotificationWorker } from "./appointment-notifications";
 import { startAdminRequestNotificationWorker } from "./admin-notification-worker";
+import { startAppointmentRequestProposalEmailWorker } from "./appointment-request-proposal-emails";
 import {
   materializeAllDueRecurringExpenseOccurrences,
   startRecurringExpenseMaterializationWorker,
@@ -214,11 +216,12 @@ finishHttpConfiguration();
   if (recurringExpenseWorkerEnabled) {
     await materializeAllDueRecurringExpenseOccurrences();
   }
-  if (appointmentNotificationWorkerEnabled || recurringExpenseWorkerEnabled || staffRequestEmailsEnabled) {
+  if (appointmentNotificationWorkerEnabled || recurringExpenseWorkerEnabled || staffRequestEmailsEnabled || appointmentRequestProposalEmailsEnabled) {
     // Measure scheduling, not the unawaited first tick or later interval work.
     const finishWorkers = startupTimings.start("workers");
     if (appointmentNotificationWorkerEnabled) startAppointmentNotificationWorker();
     if (staffRequestEmailsEnabled) startAdminRequestNotificationWorker();
+    if (appointmentRequestProposalEmailsEnabled) startAppointmentRequestProposalEmailWorker();
     if (recurringExpenseWorkerEnabled) {
       startRecurringExpenseMaterializationWorker(undefined, undefined, false);
     }

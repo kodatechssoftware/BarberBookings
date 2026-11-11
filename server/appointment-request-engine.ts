@@ -16,6 +16,7 @@ import { serializeSafeAuditMetadata } from "./audit-log-security";
 import {
   cancelPendingRequestRemindersWithClient,
   insertNewRequestAdminNotificationsWithClient,
+  insertProposalResponseAdminNotificationWithClient,
   schedulePendingRequestReminderWithClient,
 } from "./admin-request-notifications";
 import {
@@ -42,6 +43,7 @@ export type AppointmentRequestActor = {
 
 export type AppointmentRequestEngineOptions = Pick<MultiServiceEngineOptions, "masterEnabled" | "businessVertical"> & {
   appointmentNotificationsEnabled?: boolean;
+  proposalEmailsEnabled?: boolean;
   responseTokenSecret?: string;
   now?: () => Date;
   afterRequestNotificationCreated?: () => Promise<void>;
@@ -97,6 +99,15 @@ type ProposalRow = {
   responded_at: Date | null;
   created_by_user_id: number | null;
   created_by_professional_id: number | null;
+  email_status: "disabled" | "missing" | "pending" | "sending" | "retry" | "sent" | "failed";
+  email_delivery_revision: number;
+  email_attempts: number;
+  next_email_attempt_at: Date | null;
+  email_lease_started_at: Date | null;
+  email_provider_message_id: string | null;
+  email_error_code: string | null;
+  email_last_attempt_at: Date | null;
+  email_sent_at: Date | null;
   created_at: Date;
 };
 
@@ -139,13 +150,23 @@ function stableFingerprint(value: unknown) {
   return sha256(JSON.stringify(value));
 }
 
-function proposalToken(secret: string, requestId: number, revision: number, commandKey: string, fingerprint: string) {
+export function generateAppointmentRequestProposalToken(
+  secret: string,
+  requestId: number,
+  revision: number,
+  commandKey: string,
+  fingerprint: string,
+) {
   if (secret.length < 32) {
     throw new AppointmentRequestError(503, "APPOINTMENT_REQUEST_TOKEN_SECRET_INVALID", "A resposta segura a propostas não está configurada.");
   }
   return createHmac("sha256", secret)
     .update(`${requestId}:${revision}:${commandKey}:${fingerprint}`)
     .digest("base64url");
+}
+
+export function appointmentRequestProposalTokenHash(token: string) {
+  return sha256(token);
 }
 
 function tokenSecret(options: AppointmentRequestEngineOptions) {
@@ -212,6 +233,13 @@ function mapRequest(row: RequestRow, segments: SegmentRow[] = [], proposal?: Pro
       status: proposal.status,
       expiresAt: new Date(proposal.expires_at),
       createdAt: new Date(proposal.created_at),
+      communication: {
+        emailStatus: proposal.email_status,
+        emailDeliveryRevision: Number(proposal.email_delivery_revision),
+        emailAttempts: Number(proposal.email_attempts),
+        emailErrorCode: proposal.email_error_code,
+        emailSentAt: proposal.email_sent_at ? new Date(proposal.email_sent_at) : null,
+      },
     } : null,
   };
 }
@@ -464,6 +492,15 @@ async function markAvailabilityConflict(
     startTime: proposal?.proposed_start_time ?? request.requested_start_time,
     payload: { status: "pending", proposalId: proposal?.id ?? null },
   });
+  if (proposal) {
+    await insertProposalResponseAdminNotificationWithClient(client, {
+      requestId: request.id,
+      locationId: Number(request.location_id),
+      revision: nextRevision,
+      type: "proposal_unavailable",
+      createdAt: now,
+    });
+  }
   await cancelPendingRequestRemindersWithClient(client, request.id, now);
   await schedulePendingRequestReminderWithClient(client, {
     requestId: request.id,
@@ -746,6 +783,15 @@ async function approveLockedRequest(
       startTime,
       payload: { status: "approved", appointmentId: created.appointment.id, proposalId: proposal?.id ?? null },
     });
+    if (proposal) {
+      await insertProposalResponseAdminNotificationWithClient(client, {
+        requestId: request.id,
+        locationId: Number(request.location_id),
+        revision: nextRevision,
+        type: "proposal_accepted",
+        createdAt: now,
+      });
+    }
     if (options.appointmentNotificationsEnabled) {
       await insertAppointmentConfirmation(client, table, created.appointment.id, startTime);
     }
@@ -949,7 +995,7 @@ export async function proposeAppointmentRequestTimeWithPool(
       if (duplicate.rows[0].proposal_fingerprint !== fingerprint) {
         throw new AppointmentRequestError(409, "APPOINTMENT_REQUEST_IDEMPOTENCY_CONFLICT", "A chave de idempotência já foi usada noutra proposta.");
       }
-      const token = proposalToken(tokenSecret(options), request.id, duplicate.rows[0].revision, input.commandKey, fingerprint);
+      const token = generateAppointmentRequestProposalToken(tokenSecret(options), request.id, duplicate.rows[0].revision, input.commandKey, fingerprint);
       await client.query("COMMIT");
       return { request: mapRequest(request, rows, duplicate.rows[0]), proposal: mapRequest(request, rows, duplicate.rows[0]).activeProposal, responseToken: token, reused: true };
     }
@@ -989,13 +1035,14 @@ export async function proposeAppointmentRequestTimeWithPool(
       });
     }
     const nextRevision = request.revision + 1;
-    const token = proposalToken(tokenSecret(options), request.id, nextRevision, input.commandKey, fingerprint);
+    const token = generateAppointmentRequestProposalToken(tokenSecret(options), request.id, nextRevision, input.commandKey, fingerprint);
     const created = await client.query<ProposalRow>(`
       INSERT INTO ${table("appointment_request_proposals")} (
         request_id, revision, proposed_start_time, response_token_hash,
         command_key, proposal_fingerprint, expires_at,
-        created_by_user_id, created_by_professional_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        created_by_user_id, created_by_professional_id,
+        email_status, next_email_attempt_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `, [
       request.id,
@@ -1007,6 +1054,10 @@ export async function proposeAppointmentRequestTimeWithPool(
       utcTimestamp(input.expiresAt),
       actor.actorUserId ?? null,
       actor.actorProfessionalId ?? null,
+      request.customer_email
+        ? options.proposalEmailsEnabled ? "pending" : "disabled"
+        : "missing",
+      request.customer_email && options.proposalEmailsEnabled ? utcTimestamp(now) : null,
     ]);
     const proposal = created.rows[0];
     const updated = await client.query<RequestRow>(`
@@ -1039,7 +1090,6 @@ export async function proposeAppointmentRequestTimeWithPool(
         proposalId: proposal.id,
         expiresAt: input.expiresAt.toISOString(),
         responseEndpoint: "/api/appointment-request-proposals/respond",
-        responseToken: token,
       },
     });
     await client.query("COMMIT");
@@ -1153,6 +1203,13 @@ export async function respondToAppointmentRequestProposalWithPool(
         eventKey: `appointment-request:${request.id}:proposal-rejected:${nextRevision}`,
         startTime: proposal.proposed_start_time,
         payload: { status: "pending", proposalId: proposal.id },
+      });
+      await insertProposalResponseAdminNotificationWithClient(client, {
+        requestId: request.id,
+        locationId: Number(request.location_id),
+        revision: nextRevision,
+        type: "proposal_rejected",
+        createdAt: now,
       });
       await schedulePendingRequestReminderWithClient(client, {
         requestId: request.id,

@@ -101,6 +101,19 @@ export type StaffRequestNotificationEmailParams = {
   idempotencyKey: string;
 };
 
+export type AppointmentRequestProposalEmailParams = {
+  customerName: string;
+  customerEmail: string;
+  locationName: string;
+  locationTimeZone: string;
+  requestedStartTime: Date;
+  proposedStartTime: Date;
+  expiresAt: Date;
+  services: Array<{ name: string; durationMinutes: number }>;
+  responseUrl: string;
+  idempotencyKey: string;
+};
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, "&amp;")
@@ -170,6 +183,61 @@ export async function sendStaffRequestNotificationEmail(
     return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
   } catch (error) {
     console.error("Error sending staff request notification:", error instanceof Error ? error.name : "UnknownError");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
+  }
+}
+
+export function buildAppointmentRequestProposalEmail(params: AppointmentRequestProposalEmailParams) {
+  const requested = formatAppointmentForEmail(params.requestedStartTime, params.locationTimeZone);
+  const proposed = formatAppointmentForEmail(params.proposedStartTime, params.locationTimeZone);
+  const expires = formatAppointmentForEmail(params.expiresAt, params.locationTimeZone);
+  const services = params.services.map((service) => `
+    <li style="margin: 6px 0;">${escapeHtml(service.name)} · ${service.durationMinutes} min</li>
+  `).join("");
+  return {
+    subject: `Proposta de novo horário - ${params.locationName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 14px; color: #111;">
+        <h2 style="color: #8f4965; margin-top: 0;">Proposta de novo horário</h2>
+        <p>Olá <strong>${escapeHtml(params.customerName)}</strong>,</p>
+        <p>A equipa de ${escapeHtml(params.locationName)} propôs outro horário para o seu pedido de marcação.</p>
+        <div style="background-color: #f8f5f6; padding: 16px; border-radius: 10px; margin: 20px 0;">
+          <p style="margin: 6px 0;"><strong>Horário pedido:</strong> ${escapeHtml(requested.date)}, às ${escapeHtml(requested.time)}</p>
+          <p style="margin: 6px 0;"><strong>Novo horário:</strong> ${escapeHtml(proposed.date)}, às ${escapeHtml(proposed.time)}</p>
+          <p style="margin: 14px 0 4px;"><strong>Serviços:</strong></p>
+          <ul style="margin: 0; padding-left: 20px;">${services}</ul>
+        </div>
+        <p style="text-align: center; margin-top: 24px;">
+          <a href="${escapeHtml(params.responseUrl)}" style="background-color: #8f4965; color: white; padding: 12px 20px; text-decoration: none; border-radius: 7px; font-weight: bold; display: inline-block;">Consultar e responder</a>
+        </p>
+        <p style="font-size: 13px; color: #555; margin-top: 20px;">Pode aceitar ou recusar até ${escapeHtml(expires.date)}, às ${escapeHtml(expires.time)}. A marcação só fica confirmada depois de aceitar e de a disponibilidade ser novamente validada.</p>
+      </div>
+    `,
+  };
+}
+
+export async function sendAppointmentRequestProposalEmail(
+  params: AppointmentRequestProposalEmailParams,
+): Promise<EmailDeliveryResult> {
+  if (!resend) {
+    console.warn("RESEND_API_KEY or RESEND_FROM_EMAIL not found; appointment request proposal email was skipped.");
+    return { sent: false, providerMessageId: null, errorCode: "EMAIL_NOT_CONFIGURED" };
+  }
+  const content = buildAppointmentRequestProposalEmail(params);
+  try {
+    const response = await resend.emails.send({
+      from: emailFrom,
+      to: params.customerEmail,
+      subject: content.subject,
+      html: content.html,
+    }, { idempotencyKey: params.idempotencyKey });
+    if (response.error) {
+      console.error("Resend error while sending appointment request proposal:", response.error.name);
+      return { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_REJECTED" };
+    }
+    return { sent: true, providerMessageId: response.data?.id || null, errorCode: null };
+  } catch (error) {
+    console.error("Error sending appointment request proposal:", error instanceof Error ? error.name : "UnknownError");
     return { sent: false, providerMessageId: null, errorCode: "EMAIL_NETWORK_ERROR" };
   }
 }

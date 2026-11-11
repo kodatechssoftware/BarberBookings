@@ -40,6 +40,11 @@ export const appointmentNotificationWorkerEnabled =
 export const staffRequestEmailsEnabled =
   explicitBoolean("STAFF_REQUEST_EMAILS_ENABLED") ?? false;
 
+// Client-facing proposal emails are independent from staff alerts and from
+// confirmed-appointment notifications. They remain fail-closed everywhere.
+export const appointmentRequestProposalEmailsEnabled =
+  explicitBoolean("APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED") ?? false;
+
 export const recurringWhatsappNotificationsEnabled =
   explicitBoolean("META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED") ?? false;
 
@@ -68,6 +73,14 @@ export function validateRuntimeConfiguration() {
   if (staffRequestEmailsEnabled
     && (!process.env.RESEND_API_KEY?.trim() || !process.env.RESEND_FROM_EMAIL?.trim())) {
     throw new Error("STAFF_REQUEST_EMAILS_ENABLED requires RESEND_API_KEY and RESEND_FROM_EMAIL.");
+  }
+  if (appointmentRequestProposalEmailsEnabled
+    && (!process.env.RESEND_API_KEY?.trim() || !process.env.RESEND_FROM_EMAIL?.trim())) {
+    throw new Error("APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED requires RESEND_API_KEY and RESEND_FROM_EMAIL.");
+  }
+  if (appointmentRequestProposalEmailsEnabled
+    && !(process.env.PUBLIC_URL?.trim() || process.env.APP_BASE_URL?.trim())) {
+    throw new Error("APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED requires PUBLIC_URL (or APP_BASE_URL).");
   }
 
   if (!isProductionDeployment) return;

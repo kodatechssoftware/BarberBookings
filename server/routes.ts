@@ -56,6 +56,7 @@ import { MetaWhatsAppTestError, sendMetaWhatsAppTestMessage } from "./whatsapp";
 import {
   appointmentNotificationEventsEnabled,
   appointmentRemindersEnabled,
+  appointmentRequestProposalEmailsEnabled,
   bookingSlotIntervalMinutes,
   isDevelopmentDeployment,
   resolvedBusinessConfig,
@@ -105,6 +106,10 @@ import {
   respondToAppointmentRequestProposalWithPool,
   type AppointmentRequestActor,
 } from "./appointment-request-engine";
+import {
+  getAppointmentRequestProposalSecureLink,
+  requeueAppointmentRequestProposalEmail,
+} from "./appointment-request-proposal-emails";
 import {
   getAdminNotificationFeed,
   getRequestNotificationSettings,
@@ -331,6 +336,10 @@ const publicAppointmentProposalRateLimiter = createFixedWindowRateLimiter({
 });
 const publicAppointmentAvailabilityRateLimiter = createFixedWindowRateLimiter({
   maxAttempts: 60,
+  windowMs: 15 * 60 * 1_000,
+});
+const adminAppointmentProposalCommunicationRateLimiter = createFixedWindowRateLimiter({
+  maxAttempts: 20,
   windowMs: 15 * 60 * 1_000,
 });
 const ADMIN_PUBLIC_COPY = resolvedBusinessConfig.copy.admin;
@@ -2813,6 +2822,7 @@ export async function registerRoutes(
     masterEnabled: beautyV2MasterEnabled,
     businessVertical: resolvedBusinessConfig.vertical,
     appointmentNotificationsEnabled: appointmentNotificationEventsEnabled,
+    proposalEmailsEnabled: appointmentRequestProposalEmailsEnabled,
   } as const;
 
   app.get("/api/beauty-v2/features", async (_req, res) => {
@@ -3179,13 +3189,69 @@ export async function registerRoutes(
       const requestId = parsePositiveInteger(req.params.id);
       if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
       const input = appointmentRequestProposalSchema.parse(req.body);
-      return res.json(await proposeAppointmentRequestTimeWithPool(
+      const result = await proposeAppointmentRequestTimeWithPool(
         pool,
         requestId,
         Number(res.locals.locationId),
         input,
         await getAppointmentRequestActor(req),
         appointmentRequestOptions,
+      );
+      // The response token is deliberately kept out of ordinary administrative
+      // responses. It is only exposed by the explicit, audited copy-link action.
+      const { responseToken: _responseToken, ...safeResult } = result;
+      return res.json(safeResult);
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/admin/appointment-requests/:id/proposal-link", requireTeamAppointmentsManage, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const requestId = parsePositiveInteger(req.params.id);
+    if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+    const rateLimitKey = applyRateLimit(
+      req,
+      res,
+      adminAppointmentProposalCommunicationRateLimiter,
+      "appointment-request-proposal-link",
+      String(requestId),
+    );
+    if (!rateLimitKey) return;
+    try {
+      return res.json(await getAppointmentRequestProposalSecureLink(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        await getAppointmentRequestActor(req),
+      ));
+    } catch (error) {
+      const sent = sendAppointmentRequestError(res, error);
+      if (sent) return sent;
+      throw error;
+    }
+  });
+
+  app.post("/api/admin/appointment-requests/:id/proposal-email/resend", requireTeamAppointmentsManage, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const requestId = parsePositiveInteger(req.params.id);
+    if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
+    const rateLimitKey = applyRateLimit(
+      req,
+      res,
+      adminAppointmentProposalCommunicationRateLimiter,
+      "appointment-request-proposal-email-resend",
+      String(requestId),
+    );
+    if (!rateLimitKey) return;
+    try {
+      return res.json(await requeueAppointmentRequestProposalEmail(
+        pool,
+        requestId,
+        Number(res.locals.locationId),
+        await getAppointmentRequestActor(req),
       ));
     } catch (error) {
       const sent = sendAppointmentRequestError(res, error);
