@@ -1,6 +1,6 @@
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Bell, Calendar as CalendarIcon, Loader2, Plus } from "lucide-react";
+import { AlertTriangle, Bell, Calendar as CalendarIcon, Loader2, Plus } from "lucide-react";
 import { type AppointmentPaymentMethod, type AppointmentStatus } from "@/hooks/use-appointments";
 import { Button } from "@/components/ui/button-custom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,6 +11,7 @@ import { AppointmentDaySummary } from "@/components/admin/AppointmentDaySummary"
 import {
   getAppointmentContactLinks,
   getWeeklyAppointmentEnd,
+  hasPendingCommunicationFailure,
   type WeeklyAgendaAppointment,
 } from "@/components/admin/WeeklyAgenda";
 import { useBusinessCopy } from "@/business/use-business-copy";
@@ -322,6 +323,15 @@ export function AppointmentsTab({
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">{appointment.customerName}</p>
                           <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
+                          {hasPendingCommunicationFailure(appointment) && (
+                            <span
+                              className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full border border-rose-400/40 bg-rose-200/30 px-2 py-0.5 text-[10px] font-semibold text-rose-800"
+                              data-testid={`appointment-${appointment.id}-whatsapp-failure`}
+                            >
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              <span className="truncate">WhatsApp não entregue</span>
+                            </span>
+                          )}
                         </div>
                         <div className="min-w-0">
                           <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 md:hidden">Serviços e profissionais</p>

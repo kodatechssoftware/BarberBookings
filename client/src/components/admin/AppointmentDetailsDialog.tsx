@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { format, parseISO } from "date-fns";
 import { pt } from "date-fns/locale";
-import { AlertTriangle, CheckCircle, ChevronDown, Pencil, Phone, Plus, User, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, ChevronDown, Copy, MessageSquareText, Pencil, Phone, Plus, User, XCircle } from "lucide-react";
 import {
   useAdminMultiServiceRescheduleAvailability,
   type AppointmentExtraSnapshot,
@@ -68,6 +68,11 @@ import {
 import { getAppointmentCompletionTimingError } from "@shared/appointment-completion";
 import { useBusinessCopy } from "@/business/use-business-copy";
 import { useBusinessConfig } from "@/business/use-business-config";
+import type {
+  AppointmentCommunicationEventType,
+  AppointmentCommunicationFailure,
+  AppointmentManualContactMethod,
+} from "@shared/appointment-communications";
 
 type AdminAppointment = {
   id: number;
@@ -109,6 +114,7 @@ type AdminAppointment = {
     serviceNameSnapshot: string;
     servicePriceCentsSnapshot: number;
   }>;
+  communicationFailures?: AppointmentCommunicationFailure[];
 };
 
 export type AppointmentMutationPendingAction = {
@@ -1279,6 +1285,28 @@ function ConfirmAction({
   );
 }
 
+const communicationEventLabels: Record<AppointmentCommunicationEventType, string> = {
+  appointment_confirmation: "Confirmação da marcação",
+  appointment_rescheduled: "Reagendamento da marcação",
+  appointment_updated: "Alteração da marcação",
+  appointment_cancelled: "Cancelamento da marcação",
+  appointment_reminder_day_before: "Lembrete da marcação",
+};
+
+const manualContactMethodLabels: Record<AppointmentManualContactMethod, string> = {
+  sms: "SMS",
+  phone: "telefone",
+  other: "outro meio",
+};
+
+function getAlternativeEmailLabel(failure: AppointmentCommunicationFailure) {
+  if (failure.emailStatus === "sent") return "Email alternativo enviado";
+  if (failure.emailStatus === "failed") return "O email alternativo também falhou";
+  if (failure.emailStatus === "pending") return "Email alternativo pendente";
+  if (failure.emailStatus === "skipped") return "Email alternativo não enviado";
+  return "Sem email alternativo";
+}
+
 export function AppointmentDetailsDialog({
   appointment,
   open,
@@ -1306,6 +1334,7 @@ export function AppointmentDetailsDialog({
   canManageCustomerNotes = canManageAppointment,
   canChangeStatus = canManageAppointment,
   canCancelAppointment = canManageAppointment,
+  canManageCommunicationFollowups = false,
   pendingAction = null,
   locationLogoUrl,
 }: {
@@ -1343,6 +1372,7 @@ export function AppointmentDetailsDialog({
   canManageCustomerNotes?: boolean;
   canChangeStatus?: boolean;
   canCancelAppointment?: boolean;
+  canManageCommunicationFollowups?: boolean;
   pendingAction?: AppointmentMutationPendingAction | null;
   locationLogoUrl?: string | null;
 }) {
@@ -1359,6 +1389,7 @@ export function AppointmentDetailsDialog({
   const [completionPaymentMethod, setCompletionPaymentMethod] = useState<Exclude<AppointmentPaymentMethod, "pending"> | null>(null);
   const [completionExtras, setCompletionExtras] = useState<AppointmentExtraSelection[]>([]);
   const [isCompletionExtrasOpen, setIsCompletionExtrasOpen] = useState(false);
+  const [pendingCommunicationEventId, setPendingCommunicationEventId] = useState<number | null>(null);
   const isBeautyCompletion = businessConfig.vertical === "beauty";
   const { data: completionExtraDefinitions = [], isLoading: isLoadingCompletionExtras } = useExtras({
     enabled: Boolean(open && isPaymentDialogOpen && isBeautyCompletion),
@@ -1574,6 +1605,64 @@ export function AppointmentDetailsDialog({
     }
   };
 
+  const handleCopyPhone = async () => {
+    const phone = contactLinks.displayPhone || appointment.customerPhone;
+    if (!phone) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(phone);
+      } else {
+        const input = document.createElement("textarea");
+        input.value = phone;
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        const copied = document.execCommand("copy");
+        input.remove();
+        if (!copied) throw new Error("COPY_NOT_AVAILABLE");
+      }
+      toast({ title: "Número copiado", description: "O número da cliente foi copiado." });
+    } catch {
+      toast({
+        title: "Não foi possível copiar",
+        description: "Selecione o número apresentado na marcação e copie-o manualmente.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleMarkCommunicationContacted = async (
+    failure: AppointmentCommunicationFailure,
+    contactMethod: AppointmentManualContactMethod,
+  ) => {
+    setPendingCommunicationEventId(failure.eventId);
+    try {
+      const response = await apiRequest(
+        "POST",
+        `/api/admin/appointments/${appointment.id}/communication-failures/${failure.eventId}/contacted`,
+        { contactMethod },
+        appointment.locationId ? { headers: locationHeaders(appointment.locationId) } : undefined,
+      );
+      const result = await response.json() as { created?: boolean };
+      await queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      toast({
+        title: "Contacto registado",
+        description: result.created === false
+          ? "Este contacto já tinha sido registado."
+          : `A cliente ficou assinalada como contactada por ${manualContactMethodLabels[contactMethod]}.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Não foi possível registar o contacto",
+        description: error?.message || "Volte a tentar.",
+        variant: "destructive",
+      });
+    } finally {
+      setPendingCommunicationEventId(null);
+    }
+  };
+
   return (
     <Dialog
       open={open}
@@ -1732,6 +1821,115 @@ export function AppointmentDetailsDialog({
               </div>
             )}
           </div>
+
+          {(appointment.communicationFailures?.length ?? 0) > 0 && (
+            <section className="space-y-3" data-testid="appointment-communication-failures">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-white">
+                  <MessageSquareText className="h-4 w-4 text-rose-700" /> Comunicação com a cliente
+                </h3>
+                <p className="mt-1 text-xs text-gray-400">
+                  Falhas definitivas de WhatsApp associadas à versão atual desta marcação.
+                </p>
+              </div>
+              {(appointment.communicationFailures ?? []).map((failure) => {
+                const isPending = failure.contactedAt === null;
+                const isSaving = pendingCommunicationEventId === failure.eventId;
+                return (
+                  <article
+                    key={failure.eventId}
+                    className={cn(
+                      "rounded-2xl border p-4",
+                      isPending
+                        ? "border-rose-300/30 bg-rose-400/10"
+                        : "border-emerald-300/25 bg-emerald-400/5",
+                    )}
+                    data-testid={`appointment-communication-failure-${failure.eventId}`}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className={cn("font-semibold", isPending ? "text-rose-800" : "text-emerald-800")}>
+                          {isPending ? "WhatsApp não entregue — contactar cliente" : "Cliente contactada manualmente"}
+                        </p>
+                        <p className="mt-1 text-sm text-white">{communicationEventLabels[failure.eventType]}</p>
+                        <p className="mt-1 text-xs text-gray-300">
+                          Falha em {format(parseISO(failure.failedAt), "d 'de' MMMM 'de' yyyy, 'às' HH:mm", { locale: pt })}
+                        </p>
+                      </div>
+                      <span className={cn(
+                        "w-fit rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide",
+                        isPending
+                          ? "border-rose-400/40 bg-rose-200/25 text-rose-800"
+                          : "border-emerald-400/40 bg-emerald-200/25 text-emerald-800",
+                      )}>
+                        {isPending ? "Ação pendente" : "Resolvido"}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-xs text-gray-300">{getAlternativeEmailLabel(failure)}</p>
+
+                    {isPending && canViewCustomer && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {contactLinks.sms && (
+                          <Button asChild size="sm" variant="outline" className="h-9 border-white/15 text-xs">
+                            <a href={contactLinks.sms} data-testid="appointment-open-sms">
+                              <MessageSquareText className="mr-1 h-3.5 w-3.5" /> Abrir SMS
+                            </a>
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-9 border-white/15 text-xs"
+                          onClick={() => void handleCopyPhone()}
+                          data-testid="appointment-copy-phone"
+                        >
+                          <Copy className="mr-1 h-3.5 w-3.5" /> Copiar número
+                        </Button>
+                        {contactLinks.tel && (
+                          <Button asChild size="sm" variant="outline" className="h-9 border-white/15 text-xs">
+                            <a href={contactLinks.tel}>
+                              <Phone className="mr-1 h-3.5 w-3.5" /> Ligar
+                            </a>
+                          </Button>
+                        )}
+                      </div>
+                    )}
+
+                    {isPending && canManageCommunicationFollowups && (
+                      <div className="mt-4 border-t border-white/10 pt-3">
+                        <p className="text-xs font-semibold text-white">Assinalar como contactada</p>
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          {(["sms", "phone", "other"] as const).map((method) => (
+                            <Button
+                              key={method}
+                              type="button"
+                              size="sm"
+                              variant={method === "sms" ? "gold" : "outline"}
+                              disabled={isSaving}
+                              onClick={() => void handleMarkCommunicationContacted(failure, method)}
+                              className="h-9 text-xs"
+                              data-testid={`appointment-mark-contacted-${method}`}
+                            >
+                              {isSaving ? "A guardar..." : method === "sms" ? "Por SMS" : method === "phone" ? "Por telefone" : "Outro contacto"}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {!isPending && failure.contactedAt && (
+                      <p className="mt-3 text-xs font-medium text-emerald-800" data-testid="appointment-manual-contact-summary">
+                        Contactada por {manualContactMethodLabels[failure.contactMethod ?? "other"]} em{" "}
+                        {format(parseISO(failure.contactedAt), "d 'de' MMMM 'de' yyyy, 'às' HH:mm", { locale: pt })}
+                        {failure.contactedByName ? ` por ${failure.contactedByName}` : ""}.
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
+            </section>
+          )}
 
           {canViewCustomer ? (
           <div className="rounded-2xl border border-white/10 bg-background/50 p-4">

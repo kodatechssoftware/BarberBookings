@@ -4368,6 +4368,9 @@ export default function Admin() {
           canManageCustomerNotes={canManageSelectedAppointmentNotes}
           canChangeStatus={canChangeSelectedAppointmentStatus}
           canCancelAppointment={canEditSelectedAppointment || canChangeSelectedAppointmentStatus}
+          canManageCommunicationFollowups={canManageTeamAppointments
+            && canViewTeamCustomers
+            && beautyV2Features?.notificationDeliveryStatus === true}
         />
 
         <Dialog

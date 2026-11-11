@@ -14,6 +14,7 @@ import { useBusinessServiceIcon } from "@/business/use-business-service-icon";
 import { getProfessionalColorOptions, normalizeProfessionalColor } from "@/lib/professional-presentation";
 import { getAgendaServiceLabel } from "@shared/agenda-service-label";
 import { getOperationalAppointmentBounds } from "@shared/appointment-occupancy";
+import type { AppointmentCommunicationFailure } from "@shared/appointment-communications";
 
 export type WeeklyAgendaAppointment = {
   id: number;
@@ -50,6 +51,7 @@ export type WeeklyAgendaAppointment = {
   }>;
   agendaEntryKey?: string;
   multiServiceSegmentPosition?: number;
+  communicationFailures?: AppointmentCommunicationFailure[];
 };
 
 type AppointmentStatusFilter = AppointmentStatus | "all";
@@ -551,7 +553,27 @@ export function getAppointmentContactLinks(phone: string) {
   return {
     displayPhone,
     tel: normalizedDigits ? `tel:+${normalizedDigits}` : "",
+    sms: normalizedDigits ? `sms:+${normalizedDigits}` : "",
   };
+}
+
+export function hasPendingCommunicationFailure(appointment: WeeklyAgendaAppointment) {
+  return (appointment.communicationFailures ?? []).some((failure) => failure.contactedAt === null);
+}
+
+function CommunicationFailureBadge({ compact = false }: { compact?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-full items-center gap-1 rounded-full border border-rose-400/40 bg-rose-200/30 font-semibold text-rose-800",
+        compact ? "h-4 px-1 text-[8px]" : "px-2 py-0.5 text-[10px]",
+      )}
+      data-testid="appointment-whatsapp-failure-badge"
+    >
+      <AlertTriangle className={compact ? "h-2.5 w-2.5 shrink-0" : "h-3 w-3 shrink-0"} />
+      {!compact && <span className="truncate">WhatsApp não entregue</span>}
+    </span>
+  );
 }
 
 export function WeeklyAgenda({
@@ -779,6 +801,9 @@ export function WeeklyAgenda({
             </span>
           </div>
           <p className="mt-1 text-[11px] uppercase tracking-wide text-gray-500">{getStatusLabel(appointment.status)}</p>
+          {hasPendingCommunicationFailure(appointment) && (
+            <span className="mt-1 inline-flex"><CommunicationFailureBadge /></span>
+          )}
           {Boolean((appointment.bufferBeforeMinutesSnapshot ?? 0) || (appointment.bufferAfterMinutesSnapshot ?? 0)) && (
             <p className="mt-1 text-[11px] text-gray-500">
               Ocupação: -{appointment.bufferBeforeMinutesSnapshot ?? 0} / +{appointment.bufferAfterMinutesSnapshot ?? 0} min
@@ -816,6 +841,9 @@ export function WeeklyAgenda({
             <p className="truncate text-sm font-semibold text-white">{appointment.customerName}</p>
           </div>
           <p className="mt-1 truncate text-xs text-gray-400">{barber?.name || agendaCopy.professional.fallbackName} · {getAgendaServiceLabel(service, appointment.serviceNameSnapshot)}</p>
+          {hasPendingCommunicationFailure(appointment) && (
+            <span className="mt-1 inline-flex"><CommunicationFailureBadge /></span>
+          )}
         </div>
       </button>
     );
@@ -1187,7 +1215,10 @@ export function WeeklyAgenda({
                                         <span className={cn("min-w-0 truncate font-bold text-white", isTiny ? "text-[10px] leading-none" : "text-xs")}>
                                           {format(start, "HH:mm")} - {appointment.customerName}
                                         </span>
-                                        <span className={cn("shrink-0 rounded-full", isTiny ? "h-2 w-2" : "h-2.5 w-2.5")} style={{ backgroundColor: color }} />
+                                        <span className="flex shrink-0 items-center gap-1">
+                                          {hasPendingCommunicationFailure(appointment) && <CommunicationFailureBadge compact />}
+                                          <span className={cn("rounded-full", isTiny ? "h-2 w-2" : "h-2.5 w-2.5")} style={{ backgroundColor: color }} />
+                                        </span>
                                       </div>
                                       {!isCompact && (
                                         <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] font-semibold uppercase text-gray-200">
@@ -1529,6 +1560,7 @@ export function WeeklyAgenda({
                                 >
                                   {appointment.customerName}
                                 </span>
+                                {hasPendingCommunicationFailure(appointment) && <CommunicationFailureBadge compact />}
                               </button>
                             );
                           })}

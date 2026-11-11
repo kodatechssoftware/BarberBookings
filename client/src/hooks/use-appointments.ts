@@ -3,6 +3,7 @@ import { api, buildUrl } from "@/lib/client-api-contract";
 import type { CreateAppointmentRequest } from "@shared/routes";
 import { apiFetch } from "@/lib/api";
 import { locationHeaders, useActiveLocationId } from "@/lib/location-context";
+import type { AppointmentCommunicationFailure } from "@shared/appointment-communications";
 
 export type AppointmentStatus = "booked" | "completed" | "cancelled" | "late_cancelled" | "no_show";
 export type AppointmentPaymentMethod = "pending" | "cash" | "card" | "voucher" | "gift";
@@ -62,6 +63,7 @@ export type AppointmentRecord = {
   notificationSent?: boolean;
   canManage?: boolean;
   serviceSegments?: AppointmentServiceSegmentSnapshot[];
+  communicationFailures?: AppointmentCommunicationFailure[];
 };
 
 export type AppointmentServiceSegmentSnapshot = {
