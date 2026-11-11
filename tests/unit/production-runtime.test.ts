@@ -19,6 +19,7 @@ const baseEnvironment = {
   META_WHATSAPP_RECURRING_NOTIFICATIONS_ENABLED: "false",
   APPOINTMENT_REMINDERS_ENABLED: "false",
   STAFF_REQUEST_EMAILS_ENABLED: "false",
+  APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED: "false",
 };
 
 const productionTemplateEnvironment = {
@@ -147,6 +148,38 @@ test("staff request email worker is fail-closed and requires explicit Resend con
     RESEND_API_KEY: "test-resend-key",
     RESEND_FROM_EMAIL: "notifications@example.test",
   }, "m.validateRuntimeConfiguration()");
+});
+
+test("appointment proposal emails have an independent fail-closed switch", () => {
+  const disabled = { ...baseEnvironment };
+  delete disabled.APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED;
+  const output = evaluate(
+    disabled,
+    "m.validateRuntimeConfiguration(); console.log(m.appointmentRequestProposalEmailsEnabled)",
+  );
+  assert.equal(output, "false");
+  assert.throws(() => evaluate({
+    ...baseEnvironment,
+    APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED: "true",
+    RESEND_API_KEY: "",
+    RESEND_FROM_EMAIL: "",
+  }, "m.validateRuntimeConfiguration()"));
+  evaluate({
+    ...baseEnvironment,
+    APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED: "true",
+    RESEND_API_KEY: "test-resend-key",
+    RESEND_FROM_EMAIL: "notifications@example.test",
+  }, "m.validateRuntimeConfiguration()");
+  assert.throws(() => {
+    const missingPublicUrl = {
+      ...baseEnvironment,
+      APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED: "true",
+      RESEND_API_KEY: "test-resend-key",
+      RESEND_FROM_EMAIL: "notifications@example.test",
+    };
+    delete missingPublicUrl.PUBLIC_URL;
+    return evaluate(missingPublicUrl, "m.validateRuntimeConfiguration()");
+  });
 });
 
 test("Production requires all five appointment template names before WhatsApp activation", () => {

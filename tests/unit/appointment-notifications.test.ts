@@ -22,6 +22,7 @@ import {
   buildBookingRescheduledEmail,
   buildBookingUpdatedEmail,
   buildRecurringBookingEmail,
+  buildAppointmentRequestProposalEmail,
   buildStaffRequestNotificationEmail,
 } from "../../server/email";
 import {
@@ -62,6 +63,31 @@ test("staff request email links to the authenticated Admin without public respon
   assert.match(content.subject, /Novo pedido de marcação/);
   assert.match(content.html, /\/admin\?tab=appointment-requests&amp;locationId=7&amp;requestId=42/);
   assert.doesNotMatch(content.html, /responseToken|cancelToken|token=/i);
+});
+
+test("proposal email explains the change and keeps the response token in the URL fragment", () => {
+  const content = buildAppointmentRequestProposalEmail({
+    customerName: "Joaquina",
+    customerEmail: "joaquina@example.test",
+    locationName: "Beauty QA",
+    locationTimeZone: "Europe/Lisbon",
+    requestedStartTime: new Date("2030-06-02T09:00:00.000Z"),
+    proposedStartTime: new Date("2030-06-02T10:30:00.000Z"),
+    expiresAt: new Date("2030-06-05T10:30:00.000Z"),
+    services: [
+      { name: "Manicure", durationMinutes: 60 },
+      { name: "Pedicure", durationMinutes: 45 },
+    ],
+    responseUrl: "https://beauty.example.test/appointment-request/proposal#token=safe-response-token",
+    idempotencyKey: "proposal:1:email:1",
+  });
+  assert.match(content.subject, /novo horário/i);
+  assert.match(content.html, /Manicure/);
+  assert.match(content.html, /Pedicure/);
+  assert.match(content.html, /10:00/);
+  assert.match(content.html, /11:30/);
+  assert.match(content.html, /#token=safe-response-token/);
+  assert.doesNotMatch(content.html, /\?token=/);
 });
 
 async function fixture(optIn = true, email: string | null = "client@example.com", event = true) {

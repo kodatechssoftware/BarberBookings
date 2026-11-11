@@ -79,6 +79,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       "0025_appointment_request_approval.sql",
       "0026_parallel_service_scheduling.sql",
       "0027_admin_request_notifications.sql",
+      "0028_appointment_request_proposal_communications.sql",
     ]) {
       await copyFile(path.resolve("migrations", migration), path.join(migrationsDirectory, migration));
     }
@@ -139,6 +140,7 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     const engine = await import("../../server/appointment-request-engine");
     const adminNotifications = await import("../../server/admin-request-notifications");
     const adminNotificationWorker = await import("../../server/admin-notification-worker");
+    const proposalEmailWorker = await import("../../server/appointment-request-proposal-emails");
     const multiServiceEngine = await import("../../server/multi-service-appointment-engine");
     applicationPool = (await import("../../server/db")).pool;
     const options = {
@@ -796,6 +798,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       (await pool.query("SELECT status FROM appointment_request_proposals WHERE id = $1", [conflictedParallelProposal.proposal.id])).rows[0].status,
       "unavailable",
     );
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'proposal_unavailable'
+    `, [conflictedParallelProposalRequest.request.id])).rows[0].count), 1, "an unavailable proposal notifies the location once");
     assert.equal(Number((await pool.query(
       "SELECT count(*) AS count FROM appointments WHERE customer_name = $1",
       [conflictedParallelProposalRequest.request.customerName],
@@ -1207,12 +1213,185 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
         && error.code === "APPOINTMENT_REQUEST_TRANSITION_INVALID",
     );
 
+    const emailRequest = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-02-01T10:00:00.000Z"),
+      options,
+    );
+    const emailProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, emailRequest.request.id, 1, {
+      startTime: new Date("2035-02-01T12:00:00.000Z"),
+      expiresAt: new Date("2035-02-03T12:00:00.000Z"),
+      commandKey: "proposal-email-command",
+    }, admin, {
+      ...options,
+      proposalEmailsEnabled: true,
+      now: () => new Date("2035-01-30T00:00:00.000Z"),
+    });
+    const emailStateBefore = (await pool.query<{
+      email_status: string;
+      payload_snapshot: Record<string, unknown>;
+    }>(`
+      SELECT proposal.email_status, event.payload_snapshot
+      FROM appointment_request_proposals proposal
+      INNER JOIN appointment_notification_events event
+        ON event.appointment_request_id = proposal.request_id AND event.event_type = 'appointment_request_time_proposed'
+      WHERE proposal.id = $1
+    `, [emailProposal.proposal.id])).rows[0];
+    assert.equal(emailStateBefore.email_status, "pending");
+    assert.doesNotMatch(
+      JSON.stringify(emailStateBefore.payload_snapshot),
+      new RegExp(emailProposal.responseToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      "proposal tokens must never be persisted in notification payloads",
+    );
+    assert.equal("responseToken" in emailStateBefore.payload_snapshot, false);
+
+    let proposalEmailNow = new Date("2035-01-30T00:00:00.000Z");
+    let proposalEmailAttempts = 0;
+    const sentProposalEmails: import("../../server/email").AppointmentRequestProposalEmailParams[] = [];
+    const proposalEmailDependencies: import("../../server/appointment-request-proposal-emails").AppointmentRequestProposalEmailWorkerDependencies = {
+      databasePool: pool,
+      processingEnabled: true,
+      responseTokenSecret: environment.SESSION_SECRET,
+      publicBaseUrl: "https://beauty.example.test",
+      now: () => proposalEmailNow,
+      sendEmail: async (email) => {
+        sentProposalEmails.push(email);
+        proposalEmailAttempts += 1;
+        return proposalEmailAttempts === 1
+          ? { sent: false, providerMessageId: null, errorCode: "EMAIL_PROVIDER_ERROR" }
+          : { sent: true, providerMessageId: `proposal-message-${proposalEmailAttempts}`, errorCode: null };
+      },
+    };
+    assert.equal(await proposalEmailWorker.processNextAppointmentRequestProposalEmail(proposalEmailDependencies), true);
+    assert.equal((await pool.query("SELECT email_status FROM appointment_request_proposals WHERE id = $1", [emailProposal.proposal.id])).rows[0].email_status, "retry");
+    proposalEmailNow = new Date(proposalEmailNow.getTime() + 61_000);
+    assert.equal(await proposalEmailWorker.processNextAppointmentRequestProposalEmail(proposalEmailDependencies), true);
+    const sentEmailState = (await pool.query<{
+      email_status: string;
+      email_attempts: number;
+      email_provider_message_id: string;
+    }>(`
+      SELECT email_status, email_attempts, email_provider_message_id
+      FROM appointment_request_proposals WHERE id = $1
+    `, [emailProposal.proposal.id])).rows[0];
+    assert.equal(sentEmailState.email_status, "sent");
+    assert.equal(Number(sentEmailState.email_attempts), 2);
+    assert.equal(sentProposalEmails[1].responseUrl, `https://beauty.example.test/appointment-request/proposal#token=${encodeURIComponent(emailProposal.responseToken)}`);
+    assert.match(sentProposalEmails[1].idempotencyKey, /:email:1$/);
+    assert.equal(sentProposalEmails[1].services[0].name, "Manicure");
+
+    const copiedLink = await proposalEmailWorker.getAppointmentRequestProposalSecureLink(
+      pool,
+      emailRequest.request.id,
+      1,
+      admin,
+      { responseTokenSecret: environment.SESSION_SECRET, publicBaseUrl: "https://beauty.example.test" },
+    );
+    assert.equal(copiedLink.url, sentProposalEmails[1].responseUrl, "copy and email actions regenerate the same secure token");
+    await assert.rejects(
+      proposalEmailWorker.getAppointmentRequestProposalSecureLink(
+        pool,
+        emailRequest.request.id,
+        1,
+        admin,
+        { responseTokenSecret: "rotated-secret-that-is-at-least-32-characters", publicBaseUrl: "https://beauty.example.test" },
+      ),
+      (error: unknown) => error instanceof engine.AppointmentRequestError
+        && error.code === "APPOINTMENT_REQUEST_PROPOSAL_TOKEN_ROTATED",
+      "rotating the token secret fails closed instead of issuing a different link",
+    );
+    await assert.rejects(
+      proposalEmailWorker.getAppointmentRequestProposalSecureLink(
+        pool,
+        emailRequest.request.id,
+        2,
+        admin,
+        { responseTokenSecret: environment.SESSION_SECRET, publicBaseUrl: "https://beauty.example.test" },
+      ),
+      (error: unknown) => error instanceof engine.AppointmentRequestError
+        && error.code === "APPOINTMENT_REQUEST_PROPOSAL_NOT_FOUND",
+      "a proposal link cannot cross the request location boundary",
+    );
+    const concurrentRequeues = await Promise.all([
+      proposalEmailWorker.requeueAppointmentRequestProposalEmail(
+        pool,
+        emailRequest.request.id,
+        1,
+        admin,
+        { enabled: true, now: proposalEmailNow },
+      ),
+      proposalEmailWorker.requeueAppointmentRequestProposalEmail(
+        pool,
+        emailRequest.request.id,
+        1,
+        admin,
+        { enabled: true, now: proposalEmailNow },
+      ),
+    ]);
+    assert.deepEqual(concurrentRequeues.map((result) => result.emailDeliveryRevision), [2, 2]);
+    assert.equal(concurrentRequeues.filter((result) => result.reused).length, 1, "concurrent resend clicks queue one delivery revision");
+    assert.equal(await proposalEmailWorker.processNextAppointmentRequestProposalEmail(proposalEmailDependencies), true);
+    assert.match(sentProposalEmails.at(-1)!.idempotencyKey, /:email:2$/);
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM audit_logs
+      WHERE entity_type = 'appointment_request' AND entity_id = $1
+        AND action IN ('appointment_request.proposal_link_copied', 'appointment_request.proposal_email_requeued')
+    `, [emailRequest.request.id])).rows[0].count), 2);
+
+    const leaseRequest = await engine.createAppointmentRequestWithPool(
+      pool,
+      1,
+      input("2035-02-02T10:00:00.000Z"),
+      options,
+    );
+    const leaseProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, leaseRequest.request.id, 1, {
+      startTime: new Date("2035-02-02T12:00:00.000Z"),
+      expiresAt: new Date("2035-02-04T12:00:00.000Z"),
+      commandKey: "proposal-email-lease-command",
+    }, admin, {
+      ...options,
+      proposalEmailsEnabled: true,
+      now: () => proposalEmailNow,
+    });
+    await pool.query(`
+      UPDATE appointment_request_proposals
+      SET email_status = 'sending', email_lease_started_at = $2, next_email_attempt_at = NULL
+      WHERE id = $1
+    `, [leaseProposal.proposal.id, new Date(proposalEmailNow.getTime() - 120_000)]);
+    assert.equal(await proposalEmailWorker.processNextAppointmentRequestProposalEmail(proposalEmailDependencies, 60_000), true);
+    assert.equal((await pool.query(
+      "SELECT email_status FROM appointment_request_proposals WHERE id = $1",
+      [leaseProposal.proposal.id],
+    )).rows[0].email_status, "sent", "an expired worker lease is recovered after restart");
+
+    const missingEmailInput = { ...input("2035-02-03T10:00:00.000Z"), customerEmail: null };
+    const missingEmailRequest = await engine.createAppointmentRequestWithPool(pool, 1, missingEmailInput, options);
+    const missingEmailProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, missingEmailRequest.request.id, 1, {
+      startTime: new Date("2035-02-03T12:00:00.000Z"),
+      expiresAt: new Date("2035-02-05T12:00:00.000Z"),
+      commandKey: "proposal-email-missing-command",
+    }, admin, { ...options, proposalEmailsEnabled: true, now: () => proposalEmailNow });
+    assert.equal(missingEmailProposal.proposal.communication.emailStatus, "missing");
+    await assert.rejects(
+      proposalEmailWorker.requeueAppointmentRequestProposalEmail(
+        pool,
+        missingEmailRequest.request.id,
+        1,
+        admin,
+        { enabled: true, now: proposalEmailNow },
+      ),
+      (error: unknown) => error instanceof engine.AppointmentRequestError
+        && error.code === "APPOINTMENT_REQUEST_PROPOSAL_EMAIL_MISSING",
+    );
+
     const proposed = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-08T10:00:00.000Z"), options);
     const proposal = await engine.proposeAppointmentRequestTimeWithPool(pool, proposed.request.id, 1, {
       startTime: new Date("2035-01-08T12:00:00.000Z"),
       expiresAt: new Date("2035-01-08T11:00:00.000Z"),
       commandKey: "proposal-command-accept",
     }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") });
+    assert.equal(proposal.proposal.communication.emailStatus, "disabled", "proposal email delivery is fail-closed by default");
     assert.ok(
       (await engine.listAppointmentRequestsWithPool(pool, 1, "proposed", options))
         .some((request) => request.id === proposed.request.id),
@@ -1238,6 +1417,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       SELECT count(*) AS count FROM admin_notifications
       WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
     `, [proposed.request.id])).rows[0].count), 0, "accepting a proposal leaves no pending reminder");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'proposal_accepted'
+    `, [proposed.request.id])).rows[0].count), 1, "accepting a proposal notifies the location once");
     assert.equal(new Date(accepted.appointment.startTime).toISOString(), "2035-01-08T12:00:00.000Z");
     const acceptedRetry = await engine.respondToAppointmentRequestProposalWithPool(pool, {
       token: proposal.responseToken,
@@ -1260,6 +1443,10 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       SELECT count(*) AS count FROM admin_notifications
       WHERE appointment_request_id = $1 AND notification_type = 'pending_reminder' AND cancelled_at IS NULL
     `, [rejected.request.id])).rows[0].count), 1, "rejecting a proposal schedules one fresh pending reminder");
+    assert.equal(Number((await pool.query(`
+      SELECT count(*) AS count FROM admin_notifications
+      WHERE appointment_request_id = $1 AND notification_type = 'proposal_rejected'
+    `, [rejected.request.id])).rows[0].count), 1, "rejecting a proposal notifies the location once");
 
     const replaced = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-10T10:00:00.000Z"), options);
     const firstProposal = await engine.proposeAppointmentRequestTimeWithPool(pool, replaced.request.id, 1, {
@@ -1287,6 +1474,22 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
       expiresAt: new Date("2035-01-03T00:00:00.000Z"),
       commandKey: "proposal-command-expired",
     }, admin, { ...options, now: () => new Date("2035-01-01T00:00:00.000Z") });
+    await assert.rejects(
+      proposalEmailWorker.getAppointmentRequestProposalSecureLink(
+        pool,
+        expiring.request.id,
+        1,
+        admin,
+        {
+          responseTokenSecret: environment.SESSION_SECRET,
+          publicBaseUrl: "https://beauty.example.test",
+          now: new Date("2035-01-04T00:00:00.000Z"),
+        },
+      ),
+      (error: unknown) => error instanceof engine.AppointmentRequestError
+        && error.code === "APPOINTMENT_REQUEST_PROPOSAL_EXPIRED",
+      "expired proposals cannot produce a new copyable link",
+    );
     await assert.rejects(
       engine.respondToAppointmentRequestProposalWithPool(pool, {
         token: expiringProposal.responseToken,

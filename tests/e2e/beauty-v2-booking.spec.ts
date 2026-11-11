@@ -495,7 +495,7 @@ test("authorized Admin can review and approve a request from the location-scoped
 
   await proposalDialog.getByLabel("Data").fill("2030-06-04");
   await expect(proposalDialog.getByText("Não existem horários disponíveis nesta data. Escolha outro dia.")).toBeVisible();
-  await expect(proposalDialog.getByRole("button", { name: "Enviar proposta" })).toBeDisabled();
+  await expect(proposalDialog.getByRole("button", { name: "Registar proposta" })).toBeDisabled();
 
   await proposalDialog.getByLabel("Data").fill("2030-06-05");
   await expect(proposalDialog.getByText("Não foi possível consultar a disponibilidade.")).toBeVisible();
@@ -518,7 +518,7 @@ test("authorized Admin can review and approve a request from the location-scoped
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await proposalDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("proposal-availability-mobile.png"), fullPage: true });
-  await proposalDialog.getByRole("button", { name: "Enviar proposta" }).click();
+  await proposalDialog.getByRole("button", { name: "Registar proposta" }).click();
   await expect(page.getByText("Horário indisponível", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Notifications (F8)").getByText(
     "O horário proposto não está disponível para todos os profissionais. Escolha outro horário.",
@@ -642,7 +642,17 @@ test("Admin notifications keep unread and pending counters separate and open a s
   await page.screenshot({ path: testInfo.outputPath("admin-notifications-mobile.png"), fullPage: true });
 });
 
-test("Admin presents proposed and refused requests with state-aware PT-PT history", async ({ page }) => {
+test("Admin presents proposed and refused requests with state-aware PT-PT history", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (window as typeof window & { __copiedProposalLink?: string }).__copiedProposalLink = value;
+        },
+      },
+    });
+  });
   const login = await page.request.post("/api/admin/login", {
     data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
   });
@@ -661,8 +671,18 @@ test("Admin presents proposed and refused requests with state-aware PT-PT histor
     }],
   };
   const proposed = {
-    ...baseRequest, id: 45, status: "proposed", customerName: "Cliente Proposta", refusalReason: null,
-    activeProposal: { proposedStartTime: "2030-06-02T11:00:00.000Z", expiresAt: "2030-06-04T08:01:00.000Z", status: "active" },
+    ...baseRequest, id: 45, status: "proposed", customerName: "Cliente Proposta",
+    customerEmail: "cliente-proposta@example.test", refusalReason: null,
+    activeProposal: {
+      id: 9,
+      proposedStartTime: "2030-06-02T11:00:00.000Z",
+      expiresAt: "2030-06-04T08:01:00.000Z",
+      status: "active",
+      communication: {
+        emailStatus: "failed", emailDeliveryRevision: 1, emailAttempts: 5,
+        emailErrorCode: "EMAIL_PROVIDER_ERROR", emailSentAt: null,
+      },
+    },
     history: [
       { id: 1, event_type: "request_created", actor_type: "client", actor_name: null, from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z" },
       { id: 2, event_type: "proposal_created", actor_type: "admin", actor_name: "Admin QA", from_status: "pending", to_status: "proposed", reason: null, created_at: "2030-06-01T08:01:00.000Z" },
@@ -678,6 +698,12 @@ test("Admin presents proposed and refused requests with state-aware PT-PT histor
   };
   await page.route("**/api/admin/appointment-requests**", (route) => {
     const url = new URL(route.request().url());
+    if (route.request().method() === "POST" && url.pathname.endsWith("/45/proposal-link")) {
+      return route.fulfill({ json: { url: "https://beauty.example.test/appointment-request/proposal#token=safe-token" } });
+    }
+    if (route.request().method() === "POST" && url.pathname.endsWith("/45/proposal-email/resend")) {
+      return route.fulfill({ json: { queued: true, emailDeliveryRevision: 2 } });
+    }
     if (url.pathname.endsWith("/45")) return route.fulfill({ json: proposed });
     if (url.pathname.endsWith("/46")) return route.fulfill({ json: refused });
     const requestedStatus = url.searchParams.get("status");
@@ -687,10 +713,24 @@ test("Admin presents proposed and refused requests with state-aware PT-PT histor
 
   await page.goto("/admin");
   await page.getByRole("tab", { name: "Pedidos" }).click();
-  await page.getByRole("button", { name: "Proposta enviada" }).click();
+  await page.getByRole("button", { name: "Proposta registada" }).click();
   await page.getByRole("button", { name: "Ver e decidir" }).click();
   let dialog = page.getByRole("dialog", { name: "Pedido de marcação" });
-  await expect(dialog).toContainText("Foi proposta uma alteração ao horário. Aguarda resposta do cliente.");
+  await expect(dialog).toContainText("Foi registada uma proposta de alteração.");
+  await expect(dialog).toContainText("Horário originalmente pedido");
+  await expect(dialog).toContainText("Novo horário proposto");
+  await expect(dialog.getByTestId("proposal-email-status")).toContainText("Falha no envio");
+  await dialog.getByRole("button", { name: "Copiar ligação segura" }).click();
+  await expect(page.getByText("Ligação copiada", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as typeof window & { __copiedProposalLink?: string }).__copiedProposalLink))
+    .toBe("https://beauty.example.test/appointment-request/proposal#token=safe-token");
+  await dialog.getByRole("button", { name: "Reenviar email" }).click();
+  await expect(page.getByText("Reenvio agendado", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("proposal-communication-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("proposal-communication-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
   await expect(dialog).toContainText("Novo horário proposto");
   await expect(dialog).toContainText("Proposto por Admin QA");
   await dialog.getByRole("button", { name: "Close" }).click();

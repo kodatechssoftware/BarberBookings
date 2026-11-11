@@ -77,6 +77,8 @@ não são reinterpretadas ou alteradas pela migration.
 - `POST /api/admin/appointment-requests/:id/approve`
 - `POST /api/admin/appointment-requests/:id/refuse`
 - `POST /api/admin/appointment-requests/:id/propose`
+- `POST /api/admin/appointment-requests/:id/proposal-link`
+- `POST /api/admin/appointment-requests/:id/proposal-email/resend`
 
 As rotas Admin exigem a capability de gestão de marcações da equipa. A
 localização é sempre resolvida pelo middleware existente e não pode ser
@@ -99,13 +101,32 @@ O Admin disponibiliza uma inbox por localização para pedidos pendentes,
 propostas e decisões finais. Aprovação, recusa e proposta continuam protegidas
 por `appointments.manage_team` no backend.
 
-## Notificações e limites intencionais
+## Comunicação das propostas
 
-Os intents de pedido/proposta são registados no outbox existente com chaves
-determinísticas, mas ficam concluídos como `DELIVERY_NOT_ENABLED`: esta fase não
-envia WhatsApp nem email reais. O payload fica preparado para uma integração
-posterior e os eventos normais de confirmação só seguem a configuração já
-existente depois de existir uma marcação confirmada.
+A migration `0028_appointment_request_proposal_communications.sql` acrescenta
+estado de entrega, tentativas, lease e revisão de envio à proposta. O email é
+independente das notificações de marcações e fica desligado por omissão através
+de `APPOINTMENT_REQUEST_PROPOSAL_EMAILS_ENABLED=false`. A criação da proposta
+nunca depende do fornecedor externo: falhas são registadas e repetidas com
+backoff, sem anular a decisão do Admin.
+
+Checksum canónico da migration `0028` (normalização CRLF → LF do runner):
+`c42c586b2d3565cbc8c2368801e8994b31520ed4503c37481636380f196318f4`.
+
+O token público não é persistido nem incluído no outbox, audit log ou resposta
+normal da ação de propor. Só o SHA-256 fica na base de dados. O worker e a ação
+explícita «Copiar ligação segura» regeneram o mesmo token de forma determinística
+com `SESSION_SECRET`, verificam-no contra o hash e colocam-no apenas no fragmento
+`#token=` do URL público. A cópia da ligação e cada reenvio são auditados e
+limitados. Rodar `SESSION_SECRET` invalida a regeneração das propostas ativas já
+criadas; estas devem ser substituídas por uma nova proposta, nunca recuperadas
+através do hash.
+
+O estado `sent` significa apenas que o Resend aceitou a mensagem, não que a
+cliente a recebeu ou leu. O Admin distingue proposta registada, email pendente,
+retry, falha, email desativado e ausência de endereço. O envio por WhatsApp
+continua fora deste MVP e os intents genéricos do outbox mantêm
+`DELIVERY_NOT_ENABLED`.
 
 Não estão incluídos nesta fase:
 
@@ -113,9 +134,9 @@ Não estão incluídos nesta fase:
 - migrations remotas ou backfill;
 - recorrências, alteração de pedidos ou marketing;
 - implementação dos outros requisitos Beauty v2.
-- entrega real dos novos intents de pedido/proposta por WhatsApp/email; estes
-  continuam registados no outbox como `DELIVERY_NOT_ENABLED` até uma fase
-  própria de templates, conteúdo e transportes.
+- entrega de propostas por WhatsApp;
+- webhooks de entrega/leitura do email (o estado atual termina na aceitação pelo
+  fornecedor).
 
 ## Validação
 

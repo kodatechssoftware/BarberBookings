@@ -58,9 +58,26 @@ test("every Admin appointment-request mutation is protected by the team manageme
     "/api/admin/appointment-requests/:id/refuse\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/proposal-availability\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/propose\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id/proposal-link\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests/:id/proposal-email/resend\", requireTeamAppointmentsManage",
   ]) {
     assert.ok(source.includes(route), `missing protected route fragment: ${route}`);
   }
+});
+
+test("proposal communication exposes tokens only through the explicit audited copy-link action", async () => {
+  const routes = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
+  const engine = await readFile(new URL("../../server/appointment-request-engine.ts", import.meta.url), "utf8");
+  const delivery = await readFile(new URL("../../server/appointment-request-proposal-emails.ts", import.meta.url), "utf8");
+  assert.match(routes, /const \{ responseToken: _responseToken, \.\.\.safeResult \} = result/);
+  assert.match(routes, /adminAppointmentProposalCommunicationRateLimiter/);
+  const proposalEventStart = engine.indexOf('eventType: "appointment_request_time_proposed"');
+  const proposalCommit = engine.indexOf('await client.query("COMMIT")', proposalEventStart);
+  assert.ok(proposalEventStart > 0 && proposalCommit > proposalEventStart);
+  assert.doesNotMatch(engine.slice(proposalEventStart, proposalCommit), /responseToken/);
+  assert.match(delivery, /appointmentRequestProposalTokenHash\(token\) !== input\.responseTokenHash/);
+  assert.match(delivery, /proposal_link_copied/);
+  assert.match(delivery, /proposal_email_requeued/);
 });
 
 test("administrative request notifications are authenticated and capability scoped", async () => {
