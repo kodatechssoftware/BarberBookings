@@ -487,6 +487,91 @@ test("appointment request workflow is scoped, idempotent, atomic and concurrency
     assert.equal(contactedCommunication.get(approvedAppointmentId)?.[0].contactMethod, "sms");
     assert.equal(contactedCommunication.get(approvedAppointmentId)?.[0].contactedByName, "Admin QA");
 
+    const additionalFailedEvents = await pool.query<{ id: number; event_type: string }>(`
+      INSERT INTO appointment_notification_events (
+        appointment_id, event_type, event_revision, event_key,
+        appointment_start_time, whatsapp_status, failed_at, email_status,
+        created_at, updated_at
+      )
+      SELECT appointment.id, event.event_type, appointment.notification_revision,
+        'manual-contact-' || event.event_type || '-' || appointment.id,
+        appointment.start_time, 'failed', event.failed_at, event.email_status,
+        event.failed_at, event.failed_at
+      FROM appointments appointment
+      CROSS JOIN (VALUES
+        ('appointment_rescheduled', '2035-01-04 09:05:00'::timestamp, 'failed'),
+        ('appointment_updated', '2035-01-04 09:06:00'::timestamp, 'pending')
+      ) AS event(event_type, failed_at, email_status)
+      WHERE appointment.id = $1
+      RETURNING id, event_type
+    `, [approvedAppointmentId]);
+    const phoneEventId = Number(additionalFailedEvents.rows.find(
+      (event) => event.event_type === "appointment_rescheduled",
+    )?.id);
+    const otherEventId = Number(additionalFailedEvents.rows.find(
+      (event) => event.event_type === "appointment_updated",
+    )?.id);
+
+    await pool.query(`
+      INSERT INTO business_feature_settings (feature_name, location_id, enabled)
+      VALUES ('notificationDeliveryStatus', 2, true)
+      ON CONFLICT (feature_name, location_id) WHERE location_id IS NOT NULL
+      DO UPDATE SET enabled = true
+    `);
+    await assert.rejects(
+      communicationFollowups.markAppointmentCommunicationContacted(pool, {
+        locationId: 2,
+        appointmentId: approvedAppointmentId,
+        eventId: phoneEventId,
+        contactMethod: "phone",
+        actor: { userId: 1, displayName: "Admin QA" },
+      }, options),
+      (error: unknown) => error instanceof communicationFollowups.AppointmentCommunicationFollowupError
+        && error.code === "APPOINTMENT_COMMUNICATION_FAILURE_NOT_FOUND",
+      "manual follow-up cannot cross location boundaries",
+    );
+    const phoneContact = await communicationFollowups.markAppointmentCommunicationContacted(pool, {
+      locationId: 1,
+      appointmentId: approvedAppointmentId,
+      eventId: phoneEventId,
+      contactMethod: "phone",
+      actor: { userId: 1, displayName: "Admin QA" },
+      now: new Date("2035-01-04T09:07:00.000Z"),
+    }, options);
+    const otherContact = await communicationFollowups.markAppointmentCommunicationContacted(pool, {
+      locationId: 1,
+      appointmentId: approvedAppointmentId,
+      eventId: otherEventId,
+      contactMethod: "other",
+      actor: { userId: 1, displayName: "Admin QA" },
+      now: new Date("2035-01-04T09:08:00.000Z"),
+    }, options);
+    assert.equal(phoneContact.contactMethod, "phone");
+    assert.equal(otherContact.contactMethod, "other");
+    const allContactedCommunications = await communicationFollowups.getAppointmentCommunicationFailures(
+      pool, 1, [approvedAppointmentId], options,
+    );
+    const contactedByEvent = new Map(
+      allContactedCommunications.get(approvedAppointmentId)?.map((failure) => [failure.eventId, failure]),
+    );
+    assert.equal(contactedByEvent.get(phoneEventId)?.contactMethod, "phone");
+    assert.equal(contactedByEvent.get(phoneEventId)?.emailStatus, "failed");
+    assert.equal(contactedByEvent.get(otherEventId)?.contactMethod, "other");
+    assert.equal(contactedByEvent.get(otherEventId)?.emailStatus, "pending");
+    const manualContactAudit = await pool.query<{ metadata: Record<string, unknown> | string }>(`
+      SELECT metadata FROM audit_logs
+      WHERE action = 'appointment.communication_manual_contact_recorded'
+        AND entity_type = 'appointment_notification_event'
+        AND entity_id = ANY($1::int[])
+      ORDER BY entity_id
+    `, [[phoneEventId, otherEventId]]);
+    assert.equal(manualContactAudit.rowCount, 2);
+    for (const audit of manualContactAudit.rows) {
+      const metadata = typeof audit.metadata === "string" ? JSON.parse(audit.metadata) : audit.metadata;
+      assert.equal("phone" in metadata, false, "audit metadata must not expose the customer phone");
+      assert.equal("customerPhone" in metadata, false, "audit metadata must not expose customer PII");
+    }
+
     const multi = await engine.createAppointmentRequestWithPool(pool, 1, input("2035-01-05T10:00:00.000Z", true), options);
     const multiApproved = await engine.approveAppointmentRequestWithPool(pool, multi.request.id, 1, admin, options);
     assert.equal(multiApproved.request.status, "approved");
