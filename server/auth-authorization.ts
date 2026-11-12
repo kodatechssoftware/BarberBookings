@@ -13,6 +13,15 @@ import {
 
 const canonicalRequestContexts = new WeakMap<Request, CanonicalAuthContext>();
 
+export const consultationTechnicalMutationExceptions = new Set([
+  "/api/admin/login",
+  "/api/admin/logout",
+  "/api/account/password",
+  "/api/auth/bootstrap",
+  "/api/user-invites/accept",
+  "/api/user-invites/validate",
+]);
+
 export function setCanonicalRequestAuthContext(
   request: Request,
   context: CanonicalAuthContext,
@@ -21,6 +30,24 @@ export function setCanonicalRequestAuthContext(
 }
 export function getCanonicalRequestAuthContext(request: Request) {
   return canonicalRequestContexts.get(request);
+}
+
+export function enforceConsultationReadOnly(
+  request: Request,
+  response: Response,
+  next: NextFunction,
+) {
+  const context = getCanonicalRequestAuthContext(request);
+  const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method.toUpperCase());
+  if (!context?.hasConsultationAccessPreset
+    || !isMutation
+    || consultationTechnicalMutationExceptions.has(request.path)) {
+    return next();
+  }
+  return response.status(403).json({
+    code: "CONSULTATION_READ_ONLY",
+    message: "O modo de consulta não permite alterar dados.",
+  });
 }
 
 export function hasAnyCanonicalAccessAtLocation(
@@ -109,6 +136,67 @@ export function redactTeamAgendaAppointment<T extends Record<string, unknown>>(
     createdAt: null,
     extras: undefined,
     canManage: false,
+  };
+}
+
+/**
+ * Consultation responses are allowlisted instead of redacted. This prevents a
+ * newly-added appointment field from becoming visible to read-only users by
+ * accident.
+ */
+export function toConsultationAppointment<T extends Record<string, unknown>>(
+  appointment: T,
+) {
+  const segments = Array.isArray(appointment.serviceSegments)
+    ? appointment.serviceSegments.map((value) => {
+        const segment = value as Record<string, unknown>;
+        return {
+          id: segment.id,
+          appointmentId: segment.appointmentId,
+          position: segment.position,
+          executionStage: segment.executionStage,
+          serviceId: segment.serviceId,
+          barberId: segment.barberId,
+          startTime: segment.startTime,
+          durationMinutes: segment.durationMinutes,
+          serviceNameSnapshot: segment.serviceNameSnapshot,
+          servicePriceCentsSnapshot: segment.servicePriceCentsSnapshot,
+        };
+      })
+    : [];
+  return {
+    id: appointment.id,
+    locationId: appointment.locationId,
+    barberId: appointment.barberId,
+    serviceId: appointment.serviceId,
+    startTime: appointment.startTime,
+    customerName: appointment.customerName,
+    durationMinutes: appointment.durationMinutes,
+    serviceNameSnapshot: appointment.serviceNameSnapshot,
+    servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot,
+    status: appointment.status,
+    serviceSegments: segments,
+    canManage: false,
+    consultationView: true,
+  };
+}
+
+/**
+ * The consultation team DTO is deliberately allowlisted. In particular it
+ * must never inherit credentials, contact data or compensation fields added
+ * to the internal professional model in the future.
+ */
+export function toConsultationProfessional<T extends Record<string, unknown>>(
+  professional: T,
+) {
+  return {
+    id: professional.id,
+    name: professional.name,
+    specialty: professional.specialty,
+    avatar: professional.avatar,
+    color: professional.color,
+    isVisible: professional.isVisible,
+    serviceIds: professional.serviceIds,
   };
 }
 

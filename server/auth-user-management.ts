@@ -12,6 +12,11 @@ import {
   type CanonicalUserIdentityUpdateInput,
   type CapabilityCode,
 } from "@shared/auth";
+import {
+  parseBeautyV2MasterSwitch,
+  resolveBeautyV2Features,
+  type BeautyV2FeatureSetting,
+} from "@shared/business/v2-features";
 import type { CanonicalAuthContext, CanonicalSessionIdentity } from "./auth-runtime";
 import { serializeSafeAuditMetadata } from "./audit-log-security";
 
@@ -39,13 +44,14 @@ type ManagedUserRow = QueryResultRow & {
   created_at: Date;
   updated_at: Date;
   professional_id: number | null;
+  legacy_admin_id: number | null;
 };
 
 type ScopeRow = QueryResultRow & {
   id: number;
   user_id: number;
   location_id: number | null;
-  preset_key: "administrator" | "professional" | null;
+  preset_key: "administrator" | "professional" | "consultation" | null;
   capability_code: CapabilityCode | null;
 };
 
@@ -224,9 +230,12 @@ async function getUserRow(queryable: Queryable, schema: string, userId: number, 
       canonical_user.created_at,
       canonical_user.updated_at,
       professional.id AS professional_id
+      , administrator.id AS legacy_admin_id
     FROM ${table(schema, "users")} canonical_user
     LEFT JOIN ${table(schema, "barbers")} professional
       ON professional.user_id = canonical_user.id
+    LEFT JOIN ${table(schema, "admins")} administrator
+      ON administrator.user_id = canonical_user.id
     WHERE canonical_user.id = $1
     ${forUpdate ? "FOR UPDATE OF canonical_user" : ""}
   `, [userId]);
@@ -290,6 +299,73 @@ async function assertLocationsExist(queryable: Queryable, schema: string, scopes
   `, [ids]);
   if (result.rows.length !== ids.length) {
     throw new CanonicalUserManagementError("LOCATION_NOT_FOUND", 400, "Uma das localizações indicadas não existe.");
+  }
+}
+
+function consultationScopes(scopes: readonly AccessScope[]) {
+  return scopes.filter((scope): scope is Extract<AccessScope, { kind: "location" }> => (
+    scope.kind === "location" && scope.preset === "consultation"
+  ));
+}
+
+function assertConsultationExclusive(scopes: readonly AccessScope[]) {
+  const consultation = consultationScopes(scopes);
+  if (consultation.length > 0 && consultation.length !== scopes.length) {
+    throw new CanonicalUserManagementError(
+      "CONSULTATION_ROLE_INCOMPATIBLE",
+      409,
+      "O perfil de consulta n\u00e3o pode ser combinado com outros perfis ou permiss\u00f5es.",
+    );
+  }
+}
+
+async function assertConsultationFeatureEnabled(
+  queryable: Queryable,
+  schema: string,
+  scopes: readonly AccessScope[],
+) {
+  const locationIds = consultationScopes(scopes).map((scope) => scope.locationId);
+  if (locationIds.length === 0) return;
+  if (process.env.BUSINESS_VERTICAL?.trim().toLowerCase() !== "beauty") {
+    throw new CanonicalUserManagementError(
+      "CONSULTATION_ROLE_DISABLED",
+      409,
+      "O perfil de consulta est\u00e1 dispon\u00edvel apenas na vertical Beauty.",
+    );
+  }
+  if (!parseBeautyV2MasterSwitch(process.env.BEAUTY_V2_FEATURES_ENABLED)) {
+    throw new CanonicalUserManagementError(
+      "CONSULTATION_ROLE_DISABLED",
+      409,
+      "Ative a funcionalidade de perfil de consulta antes de atribuir este acesso.",
+    );
+  }
+  const result = await queryable.query<{
+    feature_name: string;
+    location_id: number | null;
+    enabled: boolean;
+  }>(`
+    SELECT feature_name, location_id, enabled
+    FROM ${table(schema, "business_feature_settings")}
+    WHERE feature_name = 'consultationRole'
+      AND (location_id IS NULL OR location_id = ANY($1::integer[]))
+  `, [locationIds]);
+  const settings = result.rows.map((row): BeautyV2FeatureSetting => ({
+    featureName: "consultationRole",
+    locationId: row.location_id === null ? null : Number(row.location_id),
+    enabled: Boolean(row.enabled),
+  }));
+  const disabled = locationIds.filter((locationId) => !resolveBeautyV2Features({
+    masterEnabled: true,
+    settings,
+    locationId,
+  }).consultationRole);
+  if (disabled.length > 0) {
+    throw new CanonicalUserManagementError(
+      "CONSULTATION_ROLE_DISABLED",
+      409,
+      "O perfil de consulta n\u00e3o est\u00e1 ativo em todas as localiza\u00e7\u00f5es selecionadas.",
+    );
   }
 }
 
@@ -401,8 +477,10 @@ export async function listCanonicalUsers(
       canonical_user.created_at,
       canonical_user.updated_at,
       professional.id AS professional_id
+      , administrator.id AS legacy_admin_id
     FROM ${table(schema, "users")} canonical_user
     LEFT JOIN ${table(schema, "barbers")} professional ON professional.user_id = canonical_user.id
+    LEFT JOIN ${table(schema, "admins")} administrator ON administrator.user_id = canonical_user.id
     ORDER BY canonical_user.display_name, canonical_user.id
   `);
   return result.rows.map(managedUser);
@@ -430,10 +508,12 @@ export async function createCanonicalInvitedUser(
   const schema = resolveSchemaName(options.schemaName);
   const now = options.now ?? new Date();
   assertGrantCeiling(actor, input.access);
+  assertConsultationExclusive(input.access);
   return transaction(pool, async (client) => {
     await lockLoginIdentity(client, normalizeEmail(input.email));
     await assertEmailAvailable(client, schema, input.email);
     await assertLocationsExist(client, schema, input.access);
+    await assertConsultationFeatureEnabled(client, schema, input.access);
     const inserted = await client.query<{ id: number }>(`
       INSERT INTO ${table(schema, "users")} (
         display_name, email, password_hash, status, auth_version, created_at, updated_at
@@ -742,6 +822,15 @@ export async function setCanonicalProfessionalLink(
   const now = options.now ?? new Date();
   return transaction(pool, async (client) => {
     const current = await requireUserRow(client, schema, userId, true);
+    if (professionalId !== null && scopeRowsToScopes(
+      await loadScopeRows(client, schema, userId),
+    ).some((scope) => scope.preset === "consultation")) {
+      throw new CanonicalUserManagementError(
+        "CONSULTATION_ROLE_INCOMPATIBLE",
+        409,
+        "O perfil de consulta n\u00e3o pode ser associado a um profissional.",
+      );
+    }
     if (professionalId === null) {
       await client.query(`UPDATE ${table(schema, "barbers")} SET user_id = NULL WHERE user_id = $1`, [userId]);
     } else {
@@ -798,11 +887,37 @@ export async function replaceCanonicalUserAccess(
     throw new CanonicalUserManagementError("ACCESS_FORBIDDEN", 403, "Não pode gerir acesso nesta localização.");
   }
   assertGrantCeiling(actor, input.scopes);
+  if (userId === actor.user.id && input.scopes.some((scope) => scope.preset === "consultation")) {
+    throw new CanonicalUserManagementError(
+      "SELF_ASSIGNMENT_FORBIDDEN",
+      409,
+      "N\u00e3o pode atribuir a si pr\u00f3prio o perfil de consulta.",
+    );
+  }
 
   return transaction(pool, async (client) => {
     await lockLastAdministratorInvariant(client);
-    await requireUserRow(client, schema, userId, true);
+    const targetUser = await requireUserRow(client, schema, userId, true);
     await assertLocationsExist(client, schema, input.scopes);
+    const existingScopes = scopeRowsToScopes(await loadScopeRows(client, schema, userId));
+    const resultingScopes = input.mode === "replace_all"
+      ? input.scopes
+      : [
+          ...existingScopes.filter((scope) => (
+            scope.kind !== "location" || scope.locationId !== input.locationId
+          )),
+          ...input.scopes,
+        ];
+    assertConsultationExclusive(resultingScopes);
+    if ((targetUser.professional_id != null || targetUser.legacy_admin_id != null)
+      && resultingScopes.some((scope) => scope.preset === "consultation")) {
+      throw new CanonicalUserManagementError(
+        "CONSULTATION_ROLE_INCOMPATIBLE",
+        409,
+        "Desassocie primeiro o perfil administrativo ou profissional antes de atribuir o perfil de consulta.",
+      );
+    }
+    await assertConsultationFeatureEnabled(client, schema, resultingScopes);
     if (input.mode === "replace_all") {
       await client.query(`DELETE FROM ${table(schema, "user_access_scopes")} WHERE user_id = $1`, [userId]);
     } else {

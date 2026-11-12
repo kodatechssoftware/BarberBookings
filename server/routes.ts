@@ -247,11 +247,14 @@ import {
   enforceCanonicalOwnOrTeamCapability,
   getCanonicalAccessibleLocationIds,
   getCanonicalRequestAuthContext,
+  enforceConsultationReadOnly,
   hasAnyCanonicalAccessAtLocation,
   hasCanonicalCapability,
   hasCanonicalOwnCapability,
   hasCanonicalOwnOrTeamCapability,
   redactTeamAgendaAppointment,
+  toConsultationAppointment,
+  toConsultationProfessional,
   requireAllGlobalCapabilities,
   requireAnyCapabilityAtLocation,
   requireCapabilityAtLocation,
@@ -2435,6 +2438,7 @@ export async function registerRoutes(
         return next(error);
       }
     });
+    app.use(enforceConsultationReadOnly);
   }
 
   app.get("/api/multi-location/config", (_req, res) => {
@@ -2850,6 +2854,7 @@ export async function registerRoutes(
       multiServiceAppointments: effective.multiServiceAppointments,
       parallelServiceScheduling: effective.parallelServiceScheduling,
       notificationDeliveryStatus: effective.notificationDeliveryStatus,
+      consultationRole: effective.consultationRole,
       appointmentRequestsAvailable: beautyV2MasterEnabled
         && resolvedBusinessConfig.vertical === "beauty"
         && settings.some((setting) => setting.featureName === "appointmentRequests" && setting.enabled),
@@ -2868,7 +2873,7 @@ export async function registerRoutes(
     pairs: z.array(parallelCompatibilityPairSchema).max(5000),
   });
 
-  app.get("/api/admin/parallel-service-compatibilities", requireCatalogView, async (_req, res) => {
+  app.get("/api/admin/parallel-service-compatibilities", requireCatalogLocationManage, async (_req, res) => {
     if (!beautyV2MasterEnabled || resolvedBusinessConfig.vertical !== "beauty") {
       return res.status(404).json({ message: "Funcionalidade indisponível." });
     }
@@ -5432,9 +5437,16 @@ export async function registerRoutes(
       ? barbers
       : barbers.filter((barber) => barber.isVisible || barber.id === ownBarberId);
 
+    const isConsultationView = Boolean(
+      canonicalContext
+      && canonicalContext.consultationLocationIds.includes(locationId),
+    );
+
     res.json(
       visibleBarbers.map((barber) =>
-        sanitizeBarberForResponse(
+        isConsultationView
+          ? toConsultationProfessional(barber)
+          : sanitizeBarberForResponse(
           avatarReferences && referencedBarberId(barber.avatar) === barber.id
             ? { ...barber, avatar: `${barber.avatar}&locationId=${locationId}` }
             : barber,
@@ -5656,11 +5668,15 @@ export async function registerRoutes(
     const serviceIds = allServiceIds
       .filter((serviceId) => !allowedServices || allowedServices.has(serviceId));
     const [compensationRule] = await storage.getBarberCompensationRules(barber.id, locationId);
-    res.json(sanitizeBarberForResponse({
+    const responseBarber = {
       ...attachCompensationRule(barber, locationId, compensationRule),
       serviceIds,
       allServicesAllowed: locationServiceIds.length > 0 && serviceIds.length === locationServiceIds.length,
-    }, includePrivateFields, canViewTeamFinance));
+    };
+    if (canonicalContext?.consultationLocationIds.includes(locationId)) {
+      return res.json(toConsultationProfessional(responseBarber));
+    }
+    res.json(sanitizeBarberForResponse(responseBarber, includePrivateFields, canViewTeamFinance));
   });
 
   // === SERVICES ===
@@ -5802,6 +5818,13 @@ export async function registerRoutes(
     );
 
     const canonicalProfessionalId = canonicalContext?.professionalId ?? undefined;
+    const isConsultationView = Boolean(
+      canonicalContext
+      && canonicalContext.consultationLocationIds.includes(locationId),
+    );
+    if (isConsultationView) {
+      return res.json(appointmentsWithCommunicationFailures.map(toConsultationAppointment));
+    }
     const canViewAllCustomerData = Boolean(canonicalContext && hasCanonicalCapability(
       canonicalContext,
       "customers.view_team",

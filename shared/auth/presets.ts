@@ -1,6 +1,6 @@
 import { capabilityCodes, type CapabilityCode } from "./capabilities";
 
-export const accessPresetKeys = ["administrator", "professional"] as const;
+export const accessPresetKeys = ["administrator", "professional", "consultation"] as const;
 
 export type AccessPresetKey = (typeof accessPresetKeys)[number];
 
@@ -25,6 +25,17 @@ export const professionalCapabilityCodes = [
   "reports.export_own",
 ] as const satisfies readonly CapabilityCode[];
 
+/**
+ * Deliberately small, read-only preset used by reception/operations viewers.
+ * Keep this list explicit: adding a capability to the registry must never
+ * silently broaden consultation access.
+ */
+export const consultationCapabilityCodes = [
+  "agenda.view_team",
+  "team.view",
+  "catalog.view",
+] as const satisfies readonly CapabilityCode[];
+
 export const accessPresets = {
   administrator: {
     key: "administrator",
@@ -40,6 +51,13 @@ export const accessPresets = {
     description: "Acesso operacional próprio e leitura da agenda da equipa.",
     reserved: false,
     capabilities: professionalCapabilityCodes,
+  },
+  consultation: {
+    key: "consultation",
+    label: "Consulta",
+    description: "Leitura operacional da agenda, equipa e cat\u00e1logo numa localiza\u00e7\u00e3o.",
+    reserved: false,
+    capabilities: consultationCapabilityCodes,
   },
 } as const satisfies Record<AccessPresetKey, AccessPreset>;
 

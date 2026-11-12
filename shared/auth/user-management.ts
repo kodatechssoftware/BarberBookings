@@ -52,6 +52,14 @@ const baseAccessScopeInputSchema = z.object({
       }
     }
   }
+  if (scope.preset === "consultation") {
+    if (scope.kind !== "location") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["preset"], message: "Consulta s\u00f3 pode ser atribu\u00edda por localiza\u00e7\u00e3o." });
+    }
+    if (scope.capabilities.length > 0) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["capabilities"], message: "O perfil de consulta n\u00e3o aceita permiss\u00f5es adicionais." });
+    }
+  }
 });
 
 export const canonicalAccessScopeInputSchema = baseAccessScopeInputSchema.transform((scope): AccessScope => (
@@ -80,6 +88,13 @@ export const canonicalAccessScopesSchema = z.array(canonicalAccessScopeInputSche
       }
       keys.add(key);
     });
+    const consultationScopes = scopes.filter((scope) => scope.preset === "consultation");
+    if (consultationScopes.length > 0 && consultationScopes.length !== scopes.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "O perfil de consulta n\u00e3o pode ser combinado com outros perfis ou permiss\u00f5es.",
+      });
+    }
   });
 
 export const canonicalUserCreateSchema = z.object({
@@ -91,6 +106,14 @@ export const canonicalUserCreateSchema = z.object({
     "Indique o acesso inicial.",
   ),
   inviteExpiresInHours: z.number().int().min(1).max(168).optional(),
+}).superRefine((value, context) => {
+  if (value.professionalId && value.access.some((scope) => scope.preset === "consultation")) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["professionalId"],
+      message: "O perfil de consulta n\u00e3o pode estar associado a um profissional.",
+    });
+  }
 });
 
 export const canonicalUserIdentityUpdateSchema = z.object({

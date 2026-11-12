@@ -791,9 +791,11 @@ export const userAccessScopes = appPgTable("user_access_scopes", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
   presetKeyCheck: check("user_access_scopes_preset_key_check",
-    sql`${table.presetKey} IS NULL OR ${table.presetKey} IN ('administrator', 'professional')`),
+    sql`${table.presetKey} IS NULL OR ${table.presetKey} IN ('administrator', 'professional', 'consultation')`),
   administratorGlobalCheck: check("user_access_scopes_administrator_global_check",
     sql`${table.presetKey} IS DISTINCT FROM 'administrator' OR ${table.locationId} IS NULL`),
+  consultationLocationCheck: check("user_access_scopes_consultation_location_check",
+    sql`${table.presetKey} IS DISTINCT FROM 'consultation' OR ${table.locationId} IS NOT NULL`),
   timestampsCheck: check("user_access_scopes_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
   globalScopeUnique: uniqueIndex("user_access_scopes_global_unique")
     .on(table.userId)

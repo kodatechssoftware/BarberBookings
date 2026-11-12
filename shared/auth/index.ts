@@ -11,6 +11,7 @@ export {
 export {
   accessPresetKeys,
   accessPresets,
+  consultationCapabilityCodes,
   professionalCapabilityCodes,
   resolvePresetCapabilities,
   type AccessPreset,

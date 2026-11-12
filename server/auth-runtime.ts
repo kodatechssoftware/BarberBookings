@@ -9,6 +9,11 @@ import {
   type AuthContext,
   type CapabilityCode,
 } from "@shared/auth";
+import {
+  parseBeautyV2MasterSwitch,
+  resolveBeautyV2Features,
+  type BeautyV2FeatureSetting,
+} from "@shared/business/v2-features";
 
 export const authRuntimeModes = ["legacy", "canonical"] as const;
 export type AuthRuntimeMode = (typeof authRuntimeModes)[number];
@@ -50,6 +55,8 @@ export type CanonicalAuthContext = AuthContext & {
   legacyAdminId: number | null;
   isGlobalAdministrator: boolean;
   hasProfessionalAccessPreset: boolean;
+  hasConsultationAccessPreset: boolean;
+  consultationLocationIds: readonly number[];
 };
 
 export type CanonicalSessionIdentity = {
@@ -140,7 +147,37 @@ async function loadContextForUserRow(
       ON capability.access_scope_id = scope.id
     ORDER BY scope.id, capability.capability_code
   `, [user.id]);
-  const scopes = rowsToAccessScopes(contextRows.rows);
+  const persistedScopes = rowsToAccessScopes(contextRows.rows);
+  const consultationLocationIds = persistedScopes.flatMap((scope) => (
+    scope.kind === "location" && scope.preset === "consultation" ? [scope.locationId] : []
+  ));
+  let enabledConsultationLocationIds = new Set<number>();
+  if (consultationLocationIds.length > 0
+    && process.env.BUSINESS_VERTICAL?.trim().toLowerCase() === "beauty"
+    && parseBeautyV2MasterSwitch(process.env.BEAUTY_V2_FEATURES_ENABLED)) {
+    const featureRows = await queryable.query<{
+      feature_name: string;
+      location_id: number | null;
+      enabled: boolean;
+    }>(`
+      SELECT feature_name, location_id, enabled
+      FROM ${table(schema, "business_feature_settings")}
+      WHERE feature_name = 'consultationRole'
+        AND (location_id IS NULL OR location_id = ANY($1::integer[]))
+    `, [consultationLocationIds]);
+    const settings = featureRows.rows.map((row): BeautyV2FeatureSetting => ({
+      featureName: "consultationRole",
+      locationId: row.location_id === null ? null : Number(row.location_id),
+      enabled: Boolean(row.enabled),
+    }));
+    enabledConsultationLocationIds = new Set(consultationLocationIds.filter((locationId) => (
+      resolveBeautyV2Features({ masterEnabled: true, settings, locationId }).consultationRole
+    )));
+  }
+  const scopes = persistedScopes.filter((scope) => (
+    scope.preset !== "consultation"
+    || (scope.kind === "location" && enabledConsultationLocationIds.has(scope.locationId))
+  ));
   const link = contextRows.rows[0] ?? { professional_id: null, legacy_admin_id: null };
   return {
     user: {
@@ -160,6 +197,8 @@ async function loadContextForUserRow(
       (scope) => scope.kind === "global" && scope.preset === "administrator",
     ),
     hasProfessionalAccessPreset: scopes.some((scope) => scope.preset === "professional"),
+    hasConsultationAccessPreset: consultationLocationIds.length > 0,
+    consultationLocationIds: Array.from(enabledConsultationLocationIds).sort((a, b) => a - b),
   };
 }
 
@@ -313,6 +352,9 @@ export function toCanonicalMeResponse(context: CanonicalAuthContext) {
     name: context.user.displayName,
     email: context.user.email,
     professionalId: context.professionalId,
+    consultationAssigned: context.hasConsultationAccessPreset,
+    consultationMode: context.consultationLocationIds.length > 0,
+    consultationLocationIds: context.consultationLocationIds,
     access: context.access,
   };
 }
