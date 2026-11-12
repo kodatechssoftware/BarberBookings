@@ -77,6 +77,7 @@ type UserAccessManagerProps = {
   currentAccess: EffectiveAccess;
   locations: ShopLocation[];
   professionals: ProfessionalOption[];
+  consultationEnabledLocationIds: readonly number[];
 };
 
 type AccessDraft = {
@@ -241,7 +242,9 @@ function scopeSummary(scope: AccessScope, locations: readonly ShopLocation[]) {
     ? "Global"
     : locations.find((location) => location.id === scope.locationId)?.name ?? `Localização #${scope.locationId}`;
   const explicitCount = scope.capabilities?.length ?? 0;
-  const type = scope.preset === "professional" ? "Professional" : "Acesso personalizado";
+  const type = scope.preset === "professional"
+    ? "Professional"
+    : scope.preset === "consultation" ? "Consulta" : "Acesso personalizado";
   return `${type} · ${context}${explicitCount ? ` · ${explicitCount} adicionais` : ""}`;
 }
 
@@ -250,6 +253,7 @@ function AccessEditor({
   onChange,
   actorAccess,
   locations,
+  consultationEnabledLocationIds,
   disabled,
   lastAdministrator,
 }: {
@@ -257,18 +261,25 @@ function AccessEditor({
   onChange: (value: AccessDraft[]) => void;
   actorAccess: EffectiveAccess;
   locations: ShopLocation[];
+  consultationEnabledLocationIds: readonly number[];
   disabled?: boolean;
   lastAdministrator?: boolean;
 }) {
   const canManageGlobal = hasCapability(actorAccess, "access.manage");
   const manageableLocations = locations.filter((location) =>
     hasCapabilityAtLocation(actorAccess, "access.manage", location.id));
-  const accessType = value.some((scope) => scope.kind === "global" && scope.preset === "administrator")
-    ? "administrator"
-    : "professional";
+  const accessType = value.some((scope) => scope.preset === "consultation")
+    ? "consultation"
+    : value.some((scope) => scope.kind === "global" && scope.preset === "administrator")
+      ? "administrator"
+      : "professional";
   const usedLocationIds = new Set(value.flatMap((scope) =>
     scope.kind === "location" && scope.locationId ? [scope.locationId] : []));
-  const availableLocations = manageableLocations.filter((location) => !usedLocationIds.has(location.id));
+  const consultationEnabledSet = new Set(consultationEnabledLocationIds);
+  const availableLocations = manageableLocations.filter((location) => (
+    !usedLocationIds.has(location.id)
+    && (accessType !== "consultation" || consultationEnabledSet.has(location.id))
+  ));
   const canUseAdministrator = canManageGlobal
     && capabilityCodes.every((capability) => hasCapability(actorAccess, capability));
 
@@ -285,7 +296,7 @@ function AccessEditor({
     key: `location-${locationId}-${Date.now()}`,
     kind: "location",
     locationId,
-    preset: resolvePresetCapabilities("professional").every((capability) =>
+    preset: accessType === "consultation" ? "consultation" : resolvePresetCapabilities("professional").every((capability) =>
       hasCapabilityAtLocation(actorAccess, capability, locationId)) ? "professional" : "custom",
     capabilities: [],
   }]);
@@ -320,6 +331,18 @@ function AccessEditor({
     }] : []);
   };
 
+  const selectConsultation = () => {
+    if (lastAdministrator) return;
+    const location = manageableLocations.find((candidate) => consultationEnabledSet.has(candidate.id));
+    onChange(location ? [{
+      key: `location-${location.id}-${Date.now()}`,
+      kind: "location",
+      locationId: location.id,
+      preset: "consultation",
+      capabilities: [],
+    }] : []);
+  };
+
   return (
     <div className="space-y-4" data-testid="access-editor">
       <div>
@@ -327,7 +350,7 @@ function AccessEditor({
         <p className="mt-1 text-xs text-gray-400">Escolha o perfil funcional. O sistema aplica internamente as permissões seguras desse perfil.</p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Tipo de acesso">
+      <div className="grid gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Tipo de acesso">
         <button
           type="button"
           role="radio"
@@ -352,6 +375,18 @@ function AccessEditor({
           <span className="flex items-center gap-2 font-semibold text-white"><ShieldCheck className="h-4 w-4 text-primary" /> Administrator</span>
           <span className="mt-2 block text-xs text-gray-400">Acesso administrativo global completo.</span>
         </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={accessType === "consultation"}
+          data-testid="access-type-consultation"
+          disabled={disabled || Boolean(lastAdministrator) || consultationEnabledSet.size === 0}
+          onClick={selectConsultation}
+          className={`rounded-xl border p-4 text-left transition-colors ${accessType === "consultation" ? "border-primary bg-primary/10" : "border-white/10 bg-background/40 hover:border-white/25"} disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          <span className="flex items-center gap-2 font-semibold text-white"><UserRound className="h-4 w-4 text-primary" /> Consulta</span>
+          <span className="mt-2 block text-xs text-gray-400">Agenda, equipa e servi\u00e7os em modo estritamente de leitura.</span>
+        </button>
       </div>
 
       {accessType === "administrator" ? (
@@ -367,6 +402,32 @@ function AccessEditor({
             </p>
           )}
         </section>
+      ) : accessType === "consultation" ? (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-gray-300">
+            Sem edi\u00e7\u00e3o, dados de contacto, clientes, pedidos, relat\u00f3rios, exporta\u00e7\u00f5es ou defini\u00e7\u00f5es. N\u00e3o admite permiss\u00f5es adicionais.
+          </div>
+          {!disabled && (
+            <Select value="" onValueChange={(raw) => addLocation(Number(raw))} disabled={availableLocations.length === 0}>
+              <SelectTrigger className="h-10 w-full border-white/10 bg-background sm:max-w-sm" aria-label="Adicionar localiza\u00e7\u00e3o ao perfil de consulta">
+                <SelectValue placeholder="Adicionar localiza\u00e7\u00e3o" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableLocations.map((location) => <SelectItem key={location.id} value={String(location.id)}>{location.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {value.length === 0 && <div className="rounded-lg border border-dashed border-white/15 p-4 text-sm text-gray-400">Ative primeiro a funcionalidade na localiza\u00e7\u00e3o pretendida.</div>}
+          {value.map((scope) => (
+            <section key={scope.key} className="flex items-center justify-between rounded-xl border border-white/10 bg-background/40 p-4">
+              <div>
+                <p className="font-semibold text-white">{locations.find((location) => location.id === scope.locationId)?.name ?? `Localiza\u00e7\u00e3o #${scope.locationId}`}</p>
+                <p className="mt-1 text-xs text-gray-400">Perfil Consulta</p>
+              </div>
+              {!disabled && <Button type="button" variant="ghost" size="sm" className="text-red-300" onClick={() => removeScope(scope)}>Remover</Button>}
+            </section>
+          ))}
+        </div>
       ) : (
         <div className="space-y-4">
           <div className="rounded-lg border border-white/10 bg-background/30 p-3 text-xs text-gray-300">
@@ -540,6 +601,7 @@ export function UserAccessManager({
   currentAccess,
   locations,
   professionals,
+  consultationEnabledLocationIds,
 }: UserAccessManagerProps) {
   const { toast } = useToast();
   const pendingRef = useRef(false);
@@ -552,6 +614,7 @@ export function UserAccessManager({
   const [email, setEmail] = useState("");
   const [professionalId, setProfessionalId] = useState<string>("none");
   const [accessDrafts, setAccessDrafts] = useState<AccessDraft[]>([]);
+  const isConsultationDraft = accessDrafts.some((scope) => scope.preset === "consultation");
 
   const canManageGlobalAccess = hasCapability(currentAccess, "access.manage");
   const manageableLocations = locations.filter((location) =>
@@ -672,6 +735,9 @@ export function UserAccessManager({
     if (accessDrafts.some((scope) => !canActorGrantScope(currentAccess, scope))) {
       return "Não pode conceder acesso acima do seu teto de permissões.";
     }
+    if (isConsultationDraft && professionalId !== "none") {
+      return "O perfil de consulta não pode estar associado a um Professional.";
+    }
     return null;
   };
 
@@ -687,7 +753,7 @@ export function UserAccessManager({
       const response = await apiRequest("POST", "/api/admin/users", {
         displayName: displayName.trim(),
         email: email.trim(),
-        professionalId: professionalId === "none" ? null : Number(professionalId),
+        professionalId: isConsultationDraft || professionalId === "none" ? null : Number(professionalId),
         access: toAccessScopes(accessDrafts),
       });
       const result = await response.json() as { user: ManagedCanonicalUserDetail } & InviteResult;
@@ -750,6 +816,9 @@ export function UserAccessManager({
     if (!editingUser || !beginPending(`access-${editingUser.id}`)) return;
     setFormError(null);
     try {
+      if (isConsultationDraft && editingUser.professionalId !== null) {
+        throw new Error("Desassocie primeiro o Professional antes de atribuir o perfil de consulta.");
+      }
       if (isEditingLastAdministrator && !accessDrafts.some((scope) =>
         scope.kind === "global" && scope.preset === "administrator")) {
         throw new Error("O último Administrator global ativo não pode ser despromovido.");
@@ -964,7 +1033,13 @@ export function UserAccessManager({
             <DialogDescription>Escolha o tipo de acesso e envie um convite de ativação. Nenhuma palavra-passe é apresentada ao Admin.</DialogDescription>
           </DialogHeader>
           <div className="space-y-6">
-            <AccessEditor value={accessDrafts} onChange={setAccessDrafts} actorAccess={currentAccess} locations={locations} />
+            <AccessEditor
+              value={accessDrafts}
+              onChange={setAccessDrafts}
+              actorAccess={currentAccess}
+              locations={locations}
+              consultationEnabledLocationIds={consultationEnabledLocationIds}
+            />
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="new-user-name">Nome</Label>
@@ -975,7 +1050,7 @@ export function UserAccessManager({
                 <Input id="new-user-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="border-white/10 bg-background" />
               </div>
             </div>
-            <div className="space-y-2">
+            {!isConsultationDraft && <div className="space-y-2">
               <Label htmlFor="new-user-professional">Professional associado (opcional)</Label>
               <Select value={professionalId} onValueChange={setProfessionalId}>
                 <SelectTrigger id="new-user-professional" className="border-white/10 bg-background" aria-label="Professional associado">
@@ -988,7 +1063,7 @@ export function UserAccessManager({
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            </div>}
             {formError && <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">{formError}</p>}
           </div>
           <DialogFooter>
@@ -1056,6 +1131,7 @@ export function UserAccessManager({
                   onChange={setAccessDrafts}
                   actorAccess={currentAccess}
                   locations={locations}
+                  consultationEnabledLocationIds={consultationEnabledLocationIds}
                   disabled={!canManageGlobalAccess && manageableLocations.length === 0}
                   lastAdministrator={isEditingLastAdministrator}
                 />

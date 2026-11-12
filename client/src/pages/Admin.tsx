@@ -140,6 +140,9 @@ type AdminUser = {
   access?: EffectiveAccess;
   name?: string;
   email?: string;
+  consultationAssigned?: boolean;
+  consultationMode?: boolean;
+  consultationLocationIds?: number[];
 };
 type AdminAppointment = {
   id: number;
@@ -1739,6 +1742,7 @@ export default function Admin() {
   );
   const usesCanonicalAuth = Boolean(user?.access && user.userId);
   const canViewTeam = canUseRuntimeCapability(user, "team.view", activeLocationId, (role) => role === "admin");
+  const canViewCatalog = canUseRuntimeCapability(user, "catalog.view", activeLocationId, (role) => role === "admin" || role === "barber");
   const canManageTeamGlobal = canUseRuntimeCapability(user, "team.manage_global", activeLocationId, (role) => role === "admin");
   const canAssignTeamLocation = canUseRuntimeCapability(user, "team.assign_location", activeLocationId, (role) => role === "admin");
   const canManageCatalogGlobal = canUseRuntimeCapability(user, "catalog.manage_global", activeLocationId, (role) => role === "admin");
@@ -1759,7 +1763,11 @@ export default function Admin() {
   );
   const canOpenTeamManagement = canViewTeam || canManageTeamGlobal || canAssignTeamLocation
     || canManageTeamHours || canManageOwnHours || canManageCompensation || canManageUsers;
-  const canOpenCatalogManagement = canManageCatalogGlobal || canManageCatalogLocation;
+  // catalog.view is also part of the long-standing Professional preset, whose
+  // UI intentionally did not expose the full Services surface. Consultation
+  // is the only read-only mode that opens it without a management capability.
+  const canOpenCatalogManagement = Boolean(user?.consultationMode && canViewCatalog)
+    || canManageCatalogGlobal || canManageCatalogLocation;
   const canCreateProfessional = canManageTeamGlobal && canAssignTeamLocation
     && canManageCatalogLocation && canManageCompensation;
   const canEditProfessional = canManageTeamGlobal || canManageCatalogLocation || canManageCompensation;
@@ -1776,7 +1784,7 @@ export default function Admin() {
   );
   const appointmentQueryDate = appointmentViewMode === "day" ? format(selectedDateFilter, 'yyyy-MM-dd') : undefined;
   const { data: appointments, isLoading: isLoadingAppointments, refetch } = useAppointments({ 
-    enabled: user?.authorized === true,
+    enabled: user?.authorized === true && canViewTeamAgenda,
     date: appointmentQueryDate,
     barberId: usesOwnOperationalView
       ? String(operationalProfessionalId)
@@ -1784,7 +1792,7 @@ export default function Admin() {
     refetchInterval: 10000,
   });
   const { data: weeklyAppointments, isLoading: isLoadingWeeklyAppointments } = useAppointments({
-    enabled: user?.authorized === true,
+    enabled: user?.authorized === true && canViewTeamAgenda,
     scope: canViewTeamAgenda ? "team" : undefined,
     refetchInterval: 10000,
   });
@@ -1793,7 +1801,10 @@ export default function Admin() {
     isLoading: isLoadingBarbers,
     isFetching: isFetchingBarbers,
     isError: isBarbersError,
-  } = useBarbers({ enabled: user?.authorized === true, includeHidden: true });
+  } = useBarbers({
+    enabled: user?.authorized === true && (canViewTeam || canViewTeamAgenda),
+    includeHidden: canViewTeam,
+  });
   const activeBarbers = useMemo(
     () => (barbers || []).filter((barber) => barber.isVisible !== false),
     [barbers],
@@ -1807,7 +1818,7 @@ export default function Admin() {
     isLoading: isLoadingServices,
     isFetching: isFetchingServices,
     isError: isServicesError,
-  } = useServices({ enabled: user?.authorized === true, includeHidden: true });
+  } = useServices({ enabled: user?.authorized === true && canViewCatalog, includeHidden: true });
   const {
     data: serviceCategories = [],
     isLoading: isLoadingServiceCategories,
@@ -2484,6 +2495,9 @@ export default function Admin() {
           access: data.access,
           name: data.name,
           email: data.email,
+          consultationAssigned: data.consultationAssigned,
+          consultationMode: data.consultationMode,
+          consultationLocationIds: data.consultationLocationIds,
         });
         queryClient.invalidateQueries();
         toast({ title: "Bem-vindo", description: data.message });
@@ -3353,6 +3367,32 @@ export default function Admin() {
     };
   }, []);
 
+  // A consultation assignment is evaluated on every server request. Polling
+  // /me also makes flag revocation visible immediately without requiring a
+  // reload or keeping stale protected panels mounted.
+  useEffect(() => {
+    if (!user?.authorized || !user.consultationAssigned) return;
+    const refreshConsultationAccess = () => void checkAuth();
+    const intervalId = window.setInterval(refreshConsultationAccess, 15_000);
+    window.addEventListener("focus", refreshConsultationAccess);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshConsultationAccess);
+    };
+  }, [user?.authorized, user?.consultationAssigned]);
+
+  useEffect(() => {
+    if (!user?.consultationMode) return;
+    const allowedTabs = new Set([
+      ...(canViewTeamAgenda ? ["dashboard", "appointments"] : []),
+      ...(canViewTeam ? ["barbers"] : []),
+      ...(canViewCatalog ? ["services"] : []),
+    ]);
+    if (allowedTabs.has(activeTab)) return;
+    setSelectedAppointment(null);
+    setActiveTab(canViewTeamAgenda ? "dashboard" : canViewTeam ? "barbers" : "services");
+  }, [activeTab, canViewCatalog, canViewTeam, canViewTeamAgenda, user?.consultationMode]);
+
   const isDayClosed = (date: Date) => {
     const day = date.getDay();
     return periodsForShop({
@@ -3950,6 +3990,24 @@ export default function Admin() {
     );
   }
 
+  if (user.consultationAssigned && !user.consultationMode) {
+    return (
+      <div className="admin-shell min-h-screen bg-background p-4 text-foreground md:p-8">
+        <div className="mx-auto flex min-h-[70vh] max-w-lg items-center">
+          <Card className="w-full border-white/10 bg-card text-center">
+            <CardHeader>
+              <CardTitle className="text-xl text-white">Acesso de consulta indisponível</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm text-gray-300">
+              <p>Este perfil deixou de estar ativo nesta localização. Não foi apresentada informação protegida.</p>
+              <Button variant="outline" onClick={handleLogout}><LogOut className="mr-2 h-4 w-4" /> Sair</Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="admin-shell min-h-screen overflow-x-hidden bg-background text-foreground font-body p-4 md:p-8">
       <div className="container mx-auto max-w-full overflow-x-hidden">
@@ -3963,6 +4021,11 @@ export default function Admin() {
                 className="h-12 w-12 shrink-0 rounded-full object-contain"
               />
               <h1 className="text-2xl md:text-3xl font-display font-bold">Painel Administrativo</h1>
+              {user.consultationMode && (
+                <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary" data-testid="consultation-mode-badge">
+                  Modo de consulta
+                </span>
+              )}
               <div className="flex items-center gap-2">
                 {canManageAppointmentRequests && notificationLocationId && (
                   <AdminRequestNotificationBell
@@ -3977,7 +4040,9 @@ export default function Admin() {
                 <Button variant="ghost" size="sm" onClick={handleLogout} className="text-gray-500 hover:text-white w-fit px-0 sm:px-3"><LogOut className="w-4 h-4 mr-2" /> Sair</Button>
               </div>
             </div>
-            <p className="text-gray-400 text-sm">Faça a gestão das marcações, da equipa e dos serviços.</p>
+            <p className="text-gray-400 text-sm">{user.consultationMode
+              ? "Consulte a agenda, as marcações, a equipa e os serviços."
+              : "Faça a gestão das marcações, da equipa e dos serviços."}</p>
           </div>
           {multiLocationConfig?.enabled && availableLocations.length > 0 && (
             <div className="w-full lg:w-80">
@@ -4529,8 +4594,8 @@ export default function Admin() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <div className="sticky top-2 z-30 w-full max-w-full overflow-hidden rounded-xl md:static">
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
-            <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>
-            <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>
+            {canViewTeamAgenda && <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>}
+            {canViewTeamAgenda && <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>}
             {canManageAppointmentRequests && <TabsTrigger value="appointment-requests" className={adminTabTriggerClass}>
               <Inbox className="w-4 h-4" /> Pedidos
               {(requestNotificationFeed?.pendingDecisionCount ?? 0) > 0 && (
@@ -4669,6 +4734,7 @@ export default function Admin() {
               dayAppointmentSummary={dayAppointmentSummary}
               canFilterProfessionals={canViewTeamAgenda}
               canCreateManualAppointment={canCreateManualAppointment}
+              consultationMode={user.consultationMode}
               onOpenManualBooking={() => openManualBookingDialog()}
               onSelectAppointment={(appointment) => setSelectedAppointment(appointment)}
               getBarberName={getBarberName}
@@ -5418,7 +5484,7 @@ export default function Admin() {
                 </Dialog>}
               </div>
             </div>
-            {beautyV2Features?.enabled && beautyV2Features.multiServiceAppointments && (
+            {canManageCatalogLocation && beautyV2Features?.enabled && beautyV2Features.multiServiceAppointments && (
               <ParallelServiceCompatibilityManager
                 locationId={activeLocation?.id ?? activeLocationId}
                 services={services ?? []}
@@ -5912,6 +5978,9 @@ export default function Admin() {
                   name: barber.name,
                   userId: barber.userId,
                 }))}
+                consultationEnabledLocationIds={beautyV2Features?.consultationRole && notificationLocationId
+                  ? [notificationLocationId]
+                  : []}
               />
               {!canManageAccess && (
                 <p className="mt-3 text-xs text-amber-200">

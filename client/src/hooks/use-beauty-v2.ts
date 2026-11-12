@@ -8,6 +8,7 @@ export type BeautyV2PublicFeatures = {
   multiServiceAppointments: boolean;
   parallelServiceScheduling: boolean;
   notificationDeliveryStatus: boolean;
+  consultationRole: boolean;
   appointmentRequestsAvailable: boolean;
 };
 

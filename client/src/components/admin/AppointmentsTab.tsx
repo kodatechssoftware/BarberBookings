@@ -83,6 +83,7 @@ type AppointmentsTabProps = {
   dayAppointmentSummary: DayAppointmentSummary;
   canFilterProfessionals: boolean;
   canCreateManualAppointment: boolean;
+  consultationMode?: boolean;
   onOpenManualBooking: () => void;
   onSelectAppointment: (appointment: WeeklyAgendaAppointment) => void;
   getBarberName: (id: number) => string;
@@ -129,6 +130,7 @@ export function AppointmentsTab({
   dayAppointmentSummary,
   canFilterProfessionals,
   canCreateManualAppointment,
+  consultationMode = false,
   onOpenManualBooking,
   onSelectAppointment,
   getBarberName,
@@ -322,7 +324,9 @@ export function AppointmentsTab({
                         </div>
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-white">{appointment.customerName}</p>
-                          <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
+                          {!consultationMode && (
+                            <p className="truncate text-xs text-gray-400">{appointment.customerPhone ? getAppointmentContactLinks(appointment.customerPhone).displayPhone : "Sem telemóvel"}</p>
+                          )}
                           {hasPendingCommunicationFailure(appointment) && (
                             <span
                               className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full border border-rose-400/40 bg-rose-200/30 px-2 py-0.5 text-[10px] font-semibold text-rose-800"

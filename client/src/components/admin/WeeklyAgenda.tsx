@@ -544,8 +544,8 @@ function getDailyAppointmentLabel(count: number) {
   return `${count} no dia`;
 }
 
-export function getAppointmentContactLinks(phone: string) {
-  const trimmedPhone = phone.trim();
+export function getAppointmentContactLinks(phone?: string | null) {
+  const trimmedPhone = phone?.trim() ?? "";
   const digits = trimmedPhone.replace(/\D/g, "");
   const normalizedDigits = digits.length === 9 && digits.startsWith("9") ? `351${digits}` : digits;
   const displayPhone = normalizedDigits ? `+${normalizedDigits}` : trimmedPhone;
