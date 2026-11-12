@@ -96,12 +96,22 @@ const embedded = new EmbeddedPostgres({
   onError: () => undefined,
 });
 let pool: pg.Pool | undefined;
+const previousBeautyV2MasterSwitch = process.env.BEAUTY_V2_FEATURES_ENABLED;
+const previousBusinessVertical = process.env.BUSINESS_VERTICAL;
+process.env.BEAUTY_V2_FEATURES_ENABLED = "true";
+process.env.BUSINESS_VERTICAL = "beauty";
 
 try {
-  await copyFile(
-    path.resolve(process.cwd(), "migrations/0015_auth_users_foundation.sql"),
-    path.join(migrationsDirectory, "0015_auth_users_foundation.sql"),
-  );
+  for (const migration of [
+    "0015_auth_users_foundation.sql",
+    "0023_beauty_v2_feature_settings.sql",
+    "0030_consultation_access_role.sql",
+  ]) {
+    await copyFile(
+      path.resolve(process.cwd(), `migrations/${migration}`),
+      path.join(migrationsDirectory, migration),
+    );
+  }
   await embedded.initialise();
   await embedded.start();
   pool = new pg.Pool({
@@ -157,10 +167,81 @@ try {
   const root = await loadCanonicalAuthContext(pool, rootId, options);
   assert(root?.isGlobalAdministrator);
 
+  await pool.query(`
+    INSERT INTO ${table(schema, "business_feature_settings")} (feature_name, location_id, enabled)
+    VALUES ('consultationRole', 1, true)
+  `);
+
   const create = (actor: CanonicalAuthContext, input: Parameters<typeof createCanonicalInvitedUser>[2]) =>
     createCanonicalInvitedUser(pool!, actor, input, options);
   const accept = (token: string, password: string, now?: Date) =>
     acceptCanonicalUserInvite(pool!, token, password, { ...options, ...(now ? { now } : {}) });
+
+  const consultation = await create(root, {
+    displayName: "Utilizador de consulta",
+    email: "consultation@example.test",
+    access: [{ kind: "location", locationId: 1, preset: "consultation", capabilities: [] }],
+  });
+  const consultationIdentity = await accept(consultation.invite.token, "Consultation-password-2026");
+  let consultationContext = await loadCanonicalAuthContext(pool, consultation.user.id, options);
+  assert(consultationContext?.hasConsultationAccessPreset);
+  assert.deepEqual(consultationContext.consultationLocationIds, [1]);
+  assert.deepEqual(consultationContext.access.locationCapabilities, [{
+    locationId: 1,
+    capabilities: ["agenda.view_team", "team.view", "catalog.view"],
+  }]);
+  await assert.rejects(
+    pool.query(`
+      INSERT INTO ${table(schema, "user_access_scope_capabilities")} (access_scope_id, capability_code)
+      SELECT id, 'appointments.manage_team'
+      FROM ${table(schema, "user_access_scopes")}
+      WHERE user_id = $1 AND preset_key = 'consultation'
+    `, [consultation.user.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    pool.query(`
+      INSERT INTO ${table(schema, "user_access_scopes")} (user_id, location_id, preset_key)
+      VALUES ($1, 2, 'professional')
+    `, [consultation.user.id]),
+    (error: any) => error?.code === "23514",
+  );
+  await assert.rejects(
+    setCanonicalProfessionalLink(pool, root, consultation.user.id, professionalIds[2], options),
+    expectManagementCode("CONSULTATION_ROLE_INCOMPATIBLE"),
+  );
+  await pool.query(`
+    UPDATE ${table(schema, "business_feature_settings")}
+    SET enabled = false
+    WHERE feature_name = 'consultationRole' AND location_id = 1
+  `);
+  consultationContext = await loadCanonicalAuthContext(pool, consultation.user.id, options);
+  assert(consultationContext?.hasConsultationAccessPreset);
+  assert.deepEqual(consultationContext.consultationLocationIds, []);
+  assert.deepEqual(consultationContext.access.locationCapabilities, []);
+  assert(await validateCanonicalSession(pool, consultationIdentity, options),
+    "feature revocation keeps the authenticated identity but removes protected capabilities");
+  await assert.rejects(create(root, {
+    displayName: "Consulta bloqueada",
+    email: "consultation-disabled@example.test",
+    access: [{ kind: "location", locationId: 1, preset: "consultation", capabilities: [] }],
+  }), expectManagementCode("CONSULTATION_ROLE_DISABLED"));
+  await pool.query(`
+    UPDATE ${table(schema, "business_feature_settings")}
+    SET enabled = true
+    WHERE feature_name = 'consultationRole' AND location_id = 1
+  `);
+  process.env.BUSINESS_VERTICAL = "barber";
+  await assert.rejects(create(root, {
+    displayName: "Consulta fora da Beauty",
+    email: "consultation-barber@example.test",
+    access: [{ kind: "location", locationId: 1, preset: "consultation", capabilities: [] }],
+  }), expectManagementCode("CONSULTATION_ROLE_DISABLED"));
+  process.env.BUSINESS_VERTICAL = "beauty";
+  await assert.rejects(replaceCanonicalUserAccess(pool, root, root.user.id, {
+    mode: "replace_all",
+    scopes: [{ kind: "location", locationId: 1, preset: "consultation", capabilities: [] }],
+  }, options), expectManagementCode("SELF_ASSIGNMENT_FORBIDDEN"));
 
   const administrator = await create(root, {
     displayName: "Admin sem profissional",
@@ -646,6 +727,10 @@ try {
   assert(await validateCanonicalSession(pool, professionalIdentity, options));
   console.log("Canonical user and access management PostgreSQL checks passed.");
 } finally {
+  if (previousBeautyV2MasterSwitch === undefined) delete process.env.BEAUTY_V2_FEATURES_ENABLED;
+  else process.env.BEAUTY_V2_FEATURES_ENABLED = previousBeautyV2MasterSwitch;
+  if (previousBusinessVertical === undefined) delete process.env.BUSINESS_VERTICAL;
+  else process.env.BUSINESS_VERTICAL = previousBusinessVertical;
   await pool?.end().catch(() => undefined);
   await stopEmbeddedPostgres(embedded, databaseDir).catch(() => undefined);
   await rm(databaseDir, { recursive: true, force: true });

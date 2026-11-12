@@ -61,3 +61,25 @@ test("unknown presets and capabilities fail closed", () => {
     scopes: [{ kind: "global", capabilities: ["users.superuser"] }],
   }).success, false);
 });
+
+test("consultation access is location-only, exclusive and has no additional capabilities", () => {
+  const valid = [{ kind: "location", locationId: 1, preset: "consultation" }];
+  assert.equal(canonicalUserCreateSchema.safeParse({
+    displayName: "Consulta",
+    email: "consulta@example.test",
+    access: valid,
+  }).success, true);
+  for (const access of [
+    [{ kind: "global", preset: "consultation" }],
+    [{ kind: "location", locationId: 1, preset: "consultation", capabilities: ["catalog.view"] }],
+    [...valid, { kind: "location", locationId: 2, preset: "professional" }],
+  ]) {
+    assert.equal(canonicalAccessReplaceSchema.safeParse({ mode: "replace_all", scopes: access }).success, false);
+  }
+  assert.equal(canonicalUserCreateSchema.safeParse({
+    displayName: "Consulta Professional",
+    email: "consulta-pro@example.test",
+    professionalId: 1,
+    access: valid,
+  }).success, false);
+});

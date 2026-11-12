@@ -297,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 28,
-    "an empty legacy baseline must apply every migration through 0029");
+  assert.equal(freshRun.applied.length, 29,
+    "an empty legacy baseline must apply every migration through 0030");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -394,7 +394,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 28);
+  assert.equal(secondFreshRun.alreadyApplied, 29);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1214,6 +1214,7 @@ try {
     "0027_admin_request_notifications.sql",
     "0028_appointment_request_proposal_communications.sql",
     "0029_appointment_communication_followups.sql",
+    "0030_consultation_access_role.sql",
   ]);
   assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
   assert.deepEqual((await pool.query(`
@@ -1548,7 +1549,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 28);
+  assert.equal(secondCompensationRun.alreadyApplied, 29);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2320,7 +2321,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0029, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0030, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

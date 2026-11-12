@@ -6,6 +6,12 @@ import {
   type CapabilityCode,
   type EffectiveAccess,
 } from "../../shared/auth";
+import { resolveBusinessRuntimeConfig } from "../../server/business-runtime-config";
+
+const beautyRuntimeConfig = resolveBusinessRuntimeConfig({
+  BUSINESS_VERTICAL: "beauty",
+  MULTI_LOCATION_ENABLED: "false",
+}, { productionDeployment: false }).config;
 
 type MockUser = {
   id: number;
@@ -67,6 +73,7 @@ async function mockCanonicalAdmin(
     users?: MockUser[];
     rejectNextAccessUpdate?: boolean;
     rejectNextStatusUpdate?: boolean;
+    consultationRole?: boolean;
   } = {},
 ) {
   const actorAccess = options.access ?? {
@@ -100,6 +107,17 @@ async function mockCanonicalAdmin(
     email: "admin@example.test",
     access: actorAccess,
   } }));
+  if (options.consultationRole !== undefined) {
+    await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+      enabled: true,
+      appointmentRequests: false,
+      multiServiceAppointments: false,
+      parallelServiceScheduling: false,
+      notificationDeliveryStatus: false,
+      consultationRole: options.consultationRole,
+      appointmentRequestsAvailable: false,
+    } }));
+  }
   await page.route("**/api/account/locations", (route) => route.fulfill({ json: locations }));
   await page.route("**/api/barbers**", async (route) => {
     const request = route.request();
@@ -222,6 +240,35 @@ async function mockCanonicalAdmin(
 }
 
 test.describe("canonical User & Access Management UI", () => {
+  test("invites a location-scoped consultation user only when the Beauty flag is active", async ({ page }) => {
+    await loginLegacyAdmin(page);
+    await page.route("**/api/runtime-config", (route) => route.fulfill({ json: beautyRuntimeConfig }));
+    const observed = await mockCanonicalAdmin(page, { consultationRole: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: "Utilizadores", exact: true }).click();
+    await page.getByRole("button", { name: "Convidar utilizador" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Convidar novo utilizador" });
+    const consultationOption = dialog.getByTestId("access-type-consultation");
+    await expect(consultationOption).toBeEnabled();
+    await consultationOption.click();
+    await expect(consultationOption).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.getByText(/modo estritamente de leitura/i)).toBeVisible();
+    await expect(dialog.getByLabel("Professional associado")).toHaveCount(0);
+    await dialog.getByLabel("Nome").fill("Receção Consulta");
+    await dialog.getByLabel("Email").fill("consulta@example.test");
+    await dialog.getByRole("button", { name: "Enviar convite" }).click();
+
+    await expect.poll(() => observed.created).toMatchObject({
+      displayName: "Receção Consulta",
+      email: "consulta@example.test",
+      professionalId: null,
+      access: [{ kind: "location", locationId: 1, preset: "consultation", capabilities: [] }],
+    });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)).toBe(false);
+  });
+
   test("covers identity, Professional linkage, states, invitations and responsive rendering", async ({ page }) => {
     await loginLegacyAdmin(page);
     const observed = await mockCanonicalAdmin(page);

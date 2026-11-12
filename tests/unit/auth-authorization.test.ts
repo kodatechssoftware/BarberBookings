@@ -9,6 +9,8 @@ import {
   hasCanonicalOwnCapability,
   hasCanonicalOwnOrTeamCapability,
   redactTeamAgendaAppointment,
+  toConsultationAppointment,
+  toConsultationProfessional,
 } from "../../server/auth-authorization";
 import { canUseRuntimeCapability } from "../../client/src/lib/auth-capabilities";
 
@@ -38,6 +40,10 @@ function context(
     access: resolveEffectiveAccess(scopes),
     isGlobalAdministrator: false,
     hasProfessionalAccessPreset: scopes.some((scope) => scope.preset === "professional"),
+    hasConsultationAccessPreset: scopes.some((scope) => scope.preset === "consultation"),
+    consultationLocationIds: scopes.flatMap((scope) => (
+      scope.kind === "location" && scope.preset === "consultation" ? [scope.locationId] : []
+    )),
     ...overrides,
   };
 }
@@ -352,6 +358,77 @@ test("team agenda redaction excludes private customer and commercial fields", ()
   assert.equal(redacted.createdAt, null);
   assert.equal(redacted.extras, undefined);
   assert.equal(redacted.canManage, false);
+});
+
+test("consultation appointment DTO is an allowlist without customer contact or financial internals", () => {
+  const dto = toConsultationAppointment({
+    id: 7,
+    locationId: locationA,
+    barberId: professionalA,
+    serviceId: 3,
+    startTime: new Date("2030-01-02T10:00:00Z"),
+    customerName: "Cliente",
+    customerPhone: "+351911111111",
+    customerEmail: "cliente@example.test",
+    privateNotes: "segredo",
+    paymentMethod: "card",
+    internalCosts: [{ amount: 10 }],
+    marginCents: 900,
+    providerToken: "secret",
+    durationMinutes: 45,
+    serviceNameSnapshot: "Servi\u00e7o",
+    servicePriceCentsSnapshot: 2500,
+    status: "booked",
+    serviceSegments: [{
+      id: 9,
+      appointmentId: 7,
+      position: 0,
+      executionStage: 0,
+      serviceId: 3,
+      barberId: professionalA,
+      startTime: new Date("2030-01-02T10:00:00Z"),
+      durationMinutes: 45,
+      bufferBeforeMinutesSnapshot: 15,
+      serviceNameSnapshot: "Servi\u00e7o",
+      servicePriceCentsSnapshot: 2500,
+      unexpectedSensitiveField: "hidden",
+    }],
+  });
+  assert.deepEqual(Object.keys(dto).sort(), [
+    "barberId", "canManage", "consultationView", "customerName", "durationMinutes",
+    "id", "locationId", "serviceId", "serviceNameSnapshot", "servicePriceCentsSnapshot",
+    "serviceSegments", "startTime", "status",
+  ].sort());
+  assert.equal("customerPhone" in dto, false);
+  assert.equal("customerEmail" in dto, false);
+  assert.equal("paymentMethod" in dto, false);
+  assert.equal("bufferBeforeMinutesSnapshot" in dto.serviceSegments[0], false);
+  assert.equal("unexpectedSensitiveField" in dto.serviceSegments[0], false);
+});
+
+test("consultation professional DTO excludes contact, credential and compensation fields", () => {
+  const dto = toConsultationProfessional({
+    id: professionalA,
+    name: "Profissional",
+    specialty: "Est\u00e9tica",
+    avatar: "/avatar.png",
+    color: "#c88192",
+    isVisible: true,
+    serviceIds: [1, 2],
+    email: "private@example.test",
+    password: "secret",
+    compensationModel: "commission",
+    commissionPercent: 50,
+    chairRentCents: 10000,
+    privateNotes: "hidden",
+  });
+  assert.deepEqual(Object.keys(dto).sort(), [
+    "avatar", "color", "id", "isVisible", "name", "serviceIds", "specialty",
+  ]);
+  assert.equal("email" in dto, false);
+  assert.equal("password" in dto, false);
+  assert.equal("compensationModel" in dto, false);
+  assert.equal("privateNotes" in dto, false);
 });
 
 test("frontend capability checks prefer canonical access and preserve legacy fallbacks", () => {

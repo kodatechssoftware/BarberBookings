@@ -115,7 +115,7 @@ test("manual WhatsApp follow-ups are feature-gated, team-scoped and omit custome
 test("parallel compatibility configuration is location-scoped and capability protected", async () => {
   const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
   assert.ok(source.includes(
-    'app.get("/api/admin/parallel-service-compatibilities", requireCatalogView',
+    'app.get("/api/admin/parallel-service-compatibilities", requireCatalogLocationManage',
   ));
   assert.ok(source.includes(
     'app.put("/api/admin/parallel-service-compatibilities", requireCatalogLocationManage',

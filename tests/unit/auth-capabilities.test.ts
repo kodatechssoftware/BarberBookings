@@ -4,6 +4,7 @@ import {
   accessPresets,
   capabilityCodes,
   capabilityRegistry,
+  consultationCapabilityCodes,
   hasCapability,
   hasCapabilityAtLocation,
   hasOwnCapability,
@@ -113,6 +114,16 @@ test("the Professional preset contains exactly the approved defaults", () => {
   ] as const satisfies readonly CapabilityCode[]) {
     assert.equal(professionalCapabilityCodes.includes(excluded as never), false, excluded);
   }
+});
+
+test("the Consultation preset is an explicit read-only allowlist", () => {
+  const expected = ["agenda.view_team", "team.view", "catalog.view"] as const;
+  assert.deepEqual(consultationCapabilityCodes, expected);
+  assert.deepEqual(accessPresets.consultation.capabilities, expected);
+  assert.equal(accessPresets.consultation.reserved, false);
+  assert.equal(consultationCapabilityCodes.some((capability) => capability.includes("manage")), false);
+  assert.equal(consultationCapabilityCodes.some((capability) => capability.includes("create")), false);
+  assert.equal(consultationCapabilityCodes.some((capability) => capability.includes("export")), false);
 });
 
 test("global grants apply everywhere while local grants stay in their location", () => {
