@@ -22,6 +22,13 @@ import {
   type AppointmentAvailabilityWindowInput,
 } from "./storage";
 import { barberAvatarVersion, decodeBarberAvatar, referencedBarberId } from "./barber-avatars";
+import { teamProfileUpdateSchema } from "@shared/team-profiles";
+import {
+  getAdminTeamProfile,
+  listPublicTeamProfiles,
+  saveAdminTeamProfile,
+  TeamProfileError,
+} from "./team-profiles";
 import {
   api,
   serviceCategoryCreateInputSchema,
@@ -2855,10 +2862,83 @@ export async function registerRoutes(
       parallelServiceScheduling: effective.parallelServiceScheduling,
       notificationDeliveryStatus: effective.notificationDeliveryStatus,
       consultationRole: effective.consultationRole,
+      teamProfiles: effective.teamProfiles,
       appointmentRequestsAvailable: beautyV2MasterEnabled
         && resolvedBusinessConfig.vertical === "beauty"
         && settings.some((setting) => setting.featureName === "appointmentRequests" && setting.enabled),
     });
+  });
+
+  const requireTeamProfilesEnabled = async (_req: Request, res: Response, next: NextFunction) => {
+    if (!beautyV2MasterEnabled || resolvedBusinessConfig.vertical !== "beauty") {
+      return res.status(404).json({ message: "Funcionalidade indisponível." });
+    }
+    const effective = resolveBeautyV2Features({
+      masterEnabled: beautyV2MasterEnabled,
+      settings: await listBeautyV2FeatureSettings(),
+      locationId: Number(res.locals.locationId),
+    });
+    if (!effective.teamProfiles) return res.status(404).json({ message: "Perfil não disponível." });
+    next();
+  };
+
+  app.get("/api/public/team-profiles", requireTeamProfilesEnabled, async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await listPublicTeamProfiles(pool, Number(res.locals.locationId)));
+  });
+
+  app.get("/api/public/team-profiles/:slug", requireTeamProfilesEnabled, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const profiles = await listPublicTeamProfiles(pool, Number(res.locals.locationId), req.params.slug);
+    if (!profiles[0]) return res.status(404).json({ message: "Perfil não disponível." });
+    res.json(profiles[0]);
+  });
+
+  app.get("/api/admin/team-profiles/:barberId", requireTeamGlobalManage, requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const barberId = parsePositiveInteger(req.params.barberId);
+      if (barberId === null) return res.status(400).json({ message: "Profissional inválida." });
+      res.json(await getAdminTeamProfile(pool, Number(res.locals.locationId), barberId));
+    } catch (error) {
+      if (error instanceof TeamProfileError) return res.status(error.status).json({ code: error.code, message: error.message });
+      console.error("Load team profile error:", error);
+      res.status(500).json({ message: "Não foi possível carregar o perfil público." });
+    }
+  });
+
+  app.put("/api/admin/team-profiles/:barberId", requireTeamGlobalManage, requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const barberId = parsePositiveInteger(req.params.barberId);
+      if (barberId === null) return res.status(400).json({ message: "Profissional inválida." });
+      const profile = teamProfileUpdateSchema.parse(req.body);
+      const canonicalContext = getCanonicalRequestAuthContext(req);
+      const updated = await saveAdminTeamProfile(pool, {
+        locationId: Number(res.locals.locationId),
+        barberId,
+        actorUserId: canonicalContext?.user.id ?? null,
+        profile,
+      });
+      recordAuditLog(req, {
+        action: "team_profile.updated",
+        entityType: "barber_public_profile",
+        entityId: barberId,
+        summary: `Perfil público atualizado: ${updated.name}`,
+        metadata: {
+          professionalId: barberId,
+          published: updated.isPublished,
+          qualificationCount: updated.qualifications.length,
+          testimonialCount: updated.testimonials.length,
+        },
+      });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.issues[0]?.message ?? "Dados inválidos.", field: error.issues[0]?.path.join(".") });
+      }
+      if (error instanceof TeamProfileError) return res.status(error.status).json({ code: error.code, message: error.message });
+      console.error("Save team profile error:", error);
+      res.status(500).json({ message: "Não foi possível guardar o perfil público." });
+    }
   });
 
   const parallelCompatibilityPairSchema = z.object({

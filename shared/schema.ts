@@ -46,6 +46,8 @@ export const appointmentInternalCostsIdSeq = appPgSchema?.sequence("appointment_
 export const usersIdSeq = appPgSchema?.sequence("users_id_seq");
 export const userAccessScopesIdSeq = appPgSchema?.sequence("user_access_scopes_id_seq");
 export const userInvitesIdSeq = appPgSchema?.sequence("user_invites_id_seq");
+export const barberQualificationsIdSeq = appPgSchema?.sequence("barber_qualifications_id_seq");
+export const barberTestimonialsIdSeq = appPgSchema?.sequence("barber_testimonials_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -935,6 +937,82 @@ export const barberServices = appPgTable("barber_services", {
     .on(table.locationId, table.serviceId, table.barberId),
 }));
 
+export const barberPublicProfiles = appPgTable("barber_public_profiles", {
+  barberId: integer("barber_id").notNull(),
+  locationId: integer("location_id").notNull(),
+  slug: text("slug").notNull(),
+  displayOrder: integer("display_order").notNull().default(0),
+  isPublished: boolean("is_published").notNull().default(false),
+  publicationAuthorizedAt: timestamp("publication_authorized_at"),
+  publicationAuthorizedByUserId: integer("publication_authorized_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.barberId, table.locationId] }),
+  barberLocationFk: foreignKey({
+    name: "barber_public_profiles_barber_location_fkey",
+    columns: [table.barberId, table.locationId],
+    foreignColumns: [barberLocations.barberId, barberLocations.locationId],
+  }).onDelete("cascade"),
+  locationSlugUnique: uniqueIndex("barber_public_profiles_location_slug_idx").on(table.locationId, table.slug),
+  publicListingIdx: index("barber_public_profiles_public_listing_idx")
+    .on(table.locationId, table.displayOrder, table.barberId)
+    .where(sql`${table.isPublished} = true`),
+  slugCheck: check("barber_public_profiles_slug_check", sql`${table.slug} = lower(${table.slug}) AND ${table.slug} ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(${table.slug}) BETWEEN 1 AND 80`),
+  displayOrderCheck: check("barber_public_profiles_display_order_check", sql`${table.displayOrder} >= 0`),
+  publicationCheck: check("barber_public_profiles_publication_check", sql`${table.isPublished} = false OR ${table.publicationAuthorizedAt} IS NOT NULL`),
+  timestampsCheck: check("barber_public_profiles_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+}));
+
+export const barberQualifications = appPgTable("barber_qualifications", {
+  id: idColumn("barber_qualifications_id_seq"),
+  barberId: integer("barber_id").notNull(),
+  locationId: integer("location_id").notNull(),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  issuer: text("issuer"),
+  completedYear: integer("completed_year"),
+  description: text("description"),
+  displayOrder: integer("display_order").notNull().default(0),
+  isPublished: boolean("is_published").notNull().default(false),
+  publicationAuthorizedAt: timestamp("publication_authorized_at"),
+  publicationAuthorizedByUserId: integer("publication_authorized_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  barberLocationFk: foreignKey({
+    name: "barber_qualifications_barber_location_fkey",
+    columns: [table.barberId, table.locationId],
+    foreignColumns: [barberLocations.barberId, barberLocations.locationId],
+  }).onDelete("cascade"),
+  profileIdx: index("barber_qualifications_profile_idx").on(table.locationId, table.barberId, table.displayOrder, table.id),
+  kindCheck: check("barber_qualifications_kind_check", sql`${table.kind} IN ('course', 'training', 'diploma', 'certification')`),
+  publicationCheck: check("barber_qualifications_publication_check", sql`${table.isPublished} = false OR ${table.publicationAuthorizedAt} IS NOT NULL`),
+}));
+
+export const barberTestimonials = appPgTable("barber_testimonials", {
+  id: idColumn("barber_testimonials_id_seq"),
+  barberId: integer("barber_id").notNull(),
+  locationId: integer("location_id").notNull(),
+  authorDisplayName: text("author_display_name").notNull(),
+  quote: text("quote").notNull(),
+  sourceLabel: text("source_label"),
+  displayOrder: integer("display_order").notNull().default(0),
+  isPublished: boolean("is_published").notNull().default(false),
+  publicationAuthorizedAt: timestamp("publication_authorized_at"),
+  publicationAuthorizedByUserId: integer("publication_authorized_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  barberLocationFk: foreignKey({
+    name: "barber_testimonials_barber_location_fkey",
+    columns: [table.barberId, table.locationId],
+    foreignColumns: [barberLocations.barberId, barberLocations.locationId],
+  }).onDelete("cascade"),
+  profileIdx: index("barber_testimonials_profile_idx").on(table.locationId, table.barberId, table.displayOrder, table.id),
+  publicationCheck: check("barber_testimonials_publication_check", sql`${table.isPublished} = false OR ${table.publicationAuthorizedAt} IS NOT NULL`),
+}));
+
 export const barberInvites = appPgTable("barber_invites", {
   id: idColumn("barber_invites_id_seq"),
   barberId: integer("barber_id").references(() => barbers.id).notNull(),
@@ -1819,6 +1897,9 @@ export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
 export type BarberAvailability = typeof barberAvailability.$inferSelect;
 export type BarberService = typeof barberServices.$inferSelect;
+export type BarberPublicProfile = typeof barberPublicProfiles.$inferSelect;
+export type BarberQualification = typeof barberQualifications.$inferSelect;
+export type BarberTestimonial = typeof barberTestimonials.$inferSelect;
 export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;
 export type AuditLog = typeof auditLogs.$inferSelect;
