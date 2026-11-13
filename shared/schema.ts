@@ -231,6 +231,39 @@ export const businessFeatureSettings = appPgTable("business_feature_settings", {
     .where(sql`${table.locationId} IS NOT NULL`),
 }));
 
+export const locationGoogleReviewSettings = appPgTable("location_google_review_settings", {
+  locationId: integer("location_id").primaryKey().references(() => locations.id, { onDelete: "cascade" }),
+  googlePlaceId: text("google_place_id"),
+  googleMapsUrl: text("google_maps_url").notNull(),
+  googleReviewRequestUrl: text("google_review_request_url").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  placeIdCheck: check("location_google_review_settings_place_id_check", sql`
+    ${table.googlePlaceId} IS NULL
+    OR (
+      ${table.googlePlaceId} = btrim(${table.googlePlaceId})
+      AND length(${table.googlePlaceId}) BETWEEN 1 AND 512
+      AND ${table.googlePlaceId} ~ '^[A-Za-z0-9_-]+$'
+    )
+  `),
+  mapsUrlCheck: check("location_google_review_settings_maps_url_check", sql`
+    length(${table.googleMapsUrl}) BETWEEN 1 AND 2048
+    AND (
+      ${table.googleMapsUrl} ~ '^https://(www\\.)?google\\.com/maps(?:[/?#].*)?$'
+      OR ${table.googleMapsUrl} ~ '^https://maps\\.google\\.com(?:[/?#].*)?$'
+    )
+  `),
+  reviewUrlCheck: check("location_google_review_settings_review_url_check", sql`
+    length(${table.googleReviewRequestUrl}) BETWEEN 1 AND 2048
+    AND (
+      ${table.googleReviewRequestUrl} ~ '^https://search\\.google\\.com/local/writereview\\?placeid=[A-Za-z0-9_-]+$'
+      OR ${table.googleReviewRequestUrl} ~ '^https://g\\.page/r/[A-Za-z0-9_-]+/review$'
+    )
+  `),
+  timestampsCheck: check("location_google_review_settings_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+}));
+
 /** Canonical login identity. Legacy admins/barbers remain authoritative until auth cutover. */
 export const users = appPgTable("users", {
   id: idColumn("users_id_seq"),
@@ -1893,6 +1926,7 @@ export type UserAccessScope = typeof userAccessScopes.$inferSelect;
 export type UserAccessScopeCapability = typeof userAccessScopeCapabilities.$inferSelect;
 export type UserInvite = typeof userInvites.$inferSelect;
 export type BusinessFeatureSetting = typeof businessFeatureSettings.$inferSelect;
+export type LocationGoogleReviewSetting = typeof locationGoogleReviewSettings.$inferSelect;
 export type Blacklist = typeof blacklist.$inferSelect;
 export type ShopAvailability = typeof shopAvailability.$inferSelect;
 export type BarberAvailability = typeof barberAvailability.$inferSelect;

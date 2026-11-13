@@ -29,6 +29,13 @@ import {
   saveAdminTeamProfile,
   TeamProfileError,
 } from "./team-profiles";
+import { googleReviewSettingsUpdateSchema } from "@shared/google-reviews";
+import {
+  getAdminGoogleReviewSettings,
+  getPublicGoogleReviewsPresentation,
+  GoogleReviewSettingsError,
+  saveAdminGoogleReviewSettings,
+} from "./google-reviews";
 import {
   api,
   serviceCategoryCreateInputSchema,
@@ -2863,6 +2870,7 @@ export async function registerRoutes(
       notificationDeliveryStatus: effective.notificationDeliveryStatus,
       consultationRole: effective.consultationRole,
       teamProfiles: effective.teamProfiles,
+      googleReviews: effective.googleReviews,
       appointmentRequestsAvailable: beautyV2MasterEnabled
         && resolvedBusinessConfig.vertical === "beauty"
         && settings.some((setting) => setting.featureName === "appointmentRequests" && setting.enabled),
@@ -2938,6 +2946,66 @@ export async function registerRoutes(
       if (error instanceof TeamProfileError) return res.status(error.status).json({ code: error.code, message: error.message });
       console.error("Save team profile error:", error);
       res.status(500).json({ message: "Não foi possível guardar o perfil público." });
+    }
+  });
+
+  const requireGoogleReviewsEnabled = async (_req: Request, res: Response, next: NextFunction) => {
+    if (!beautyV2MasterEnabled || resolvedBusinessConfig.vertical !== "beauty") {
+      return res.status(404).json({ message: "Funcionalidade indisponível." });
+    }
+    const effective = resolveBeautyV2Features({
+      masterEnabled: beautyV2MasterEnabled,
+      settings: await listBeautyV2FeatureSettings(),
+      locationId: Number(res.locals.locationId),
+    });
+    if (!effective.googleReviews) return res.status(404).json({ message: "Avaliações Google indisponíveis." });
+    next();
+  };
+
+  app.get("/api/public/google-reviews", requireGoogleReviewsEnabled, async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const presentation = await getPublicGoogleReviewsPresentation(pool, Number(res.locals.locationId));
+    if (!presentation) return res.status(404).json({ message: "Avaliações Google ainda não configuradas." });
+    return res.json(presentation);
+  });
+
+  app.get("/api/admin/google-reviews", requireLocationsManage, requireGoogleReviewsEnabled, async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      return res.json(await getAdminGoogleReviewSettings(pool, Number(res.locals.locationId)));
+    } catch (error) {
+      if (error instanceof GoogleReviewSettingsError) return res.status(error.status).json({ code: error.code, message: error.message });
+      console.error("Load Google review settings error:", error);
+      return res.status(500).json({ message: "Não foi possível carregar a configuração das avaliações Google." });
+    }
+  });
+
+  app.put("/api/admin/google-reviews", requireLocationsManage, requireGoogleReviewsEnabled, async (req, res) => {
+    try {
+      const settings = googleReviewSettingsUpdateSchema.parse(req.body);
+      const updated = await saveAdminGoogleReviewSettings(pool, {
+        locationId: Number(res.locals.locationId),
+        settings,
+      });
+      recordAuditLog(req, {
+        action: "google_reviews.settings_updated",
+        entityType: "location_google_review_settings",
+        entityId: Number(res.locals.locationId),
+        locationId: Number(res.locals.locationId),
+        summary: "Ligações oficiais das avaliações Google atualizadas.",
+        metadata: {
+          configured: true,
+          placeIdConfigured: Boolean(updated.googlePlaceId),
+        },
+      });
+      return res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.issues[0]?.message ?? "Configuração inválida.", field: error.issues[0]?.path.join(".") });
+      }
+      if (error instanceof GoogleReviewSettingsError) return res.status(error.status).json({ code: error.code, message: error.message });
+      console.error("Save Google review settings error:", error);
+      return res.status(500).json({ message: "Não foi possível guardar a configuração das avaliações Google." });
     }
   });
 
