@@ -10,6 +10,7 @@ export type BeautyV2PublicFeatures = {
   notificationDeliveryStatus: boolean;
   consultationRole: boolean;
   teamProfiles: boolean;
+  googleReviews: boolean;
   appointmentRequestsAvailable: boolean;
 };
 

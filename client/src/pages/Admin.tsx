@@ -59,6 +59,7 @@ import { AppointmentRequestsManager } from "@/components/admin/AppointmentReques
 import { AdminRequestNotificationBell } from "@/components/admin/AdminRequestNotificationBell";
 import { ParallelServiceCompatibilityManager } from "@/components/admin/ParallelServiceCompatibilityManager";
 import { TeamProfileManager } from "@/components/admin/TeamProfileManager";
+import { GoogleReviewsSettings } from "@/components/admin/GoogleReviewsSettings";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import {
   RecurringExpenseOccurrenceDialog,
@@ -5967,6 +5968,9 @@ export default function Admin() {
                 maxLocations={multiLocationConfig?.maxLocations ?? 1}
                 mode={multiLocationConfig?.enabled ? "multiple" : "single"}
               />
+              {beautyV2Features?.googleReviews === true && notificationLocationId ? (
+                <GoogleReviewsSettings locationId={notificationLocationId} />
+              ) : null}
             </TabsContent>
           )}
 

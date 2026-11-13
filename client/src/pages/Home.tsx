@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Clock, ExternalLink, MapPin } from "lucide-react";
 import { Link } from "wouter";
@@ -19,10 +19,13 @@ import { groupServicesForDisplay } from "@/lib/service-groups";
 import { getProfessionalAvatar } from "@/lib/professional-presentation";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import { usePublicTeamProfiles } from "@/hooks/use-team-profiles";
+import { usePublicGoogleReviews } from "@/hooks/use-google-reviews";
 import { resolvePublicBookingPrimaryAction } from "@shared/business/copy/appointment-request.pt";
 
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
 const shouldPreloadAdminPage = !/^https?:\/\//i.test(adminUrl);
+const GoogleReviewsSection = lazy(() => import("@/components/public/GoogleReviewsSection")
+  .then((module) => ({ default: module.GoogleReviewsSection })));
 
 const navItems = [
   { id: "services", label: "Serviços" },
@@ -152,6 +155,10 @@ export default function Home() {
   );
   const { data: publicTeamProfiles = [] } = usePublicTeamProfiles({
     enabled: beautyV2Features?.teamProfiles === true,
+    locationId: selectedLocation.id > 0 ? selectedLocation.id : null,
+  });
+  const { data: googleReviewsPresentation } = usePublicGoogleReviews({
+    enabled: beautyV2Features?.googleReviews === true,
     locationId: selectedLocation.id > 0 ? selectedLocation.id : null,
   });
   const publicProfilesByProfessionalId = useMemo(
@@ -459,6 +466,12 @@ export default function Home() {
           )}
         </div>
       </section>
+
+      {googleReviewsPresentation ? (
+        <Suspense fallback={null}>
+          <GoogleReviewsSection presentation={googleReviewsPresentation} />
+        </Suspense>
+      ) : null}
 
       <section id="location" className="home-section home-location-section scroll-mt-20 py-16 md:py-24">
         <div className="container mx-auto px-4">
