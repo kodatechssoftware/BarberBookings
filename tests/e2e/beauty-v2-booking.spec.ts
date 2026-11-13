@@ -1088,3 +1088,62 @@ test("Admin appointment calendar keeps every Beauty day state readable", async (
     expect(await calendar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   }
 });
+
+test("published team profile is responsive and starts booking with the selected professional", async ({ page }, testInfo) => {
+  await mockBeautyV2(page);
+  await page.unroute("**/api/beauty-v2/features");
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true,
+    appointmentRequests: true,
+    multiServiceAppointments: true,
+    parallelServiceScheduling: true,
+    notificationDeliveryStatus: false,
+    consultationRole: false,
+    teamProfiles: true,
+    appointmentRequestsAvailable: true,
+  } }));
+  await page.route("**/api/public/team-profiles/mariana", (route) => route.fulfill({ json: {
+    professionalId: 21,
+    slug: "mariana",
+    name: "Mariana Silva",
+    specialty: "Unhas e pedicure",
+    bio: "Uma apresentação cuidada e autorizada.",
+    avatar: null,
+    displayOrder: 0,
+    services: [{ id: 11, name: "Manicure", duration: 45, price: 2500 }],
+    qualifications: [{ kind: "certification", title: "Nail Expert", issuer: "Academia Beauty", completedYear: 2029, description: "Formação avançada." }],
+    testimonials: [{ authorDisplayName: "Cliente autorizada", quote: "Um atendimento excelente.", sourceLabel: "Opinião autorizada" }],
+  } }));
+
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/equipa/mariana");
+    await expect(page.getByRole("heading", { name: "Mariana Silva" })).toBeVisible();
+    await expect(page.getByText("Nail Expert")).toBeVisible();
+    await expect(page.getByText("Um atendimento excelente.")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+    await page.screenshot({ path: testInfo.outputPath(`team-profile-${viewport.width}.png`), fullPage: true });
+  }
+
+  await page.getByRole("link", { name: /Pedir marcação com Mariana/ }).click();
+  await expect(page).toHaveURL(/\/booking\?barberId=21$/);
+  await page.getByRole("button", { name: /Manicure/ }).click();
+  await expect(page.getByRole("combobox", { name: /Profissional para Manicure/ })).toContainText("Ana");
+});
+
+test("team profile direct URL stays closed when the feature flag is disabled", async ({ page }) => {
+  let profileRequestCount = 0;
+  await page.route("**/api/locations", (route) => route.fulfill({ json: [location] }));
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true, appointmentRequests: true, multiServiceAppointments: true,
+    parallelServiceScheduling: false, notificationDeliveryStatus: false,
+    consultationRole: false, teamProfiles: false, appointmentRequestsAvailable: true,
+  } }));
+  await page.route("**/api/public/team-profiles/**", (route) => {
+    profileRequestCount += 1;
+    return route.fulfill({ status: 500, body: "must not be requested" });
+  });
+  await page.goto("/equipa/mariana");
+  await expect(page.getByRole("heading", { name: "Perfil não disponível" })).toBeVisible();
+  expect(profileRequestCount).toBe(0);
+});

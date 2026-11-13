@@ -54,9 +54,9 @@ function consultationContext(): CanonicalAuthContext {
   };
 }
 
-test("all 82 mutable routes are stopped before business handlers for consultation sessions", () => {
+test("all 83 mutable routes are stopped before business handlers for consultation sessions", () => {
   const routes = mutableRoutes();
-  assert.equal(routes.length, 82, "the reviewed mutation matrix changed and requires a security review");
+  assert.equal(routes.length, 83, "the reviewed mutation matrix changed and requires a security review");
   assert.deepEqual(Array.from(consultationTechnicalMutationExceptions).sort(), [
     "/api/account/password",
     "/api/admin/login",

@@ -297,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 29,
-    "an empty legacy baseline must apply every migration through 0030");
+  assert.equal(freshRun.applied.length, 30,
+    "an empty legacy baseline must apply every migration through 0031");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -322,6 +322,10 @@ try {
   ]) {
     assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable(tableName)}`)).rows[0].count), 0,
       `${tableName} must start empty`);
+  }
+  for (const tableName of ["barber_public_profiles", "barber_qualifications", "barber_testimonials"]) {
+    assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable(tableName)}`)).rows[0].count), 0,
+      `${tableName} must start empty and unpublished`);
   }
   for (const tableName of ["appointment_service_segments", "appointment_request_segments"]) {
     const executionStage = (await pool.query(`
@@ -394,7 +398,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 29);
+  assert.equal(secondFreshRun.alreadyApplied, 30);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1215,8 +1219,15 @@ try {
     "0028_appointment_request_proposal_communications.sql",
     "0029_appointment_communication_followups.sql",
     "0030_consultation_access_role.sql",
+    "0031_public_team_profiles.sql",
   ]);
   assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM information_schema.tables
+    WHERE table_schema = $1 AND table_name IN ('barber_public_profiles', 'barber_qualifications', 'barber_testimonials')
+  `, [schema])).rows[0].count), 3, "0031 creates the three additive public-profile tables");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("barber_public_profiles")}`)).rows[0].count), 0,
+    "0031 must not publish existing professionals automatically");
   assert.deepEqual((await pool.query(`
     SELECT position, execution_stage FROM ${table("appointment_service_segments")}
     WHERE appointment_id = $1 ORDER BY position
@@ -1549,7 +1560,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 29);
+  assert.equal(secondCompensationRun.alreadyApplied, 30);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2321,7 +2332,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0030, default-off Beauty v2 feature settings, additive sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0031, default-off Beauty v2 feature settings, additive public team profiles, sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();
