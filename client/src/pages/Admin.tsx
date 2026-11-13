@@ -58,6 +58,7 @@ import { UserAccessManager } from "@/components/admin/UserAccessManager";
 import { AppointmentRequestsManager } from "@/components/admin/AppointmentRequestsManager";
 import { AdminRequestNotificationBell } from "@/components/admin/AdminRequestNotificationBell";
 import { ParallelServiceCompatibilityManager } from "@/components/admin/ParallelServiceCompatibilityManager";
+import { TeamProfileManager } from "@/components/admin/TeamProfileManager";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import {
   RecurringExpenseOccurrenceDialog,
@@ -4943,6 +4944,9 @@ export default function Admin() {
                       />
                     )}
                     <div className="flex flex-wrap gap-2">
+                      {canManageTeamGlobal && beautyV2Features?.teamProfiles === true && (
+                        <TeamProfileManager professionalId={barber.id} professionalName={barber.name} />
+                      )}
                       {canEditProfessional && <Dialog open={editingBarberId === barber.id} onOpenChange={(open) => {
                         if (!open && savingBarberIdRef.current === barber.id) return;
                         setEditingBarberId(open ? barber.id : null);

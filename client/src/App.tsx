@@ -23,6 +23,8 @@ const BarberInvite = lazy(() => import("@/pages/BarberInvite"));
 const UserInvite = lazy(() => import("@/pages/UserInvite"));
 const Setup = lazy(() => import("@/pages/Setup"));
 const AppointmentRequestProposal = lazy(() => import("@/pages/AppointmentRequestProposal"));
+const TeamProfile = lazy(() => import("@/pages/TeamProfile"));
+const TeamDirectory = lazy(() => import("@/pages/TeamDirectory"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function PageLoader() {
@@ -47,6 +49,8 @@ function Router() {
         <Route path="/user-invite">{() => <UserInvite />}</Route>
         <Route path="/setup">{() => <Setup />}</Route>
         <Route path="/appointment-request/proposal">{() => <AppointmentRequestProposal />}</Route>
+        <Route path="/equipa">{() => <TeamDirectory />}</Route>
+        <Route path="/equipa/:slug">{(params) => <TeamProfile slug={params.slug} />}</Route>
         <Route>{() => <NotFound />}</Route>
       </Switch>
     </Suspense>

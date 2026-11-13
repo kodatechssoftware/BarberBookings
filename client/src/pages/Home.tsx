@@ -18,6 +18,7 @@ import { resolveLocationMapLinks } from "@shared/location-maps";
 import { groupServicesForDisplay } from "@/lib/service-groups";
 import { getProfessionalAvatar } from "@/lib/professional-presentation";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
+import { usePublicTeamProfiles } from "@/hooks/use-team-profiles";
 import { resolvePublicBookingPrimaryAction } from "@shared/business/copy/appointment-request.pt";
 
 const adminUrl = import.meta.env.VITE_ADMIN_URL || "/admin";
@@ -148,6 +149,14 @@ export default function Home() {
   const primaryBookingAction = resolvePublicBookingPrimaryAction(
     Boolean(beautyV2Features?.appointmentRequests),
     shopBranding.heroPrimaryCtaLabel,
+  );
+  const { data: publicTeamProfiles = [] } = usePublicTeamProfiles({
+    enabled: beautyV2Features?.teamProfiles === true,
+    locationId: selectedLocation.id > 0 ? selectedLocation.id : null,
+  });
+  const publicProfilesByProfessionalId = useMemo(
+    () => new Map(publicTeamProfiles.map((profile) => [profile.professionalId, profile])),
+    [publicTeamProfiles],
   );
   const selectedMapLinks = resolveLocationMapLinks(selectedLocation);
   const selectedMapKey = `${selectedLocation.id}:${selectedMapLinks.mapEmbedUrl}`;
@@ -410,6 +419,7 @@ export default function Home() {
               <p className="mt-4 text-sm leading-relaxed text-gray-400 md:text-base">
                 {homeCopy.teamDescription}
               </p>
+              {beautyV2Features?.teamProfiles && publicTeamProfiles.length > 0 && <Link href="/equipa" className="mt-5 inline-flex min-h-10 items-center text-sm font-semibold text-primary hover:underline">Conhecer toda a equipa</Link>}
             </div>
           </div>
 
@@ -438,7 +448,9 @@ export default function Home() {
                         <h3 className="truncate text-2xl font-bold text-white">{barber.name}</h3>
                         <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-primary">{barber.specialty}</p>
                         {barber.bio && <p className="mt-4 line-clamp-3 text-sm leading-relaxed text-gray-400">{barber.bio}</p>}
+                        {publicProfilesByProfessionalId.get(barber.id)?.services.length ? <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-gray-500">{publicProfilesByProfessionalId.get(barber.id)!.services.map((service) => service.name).join(" · ")}</p> : null}
                       </div>
+                      {publicProfilesByProfessionalId.has(barber.id) && <Link href={`/equipa/${publicProfilesByProfessionalId.get(barber.id)!.slug}`} className="mt-4 inline-flex min-h-10 items-center text-sm font-semibold text-primary hover:underline">Conhecer perfil</Link>}
                     </div>
                   </div>
                 </motion.article>

@@ -137,6 +137,11 @@ function PanelMessage({
 
 export default function BeautyV2Booking({ features }: { features: BeautyV2PublicFeatures }) {
   const { toast } = useToast();
+  const preferredProfessionalId = useMemo(() => {
+    const value = new URLSearchParams(window.location.search).get("barberId");
+    const parsed = value ? Number(value) : NaN;
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }, []);
   const [locationId, setLocationId] = useState<number | null>(null);
   const [selections, setSelections] = useState<Selection[]>([]);
   const [date, setDate] = useState<Date | undefined>(startOfToday());
@@ -228,10 +233,14 @@ export default function BeautyV2Booking({ features }: { features: BeautyV2Public
     && format(candidate, "yyyy-MM-dd") <= bookingWindow.maxDate);
 
   const addService = (serviceId: number) => {
+    const preferredBarberId = preferredProfessionalId !== null
+      && canBarberPerformService(visibleBarbers.find((barber) => barber.id === preferredProfessionalId), serviceId)
+      ? preferredProfessionalId
+      : null;
     if (!effectiveFeatures.multiServiceAppointments) {
-      setSelections([{ serviceId, barberId: null }]);
+      setSelections([{ serviceId, barberId: preferredBarberId }]);
     } else if (!selectedIds.has(serviceId)) {
-      setSelections((current) => [...current, { serviceId, barberId: null }]);
+      setSelections((current) => [...current, { serviceId, barberId: preferredBarberId }]);
     }
   };
 
