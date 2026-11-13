@@ -1121,6 +1121,14 @@ test("published team profile is responsive and starts booking with the selected 
     await expect(page.getByRole("heading", { name: "Mariana Silva" })).toBeVisible();
     await expect(page.getByText("Nail Expert")).toBeVisible();
     await expect(page.getByText("Um atendimento excelente.")).toBeVisible();
+    for (const text of [
+      "Uma apresentação cuidada e autorizada.",
+      "Manicure · 45 min",
+      "Formação avançada.",
+      "Um atendimento excelente.",
+    ]) {
+      expect(await contrastRatio(page.getByText(text).first())).toBeGreaterThanOrEqual(4.5);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
     await page.screenshot({ path: testInfo.outputPath(`team-profile-${viewport.width}.png`), fullPage: true });
   }
