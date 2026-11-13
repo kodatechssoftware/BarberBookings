@@ -1155,3 +1155,97 @@ test("team profile direct URL stays closed when the feature flag is disabled", a
   await expect(page.getByRole("heading", { name: "Perfil não disponível" })).toBeVisible();
   expect(profileRequestCount).toBe(0);
 });
+
+test("Google review links are responsive, official and absent when the feature is disabled", async ({ page }, testInfo) => {
+  await mockBeautyV2(page);
+  await page.unroute("**/api/beauty-v2/features");
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true, appointmentRequests: true, multiServiceAppointments: true,
+    parallelServiceScheduling: false, notificationDeliveryStatus: false,
+    consultationRole: false, teamProfiles: false, googleReviews: true,
+    appointmentRequestsAvailable: true,
+  } }));
+  const reviewsUrl = "https://www.google.com/maps/place/Beauty+Studio+QA";
+  const reviewRequestUrl = "https://g.page/r/CX_beauty-qa/review";
+  let requestCount = 0;
+  await page.route("**/api/public/google-reviews", (route) => {
+    requestCount += 1;
+    return route.fulfill({ json: {
+      provider: "google", source: "links",
+      links: { reviewsUrl, reviewRequestUrl }, summary: null, reviews: [],
+    } });
+  });
+
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    const section = page.locator("#google-reviews");
+    await expect(section.getByRole("heading", { name: /opini/i })).toBeVisible();
+    await expect(section.getByRole("link", { name: /Ver .* no Google/ })).toHaveAttribute("href", reviewsUrl);
+    await expect(section.getByRole("link", { name: /Deixar uma/ })).toHaveAttribute("href", reviewRequestUrl);
+    await expect(section.locator("[data-rating], [data-review-count], [data-google-review]" )).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+    await page.screenshot({ path: testInfo.outputPath(`google-reviews-${viewport.width}.png`), fullPage: true });
+  }
+  expect(requestCount).toBe(2);
+
+  await page.unroute("**/api/beauty-v2/features");
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true, appointmentRequests: true, multiServiceAppointments: true,
+    parallelServiceScheduling: false, notificationDeliveryStatus: false,
+    consultationRole: false, teamProfiles: false, googleReviews: false,
+    appointmentRequestsAvailable: true,
+  } }));
+  const requestsBeforeDisabledLoad = requestCount;
+  await page.goto("/");
+  await expect(page.locator("#google-reviews")).toHaveCount(0);
+  expect(requestCount).toBe(requestsBeforeDisabledLoad);
+});
+
+test("authorized Admin configures and previews official Google review links", async ({ page }) => {
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true, appointmentRequests: true, multiServiceAppointments: true,
+    parallelServiceScheduling: false, notificationDeliveryStatus: false,
+    consultationRole: false, teamProfiles: false, googleReviews: true,
+    appointmentRequestsAvailable: true,
+  } }));
+  const updates: unknown[] = [];
+  await page.route("**/api/admin/google-reviews", async (route) => {
+    if (route.request().method() === "PUT") {
+      const input = route.request().postDataJSON() as Record<string, unknown>;
+      updates.push(input);
+      return route.fulfill({ json: {
+        locationId: 1, configured: true, ...input, updatedAt: "2030-06-01T08:00:00.000Z",
+      } });
+    }
+    return route.fulfill({ json: {
+      locationId: 1, configured: false, googlePlaceId: null,
+      googleMapsUrl: "", googleReviewRequestUrl: "", updatedAt: null,
+    } });
+  });
+
+  await page.goto("/admin");
+  await page.getByRole("tab", { name: /Estabelecimento|Localiza/ }).click();
+  await expect(page.getByText(/Configure apenas as liga/)).toBeVisible();
+  await expect(page.getByText(/permanece oculta/)).toBeVisible();
+  await page.getByLabel(/Liga.* ver as avalia/).fill("https://www.google.com/maps/place/Beauty+Studio+QA");
+  await page.getByLabel(/Liga.* deixar uma avalia/).fill("https://g.page/r/CX_beauty-qa/review");
+  await page.getByLabel(/Google Place ID/).fill("ChIJN1t_tDeuEmsRUsoyG83frY4");
+  await expect(page.getByText(/visualiza/).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /Ver .* no Google/ })).toBeVisible();
+  await page.getByRole("button", { name: /Guardar liga/ }).click();
+  await expect.poll(() => updates.length).toBe(1);
+  expect(updates[0]).toEqual({
+    googlePlaceId: "ChIJN1t_tDeuEmsRUsoyG83frY4",
+    googleMapsUrl: "https://www.google.com/maps/place/Beauty+Studio+QA",
+    googleReviewRequestUrl: "https://g.page/r/CX_beauty-qa/review",
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByText(/Configure apenas as liga/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
+});
