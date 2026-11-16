@@ -303,12 +303,14 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
 
   test("returns only occupancy intersecting the requested Lisbon calendar date", async ({ request }) => {
     await loginAdmin(request);
-    const nextYear = new Date().getUTCFullYear() + 1;
-    const appointmentStart = new Date(Date.UTC(nextYear, 0, 15, 10, 0));
-    const appointmentDate = `${nextYear}-01-15`;
-    const previousDate = `${nextYear}-01-14`;
-    const unrelatedDate = `${nextYear}-01-13`;
-    const createResponse = await request.post("/api/appointments/block", { data: {
+    // Keep this fixture away from the 60-100 day ranges used by the other
+    // serial scenarios. A fixed 15 January collided with futureStart(62)
+    // whenever the suite ran on 14 November.
+    const appointmentStart = futureStart(140, 10);
+    const appointmentDate = appointmentStart.toISOString().slice(0, 10);
+    const previousDate = new Date(appointmentStart.getTime() - 86400000).toISOString().slice(0, 10);
+    const unrelatedDate = new Date(appointmentStart.getTime() - 2 * 86400000).toISOString().slice(0, 10);
+    const appointmentInput = {
       barberId: eligibleProfessional.id,
       serviceId: service.id,
       serviceMode: "existing",
@@ -318,9 +320,17 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
       customerEmail: "",
       isManualBooking: true,
       allowOutsideHours: true,
-    } });
+    };
+    const createResponse = await request.post("/api/appointments/block", { data: appointmentInput });
     expect(createResponse.status(), await createResponse.text()).toBe(201);
     const appointment = (await createResponse.json()).appointments[0];
+
+    const overlappingResponse = await request.post("/api/appointments/block", { data: {
+      ...appointmentInput,
+      name: "Date filter overlap QA",
+      phone: "+351912640098",
+    } });
+    expect(overlappingResponse.status(), await overlappingResponse.text()).toBe(409);
 
     const onAppointmentDate = await request.get(
       `/api/appointments/public?barberId=${eligibleProfessional.id}&date=${appointmentDate}`,
@@ -331,7 +341,8 @@ test.describe.serial("Beauty service-first and operational service buffers", () 
     const onUnrelatedDate = await request.get(
       `/api/appointments/public?barberId=${eligibleProfessional.id}&date=${unrelatedDate}`,
     );
-    expect((await onAppointmentDate.json()).some((item: any) => item.id === appointment.id)).toBe(true);
+    const appointmentsOnDate = await onAppointmentDate.json();
+    expect(appointmentsOnDate.filter((item: any) => item.id === appointment.id)).toHaveLength(1);
     expect((await onPreviousDate.json()).some((item: any) => item.id === appointment.id)).toBe(false);
     expect((await onUnrelatedDate.json()).some((item: any) => item.id === appointment.id)).toBe(false);
   });

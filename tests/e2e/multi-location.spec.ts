@@ -1126,8 +1126,14 @@ test("[multi-location] photo references carry shop context and enforce visibilit
   }
 });
 
-test("[multi-location] isolates the Extras catalogue and rejects cross-location updates", async ({ page, request }) => {
+test("[multi-location] isolates the Extras catalogue and rejects cross-location updates", async ({ page, request }, testInfo) => {
   const [shopA, shopB] = await ensureLocations(request, 2);
+  const runId = `${Date.now()}-${testInfo.repeatEachIndex}`;
+  const extraAName = `Extra Loja A QA ${runId}`;
+  const extraBName = `Extra Loja B QA ${runId}`;
+  const serviceBName = `Serviço Extra Loja B QA ${runId}`;
+  const barberBName = `Barbeiro Extra Loja B QA ${runId}`;
+  const uiCustomerName = `Cliente mantido entre lojas ${runId}`;
   for (const shop of [shopA, shopB]) {
     if (!shop.isActive) {
       const activate = await request.patch(`/api/admin/locations/${shop.id}`, { data: { isActive: true } });
@@ -1140,7 +1146,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   const createA = await request.post("/api/admin/extras", {
     headers: headersA,
     data: {
-      name: "Extra Loja A QA",
+      name: extraAName,
       pricingMode: "fixed",
       amountCents: 400,
       financialRule: "follow_compensation",
@@ -1150,7 +1156,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   const createB = await request.post("/api/admin/extras", {
     headers: headersB,
     data: {
-      name: "Extra Loja B QA",
+      name: extraBName,
       pricingMode: "fixed",
       amountCents: 900,
       financialRule: "barber",
@@ -1195,18 +1201,18 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await page.getByRole("option", { name: shopA.name, exact: true }).click();
   await page.getByRole("tab", { name: "Extras", exact: true }).click();
   const extrasManager = page.getByTestId("extras-manager");
-  await expect(extrasManager.getByText("Extra Loja A QA", { exact: true })).toBeVisible();
-  await expect(extrasManager.getByText("Extra Loja B QA", { exact: true })).toHaveCount(0);
+  await expect(extrasManager.getByText(extraAName, { exact: true })).toBeVisible();
+  await expect(extrasManager.getByText(extraBName, { exact: true })).toHaveCount(0);
 
   await page.getByLabel("Loja em gestão").click();
   await page.getByRole("option", { name: shopB.name, exact: true }).click();
-  await expect(extrasManager.getByText("Extra Loja B QA", { exact: true })).toBeVisible();
-  await expect(extrasManager.getByText("Extra Loja A QA", { exact: true })).toHaveCount(0);
+  await expect(extrasManager.getByText(extraBName, { exact: true })).toBeVisible();
+  await expect(extrasManager.getByText(extraAName, { exact: true })).toHaveCount(0);
 
   const serviceBResponse = await request.post("/api/services", {
     headers: headersB,
     data: {
-      name: "Serviço Extra Loja B QA",
+      name: serviceBName,
       description: "Validação de isolamento de Extras",
       price: 1800,
       duration: 30,
@@ -1218,7 +1224,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   const barberBResponse = await request.post("/api/barbers", {
     headers: headersB,
     data: {
-      name: "Barbeiro Extra Loja B QA",
+      name: barberBName,
       specialty: "Isolamento de Extras",
       isVisible: true,
       serviceIds: [serviceB.id],
@@ -1424,7 +1430,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await page.getByRole("option", { name: barberB.name, exact: true }).click();
   await bookingDialog.getByTestId("manual-booking-service").click();
   await page.getByRole("option", { name: serviceB.name, exact: true }).click();
-  await bookingDialog.getByLabel("Nome do cliente", { exact: true }).fill("Cliente mantido entre lojas");
+  await bookingDialog.getByLabel("Nome do cliente", { exact: true }).fill(uiCustomerName);
   await bookingDialog.locator("#manual-booking-phone").fill("912345678");
   await bookingDialog.getByLabel("Email (opcional)").fill("cliente-mantido@example.test");
   await bookingDialog.getByLabel("Condições especiais desta marcação").click();
@@ -1439,7 +1445,7 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await page.getByRole("option", { name: shopA.name, exact: true }).click();
   await expect(bookingDialog.getByTestId("manual-booking-barber")).toContainText("Selecione");
   await expect(bookingDialog.getByTestId("manual-booking-service")).toContainText("Selecione");
-  await expect(bookingDialog.getByLabel("Nome do cliente", { exact: true })).toHaveValue("Cliente mantido entre lojas");
+  await expect(bookingDialog.getByLabel("Nome do cliente", { exact: true })).toHaveValue(uiCustomerName);
   await expect(bookingDialog.locator("#manual-booking-phone")).toHaveValue("912 345 678");
   await expect(bookingDialog.getByLabel("Email (opcional)")).toHaveValue("cliente-mantido@example.test");
   await expect(bookingDialog.getByLabel(`Selecionar Extra ${extraA.name}`)).toBeVisible();
@@ -1460,11 +1466,22 @@ test("[multi-location] isolates the Extras catalogue and rejects cross-location 
   await bookingDialog.getByTestId("appointment-block-submit").click();
   await expect(bookingDialog).toHaveCount(0);
   const uiCreatedInB = (await (await request.get("/api/appointments", { headers: headersB })).json())
-    .find((appointment: any) => appointment.customerName === "Cliente mantido entre lojas");
+    .find((appointment: any) => appointment.customerName === uiCustomerName);
   expect(uiCreatedInB).toMatchObject({ locationId: shopB.id, barberId: barberB.id, serviceId: serviceB.id });
   expect((await (await request.get("/api/appointments", { headers: headersA })).json())
-    .some((appointment: any) => appointment.customerName === "Cliente mantido entre lojas")).toBe(false);
+    .some((appointment: any) => appointment.customerName === uiCustomerName)).toBe(false);
 
+  // The first available UI time can still be in the future (notably 06:00 in
+  // early CI runs). Cancel that fixture before asserting that the temporary
+  // service can be hidden; the production rule must keep rejecting services
+  // that are still required by future appointments.
+  if (uiCreatedInB.status === "booked") {
+    const cancelUiBooking = await request.patch(`/api/appointments/${uiCreatedInB.id}/status`, {
+      headers: headersB,
+      data: { status: "cancelled" },
+    });
+    expect(cancelUiBooking.ok(), await cancelUiBooking.text()).toBe(true);
+  }
   expect((await request.patch(`/api/appointments/${localBookingBody.appointments[0].id}/status`, {
     headers: headersB,
     data: { status: "cancelled" },
