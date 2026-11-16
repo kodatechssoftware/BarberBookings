@@ -23,16 +23,44 @@ O Admin reutiliza as permissões `team.manage_global` e as associações de loca
 - Testemunhos e qualificações publicados exigem autorização registada; o audit log regista apenas contagens e estado de publicação.
 - O CTA transporta apenas o identificador operacional da profissional. O booking volta a validar serviços, disponibilidade e localização.
 
-## Fase 2 — certificados digitais (pendente)
+## Fase 2 — imagens de certificados
 
-Fica deliberadamente fora da Fase 1 o carregamento ou publicação de ficheiros originais de diplomas e certificados. Antes de o implementar é necessário aprovar:
+A migration `0033_team_profile_certificate_documents.sql` acrescenta metadados de imagens privadas sem alterar ou publicar qualificações existentes. O MVP aceita apenas JPG, PNG e WebP até 10 MB. O backend confirma o conteúdo real, limita a descodificação a 40 milhões de píxeis, corrige orientação, redimensiona para um máximo de 2400 px, converte para WebP até 3 MB e não transporta EXIF/GPS para o derivado.
 
-1. bucket privado por ambiente, com políticas de acesso e isolamento por localização;
-2. uploads autenticados, allowlist de MIME, limites de tamanho, antivírus e remoção de metadados;
-3. geração de derivados públicos sem número de documento, assinatura ou outros dados pessoais;
-4. URLs assinados com validade curta para originais privados;
-5. retenção, eliminação, exportação e prova de consentimento;
-6. inclusão explícita nos backups e no procedimento de recuperação;
-7. custos de armazenamento, transferência e processamento de imagens/PDF.
+Checksum SHA-256 canónico da migration: `eedefb41791e7a9d413fb5b68a74beaaa6e3b4567db4ae89610120a474dc62ff`.
 
-Até essa decisão, a aplicação guarda apenas texto estruturado e nunca aceita ou expõe ficheiros de certificados.
+O original recebido nunca é guardado. PDF, SVG, HTML, imagens animadas e caminhos fornecidos pelo browser são recusados. Os caminhos são UUID aleatórios e não incluem nomes ou outros dados pessoais. Uma qualificação continua válida sem imagem; publicar a qualificação nunca publica automaticamente o certificado.
+
+### Bucket privado
+
+Criar manualmente, no projeto Supabase do ambiente certo, um bucket chamado exatamente `beauty-team-certificates`:
+
+1. Storage → New bucket;
+2. manter **Public bucket** desligado;
+3. limitar o tamanho do objeto a 3 MB (o limite de entrada de 10 MB é aplicado antes, na API);
+4. permitir apenas `image/webp`, porque o backend nunca envia o original;
+5. não criar políticas de leitura para `anon` ou `authenticated` — a aplicação usa autenticação própria e o backend é o único cliente do Storage;
+6. configurar `SUPABASE_URL` e preferencialmente `SUPABASE_SECRET_KEY` no serviço backend; `SUPABASE_SERVICE_ROLE_KEY` é apenas fallback legado;
+7. nunca criar variáveis `VITE_*` com estas credenciais.
+
+O bucket deve existir antes de ativar `teamProfiles` com uploads. A ausência de configuração devolve 503 e não afeta o perfil textual.
+
+### Publicação e acesso
+
+- Só `team.manage_global`, a flag `teamProfiles` e a localização ativa permitem gerir imagens.
+- Um documento fica público apenas quando perfil, qualificação e documento estão publicados e autorizados.
+- A rota pública volta a validar esses estados e a localização antes de emitir um URL Supabase assinado por 60 segundos.
+- Revogar a publicação bloqueia novos URLs imediatamente; um URL já emitido expira no máximo ao fim desses 60 segundos.
+- O audit log guarda IDs, tamanho e estado, nunca o caminho Storage, URL assinado, hash ou conteúdo.
+
+### Substituição, limpeza e recuperação
+
+O novo objeto é processado e gravado antes de substituir atomicamente o documento atual. O anterior passa a `pending_delete`; falhas de Storage nunca repõem um documento removido na página pública. O endpoint administrativo e `npm run certificates:cleanup -- [locationId]` repetem de forma idempotente a remoção de registos `uploading`, `failed` ou `pending_delete` antigos, sem tocar no documento atual. A limpeza é explícita e não depende de cron em memória.
+
+Backups PostgreSQL não contêm objetos do Supabase Storage. Antes de uma operação destrutiva, exportar separadamente o bucket e o respetivo inventário. Na recuperação, restaurar primeiro a BD e depois os objetos nos mesmos paths; documentos sem objeto permanecem privados/indisponíveis até serem substituídos. Não reutilizar um backup de outro estabelecimento.
+
+### Limitações do MVP
+
+- Não existe antivírus de documentos porque não são aceites documentos originais; o conteúdo é integralmente descodificado e reconstruído como imagem WebP.
+- A aplicação não oculta informação visível dentro da fotografia. O Admin recebe um aviso e deve confirmar que não há números, assinaturas, moradas ou dados privados antes de autorizar.
+- Não há PDF, OCR, versão original ou transformação Supabase paga.

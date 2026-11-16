@@ -62,10 +62,11 @@ test("public team profiles are additive, authorised, allowlisted and location-is
       );
     `);
     await copyFile(path.resolve("migrations/0031_public_team_profiles.sql"), path.join(migrationsDirectory, "0031_public_team_profiles.sql"));
+    await copyFile(path.resolve("migrations/0033_team_profile_certificate_documents.sql"), path.join(migrationsDirectory, "0033_team_profile_certificate_documents.sql"));
     const firstRun = await runSchemaMigrations(pool, { schemaName: "public", migrationsDirectory, environment: process.env });
-    assert.deepEqual(firstRun.applied, ["0031_public_team_profiles.sql"]);
+    assert.deepEqual(firstRun.applied, ["0031_public_team_profiles.sql", "0033_team_profile_certificate_documents.sql"]);
     const secondRun = await runSchemaMigrations(pool, { schemaName: "public", migrationsDirectory, environment: process.env });
-    assert.equal(secondRun.alreadyApplied, 1);
+    assert.equal(secondRun.alreadyApplied, 2);
     assert.deepEqual(secondRun.applied, []);
 
     await pool.query(`
@@ -134,10 +135,11 @@ test("public team profiles are additive, authorised, allowlisted and location-is
 
     const unpublished = teamProfileUpdateSchema.parse({
       slug: "mariana", bio: saved.bio, displayOrder: 2, isPublished: false, publicationAuthorized: true,
-      qualifications: saved.qualifications.map((item) => ({ ...item, isPublished: false })),
+      qualifications: saved.qualifications.map(({ certificate: _certificate, ...item }) => ({ ...item, isPublished: false })),
       testimonials: saved.testimonials.map((item) => ({ ...item, isPublished: false })),
     });
-    await module.saveAdminTeamProfile(pool, { locationId: 1, barberId: 1, actorUserId: 1, profile: unpublished });
+    const unpublishedSaved = await module.saveAdminTeamProfile(pool, { locationId: 1, barberId: 1, actorUserId: 1, profile: unpublished });
+    assert.equal(unpublishedSaved.qualifications[0].id, saved.qualifications[0].id, "qualification IDs stay stable for certificate associations");
     assert.deepEqual(await module.listPublicTeamProfiles(pool, 1), [], "withdrawal is immediate");
   } finally {
     await pool?.end().catch(() => undefined);

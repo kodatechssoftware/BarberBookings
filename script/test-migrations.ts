@@ -297,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 31,
-    "an empty legacy baseline must apply every migration through 0032");
+  assert.equal(freshRun.applied.length, 32,
+    "an empty legacy baseline must apply every migration through 0033");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -400,7 +400,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 31);
+  assert.equal(secondFreshRun.alreadyApplied, 32);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1223,6 +1223,7 @@ try {
     "0030_consultation_access_role.sql",
     "0031_public_team_profiles.sql",
     "0032_google_review_links.sql",
+    "0033_team_profile_certificate_documents.sql",
   ]);
   assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
   assert.equal(Number((await pool.query(`
@@ -1233,6 +1234,14 @@ try {
     "0031 must not publish existing professionals automatically");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("location_google_review_settings")}`)).rows[0].count), 0,
     "0032 must not configure Google review links automatically");
+  assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${table("barber_qualification_documents")}`)).rows[0].count), 0,
+    "0033 must not create or publish certificate documents automatically");
+  assert.equal(Number((await pool.query(`
+    SELECT count(*) AS count FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = $1 AND t.relname = 'barber_qualification_documents' AND c.contype <> 'n'
+  `, [schema])).rows[0].count), 16, "0033 must install every certificate integrity constraint");
   assert.deepEqual((await pool.query(`
     SELECT position, execution_stage FROM ${table("appointment_service_segments")}
     WHERE appointment_id = $1 ORDER BY position
@@ -1565,7 +1574,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 31);
+  assert.equal(secondCompensationRun.alreadyApplied, 32);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2337,7 +2346,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0032, default-off Beauty v2 feature settings, additive public team profiles and Google review links, sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0033, default-off Beauty v2 feature settings, additive public team profiles, private certificate metadata and Google review links, sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

@@ -1,6 +1,6 @@
 ﻿import type { Express } from "express";
 import type { Server } from "http";
-import type { NextFunction, Request, Response } from "express";
+import { raw as expressRaw, type NextFunction, type Request, type Response } from "express";
 import {
   AppointmentExtrasError,
   AppointmentAvailabilityWindowsError,
@@ -29,6 +29,20 @@ import {
   saveAdminTeamProfile,
   TeamProfileError,
 } from "./team-profiles";
+import { processCertificateImage, CertificateImageError } from "./team-profile-certificate-image";
+import {
+  CertificateStorageError,
+  createTeamProfileCertificateStorageFromEnvironment,
+} from "./team-profile-certificate-storage";
+import {
+  cleanupTeamProfileCertificateOrphans,
+  getAdminTeamProfileCertificateSignedUrl,
+  getPublicTeamProfileCertificateSignedUrl,
+  removeTeamProfileCertificate,
+  TeamProfileCertificateError,
+  updateTeamProfileCertificatePublication,
+  uploadTeamProfileCertificate,
+} from "./team-profile-certificates";
 import { googleReviewSettingsUpdateSchema } from "@shared/google-reviews";
 import {
   getAdminGoogleReviewSettings,
@@ -2561,7 +2575,11 @@ export async function registerRoutes(
         || req.path.startsWith("/barber-invites/");
       // <img> cannot supply X-Location-Id. Only this read-only image route accepts
       // the equivalent URL parameter, through the SAME location access checks.
-      const imageLocation = req.method === "GET" && /^\/barbers\/\d+\/avatar$/.test(req.path)
+      const imageLocation = req.method === "GET" && (
+        /^\/barbers\/\d+\/avatar$/.test(req.path)
+        || /^\/public\/team-profile-certificates\/\d+$/.test(req.path)
+        || /^\/admin\/team-profiles\/\d+\/certificates\/\d+\/preview$/.test(req.path)
+      )
         ? req.query.locationId : undefined;
       if (imageLocation !== undefined && typeof imageLocation !== "string") {
         return res.status(400).json({ message: "Localização inválida." });
@@ -2946,6 +2964,175 @@ export async function registerRoutes(
       if (error instanceof TeamProfileError) return res.status(error.status).json({ code: error.code, message: error.message });
       console.error("Save team profile error:", error);
       res.status(500).json({ message: "Não foi possível guardar o perfil público." });
+    }
+  });
+
+  const certificatePublicationSchema = z.object({
+    publicationAuthorized: z.boolean(),
+    isPublished: z.boolean(),
+  }).strict();
+  const certificateRawBody = expressRaw({
+    type: ["image/jpeg", "image/png", "image/webp"],
+    limit: "10mb",
+  });
+  const sendCertificateError = (res: Response, error: unknown) => {
+    if (error instanceof CertificateImageError || error instanceof TeamProfileCertificateError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    if (error instanceof CertificateStorageError) {
+      return res.status(error.code === "CERTIFICATE_STORAGE_NOT_CONFIGURED" ? 503 : 502)
+        .json({ code: error.code, message: error.message });
+    }
+    return null;
+  };
+
+  app.post(
+    "/api/admin/team-profiles/:barberId/qualifications/:qualificationId/certificate",
+    requireTeamGlobalManage,
+    requireTeamProfilesEnabled,
+    certificateRawBody,
+    async (req, res) => {
+      try {
+        const barberId = parsePositiveInteger(req.params.barberId);
+        const qualificationId = parsePositiveInteger(req.params.qualificationId);
+        if (barberId === null || qualificationId === null) return res.status(400).json({ message: "Identificador inválido." });
+        if (!Buffer.isBuffer(req.body)) return res.status(400).json({ message: "Envie uma imagem válida." });
+        const image = await processCertificateImage(req.body, req.headers["content-type"]?.split(";", 1)[0] ?? "");
+        const canonicalContext = getCanonicalRequestAuthContext(req);
+        const certificate = await uploadTeamProfileCertificate({
+          pool,
+          storage: createTeamProfileCertificateStorageFromEnvironment(),
+          locationId: Number(res.locals.locationId),
+          barberId,
+          qualificationId,
+          actorUserId: canonicalContext?.user.id ?? null,
+          image,
+        });
+        recordAuditLog(req, {
+          action: "team_profile.certificate_uploaded",
+          entityType: "barber_qualification_document",
+          entityId: certificate.id,
+          summary: "Imagem de certificado processada e guardada.",
+          metadata: { professionalId: barberId, qualificationId, byteSize: certificate.byteSize },
+        });
+        return res.status(201).json(certificate);
+      } catch (error) {
+        const response = sendCertificateError(res, error);
+        if (response) return response;
+        console.error("Upload team certificate error:", error);
+        return res.status(500).json({ message: "Não foi possível processar o certificado." });
+      }
+    },
+  );
+
+  app.patch("/api/admin/team-profiles/:barberId/certificates/:documentId", requireTeamGlobalManage, requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const barberId = parsePositiveInteger(req.params.barberId);
+      const documentId = parsePositiveInteger(req.params.documentId);
+      if (barberId === null || documentId === null) return res.status(400).json({ message: "Identificador inválido." });
+      const update = certificatePublicationSchema.parse(req.body);
+      const canonicalContext = getCanonicalRequestAuthContext(req);
+      const certificate = await updateTeamProfileCertificatePublication({
+        pool, locationId: Number(res.locals.locationId), barberId, documentId,
+        actorUserId: canonicalContext?.user.id ?? null, ...update,
+      });
+      recordAuditLog(req, {
+        action: "team_profile.certificate_publication_updated",
+        entityType: "barber_qualification_document",
+        entityId: documentId,
+        summary: certificate.isPublished ? "Certificado publicado." : "Publicação do certificado revogada.",
+        metadata: { professionalId: barberId, qualificationId: certificate.qualificationId, published: certificate.isPublished },
+      });
+      return res.json(certificate);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ message: error.issues[0]?.message ?? "Dados inválidos." });
+      const response = sendCertificateError(res, error);
+      if (response) return response;
+      console.error("Update team certificate error:", error);
+      return res.status(500).json({ message: "Não foi possível atualizar o certificado." });
+    }
+  });
+
+  app.delete("/api/admin/team-profiles/:barberId/certificates/:documentId", requireTeamGlobalManage, requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const barberId = parsePositiveInteger(req.params.barberId);
+      const documentId = parsePositiveInteger(req.params.documentId);
+      if (barberId === null || documentId === null) return res.status(400).json({ message: "Identificador inválido." });
+      const canonicalContext = getCanonicalRequestAuthContext(req);
+      const result = await removeTeamProfileCertificate({
+        pool, storage: createTeamProfileCertificateStorageFromEnvironment(),
+        locationId: Number(res.locals.locationId), barberId, documentId,
+        actorUserId: canonicalContext?.user.id ?? null,
+      });
+      recordAuditLog(req, {
+        action: "team_profile.certificate_removed",
+        entityType: "barber_qualification_document",
+        entityId: documentId,
+        summary: "Certificado removido do perfil público.",
+        metadata: { professionalId: barberId, pendingCleanup: result.pendingCleanup },
+      });
+      return res.json(result);
+    } catch (error) {
+      const response = sendCertificateError(res, error);
+      if (response) return response;
+      console.error("Remove team certificate error:", error);
+      return res.status(500).json({ message: "Não foi possível remover o certificado." });
+    }
+  });
+
+  app.get("/api/admin/team-profiles/:barberId/certificates/:documentId/preview", requireTeamGlobalManage, requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const barberId = parsePositiveInteger(req.params.barberId);
+      const documentId = parsePositiveInteger(req.params.documentId);
+      if (barberId === null || documentId === null) return res.status(400).json({ message: "Identificador inválido." });
+      const signedUrl = await getAdminTeamProfileCertificateSignedUrl({
+        pool, storage: createTeamProfileCertificateStorageFromEnvironment(),
+        locationId: Number(res.locals.locationId), barberId, documentId,
+      });
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.redirect(302, signedUrl);
+    } catch (error) {
+      const response = sendCertificateError(res, error);
+      if (response) return response;
+      return res.status(500).json({ message: "Não foi possível abrir o certificado." });
+    }
+  });
+
+  app.post("/api/admin/team-profile-certificates/cleanup", requireTeamGlobalManage, requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const result = await cleanupTeamProfileCertificateOrphans({
+        pool,
+        storage: createTeamProfileCertificateStorageFromEnvironment(),
+        locationId: Number(res.locals.locationId),
+      });
+      if (result.removed > 0) recordAuditLog(req, {
+        action: "team_profile.certificate_cleanup",
+        entityType: "barber_qualification_document",
+        summary: "Limpeza de certificados incompletos concluída.",
+        metadata: { inspected: result.inspected, removed: result.removed },
+      });
+      return res.json(result);
+    } catch (error) {
+      const response = sendCertificateError(res, error);
+      if (response) return response;
+      return res.status(500).json({ message: "Não foi possível concluir a limpeza." });
+    }
+  });
+
+  app.get("/api/public/team-profile-certificates/:documentId", requireTeamProfilesEnabled, async (req, res) => {
+    try {
+      const documentId = parsePositiveInteger(req.params.documentId);
+      if (documentId === null) return res.status(404).json({ message: "Certificado não disponível." });
+      const signedUrl = await getPublicTeamProfileCertificateSignedUrl({
+        pool, storage: createTeamProfileCertificateStorageFromEnvironment(),
+        locationId: Number(res.locals.locationId), documentId,
+      });
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.redirect(302, signedUrl);
+    } catch (error) {
+      const response = sendCertificateError(res, error);
+      if (response) return response;
+      return res.status(500).json({ message: "Não foi possível abrir o certificado." });
     }
   });
 

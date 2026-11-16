@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { barberAvatarReference } from "./barber-avatars";
 import type { PublicTeamProfile, TeamProfileUpdateInput } from "@shared/team-profiles";
+import { listCurrentTeamProfileCertificates, type TeamProfileCertificateDto } from "./team-profile-certificates";
 
 function quoteIdentifier(identifier: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) throw new Error("Unsafe database identifier.");
@@ -66,7 +67,7 @@ export class TeamProfileError extends Error {
   }
 }
 
-function adminDto(profile: ProfileRow | null, barber: { id: number; name: string; specialty: string; bio: string | null; avatar: string | null }, qualifications: QualificationRow[], testimonials: TestimonialRow[], services: ServiceRow[]) {
+function adminDto(profile: ProfileRow | null, barber: { id: number; name: string; specialty: string; bio: string | null; avatar: string | null }, qualifications: QualificationRow[], testimonials: TestimonialRow[], services: ServiceRow[], certificates: Map<number, TeamProfileCertificateDto>) {
   return {
     professionalId: barber.id,
     name: barber.name,
@@ -88,6 +89,7 @@ function adminDto(profile: ProfileRow | null, barber: { id: number; name: string
       displayOrder: item.display_order,
       isPublished: item.is_published,
       publicationAuthorized: Boolean(item.publication_authorized_at),
+      certificate: certificates.get(item.id) ?? null,
     })),
     testimonials: testimonials.map((item) => ({
       id: item.id,
@@ -119,7 +121,7 @@ async function loadServices(client: Pool | PoolClient, locationId: number, barbe
 }
 
 export async function getAdminTeamProfile(pool: Pool, locationId: number, barberId: number) {
-  const [barberResult, profileResult, qualificationResult, testimonialResult, services] = await Promise.all([
+  const [barberResult, profileResult, qualificationResult, testimonialResult, services, certificates] = await Promise.all([
     pool.query<{ id: number; name: string; specialty: string; bio: string | null; avatar: string | null }>(`
       SELECT b.id, b.name, b.specialty, b.bio, b.avatar
       FROM ${table("barbers")} b
@@ -147,10 +149,11 @@ export async function getAdminTeamProfile(pool: Pool, locationId: number, barber
       ORDER BY display_order, id
     `, [barberId, locationId]),
     loadServices(pool, locationId, [barberId]),
+    listCurrentTeamProfileCertificates(pool, locationId, [barberId]),
   ]);
   const barber = barberResult.rows[0];
   if (!barber) throw new TeamProfileError("TEAM_PROFILE_NOT_FOUND", 404, "Profissional não encontrada nesta localização.");
-  return adminDto(profileResult.rows[0] ?? null, barber, qualificationResult.rows, testimonialResult.rows, services);
+  return adminDto(profileResult.rows[0] ?? null, barber, qualificationResult.rows, testimonialResult.rows, services, certificates);
 }
 
 export async function saveAdminTeamProfile(pool: Pool, input: {
@@ -188,16 +191,48 @@ export async function saveAdminTeamProfile(pool: Pool, input: {
       input.profile.isPublished, authorizedAt, input.profile.publicationAuthorized ? input.actorUserId : null]);
     await client.query(`UPDATE ${table("barbers")} SET bio = $2 WHERE id = $1`, [input.barberId, input.profile.bio || null]);
 
-    await client.query(`DELETE FROM ${table("barber_qualifications")} WHERE barber_id = $1 AND location_id = $2`, [input.barberId, input.locationId]);
+    const existingQualifications = await client.query<{ id: number }>(`
+      SELECT id FROM ${table("barber_qualifications")}
+      WHERE barber_id = $1 AND location_id = $2
+      FOR UPDATE
+    `, [input.barberId, input.locationId]);
+    const existingQualificationIds = new Set(existingQualifications.rows.map((row) => row.id));
+    const requestedQualificationIds = input.profile.qualifications.flatMap((item) => item.id ? [item.id] : []);
+    if (requestedQualificationIds.some((id) => !existingQualificationIds.has(id))) {
+      throw new TeamProfileError("TEAM_PROFILE_QUALIFICATION_SCOPE_INVALID", 404, "Formação não encontrada neste perfil.");
+    }
     for (const item of input.profile.qualifications) {
-      await client.query(`
-        INSERT INTO ${table("barber_qualifications")} (
-          barber_id, location_id, kind, title, issuer, completed_year, description,
-          display_order, is_published, publication_authorized_at, publication_authorized_by_user_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-      `, [input.barberId, input.locationId, item.kind, item.title, item.issuer || null,
+      const values = [input.barberId, input.locationId, item.kind, item.title, item.issuer || null,
         item.completedYear ?? null, item.description || null, item.displayOrder, item.isPublished,
-        item.publicationAuthorized ? new Date() : null, item.publicationAuthorized ? input.actorUserId : null]);
+        item.publicationAuthorized ? new Date() : null, item.publicationAuthorized ? input.actorUserId : null];
+      if (item.id) {
+        await client.query(`
+          UPDATE ${table("barber_qualifications")} SET
+            kind = $3, title = $4, issuer = $5, completed_year = $6, description = $7,
+            display_order = $8, is_published = $9, publication_authorized_at = $10,
+            publication_authorized_by_user_id = $11, updated_at = now()
+          WHERE id = $12 AND barber_id = $1 AND location_id = $2
+        `, [...values, item.id]);
+      } else {
+        await client.query(`
+          INSERT INTO ${table("barber_qualifications")} (
+            barber_id, location_id, kind, title, issuer, completed_year, description,
+            display_order, is_published, publication_authorized_at, publication_authorized_by_user_id
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        `, values);
+      }
+    }
+    const removedQualificationIds = Array.from(existingQualificationIds).filter((id) => !requestedQualificationIds.includes(id));
+    if (removedQualificationIds.length > 0) {
+      const documents = await client.query<{ qualification_id: number }>(`
+        SELECT qualification_id FROM ${table("barber_qualification_documents")}
+        WHERE qualification_id = ANY($1::int[])
+        LIMIT 1
+      `, [removedQualificationIds]);
+      if (documents.rows[0]) {
+        throw new TeamProfileError("TEAM_PROFILE_CERTIFICATE_EXISTS", 409, "Remova o certificado antes de eliminar esta formação.");
+      }
+      await client.query(`DELETE FROM ${table("barber_qualifications")} WHERE id = ANY($1::int[])`, [removedQualificationIds]);
     }
 
     await client.query(`DELETE FROM ${table("barber_testimonials")} WHERE barber_id = $1 AND location_id = $2`, [input.barberId, input.locationId]);
@@ -239,7 +274,7 @@ export async function listPublicTeamProfiles(pool: Pool, locationId: number, slu
   `, [locationId, slug ?? null]);
   const ids = profileResult.rows.map((profile) => profile.barber_id);
   if (ids.length === 0) return [];
-  const [qualificationResult, testimonialResult, services] = await Promise.all([
+  const [qualificationResult, testimonialResult, services, certificates] = await Promise.all([
     pool.query<QualificationRow>(`
       SELECT id, barber_id, kind, title, issuer, completed_year, description, display_order,
              is_published, publication_authorized_at
@@ -257,6 +292,7 @@ export async function listPublicTeamProfiles(pool: Pool, locationId: number, slu
       ORDER BY display_order, id
     `, [locationId, ids]),
     loadServices(pool, locationId, ids),
+    listCurrentTeamProfileCertificates(pool, locationId, ids),
   ]);
   return profileResult.rows.map((profile) => ({
     professionalId: profile.barber_id,
@@ -269,8 +305,11 @@ export async function listPublicTeamProfiles(pool: Pool, locationId: number, slu
     services: services.filter((service) => service.barber_id === profile.barber_id)
       .map(({ id, name, duration, price }) => ({ id, name, duration, price })),
     qualifications: qualificationResult.rows.filter((item) => item.barber_id === profile.barber_id).map((item) => ({
-      kind: item.kind, title: item.title, issuer: item.issuer,
+      id: item.id, kind: item.kind, title: item.title, issuer: item.issuer,
       completedYear: item.completed_year, description: item.description,
+      certificateUrl: certificates.get(item.id)?.isPublished && certificates.get(item.id)?.publicationAuthorized
+        ? `/api/public/team-profile-certificates/${certificates.get(item.id)!.id}?locationId=${locationId}`
+        : null,
     })),
     testimonials: testimonialResult.rows.filter((item) => item.barber_id === profile.barber_id).map((item) => ({
       authorDisplayName: item.author_display_name, quote: item.quote, sourceLabel: item.source_label,

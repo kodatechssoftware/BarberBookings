@@ -88,17 +88,16 @@ same assertions still run under the Beauty profile.
 - Concurrent approval and public booking yield one winner and one explicit
   conflict, never overlapping confirmed rows.
 
-## Dependency vulnerability review - 2026-11-04
+## Dependency vulnerability review - 2026-11-16
 
-`npm audit` reports 11 moderate findings, with no high or critical findings. No
-dependency was changed in this foundation phase.
+`npm audit` reports 4 moderate findings, with no high or critical findings. The
+certificate phase adds only the official Supabase client and `sharp`; no
+indiscriminate audit fix or forced major update was applied.
 
 | Chain | Exposure | Decision |
 | --- | --- | --- |
 | `@tailwindcss/typography` -> `postcss-selector-parser` | Build-time CSS parsing; no untrusted selector input at runtime | Keep pending Tailwind build regression tests. Audit proposes `0.5.4`, a backwards move marked semver-major. |
-| `exceljs` -> `archiver`, `archiver-utils`, `readdir-glob`, `glob`, `minimatch`, `zip-stream` | Server-generated workbooks; no user-controlled glob patterns | Keep `exceljs@4.4.0`; audit proposes the major downgrade `3.4.0`, risking accounting exports. Evaluate upstream fixes or alternatives separately. |
 | `exceljs` -> `uuid` | Transitive workbook dependency; this application does not call vulnerable buffer APIs | Retain with the same Excel export review; do not force a transitive override without workbook compatibility tests. |
-| `rimraf` -> `glob` | Transitive tooling path, not a public application endpoint | Review with the owning dependency; no blind override. |
 
 Before any dependency change: run CSS generation, Excel content assertions,
 TypeScript, build and the full regression matrix.

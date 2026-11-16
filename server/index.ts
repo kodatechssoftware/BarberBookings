@@ -29,6 +29,7 @@ import {
 import { performanceTimingMiddleware } from "./performance-timings";
 import { startupTimings } from "./startup-timings";
 import { authRuntimeMode, validateCanonicalAuthFoundation } from "./auth-runtime";
+import { getSafeBuildSha } from "./build-identity";
 
 startupTimings.mark("entry-module-ready");
 const finishHttpConfiguration = startupTimings.start("http-configuration");
@@ -65,6 +66,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "barberbookings-api",
+    buildSha: getSafeBuildSha(),
     uptime: process.uptime(),
   });
 });

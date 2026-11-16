@@ -48,6 +48,7 @@ export const userAccessScopesIdSeq = appPgSchema?.sequence("user_access_scopes_i
 export const userInvitesIdSeq = appPgSchema?.sequence("user_invites_id_seq");
 export const barberQualificationsIdSeq = appPgSchema?.sequence("barber_qualifications_id_seq");
 export const barberTestimonialsIdSeq = appPgSchema?.sequence("barber_testimonials_id_seq");
+export const barberQualificationDocumentsIdSeq = appPgSchema?.sequence("barber_qualification_documents_id_seq");
 
 function idColumn(sequenceName: string) {
   if (databaseSchema && databaseSchema !== "public") {
@@ -1018,9 +1019,59 @@ export const barberQualifications = appPgTable("barber_qualifications", {
     columns: [table.barberId, table.locationId],
     foreignColumns: [barberLocations.barberId, barberLocations.locationId],
   }).onDelete("cascade"),
+  identityUnique: uniqueIndex("barber_qualifications_identity_unique").on(table.id, table.barberId, table.locationId),
   profileIdx: index("barber_qualifications_profile_idx").on(table.locationId, table.barberId, table.displayOrder, table.id),
   kindCheck: check("barber_qualifications_kind_check", sql`${table.kind} IN ('course', 'training', 'diploma', 'certification')`),
   publicationCheck: check("barber_qualifications_publication_check", sql`${table.isPublished} = false OR ${table.publicationAuthorizedAt} IS NOT NULL`),
+}));
+
+export const barberQualificationDocuments = appPgTable("barber_qualification_documents", {
+  id: idColumn("barber_qualification_documents_id_seq"),
+  qualificationId: integer("qualification_id").notNull(),
+  barberId: integer("barber_id").notNull(),
+  locationId: integer("location_id").notNull(),
+  storageBucket: text("storage_bucket").notNull().default("beauty-team-certificates"),
+  storagePath: text("storage_path").notNull(),
+  mimeType: text("mime_type").notNull(),
+  byteSize: integer("byte_size").notNull(),
+  sha256: text("sha256").notNull(),
+  uploadState: text("upload_state").notNull().default("uploading"),
+  isCurrent: boolean("is_current").notNull().default(false),
+  isPublished: boolean("is_published").notNull().default(false),
+  publicationAuthorizedAt: timestamp("publication_authorized_at"),
+  publicationAuthorizedByUserId: integer("publication_authorized_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  uploadedByUserId: integer("uploaded_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  removedAt: timestamp("removed_at"),
+  removedByUserId: integer("removed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  qualificationFk: foreignKey({
+    name: "barber_qualification_documents_qualification_fkey",
+    columns: [table.qualificationId, table.barberId, table.locationId],
+    foreignColumns: [barberQualifications.id, barberQualifications.barberId, barberQualifications.locationId],
+  }).onDelete("restrict"),
+  pathUnique: uniqueIndex("barber_qualification_documents_storage_path_unique").on(table.storagePath),
+  currentUnique: uniqueIndex("barber_qualification_documents_current_idx").on(table.qualificationId)
+    .where(sql`${table.isCurrent} = true`),
+  profileIdx: index("barber_qualification_documents_profile_idx")
+    .on(table.locationId, table.barberId, table.qualificationId, table.id),
+  cleanupIdx: index("barber_qualification_documents_cleanup_idx")
+    .on(table.uploadState, table.updatedAt, table.id)
+    .where(sql`${table.uploadState} IN ('uploading', 'failed', 'pending_delete')`),
+  publicIdx: index("barber_qualification_documents_public_idx")
+    .on(table.locationId, table.qualificationId, table.id)
+    .where(sql`${table.isCurrent} = true AND ${table.isPublished} = true AND ${table.uploadState} = 'ready'`),
+  bucketCheck: check("barber_qualification_documents_bucket_check", sql`${table.storageBucket} = 'beauty-team-certificates'`),
+  pathCheck: check("barber_qualification_documents_path_check", sql`${table.storagePath} = btrim(${table.storagePath}) AND length(${table.storagePath}) BETWEEN 20 AND 500 AND ${table.storagePath} !~ '(^|/)\.\.(/|$)' AND ${table.storagePath} !~ '^/'`),
+  mimeCheck: check("barber_qualification_documents_mime_check", sql`${table.mimeType} = 'image/webp'`),
+  sizeCheck: check("barber_qualification_documents_size_check", sql`${table.byteSize} BETWEEN 1 AND 3145728`),
+  shaCheck: check("barber_qualification_documents_sha256_check", sql`${table.sha256} ~ '^[0-9a-f]{64}$'`),
+  stateCheck: check("barber_qualification_documents_state_check", sql`${table.uploadState} IN ('uploading', 'ready', 'pending_delete', 'failed')`),
+  currentCheck: check("barber_qualification_documents_current_check", sql`${table.isCurrent} = false OR (${table.uploadState} = 'ready' AND ${table.removedAt} IS NULL)`),
+  publicationCheck: check("barber_qualification_documents_publication_check", sql`${table.isPublished} = false OR (${table.isCurrent} = true AND ${table.uploadState} = 'ready' AND ${table.publicationAuthorizedAt} IS NOT NULL AND ${table.removedAt} IS NULL)`),
+  removalCheck: check("barber_qualification_documents_removal_check", sql`${table.removedAt} IS NULL OR (${table.isCurrent} = false AND ${table.isPublished} = false AND ${table.uploadState} = 'pending_delete')`),
+  timestampsCheck: check("barber_qualification_documents_timestamps_check", sql`${table.updatedAt} >= ${table.createdAt} AND (${table.removedAt} IS NULL OR ${table.removedAt} >= ${table.createdAt})`),
 }));
 
 export const barberTestimonials = appPgTable("barber_testimonials", {
@@ -1933,6 +1984,7 @@ export type BarberAvailability = typeof barberAvailability.$inferSelect;
 export type BarberService = typeof barberServices.$inferSelect;
 export type BarberPublicProfile = typeof barberPublicProfiles.$inferSelect;
 export type BarberQualification = typeof barberQualifications.$inferSelect;
+export type BarberQualificationDocument = typeof barberQualificationDocuments.$inferSelect;
 export type BarberTestimonial = typeof barberTestimonials.$inferSelect;
 export type BarberInvite = typeof barberInvites.$inferSelect;
 export type CustomerNote = typeof customerNotes.$inferSelect;

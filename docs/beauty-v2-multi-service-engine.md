@@ -69,9 +69,13 @@ Uma falha em qualquer segmento, constraint ou passo anterior ao commit reverte t
 - A agenda expande apenas a apresentação: mostra a mesma marcação em cada
   profissional/segmento, mantendo um único `appointment_id`.
 - Os detalhes mostram serviços, profissionais, etapas, horários e preços.
-- O reagendamento genérico fica bloqueado de forma segura para marcações
-  multi-serviço. É necessário cancelar/criar novamente até existir um editor
-  transacional dedicado; nunca é movido apenas o resumo legacy.
+- O reagendamento multi-serviço usa a operação transacional dedicada: bloqueia
+  a marcação e os segmentos, preserva profissionais e `execution_stage`, desloca
+  todos os segmentos a partir do novo início, readquire os locks por
+  profissional/dia, revalida horários e conflitos e só depois atualiza parent,
+  segmentos, ocupações, revisão, histórico e evento mockável. Qualquer falha
+  reverte o conjunto completo. O update legacy continua reservado a marcações
+  simples/legacy e nunca move apenas o resumo de uma marcação v2.
 
 ## Limites intencionais desta fase
 

@@ -69,11 +69,13 @@ export type PublicTeamProfile = {
   displayOrder: number;
   services: Array<{ id: number; name: string; duration: number; price: number }>;
   qualifications: Array<{
+    id: number;
     kind: typeof teamQualificationKinds[number];
     title: string;
     issuer: string | null;
     completedYear: number | null;
     description: string | null;
+    certificateUrl: string | null;
   }>;
   testimonials: Array<{
     authorDisplayName: string;

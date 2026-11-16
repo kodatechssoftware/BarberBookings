@@ -1089,7 +1089,7 @@ test("Admin appointment calendar keeps every Beauty day state readable", async (
   }
 });
 
-test("published team profile is responsive and starts booking with the selected professional", async ({ page }, testInfo) => {
+test("all Beauty v2 modules coexist with a responsive certified team profile and booking CTA", async ({ page }, testInfo) => {
   await mockBeautyV2(page);
   await page.unroute("**/api/beauty-v2/features");
   await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
@@ -1097,9 +1097,10 @@ test("published team profile is responsive and starts booking with the selected 
     appointmentRequests: true,
     multiServiceAppointments: true,
     parallelServiceScheduling: true,
-    notificationDeliveryStatus: false,
-    consultationRole: false,
+    notificationDeliveryStatus: true,
+    consultationRole: true,
     teamProfiles: true,
+    googleReviews: true,
     appointmentRequestsAvailable: true,
   } }));
   await page.route("**/api/public/team-profiles/mariana", (route) => route.fulfill({ json: {
@@ -1111,15 +1112,21 @@ test("published team profile is responsive and starts booking with the selected 
     avatar: null,
     displayOrder: 0,
     services: [{ id: 11, name: "Manicure", duration: 45, price: 2500 }],
-    qualifications: [{ kind: "certification", title: "Nail Expert", issuer: "Academia Beauty", completedYear: 2029, description: "Formação avançada." }],
+    qualifications: [{ id: 1, kind: "certification", title: "Nail Expert", issuer: "Academia Beauty", completedYear: 2029, description: "Formação avançada.", certificateUrl: "/api/public/team-profile-certificates/501?locationId=1" }],
     testimonials: [{ authorDisplayName: "Cliente autorizada", quote: "Um atendimento excelente.", sourceLabel: "Opinião autorizada" }],
   } }));
+  await page.route("**/api/public/team-profile-certificates/501?locationId=1", (route) => route.fulfill({
+    contentType: "image/png",
+    body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  }));
 
   for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
     await page.setViewportSize(viewport);
     await page.goto("/equipa/mariana");
     await expect(page.getByRole("heading", { name: "Mariana Silva" })).toBeVisible();
     await expect(page.getByText("Nail Expert")).toBeVisible();
+    await expect(page.getByRole("img", { name: "Certificado: Nail Expert" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Ver certificado" })).toHaveAttribute("href", "/api/public/team-profile-certificates/501?locationId=1");
     await expect(page.getByText("Um atendimento excelente.")).toBeVisible();
     for (const text of [
       "Uma apresentação cuidada e autorizada.",
@@ -1137,6 +1144,133 @@ test("published team profile is responsive and starts booking with the selected 
   await expect(page).toHaveURL(/\/booking\?barberId=21$/);
   await page.getByRole("button", { name: /Manicure/ }).click();
   await expect(page.getByRole("combobox", { name: /Profissional para Manicure/ })).toContainText("Ana");
+});
+
+test("authorized Admin manages a private certificate image without exposing the original", async ({ page }, testInfo) => {
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true,
+    appointmentRequests: true,
+    multiServiceAppointments: true,
+    parallelServiceScheduling: true,
+    notificationDeliveryStatus: true,
+    consultationRole: true,
+    teamProfiles: true,
+    googleReviews: true,
+    appointmentRequestsAvailable: true,
+  } }));
+
+  const baseProfile = {
+    professionalId: 1,
+    name: "Profissional QA",
+    specialty: "Estética",
+    avatar: null,
+    bio: "Apresentação autorizada.",
+    slug: "profissional-qa",
+    displayOrder: 0,
+    isPublished: true,
+    publicationAuthorized: true,
+    services: [],
+    qualifications: [{
+      id: 77,
+      kind: "certification",
+      title: "Certificação Beauty QA",
+      issuer: "Academia QA",
+      completedYear: 2030,
+      description: null,
+      displayOrder: 0,
+      isPublished: true,
+      publicationAuthorized: true,
+      certificate: null,
+    }],
+    testimonials: [],
+  };
+  let certificate: Record<string, unknown> | null = null;
+  const mutations: Array<{ method: string; body?: unknown }> = [];
+  const previewPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+
+  await page.route("**/api/admin/team-profiles/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method();
+    if (/\/certificates\/501\/preview$/.test(url.pathname)) {
+      return route.fulfill({ contentType: "image/png", body: previewPng });
+    }
+    if (/\/qualifications\/77\/certificate$/.test(url.pathname) && method === "POST") {
+      mutations.push({ method, body: { contentType: request.headers()["content-type"], byteLength: request.postDataBuffer()?.byteLength } });
+      certificate = {
+        id: 501,
+        qualificationId: 77,
+        state: "ready",
+        isPublished: false,
+        publicationAuthorized: false,
+        mimeType: "image/webp",
+        byteSize: 1024,
+        createdAt: "2030-06-01T08:00:00.000Z",
+        previewUrl: "/api/admin/team-profiles/1/certificates/501/preview?locationId=1",
+      };
+      return route.fulfill({ status: 201, json: certificate });
+    }
+    if (/\/certificates\/501$/.test(url.pathname) && method === "PATCH") {
+      const body = request.postDataJSON();
+      mutations.push({ method, body });
+      certificate = { ...certificate, ...body };
+      return route.fulfill({ json: certificate });
+    }
+    if (/\/certificates\/501$/.test(url.pathname) && method === "DELETE") {
+      mutations.push({ method });
+      certificate = null;
+      return route.fulfill({ json: { removed: true, pendingCleanup: false } });
+    }
+    if (/\/api\/admin\/team-profiles\/\d+$/.test(url.pathname) && method === "GET") {
+      return route.fulfill({ json: {
+        ...baseProfile,
+        professionalId: Number(url.pathname.split("/").pop()),
+        qualifications: baseProfile.qualifications.map((item) => ({ ...item, certificate })),
+      } });
+    }
+    return route.fallback();
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/admin");
+  await page.getByRole("tab", { name: "Equipa", exact: true }).click();
+  await page.getByRole("button", { name: "Perfil público" }).first().click();
+  const dialog = page.getByRole("dialog", { name: /Perfil público/ });
+  await expect(dialog.getByText(/números de documento, assinaturas, moradas/)).toBeVisible();
+
+  const fileInput = dialog.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]');
+  await fileInput.setInputFiles({ name: "certificado.png", mimeType: "image/png", buffer: previewPng });
+  await expect(dialog.getByRole("img", { name: "Pré-visualização de Certificação Beauty QA" })).toBeVisible();
+  await expect(dialog.getByText(/WebP otimizado/)).toBeVisible();
+  await dialog.screenshot({ path: testInfo.outputPath("team-certificate-admin-mobile.png") });
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  await dialog.getByRole("checkbox", { name: "Autorização da imagem confirmada" }).click();
+  await dialog.getByRole("checkbox", { name: "Publicar imagem" }).click();
+  await expect.poll(() => mutations.filter((item) => item.method === "PATCH").length).toBe(2);
+  expect(mutations.filter((item) => item.method === "PATCH").map((item) => item.body)).toEqual([
+    { publicationAuthorized: true, isPublished: false },
+    { publicationAuthorized: true, isPublished: true },
+  ]);
+
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await expect(dialog.getByRole("img", { name: "Pré-visualização de Certificação Beauty QA" })).toBeVisible();
+  await dialog.screenshot({ path: testInfo.outputPath("team-certificate-admin-desktop.png") });
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  page.once("dialog", (confirmation) => confirmation.accept());
+  await dialog.getByRole("button", { name: "Remover imagem" }).click();
+  await expect(dialog.getByRole("img", { name: "Pré-visualização de Certificação Beauty QA" })).toHaveCount(0);
+  expect(mutations.map((item) => item.method)).toEqual(["POST", "PATCH", "PATCH", "DELETE"]);
+  expect(mutations[0]?.body).toEqual({ contentType: "image/png", byteLength: previewPng.byteLength });
 });
 
 test("team profile direct URL stays closed when the feature flag is disabled", async ({ page }) => {
