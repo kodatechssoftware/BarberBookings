@@ -61,6 +61,30 @@ O novo objeto é processado e gravado antes de substituir atomicamente o documen
 
 Backups PostgreSQL não contêm objetos do Supabase Storage. Antes de uma operação destrutiva, exportar separadamente o bucket e o respetivo inventário. Na recuperação, restaurar primeiro a BD e depois os objetos nos mesmos paths; documentos sem objeto permanecem privados/indisponíveis até serem substituídos. Não reutilizar um backup de outro estabelecimento.
 
+### Smoke test isolado do Storage
+
+`npm run certificates:storage-smoke` testa exclusivamente o bucket, sem criar qualificações, certificados ou outros registos na base de dados. A execução:
+
+1. valida o serviço, repositório, branch, commit e projeto Supabase esperados;
+2. confirma que o bucket é privado, tem limite exato de 3 MB e aceita apenas `image/webp`;
+3. cria uma imagem WebP fictícia de 32 × 32 px e usa um path UUID sob os IDs técnicos reservados `2147483647`;
+4. faz upload sem `upsert`, relê o objeto privado e compara SHA-256;
+5. cria uma URL assinada por 60 segundos, descarrega-a e volta a comparar SHA-256;
+6. remove o objeto em `finally`, repete uma falha transitória de remoção e confirma que o path deixou de existir.
+
+O script não apresenta URLs, chaves ou respostas do fornecedor. Em caso de falha de limpeza, devolve apenas o path não sensível que deve ser removido manualmente. Como o plano Free do Render não suporta Shell, SSH, one-off jobs ou pre-deploy command, o ensaio deve ser executado uma única vez no final de um Build Command temporário e controlado:
+
+```sh
+npm ci && npm run build && \
+RUN_CERTIFICATE_STORAGE_SMOKE=I_UNDERSTAND_THIS_WRITES_AND_DELETES_ONE_TEST_OBJECT \
+CERT_STORAGE_EXPECTED_SERVICE_ID=srv-db7ln8qd0e5s73eauv60 \
+CERT_STORAGE_EXPECTED_GIT_COMMIT=<SHA_APROVADO> \
+CERT_STORAGE_EXPECTED_PROJECT_REF=<PROJECT_REF_BEAUTY_DEV> \
+npm run certificates:storage-smoke
+```
+
+O Auto-Deploy deve permanecer desligado. Depois da execução, restaurar imediatamente o Build Command normal `npm ci && npm run build` com **Save only**. Nunca derivar `CERT_STORAGE_EXPECTED_PROJECT_REF` de `SUPABASE_URL`, porque isso anularia a verificação independente de isolamento.
+
 ### Limitações do MVP
 
 - Não existe antivírus de documentos porque não são aceites documentos originais; o conteúdo é integralmente descodificado e reconstruído como imagem WebP.

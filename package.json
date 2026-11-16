@@ -53,6 +53,8 @@
     "db:bootstrap": "tsx script/bootstrap-database.ts",
     "db:migrate": "tsx script/migrate.ts",
     "certificates:cleanup": "tsx script/cleanup-team-profile-certificates.ts",
+    "certificates:storage-smoke": "tsx script/test-team-profile-certificate-storage-live.ts",
+    "test:certificate-storage-smoke": "cross-env NODE_ENV=test tsx --test tests/unit/team-profile-certificate-storage-smoke.test.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
