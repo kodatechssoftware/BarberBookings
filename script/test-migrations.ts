@@ -1243,6 +1243,16 @@ try {
     WHERE n.nspname = $1 AND t.relname = 'barber_qualification_documents' AND c.contype <> 'n'
   `, [schema])).rows[0].count), 16, "0033 must install every certificate integrity constraint");
   assert.deepEqual((await pool.query(`
+    SELECT
+      table_record.relrowsecurity AS rls_enabled,
+      (SELECT count(*)::int FROM pg_policy WHERE polrelid = table_record.oid) AS policy_count
+    FROM pg_class table_record
+    INNER JOIN pg_namespace namespace_record ON namespace_record.oid = table_record.relnamespace
+    WHERE namespace_record.nspname = $1
+      AND table_record.relname = 'barber_qualification_documents'
+  `, [schema])).rows[0], { rls_enabled: true, policy_count: 0 },
+  "0033 must keep certificate metadata behind deny-by-default RLS");
+  assert.deepEqual((await pool.query(`
     SELECT position, execution_stage FROM ${table("appointment_service_segments")}
     WHERE appointment_id = $1 ORDER BY position
   `, [preParallelParent.id])).rows, [

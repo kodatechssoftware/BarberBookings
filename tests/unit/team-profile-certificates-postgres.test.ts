@@ -49,6 +49,22 @@ test("0033 and certificate lifecycle are additive, private, atomic and location-
     });
     pool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
     await pool.query(`
+      CREATE ROLE anon NOLOGIN;
+      CREATE ROLE authenticated NOLOGIN;
+      CREATE ROLE supabase_admin NOLOGIN;
+    `);
+    const supportsMaintain = Number((await pool.query("SHOW server_version_num")).rows[0].server_version_num) >= 170000;
+    await pool.query(`
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+        GRANT TRUNCATE, REFERENCES, TRIGGER${supportsMaintain ? ", MAINTAIN" : ""} ON TABLES TO anon, authenticated;
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+        GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO anon, authenticated;
+      ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+        GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER${supportsMaintain ? ", MAINTAIN" : ""} ON TABLES TO anon, authenticated;
+      ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+        GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO anon, authenticated;
+    `);
+    await pool.query(`
       CREATE TABLE users (id serial PRIMARY KEY, display_name text NOT NULL);
       CREATE TABLE locations (id serial PRIMARY KEY, name text NOT NULL);
       CREATE TABLE barbers (id serial PRIMARY KEY, name text NOT NULL, specialty text NOT NULL, bio text, avatar text, is_visible boolean DEFAULT true);
@@ -71,6 +87,70 @@ test("0033 and certificate lifecycle are additive, private, atomic and location-
     assert.deepEqual((await runSchemaMigrations(pool, { schemaName: "public", migrationsDirectory, environment: process.env })).applied,
       ["0031_public_team_profiles.sql", "0033_team_profile_certificate_documents.sql"]);
     assert.equal((await runSchemaMigrations(pool, { schemaName: "public", migrationsDirectory, environment: process.env })).alreadyApplied, 2);
+    const metadataSecurity = (await pool.query(`
+      SELECT
+        class_record.relrowsecurity AS rls_enabled,
+        (SELECT count(*)::int FROM pg_policy WHERE polrelid = class_record.oid) AS policy_count,
+        has_table_privilege('anon', class_record.oid, 'SELECT') AS anon_select,
+        has_table_privilege('anon', class_record.oid, 'TRUNCATE') AS anon_truncate,
+        has_table_privilege('anon', class_record.oid, 'REFERENCES') AS anon_references,
+        has_table_privilege('authenticated', class_record.oid, 'TRIGGER') AS authenticated_trigger,
+        has_sequence_privilege('anon', 'barber_qualification_documents_id_seq', 'USAGE') AS anon_sequence_usage,
+        has_sequence_privilege('authenticated', 'barber_qualification_documents_id_seq', 'UPDATE') AS authenticated_sequence_update
+      FROM pg_class class_record
+      WHERE class_record.oid = 'barber_qualification_documents'::regclass
+    `)).rows[0];
+    assert.deepEqual(metadataSecurity, {
+      rls_enabled: true,
+      policy_count: 0,
+      anon_select: false,
+      anon_truncate: false,
+      anon_references: false,
+      authenticated_trigger: false,
+      anon_sequence_usage: false,
+      authenticated_sequence_update: false,
+    }, "0033 neutralises Supabase-style defaults and enables deny-by-default RLS");
+    await pool.query(`
+      CREATE TABLE location_google_review_settings (
+        location_id integer PRIMARY KEY REFERENCES locations(id)
+      );
+      ALTER TABLE location_google_review_settings ENABLE ROW LEVEL SECURITY;
+    `);
+    assert.equal((await pool.query(`
+      SELECT has_table_privilege('anon', 'barber_qualifications', 'TRUNCATE') AS existing_grant
+    `)).rows[0].existing_grant, true,
+    "0033 must not rewrite permissions on pre-existing 0031 objects");
+    await pool.query("BEGIN");
+    try {
+      await pool.query(`
+        REVOKE TRUNCATE, REFERENCES, TRIGGER${supportsMaintain ? ", MAINTAIN" : ""}
+          ON public.barber_public_profiles, public.barber_qualifications, public.location_google_review_settings
+          FROM anon, authenticated
+      `);
+      const residualPrivileges = await pool.query(`
+        SELECT role_record.rolname, table_record.relname, privilege.privilege_name
+        FROM (VALUES ('anon'), ('authenticated')) role_record(rolname)
+        CROSS JOIN (VALUES
+          ('barber_public_profiles'),
+          ('barber_qualifications'),
+          ('location_google_review_settings')
+        ) table_record(relname)
+        CROSS JOIN unnest($1::text[]) privilege(privilege_name)
+        WHERE has_table_privilege(
+          role_record.rolname,
+          format('public.%I', table_record.relname),
+          privilege.privilege_name
+        )
+      `, [["TRUNCATE", "REFERENCES", "TRIGGER", ...(supportsMaintain ? ["MAINTAIN"] : [])]]);
+      assert.equal(residualPrivileges.rowCount, 0,
+        "the isolated legacy-grant hardening proposal removes every effective elevated privilege");
+    } finally {
+      await pool.query("ROLLBACK");
+    }
+    assert.equal((await pool.query(`
+      SELECT has_table_privilege('anon', 'barber_qualifications', 'TRUNCATE') AS existing_grant
+    `)).rows[0].existing_grant, true,
+    "the proposal test must roll back and leave pre-existing permissions unchanged");
     await pool.query(`
       INSERT INTO users (id, display_name) VALUES (1, 'Administrador');
       INSERT INTO locations (id, name) VALUES (1, 'Beauty A'), (2, 'Beauty B');

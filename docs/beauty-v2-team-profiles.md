@@ -27,7 +27,9 @@ O Admin reutiliza as permissões `team.manage_global` e as associações de loca
 
 A migration `0033_team_profile_certificate_documents.sql` acrescenta metadados de imagens privadas sem alterar ou publicar qualificações existentes. O MVP aceita apenas JPG, PNG e WebP até 10 MB. O backend confirma o conteúdo real, limita a descodificação a 40 milhões de píxeis, corrige orientação, redimensiona para um máximo de 2400 px, converte para WebP até 3 MB e não transporta EXIF/GPS para o derivado.
 
-Checksum SHA-256 canónico da migration: `eedefb41791e7a9d413fb5b68a74beaaa6e3b4567db4ae89610120a474dc62ff`.
+Checksum SHA-256 canónico da migration: `08fc4d8b015e2975e79c0ef57d524607e2e9d16c6bb4f86c133115185492ede8`.
+
+A tabela de metadados da fase 2 ativa RLS sem políticas e revoga explicitamente todos os privilégios de `PUBLIC`, `anon` e `authenticated` sobre a tabela e a sequência. A própria migration valida privilégios efetivos, incluindo os herdados por membership, e faz rollback se algum acesso permanecer. Esta proteção é local aos novos objetos e não altera as default ACLs globais do projeto Supabase.
 
 O original recebido nunca é guardado. PDF, SVG, HTML, imagens animadas e caminhos fornecidos pelo browser são recusados. Os caminhos são UUID aleatórios e não incluem nomes ou outros dados pessoais. Uma qualificação continua válida sem imagem; publicar a qualificação nunca publica automaticamente o certificado.
 

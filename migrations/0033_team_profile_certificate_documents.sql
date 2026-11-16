@@ -85,3 +85,116 @@ CREATE INDEX barber_qualification_documents_cleanup_idx
 CREATE INDEX barber_qualification_documents_public_idx
   ON {{schema}}.barber_qualification_documents(location_id, qualification_id, id)
   WHERE is_current = true AND is_published = true AND upload_state = 'ready';
+
+-- This metadata is accessed only by the trusted application server. Supabase
+-- projects can grant privileges to Data API roles through default ACLs, and
+-- RLS does not protect TRUNCATE, REFERENCES or TRIGGER. Neutralise both direct
+-- and PUBLIC grants on the newly-created objects without changing global
+-- defaults. Keep this conditional so the migration also works in plain local
+-- PostgreSQL installations that do not define Supabase roles.
+REVOKE ALL PRIVILEGES ON TABLE {{schema}}.barber_qualification_documents FROM PUBLIC;
+REVOKE ALL PRIVILEGES ON SEQUENCE {{schema}}.barber_qualification_documents_id_seq FROM PUBLIC;
+
+DO $revoke_data_api_roles$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE {{schema}}.barber_qualification_documents FROM anon';
+    EXECUTE 'REVOKE ALL PRIVILEGES ON SEQUENCE {{schema}}.barber_qualification_documents_id_seq FROM anon';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE {{schema}}.barber_qualification_documents FROM authenticated';
+    EXECUTE 'REVOKE ALL PRIVILEGES ON SEQUENCE {{schema}}.barber_qualification_documents_id_seq FROM authenticated';
+  END IF;
+END
+$revoke_data_api_roles$;
+
+ALTER TABLE {{schema}}.barber_qualification_documents ENABLE ROW LEVEL SECURITY;
+
+DO $validate_certificate_metadata_security$
+DECLARE
+  checked_role text;
+  checked_privilege text;
+BEGIN
+  IF NOT (
+    SELECT class_record.relrowsecurity
+    FROM pg_class class_record
+    WHERE class_record.oid = '{{schema}}.barber_qualification_documents'::regclass
+  ) THEN
+    RAISE EXCEPTION 'Certificate metadata table must have row level security enabled.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_policy policy_record
+    WHERE policy_record.polrelid = '{{schema}}.barber_qualification_documents'::regclass
+  ) THEN
+    RAISE EXCEPTION 'Certificate metadata table must not define Data API policies.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_class class_record
+    CROSS JOIN LATERAL aclexplode(
+      coalesce(class_record.relacl, acldefault('r', class_record.relowner))
+    ) acl
+    WHERE class_record.oid = '{{schema}}.barber_qualification_documents'::regclass
+      AND acl.grantee = 0
+      AND acl.privilege_type IN (
+        'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+        'REFERENCES', 'TRIGGER', 'MAINTAIN'
+      )
+  ) THEN
+    RAISE EXCEPTION 'PUBLIC retains privileges on certificate metadata.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_class class_record
+    CROSS JOIN LATERAL aclexplode(
+      coalesce(class_record.relacl, acldefault('S', class_record.relowner))
+    ) acl
+    WHERE class_record.oid = '{{schema}}.barber_qualification_documents_id_seq'::regclass
+      AND acl.grantee = 0
+      AND acl.privilege_type IN ('USAGE', 'SELECT', 'UPDATE')
+  ) THEN
+    RAISE EXCEPTION 'PUBLIC retains privileges on certificate metadata sequence.';
+  END IF;
+
+  FOREACH checked_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = checked_role) THEN
+      FOREACH checked_privilege IN ARRAY (
+        CASE
+          WHEN current_setting('server_version_num')::integer >= 170000 THEN ARRAY[
+            'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+            'REFERENCES', 'TRIGGER', 'MAINTAIN'
+          ]
+          ELSE ARRAY[
+            'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+            'REFERENCES', 'TRIGGER'
+          ]
+        END
+      ) LOOP
+        IF has_table_privilege(
+          checked_role,
+          '{{schema}}.barber_qualification_documents',
+          checked_privilege
+        ) THEN
+          RAISE EXCEPTION '% retains effective % on certificate metadata.',
+            checked_role, checked_privilege;
+        END IF;
+      END LOOP;
+
+      FOREACH checked_privilege IN ARRAY ARRAY['USAGE', 'SELECT', 'UPDATE'] LOOP
+        IF has_sequence_privilege(
+          checked_role,
+          '{{schema}}.barber_qualification_documents_id_seq',
+          checked_privilege
+        ) THEN
+          RAISE EXCEPTION '% retains effective % on certificate metadata sequence.',
+            checked_role, checked_privilege;
+        END IF;
+      END LOOP;
+    END IF;
+  END LOOP;
+END
+$validate_certificate_metadata_security$;
