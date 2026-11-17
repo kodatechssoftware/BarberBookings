@@ -445,10 +445,10 @@ export default function Home() {
                   <div className="grid flex-1 grid-cols-[112px_1fr] gap-0 sm:grid-cols-[160px_1fr]">
                     <img
                       src={getProfessionalAvatar(barber, shopBranding)}
-                      alt={barber.name}
+                      alt={businessConfig.vertical === "beauty" && !barber.avatar ? `Identidade visual de ${shopBranding.shortName}` : barber.name}
                       loading="lazy"
                       decoding="async"
-                      className="h-full min-h-44 w-full bg-background object-cover object-top"
+                      className={`h-full min-h-44 w-full bg-background ${businessConfig.vertical === "beauty" && !barber.avatar ? "object-contain p-3 sm:p-4" : "object-cover object-top"}`}
                     />
                     <div className="flex min-w-0 flex-col justify-center p-4 sm:p-5">
                       <div className="min-w-0">

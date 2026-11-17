@@ -130,12 +130,18 @@ export default function TeamProfile({ slug }: { slug: string }) {
               </section>
             )}
 
-            <Button asChild variant="gold" size="lg" className="mt-8 w-full shadow-lg shadow-primary/10 sm:mt-9 sm:w-auto">
-              <Link href={`/booking?barberId=${profile.professionalId}`}>
-                <CalendarDays className="mr-2 h-5 w-5" aria-hidden="true" />
-                Pedir marcação com {profile.name.split(" ")[0]}
-              </Link>
-            </Button>
+            {profile.services.length > 0 ? (
+              <Button asChild variant="gold" size="lg" className="mt-8 w-full shadow-lg shadow-primary/10 sm:mt-9 sm:w-auto">
+                <Link href={`/booking?barberId=${profile.professionalId}`}>
+                  <CalendarDays className="mr-2 h-5 w-5" aria-hidden="true" />
+                  Pedir marcação com {profile.name.split(" ")[0]}
+                </Link>
+              </Button>
+            ) : (
+              <p role="status" className="mt-8 max-w-xl rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6 text-muted-foreground">
+                Esta profissional ainda não tem serviços disponíveis para marcação online.
+              </p>
+            )}
           </div>
         </div>
       </section>
