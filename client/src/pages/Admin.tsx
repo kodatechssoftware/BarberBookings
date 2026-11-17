@@ -10,7 +10,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO, startOfToday, subDays } from "date-fns";
 import { pt } from "date-fns/locale";
-import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes, Inbox } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Plus, Calendar as CalendarIcon, Clock, User, LogOut, Users, FileDown, Copy, TrendingUp, Euro, AlertTriangle, Upload, Trash2, MapPin, Sparkles, Pencil, Boxes, Inbox, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button-custom";
 import { useBarberAvailability, useBarbers, useShopAvailability } from "@/hooks/use-barbers";
 import { useServices } from "@/hooks/use-services";
@@ -60,6 +60,7 @@ import { AdminRequestNotificationBell } from "@/components/admin/AdminRequestNot
 import { ParallelServiceCompatibilityManager } from "@/components/admin/ParallelServiceCompatibilityManager";
 import { TeamProfileManager } from "@/components/admin/TeamProfileManager";
 import { GoogleReviewsSettings } from "@/components/admin/GoogleReviewsSettings";
+import { BeautyV2FeatureSettings } from "@/components/admin/BeautyV2FeatureSettings";
 import { useBeautyV2Features } from "@/hooks/use-beauty-v2";
 import {
   RecurringExpenseOccurrenceDialog,
@@ -1863,6 +1864,8 @@ export default function Admin() {
     activeLocation?.id ?? activeLocationId,
     (role) => role === "admin",
   );
+  const canManageBeautyV2Features = businessConfig.vertical === "beauty"
+    && canManageRequestNotificationSettings;
   const notificationLocationId = activeLocation?.id ?? activeLocationId;
   const {
     data: requestNotificationFeed,
@@ -4623,6 +4626,9 @@ export default function Admin() {
             {usesCanonicalAuth && canManageUsers && (
               <TabsTrigger value="users" className={adminTabTriggerClass}><Users className="w-4 h-4" /> Utilizadores</TabsTrigger>
             )}
+            {canManageBeautyV2Features && notificationLocationId && (
+              <TabsTrigger value="features" className={adminTabTriggerClass}><Settings2 className="w-4 h-4" /> Funcionalidades</TabsTrigger>
+            )}
             {canBlockCustomers && <TabsTrigger value="blacklist" className={adminTabTriggerClass}><User className="w-4 h-4 text-red-400" /> Bloqueados</TabsTrigger>}
             {canUseOwnOrTeamReports && (
               <TabsTrigger value="reports" className={adminTabTriggerClass}><FileDown className="w-4 h-4" /> {adminCopy.reports.tabLabel}</TabsTrigger>
@@ -5995,6 +6001,15 @@ export default function Admin() {
                   Pode gerir identidades, mas o acesso fica limitado às localizações onde tem `access.manage`.
                 </p>
               )}
+            </TabsContent>
+          )}
+
+          {canManageBeautyV2Features && notificationLocationId && activeLocation && (
+            <TabsContent value="features" className="outline-none">
+              <BeautyV2FeatureSettings
+                locationId={notificationLocationId}
+                locationName={activeLocation.name}
+              />
             </TabsContent>
           )}
 

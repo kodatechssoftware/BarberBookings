@@ -171,7 +171,7 @@ test("consultation mode is read-only and responsive, and fails closed after flag
   for (const tab of ["Agenda", "Marcações", "Equipa", "Serviços"]) {
     await expect(page.getByRole("tab", { name: tab, exact: true })).toBeVisible();
   }
-  for (const hiddenTab of ["Pedidos", "Extras", "Custos internos", "Horário", "Utilizadores", "Bloqueados", "Relatórios"]) {
+  for (const hiddenTab of ["Pedidos", "Extras", "Custos internos", "Horário", "Utilizadores", "Funcionalidades", "Bloqueados", "Relatórios"]) {
     await expect(page.getByRole("tab", { name: hiddenTab, exact: true })).toHaveCount(0);
   }
   await expect(page.getByRole("button", { name: /Marcação manual/i })).toHaveCount(0);

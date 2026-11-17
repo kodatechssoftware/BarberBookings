@@ -1293,7 +1293,97 @@ test("public team profile keeps mixed qualifications compact and accessible at e
   await expect(page.getByRole("heading", { name: "Profissional sem qualificações" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Formação e experiência" })).toHaveCount(0);
   await expect(page.getByTestId("qualification-card")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Pedir marcação com/ })).toHaveCount(0);
+  await expect(page.getByText("Esta profissional ainda não tem serviços disponíveis para marcação online.")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
+
+  await page.route("**/api/public/team-profiles", (route) => route.fulfill({ json: [{
+    professionalId: 32,
+    slug: "qa-layout-empty",
+    name: "Profissional sem fotografia",
+    specialty: "Estética",
+    bio: null,
+    avatar: null,
+    displayOrder: 1,
+    services: [],
+    qualifications: [],
+    testimonials: [],
+  }] }));
+  await page.goto("/equipa");
+  const directoryFallback = page.getByRole("img", { name: /Identidade visual de/ });
+  await expect(directoryFallback).toBeVisible();
+  expect(await directoryFallback.evaluate((image) => getComputedStyle(image).objectFit)).toBe("contain");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
+});
+
+test("settings managers confirm location-scoped Beauty v2 feature changes on desktop and mobile", async ({ page, request }, testInfo) => {
+  const anonymousResponse = await request.get("/api/admin/beauty-v2/features?locationId=1");
+  expect([401, 403]).toContain(anonymousResponse.status());
+
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok()).toBe(true);
+
+  const effective = {
+    appointmentRequests: true,
+    multiServiceAppointments: true,
+    parallelServiceScheduling: false,
+    notificationDeliveryStatus: false,
+    consultationRole: false,
+    teamProfiles: true,
+    googleReviews: false,
+  };
+  const settings = Object.entries(effective).map(([featureName, enabled]) => ({ featureName, locationId: 1, enabled }));
+  const updates: Array<{ featureName: string; body: { enabled: boolean; locationId: number } }> = [];
+
+  await page.route("**/api/account/locations", (route) => route.fulfill({ json: [location] }));
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true,
+    ...effective,
+    appointmentRequestsAvailable: true,
+  } }));
+  await page.route("**/api/admin/beauty-v2/features**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "GET") {
+      return route.fulfill({ json: { masterEnabled: true, settings, effective } });
+    }
+    const featureName = url.pathname.split("/").pop()!;
+    const body = route.request().postDataJSON() as { enabled: boolean; locationId: number };
+    updates.push({ featureName, body });
+    effective[featureName as keyof typeof effective] = body.enabled;
+    const setting = settings.find((item) => item.featureName === featureName)!;
+    setting.enabled = body.enabled;
+    return route.fulfill({ json: { setting, effectiveEnabled: body.enabled, masterEnabled: true } });
+  });
+
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 960 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: "Funcionalidades" }).click();
+    const panel = page.getByTestId("beauty-v2-feature-settings");
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole("switch")).toHaveCount(7);
+    await expect(panel.getByText("Beauty Studio QA", { exact: false }).first()).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+    await page.screenshot({ path: testInfo.outputPath(`feature-settings-${viewport.width}.png`), fullPage: true });
+  }
+
+  const teamProfilesSwitch = page.getByRole("switch", { name: "Desativar Perfis públicos da equipa" });
+  await teamProfilesSwitch.click();
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toContainText("exclusivamente a Beauty Studio QA");
+  await expect(confirmation).toContainText("imediatamente ocultos");
+  await confirmation.getByRole("button", { name: "Confirmar alteração" }).click();
+  await expect.poll(() => updates).toEqual([{
+    featureName: "teamProfiles",
+    body: { enabled: false, locationId: 1 },
+  }]);
+  await expect(page.getByRole("switch", { name: "Ativar Perfis públicos da equipa" })).toBeVisible();
+  expect(Object.entries(effective).filter(([, enabled]) => enabled).map(([name]) => name).sort()).toEqual([
+    "appointmentRequests",
+    "multiServiceAppointments",
+  ]);
 });
 
 test("authorized Admin manages a private certificate image without exposing the original", async ({ page }, testInfo) => {
