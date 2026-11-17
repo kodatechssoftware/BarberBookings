@@ -1146,6 +1146,156 @@ test("all Beauty v2 modules coexist with a responsive certified team profile and
   await expect(page.getByRole("combobox", { name: /Profissional para Manicure/ })).toContainText("Ana");
 });
 
+test("public team profile keeps mixed qualifications compact and accessible at every supported viewport", async ({ page }, testInfo) => {
+  await mockBeautyV2(page);
+  await page.unroute("**/api/beauty-v2/features");
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true,
+    appointmentRequests: true,
+    multiServiceAppointments: true,
+    parallelServiceScheduling: true,
+    notificationDeliveryStatus: true,
+    consultationRole: true,
+    teamProfiles: true,
+    googleReviews: true,
+    appointmentRequestsAvailable: true,
+  } }));
+
+  const qualifications = [
+    {
+      id: 1,
+      kind: "certification",
+      title: "Especialização avançada em técnicas de manicure e cuidado das unhas",
+      issuer: "Academia Beauty QA",
+      completedYear: 2029,
+      description: "Formação prática com foco na preparação, aplicação e acabamento, mantendo uma apresentação cuidada mesmo com textos mais extensos.",
+      certificateUrl: "/api/public/team-profile-certificates/601?locationId=1",
+    },
+    {
+      id: 2,
+      kind: "diploma",
+      title: "Pedicure profissional",
+      issuer: "Instituto QA",
+      completedYear: 2028,
+      description: "Diploma vertical de demonstração.",
+      certificateUrl: "/api/public/team-profile-certificates/602?locationId=1",
+    },
+    {
+      id: 3,
+      kind: "course",
+      title: "Nail art contemporânea",
+      issuer: "Formação QA",
+      completedYear: 2030,
+      description: null,
+      certificateUrl: "/api/public/team-profile-certificates/603?locationId=1",
+    },
+    {
+      id: 4,
+      kind: "training",
+      title: "Atendimento e experiência da cliente",
+      issuer: "Programa interno QA",
+      completedYear: 2030,
+      description: "Qualificação publicada sem imagem de certificado.",
+      certificateUrl: null,
+    },
+  ];
+
+  await page.route("**/api/public/team-profiles/qa-layout", (route) => route.fulfill({ json: {
+    professionalId: 31,
+    slug: "qa-layout",
+    name: "Profissional Beauty QA com nome extenso",
+    specialty: "Manicure, pedicure e nail art",
+    bio: "Uma apresentação profissional longa o suficiente para validar a leitura, o equilíbrio vertical e a adaptação do perfil a diferentes larguras de ecrã.",
+    avatar: null,
+    displayOrder: 0,
+    services: [
+      { id: 11, name: "Manicure", duration: 45, price: 2500 },
+      { id: 12, name: "Pedicure", duration: 60, price: 3200 },
+    ],
+    qualifications,
+    testimonials: [{ authorDisplayName: "Cliente autorizada QA", quote: "Uma experiência muito cuidada e profissional.", sourceLabel: "Opinião autorizada" }],
+  } }));
+
+  const certificateSvgs: Record<string, string> = {
+    "601": '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700"><rect width="1200" height="700" rx="28" fill="#f7edf1"/><rect x="36" y="36" width="1128" height="628" rx="20" fill="none" stroke="#8e4262" stroke-width="5"/><text x="600" y="315" text-anchor="middle" font-family="sans-serif" font-size="70" font-weight="700" fill="#57263b">CERTIFICADO QA</text><text x="600" y="400" text-anchor="middle" font-family="sans-serif" font-size="30" fill="#7d5063">FORMATO HORIZONTAL</text></svg>',
+    "602": '<svg xmlns="http://www.w3.org/2000/svg" width="700" height="1100" viewBox="0 0 700 1100"><rect width="700" height="1100" rx="28" fill="#f4eee7"/><rect x="34" y="34" width="632" height="1032" rx="20" fill="none" stroke="#8e4262" stroke-width="5"/><text x="350" y="490" text-anchor="middle" font-family="sans-serif" font-size="54" font-weight="700" fill="#57263b">DIPLOMA QA</text><text x="350" y="560" text-anchor="middle" font-family="sans-serif" font-size="25" fill="#7d5063">VERTICAL</text></svg>',
+    "603": '<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900"><rect width="900" height="900" rx="28" fill="#eee5eb"/><circle cx="450" cy="450" r="330" fill="none" stroke="#8e4262" stroke-width="6"/><text x="450" y="420" text-anchor="middle" font-family="sans-serif" font-size="62" font-weight="700" fill="#57263b">CURSO QA</text><text x="450" y="500" text-anchor="middle" font-family="sans-serif" font-size="28" fill="#7d5063">QUADRADO</text></svg>',
+  };
+  await page.route(/\/api\/public\/team-profile-certificates\/(601|602|603)(?:\?|$)/, (route) => {
+    const certificateId = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    return route.fulfill({ contentType: "image/svg+xml", body: certificateSvgs[certificateId] });
+  });
+
+  const viewports = [
+    { width: 320, height: 800, expectedFirstRow: 1 },
+    { width: 390, height: 844, expectedFirstRow: 1 },
+    { width: 768, height: 1024, expectedFirstRow: 2 },
+    { width: 1440, height: 960, expectedFirstRow: 3 },
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/equipa/qa-layout");
+    await expect(page.getByRole("heading", { name: "Profissional Beauty QA com nome extenso" })).toBeVisible();
+
+    const cards = page.getByTestId("qualification-card");
+    await expect(cards).toHaveCount(4);
+    await expect(page.getByTestId("certificate-preview")).toHaveCount(3);
+    const certificateLinks = page.getByRole("link", { name: "Ver certificado" });
+    await expect(certificateLinks).toHaveCount(3);
+    await expect(certificateLinks.first()).toHaveAttribute("target", "_blank");
+    await expect(certificateLinks.first()).toHaveAttribute("rel", "noreferrer");
+    await certificateLinks.first().focus();
+    await expect(certificateLinks.first()).toBeFocused();
+
+    const fallbackImage = page.getByRole("img", { name: /Identidade visual de/ });
+    await expect(fallbackImage).toBeVisible();
+    expect(await fallbackImage.evaluate((image) => getComputedStyle(image).objectFit)).toBe("contain");
+
+    const boxes = await cards.evaluateAll((elements) => elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return { top: box.top, width: box.width };
+    }));
+    const firstRowCount = boxes.filter((box) => Math.abs(box.top - boxes[0].top) < 2).length;
+    expect(firstRowCount).toBe(viewport.expectedFirstRow);
+    expect(Math.max(...boxes.map((box) => box.width))).toBeLessThanOrEqual(337);
+
+    const imageFits = await page.getByTestId("certificate-preview").locator("img").evaluateAll((images) => (
+      images.map((image) => getComputedStyle(image).objectFit)
+    ));
+    expect(imageFits).toEqual(["contain", "contain", "contain"]);
+
+    const previewRatios = await page.getByTestId("certificate-preview").evaluateAll((elements) => elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return box.width / box.height;
+    }));
+    for (const ratio of previewRatios) expect(ratio).toBeGreaterThanOrEqual(1.3);
+    for (const ratio of previewRatios) expect(ratio).toBeLessThanOrEqual(1.36);
+
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+    await page.screenshot({ path: testInfo.outputPath(`team-profile-layout-${viewport.width}.png`), fullPage: true });
+  }
+
+  await page.route("**/api/public/team-profiles/qa-layout-empty", (route) => route.fulfill({ json: {
+    professionalId: 32,
+    slug: "qa-layout-empty",
+    name: "Profissional sem qualificações",
+    specialty: "Estética",
+    bio: null,
+    avatar: null,
+    displayOrder: 1,
+    services: [],
+    qualifications: [],
+    testimonials: [],
+  } }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/equipa/qa-layout-empty");
+  await expect(page.getByRole("heading", { name: "Profissional sem qualificações" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Formação e experiência" })).toHaveCount(0);
+  await expect(page.getByTestId("qualification-card")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
+});
+
 test("authorized Admin manages a private certificate image without exposing the original", async ({ page }, testInfo) => {
   const login = await page.request.post("/api/admin/login", {
     data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
