@@ -230,21 +230,30 @@ export function BeautyV2FeatureSettings({
       </Card>
 
       <AlertDialog open={pendingChange !== null} onOpenChange={(open) => { if (!open) setPendingChange(null); }}>
-        <AlertDialogContent className="w-[calc(100vw-2rem)] max-w-lg border-white/10 bg-card text-white">
+        <AlertDialogContent className="w-[calc(100vw-2rem)] max-w-lg border-border bg-card text-card-foreground">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {pendingChange?.enabled ? "Ativar" : "Desativar"} {pendingChange ? featurePresentation[pendingChange.featureName].label : "funcionalidade"}?
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2 text-left text-gray-300">
-              <span className="block">Esta alteração aplica-se exclusivamente a <strong className="text-white">{locationName}</strong>.</span>
+            <AlertDialogDescription className="space-y-3 text-left text-foreground" data-testid="feature-change-description">
+              <span className="block">Esta alteração aplica-se exclusivamente a <strong className="text-foreground">{locationName}</strong>.</span>
               {pendingChange && featurePresentation[pendingChange.featureName].warning ? (
-                <span className="block text-amber-100">{featurePresentation[pendingChange.featureName].warning}</span>
+                <span
+                  className="block rounded-md border border-amber-300 bg-amber-50 px-3 py-2 font-medium text-amber-900"
+                  data-testid="feature-change-warning"
+                >
+                  {featurePresentation[pendingChange.featureName].warning}
+                </span>
               ) : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={applyChange} className={pendingChange?.enabled ? "" : "bg-red-600 text-white hover:bg-red-500"}>
+            <AlertDialogAction
+              onClick={applyChange}
+              className={pendingChange?.enabled ? "" : "bg-red-700 text-white hover:bg-red-800 focus-visible:ring-red-700"}
+              data-testid="feature-change-confirm"
+            >
               Confirmar alteração
             </AlertDialogAction>
           </AlertDialogFooter>

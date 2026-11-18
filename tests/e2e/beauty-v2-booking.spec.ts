@@ -1367,6 +1367,18 @@ test("settings managers confirm location-scoped Beauty v2 feature changes on des
     await expect(panel.getByText("Beauty Studio QA", { exact: false }).first()).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
     await page.screenshot({ path: testInfo.outputPath(`feature-settings-${viewport.width}.png`), fullPage: true });
+
+    await page.getByRole("switch", { name: "Desativar Perfis públicos da equipa" }).click();
+    const viewportConfirmation = page.getByRole("alertdialog");
+    const warning = viewportConfirmation.getByTestId("feature-change-warning");
+    const destructiveAction = viewportConfirmation.getByTestId("feature-change-confirm");
+    await expect(warning).toBeVisible();
+    expect(await contrastRatio(viewportConfirmation.getByTestId("feature-change-description"))).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(warning)).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(destructiveAction)).toBeGreaterThanOrEqual(4.5);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: testInfo.outputPath(`feature-disable-confirmation-${viewport.width}.png`), fullPage: true });
+    await viewportConfirmation.getByRole("button", { name: "Cancelar" }).click();
   }
 
   const teamProfilesSwitch = page.getByRole("switch", { name: "Desativar Perfis públicos da equipa" });
@@ -1384,6 +1396,14 @@ test("settings managers confirm location-scoped Beauty v2 feature changes on des
     "appointmentRequests",
     "multiServiceAppointments",
   ]);
+
+  await page.getByRole("switch", { name: "Ativar Perfis públicos da equipa" }).click();
+  const activationConfirmation = page.getByRole("alertdialog");
+  await expect(activationConfirmation.getByTestId("feature-change-warning")).toBeVisible();
+  expect(await contrastRatio(activationConfirmation.getByTestId("feature-change-description"))).toBeGreaterThanOrEqual(4.5);
+  expect(await contrastRatio(activationConfirmation.getByTestId("feature-change-warning"))).toBeGreaterThanOrEqual(4.5);
+  expect(await contrastRatio(activationConfirmation.getByTestId("feature-change-confirm"))).toBeGreaterThanOrEqual(4.5);
+  await activationConfirmation.getByRole("button", { name: "Cancelar" }).click();
 });
 
 test("authorized Admin manages a private certificate image without exposing the original", async ({ page }, testInfo) => {

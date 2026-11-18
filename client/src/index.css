@@ -357,7 +357,12 @@
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-green-300,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-emerald-100,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-emerald-200,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-emerald-300 {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-emerald-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-green-200,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-green-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-emerald-100,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-emerald-200,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-emerald-300 {
   color: hsl(155 46% 30%);
 }
 
@@ -368,7 +373,11 @@
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-amber-100,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-amber-200,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-amber-300,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-orange-300 {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-orange-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-amber-100,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-amber-200,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-amber-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-orange-300 {
   color: hsl(30 64% 34%);
 }
 
@@ -383,12 +392,19 @@
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-red-300,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-red-400,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-rose-200,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-rose-300 {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-rose-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-red-100,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-red-200,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-red-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-red-400,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-rose-200,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-rose-300 {
   color: hsl(350 55% 43%);
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell .text-blue-300,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-blue-300 {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-blue-300,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-blue-300 {
   color: hsl(210 48% 39%);
 }
 
@@ -396,17 +412,23 @@
 :root[data-brand-theme="beauty-clean"] .admin-shell .bg-destructive[class~="text-white"],
 :root[data-brand-theme="beauty-clean"] .admin-shell [class*="bg-red-"][class~="text-white"],
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .bg-primary[class~="text-white"],
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .bg-destructive[class~="text-white"] {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .bg-destructive[class~="text-white"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] [class*="bg-red-"][class~="text-white"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .bg-primary[class~="text-white"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .bg-destructive[class~="text-white"],
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] [class*="bg-red-"][class~="text-white"] {
   color: hsl(0 0% 100%);
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell .text-primary,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-primary {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .text-primary,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .text-primary {
   color: hsl(348 43% 43%);
 }
 
 :root[data-brand-theme="beauty-clean"] .admin-shell .bg-primary,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .bg-primary {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .bg-primary,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .bg-primary {
   border-color: hsl(348 40% 40%);
   background-color: hsl(348 43% 48%);
 }
@@ -428,7 +450,11 @@
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .border-white\/5,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .border-white\/10,
 :root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .border-white\/15,
-:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .border-white\/20 {
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="dialog"] .border-white\/20,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .border-white\/5,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .border-white\/10,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .border-white\/15,
+:root[data-brand-theme="beauty-clean"][data-admin-surface="true"] [role="alertdialog"] .border-white\/20 {
   border-color: hsl(27 20% 72% / 0.82);
 }
 
