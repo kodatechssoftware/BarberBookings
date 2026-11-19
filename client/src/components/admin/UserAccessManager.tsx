@@ -20,6 +20,7 @@ import {
   hasCapabilityAtLocation,
   resolvePresetCapabilities,
   type AccessPresetKey,
+  type AccessPresetProfile,
   type AccessScope,
   type CapabilityCode,
   type EffectiveAccess,
@@ -78,6 +79,7 @@ type UserAccessManagerProps = {
   locations: ShopLocation[];
   professionals: ProfessionalOption[];
   consultationEnabledLocationIds: readonly number[];
+  professionalPresetProfile?: AccessPresetProfile;
 };
 
 type AccessDraft = {
@@ -145,6 +147,10 @@ export const professionalAdditionalCapabilities = [
   "reports.export_team",
 ] as const satisfies readonly CapabilityCode[];
 
+export const beautyV2ProfessionalAdditionalCapabilities = [
+  "finance.view_own",
+] as const satisfies readonly CapabilityCode[];
+
 const professionalPermissionGroups: ReadonlyArray<{
   label: string;
   description: string;
@@ -177,7 +183,13 @@ const professionalPermissionGroups: ReadonlyArray<{
   },
 ];
 
-const professionalAdditionalCapabilitySet: ReadonlySet<CapabilityCode> = new Set(professionalAdditionalCapabilities);
+const beautyV2ProfessionalPermissionGroups: typeof professionalPermissionGroups = [
+  {
+    label: "Financeiro",
+    description: "Consulta opcional apenas dos próprios resultados, sem exportação.",
+    capabilities: ["finance.view_own"],
+  },
+];
 
 function accessScopeKey(scope: AccessScope, index: number) {
   return scope.kind === "global" ? `global-${index}` : `location-${scope.locationId}-${index}`;
@@ -215,6 +227,7 @@ export function isGlobalAdministrator(scopes: readonly AccessScope[]) {
 export function canActorGrantScope(
   actorAccess: EffectiveAccess,
   scope: Pick<AccessDraft, "kind" | "locationId" | "preset" | "capabilities">,
+  presetProfile: AccessPresetProfile = "default",
 ) {
   if (scope.kind === "global") {
     if (!hasCapability(actorAccess, "access.manage")) return false;
@@ -222,14 +235,14 @@ export function canActorGrantScope(
       && !capabilityCodes.every((capability) => hasCapability(actorAccess, capability))) return false;
     const capabilities = scope.preset === "custom"
       ? scope.capabilities
-      : [...resolvePresetCapabilities(scope.preset), ...scope.capabilities];
+      : [...resolvePresetCapabilities(scope.preset, { profile: presetProfile }), ...scope.capabilities];
     return capabilities.every((capability) => hasCapability(actorAccess, capability));
   }
   if (!scope.locationId || !hasCapabilityAtLocation(actorAccess, "access.manage", scope.locationId)) return false;
   if (scope.preset === "administrator") return false;
   const capabilities = scope.preset === "custom"
     ? scope.capabilities
-    : [...resolvePresetCapabilities(scope.preset), ...scope.capabilities];
+    : [...resolvePresetCapabilities(scope.preset, { profile: presetProfile }), ...scope.capabilities];
   return capabilities.every((capability) => canGrantCapabilityAtLocation(capability)
     && hasCapabilityAtLocation(actorAccess, capability, scope.locationId!));
 }
@@ -257,6 +270,7 @@ function AccessEditor({
   actorAccess,
   locations,
   consultationEnabledLocationIds,
+  professionalPresetProfile,
   disabled,
   lastAdministrator,
 }: {
@@ -265,6 +279,7 @@ function AccessEditor({
   actorAccess: EffectiveAccess;
   locations: ShopLocation[];
   consultationEnabledLocationIds: readonly number[];
+  professionalPresetProfile: AccessPresetProfile;
   disabled?: boolean;
   lastAdministrator?: boolean;
 }) {
@@ -299,7 +314,7 @@ function AccessEditor({
     key: `location-${locationId}-${Date.now()}`,
     kind: "location",
     locationId,
-    preset: accessType === "consultation" ? "consultation" : resolvePresetCapabilities("professional").every((capability) =>
+    preset: accessType === "consultation" ? "consultation" : resolvePresetCapabilities("professional", { profile: professionalPresetProfile }).every((capability) =>
       hasCapabilityAtLocation(actorAccess, capability, locationId)) ? "professional" : "custom",
     capabilities: [],
   }]);
@@ -364,7 +379,11 @@ function AccessEditor({
           className={`rounded-xl border p-4 text-left transition-colors ${accessType === "professional" ? "border-primary bg-primary/10" : "border-white/10 bg-background/40 hover:border-white/25"} disabled:cursor-not-allowed disabled:opacity-60`}
         >
           <span className="flex items-center gap-2 font-semibold text-white"><UserRound className="h-4 w-4 text-primary" /> Professional</span>
-          <span className="mt-2 block text-xs text-gray-400">Acesso operacional à agenda, marcações, clientes e resultados próprios.</span>
+          <span className="mt-2 block text-xs text-gray-400">
+            {professionalPresetProfile === "beauty-v2"
+              ? "Acesso operacional à agenda, marcações e clientes da equipa. O financeiro próprio é opcional."
+              : "Acesso operacional à agenda, marcações, clientes e resultados próprios."}
+          </span>
         </button>
         <button
           type="button"
@@ -408,7 +427,7 @@ function AccessEditor({
       ) : accessType === "consultation" ? (
         <div className="space-y-4">
           <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-gray-300">
-            Sem edi\u00e7\u00e3o, dados de contacto, clientes, pedidos, relat\u00f3rios, exporta\u00e7\u00f5es ou defini\u00e7\u00f5es. N\u00e3o admite permiss\u00f5es adicionais.
+            Sem edição, dados de contacto, relatórios, exportações ou definições. Permite consultar agenda, marcações, pedidos, equipa, serviços e horários. Não admite permissões adicionais.
           </div>
           {!disabled && (
             <Select value="" onValueChange={(raw) => addLocation(Number(raw))} disabled={availableLocations.length === 0}>
@@ -434,7 +453,9 @@ function AccessEditor({
       ) : (
         <div className="space-y-4">
           <div className="rounded-lg border border-white/10 bg-background/30 p-3 text-xs text-gray-300">
-            Inclui agenda própria e da equipa, criação manual, gestão das próprias marcações, clientes próprios, financeiro próprio e exportação própria.
+            {professionalPresetProfile === "beauty-v2"
+              ? "Inclui a gestão operacional das marcações e pedidos da equipa. O acesso aos próprios resultados financeiros pode ser atribuído separadamente; a exportação permanece indisponível."
+              : "Inclui agenda própria e da equipa, criação manual, gestão das próprias marcações, clientes próprios, financeiro próprio e exportação própria."}
           </div>
           {!disabled && (
             <Select
@@ -459,8 +480,15 @@ function AccessEditor({
         const locationName = scope.kind === "location"
           ? locations.find((location) => location.id === scope.locationId)?.name ?? `Localização #${scope.locationId}`
           : "Global (configuração existente)";
-        const scopeGrantable = canActorGrantScope(actorAccess, scope);
-        const allowedCapabilities = professionalAdditionalCapabilities.filter((capability) =>
+        const additionalCapabilities = professionalPresetProfile === "beauty-v2"
+          ? beautyV2ProfessionalAdditionalCapabilities
+          : professionalAdditionalCapabilities;
+        const additionalCapabilitySet: ReadonlySet<CapabilityCode> = new Set(additionalCapabilities);
+        const permissionGroups = professionalPresetProfile === "beauty-v2"
+          ? beautyV2ProfessionalPermissionGroups
+          : professionalPermissionGroups;
+        const scopeGrantable = canActorGrantScope(actorAccess, scope, professionalPresetProfile);
+        const allowedCapabilities = additionalCapabilities.filter((capability) =>
           scope.kind === "global"
             ? hasCapability(actorAccess, capability)
             : Boolean(scope.locationId
@@ -469,7 +497,7 @@ function AccessEditor({
         );
         const allowedCapabilitySet: ReadonlySet<CapabilityCode> = new Set(allowedCapabilities);
         const hiddenCapabilities = scope.capabilities.filter(
-          (capability) => !professionalAdditionalCapabilitySet.has(capability),
+          (capability) => !additionalCapabilitySet.has(capability),
         );
 
         return (
@@ -500,10 +528,10 @@ function AccessEditor({
 
             <details className="mt-4 rounded-lg border border-white/10 p-3" data-testid={`professional-additional-${scope.key}`}>
               <summary className="cursor-pointer text-sm font-medium text-white">
-                Permissões adicionais ({scope.capabilities.filter((capability) => professionalAdditionalCapabilitySet.has(capability)).length})
+                Permissões adicionais ({scope.capabilities.filter((capability) => additionalCapabilitySet.has(capability)).length})
               </summary>
               <div className="mt-4 space-y-4">
-                {professionalPermissionGroups.map((group) => {
+                {permissionGroups.map((group) => {
                   const capabilities = group.capabilities.filter((capability) => allowedCapabilitySet.has(capability));
                   if (capabilities.length === 0) return null;
                   return (
@@ -605,6 +633,7 @@ export function UserAccessManager({
   locations,
   professionals,
   consultationEnabledLocationIds,
+  professionalPresetProfile = "default",
 }: UserAccessManagerProps) {
   const { toast } = useToast();
   const pendingRef = useRef(false);
@@ -693,7 +722,7 @@ export function UserAccessManager({
       key: `location-${location.id}-new`,
       kind: "location",
       locationId: location.id,
-      preset: resolvePresetCapabilities("professional").every((capability) =>
+      preset: resolvePresetCapabilities("professional", { profile: professionalPresetProfile }).every((capability) =>
         hasCapabilityAtLocation(currentAccess, capability, location.id)) ? "professional" : "custom",
       capabilities: [],
     }];
@@ -702,7 +731,7 @@ export function UserAccessManager({
           key: "global-new",
           kind: "global",
           locationId: null,
-          preset: resolvePresetCapabilities("professional").every((capability) =>
+          preset: resolvePresetCapabilities("professional", { profile: professionalPresetProfile }).every((capability) =>
             hasCapability(currentAccess, capability)) ? "professional" : "custom",
           capabilities: [],
         }]
@@ -735,7 +764,7 @@ export function UserAccessManager({
     if (accessDrafts.some((scope) => scope.preset === "custom" && scope.capabilities.length === 0)) {
       return "Um âmbito personalizado precisa de pelo menos uma permissão.";
     }
-    if (accessDrafts.some((scope) => !canActorGrantScope(currentAccess, scope))) {
+    if (accessDrafts.some((scope) => !canActorGrantScope(currentAccess, scope, professionalPresetProfile))) {
       return "Não pode conceder acesso acima do seu teto de permissões.";
     }
     if (isConsultationDraft && professionalId !== "none") {
@@ -827,7 +856,7 @@ export function UserAccessManager({
         throw new Error("O último Administrator global ativo não pode ser despromovido.");
       }
       if (canManageGlobalAccess) {
-        if (accessDrafts.some((scope) => !canActorGrantScope(currentAccess, scope))) {
+        if (accessDrafts.some((scope) => !canActorGrantScope(currentAccess, scope, professionalPresetProfile))) {
           throw new Error("Não pode conceder acesso acima do seu teto de permissões.");
         }
         await apiRequest("PUT", `/api/admin/users/${editingUser.id}/access`, {
@@ -847,7 +876,7 @@ export function UserAccessManager({
         ]);
         for (const locationId of Array.from(locationIds)) {
           const scope = current.find((candidate) => candidate.locationId === locationId);
-          if (scope && !canActorGrantScope(currentAccess, scope)) {
+          if (scope && !canActorGrantScope(currentAccess, scope, professionalPresetProfile)) {
             throw new Error("Não pode conceder acesso acima do seu teto de permissões.");
           }
           await apiRequest("PUT", `/api/admin/users/${editingUser.id}/access`, {
@@ -1042,6 +1071,7 @@ export function UserAccessManager({
               actorAccess={currentAccess}
               locations={locations}
               consultationEnabledLocationIds={consultationEnabledLocationIds}
+              professionalPresetProfile={professionalPresetProfile}
             />
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -1135,6 +1165,7 @@ export function UserAccessManager({
                   actorAccess={currentAccess}
                   locations={locations}
                   consultationEnabledLocationIds={consultationEnabledLocationIds}
+                  professionalPresetProfile={professionalPresetProfile}
                   disabled={!canManageGlobalAccess && manageableLocations.length === 0}
                   lastAdministrator={isEditingLastAdministrator}
                 />

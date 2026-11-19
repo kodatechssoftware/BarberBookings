@@ -394,6 +394,37 @@ test.describe("canonical User & Access Management UI", () => {
     await expect(page.getByLabel("Notifications (F8)")).toContainText("O utilizador não tem palavra-passe definida.");
   });
 
+  test("Beauty v2 lets an Administrator grant only own finance to a Professional", async ({ page }) => {
+    await loginLegacyAdmin(page);
+    await page.route("**/api/runtime-config", (route) => route.fulfill({ json: beautyRuntimeConfig }));
+    const observed = await mockCanonicalAdmin(page, { consultationRole: true });
+    await page.goto("/admin");
+    await page.getByRole("tab", { name: "Utilizadores", exact: true }).click();
+    await page.getByTestId("managed-user-103").getByRole("button", { name: "Editar" }).click();
+    const dialog = page.getByRole("dialog", { name: "Editar utilizador" });
+
+    await dialog.getByText("Permissões adicionais (0)").click();
+    await expect(dialog.getByLabel("Ver os próprios resultados financeiros")).toBeVisible();
+    await expect(dialog.getByLabel("Exportar o próprio relatório")).toHaveCount(0);
+    await expect(dialog.getByLabel("Ver resultados financeiros da equipa")).toHaveCount(0);
+    await dialog.getByLabel("Ver os próprios resultados financeiros").click();
+    await dialog.getByRole("button", { name: "Guardar acesso" }).click();
+
+    await expect.poll(() => observed.accessUpdates.length).toBe(1);
+    expect(observed.accessUpdates[0]).toMatchObject({
+      userId: 103,
+      body: {
+        mode: "replace_all",
+        scopes: [{
+          kind: "location",
+          locationId: 1,
+          preset: "professional",
+          capabilities: ["finance.view_own"],
+        }],
+      },
+    });
+  });
+
   test("last Administrator and grant ceiling are blocked visibly before the API", async ({ page }) => {
     await loginLegacyAdmin(page);
     const onlyAdministrator = defaultUsers().filter((candidate) => candidate.id !== 102);

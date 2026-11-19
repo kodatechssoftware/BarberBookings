@@ -6022,6 +6022,7 @@ export default function Admin() {
                 consultationEnabledLocationIds={beautyV2Features?.consultationRole && notificationLocationId
                   ? [notificationLocationId]
                   : []}
+                professionalPresetProfile={beautyV2Features?.enabled ? "beauty-v2" : "default"}
               />
               {!canManageAccess && (
                 <p className="mt-3 text-xs text-amber-200">

@@ -9,6 +9,7 @@ import {
   type EffectiveAccess,
 } from "../../shared/auth";
 import {
+  beautyV2ProfessionalAdditionalCapabilities,
   canActorGrantScope,
   isGlobalAdministrator,
   professionalAdditionalCapabilities,
@@ -108,10 +109,25 @@ test("Professional UI exposes only operational, location-safe additional permiss
   }
 });
 
+test("Beauty v2 Professional UI exposes only optional own finance and never export", () => {
+  assert.deepEqual(beautyV2ProfessionalAdditionalCapabilities, ["finance.view_own"]);
+  assert.ok(beautyV2ProfessionalAdditionalCapabilities.every(canGrantCapabilityAtLocation));
+  assert.equal(beautyV2ProfessionalAdditionalCapabilities.includes("reports.export_own" as never), false);
+  assert.equal(beautyV2ProfessionalAdditionalCapabilities.includes("finance.view_team" as never), false);
+
+  assert.equal(canActorGrantScope(globalAdministratorAccess, {
+    kind: "location",
+    locationId: 7,
+    preset: "professional",
+    capabilities: ["finance.view_own"],
+  }, "beauty-v2"), true);
+});
+
 test("Admin exposes the canonical area only behind a canonical session and users.manage", () => {
   const source = readFileSync("client/src/pages/Admin.tsx", "utf8");
   assert.match(source, /const usesCanonicalAuth = Boolean\(user\?\.access && user\.userId\)/);
   assert.match(source, /usesCanonicalAuth && canManageUsers/);
   assert.match(source, /<UserAccessManager/);
+  assert.match(source, /professionalPresetProfile=\{beautyV2Features\?\.enabled \? "beauty-v2" : "default"\}/);
   assert.match(source, /"access\.manage"/);
 });

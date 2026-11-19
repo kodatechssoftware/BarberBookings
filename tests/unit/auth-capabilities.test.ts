@@ -142,6 +142,11 @@ test("Beauty v2 resolves operational presets without changing the shared Barber 
     locationId: 10,
     preset: "consultation",
   }], { presetProfile: "beauty-v2" });
+  const custom = resolveEffectiveAccess([{
+    kind: "location",
+    locationId: 10,
+    capabilities: ["catalog.view"],
+  }], { presetProfile: "beauty-v2" });
 
   assert.deepEqual(professional.locationCapabilities[0].capabilities, [...beautyV2ProfessionalCapabilityCodes]);
   assert.equal(hasCapabilityAtLocation(professional, "appointments.manage_team", 10), true);
@@ -149,7 +154,16 @@ test("Beauty v2 resolves operational presets without changing the shared Barber 
   assert.equal(hasCapabilityAtLocation(professional, "finance.view_own", 10), false);
   assert.equal(hasCapabilityAtLocation(professional, "reports.export_own", 10), false);
   assert.equal(hasCapabilityAtLocation(professional, "customers.notes_own", 10), false);
+  const professionalWithOwnFinance = resolveEffectiveAccess([{
+    kind: "location",
+    locationId: 10,
+    preset: "professional",
+    capabilities: ["finance.view_own"],
+  }], { presetProfile: "beauty-v2" });
+  assert.equal(hasCapabilityAtLocation(professionalWithOwnFinance, "finance.view_own", 10), true);
+  assert.equal(hasCapabilityAtLocation(professionalWithOwnFinance, "reports.export_own", 10), false);
   assert.deepEqual(consultation.locationCapabilities[0].capabilities, [...beautyV2ConsultationCapabilityCodes]);
+  assert.deepEqual(custom.locationCapabilities[0].capabilities, ["catalog.view"]);
   assert.equal(hasCapabilityAtLocation(consultation, "appointment_requests.view", 10), true);
   assert.equal(hasCapabilityAtLocation(consultation, "hours.view_team", 10), true);
   assert.deepEqual(professionalCapabilityCodes, accessPresets.professional.capabilities);
