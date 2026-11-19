@@ -127,7 +127,7 @@ export type AppointmentCompletionPayload = {
   expectedRevision: number;
   paymentMethod: Exclude<AppointmentPaymentMethod, "pending">;
   extras: Array<{ extraId: number; amountCents?: number; quantity?: number }>;
-  internalCosts: Array<{ internalCostId: number; unitCostCents?: number; quantity?: number }>;
+  internalCosts?: Array<{ internalCostId: number; unitCostCents?: number; quantity?: number }>;
 };
 
 type ServiceListItem = {
@@ -201,6 +201,8 @@ function EditAppointmentDialog({
   bookingSlotIntervalMinutes,
   toast,
   disabled = false,
+  canManageInternalCosts = false,
+  canManageAppointmentTerms = false,
   locationLogoUrl,
 }: {
   appointment: AdminAppointment;
@@ -212,6 +214,8 @@ function EditAppointmentDialog({
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   toast: ReturnType<typeof useToast>["toast"];
   disabled?: boolean;
+  canManageInternalCosts?: boolean;
+  canManageAppointmentTerms?: boolean;
   locationLogoUrl?: string | null;
 }) {
   const businessCopy = useBusinessCopy();
@@ -260,7 +264,7 @@ function EditAppointmentDialog({
     locationId: appointment.locationId,
   });
   const { data: internalCostDefinitions = [], isLoading: isLoadingInternalCosts } = useInternalCosts({
-    enabled: open,
+    enabled: open && canManageInternalCosts,
     locationId: appointment.locationId,
   });
   const originalTime = format(parseISO(appointment.startTime), "HH:mm");
@@ -594,7 +598,7 @@ function EditAppointmentDialog({
       toast({ title: "Serviço inválido", description: agendaCopy.professional.incompatibleService, variant: "destructive" });
       return;
     }
-    if (serviceId === "custom") {
+    if (canManageAppointmentTerms && serviceId === "custom") {
       if (!customServiceName.trim() || customServiceName.trim().length > 100) {
         toast({ title: "Serviço inválido", description: "Indique uma descrição até 100 caracteres.", variant: "destructive" });
         return;
@@ -604,7 +608,7 @@ function EditAppointmentDialog({
         return;
       }
     }
-    if ((serviceId === "custom" || showExistingPriceTerms) && priceCents === null) {
+    if (canManageAppointmentTerms && (serviceId === "custom" || showExistingPriceTerms) && priceCents === null) {
       toast({ title: "Preço inválido", description: "Indique o preço final desta marcação.", variant: "destructive" });
       return;
     }
@@ -670,17 +674,17 @@ function EditAppointmentDialog({
         barberId: parsedBarberId,
         serviceId: parsedServiceId,
         serviceMode: serviceId === "custom" ? "custom" : "existing",
-        allowOutsideHours: allowOutsideHours && selectedIsOutsideHours,
+        ...(canManageAppointmentTerms ? { allowOutsideHours: allowOutsideHours && selectedIsOutsideHours } : {}),
         extras: extrasPayload,
-        internalCosts: internalCostsPayload,
+        ...(canManageInternalCosts ? { internalCosts: internalCostsPayload } : {}),
         ...(businessConfig.features.appointmentAvailabilityWindows ? {
           availabilityWindows: requestedAvailabilityWindows,
         } : {}),
-        ...(serviceId === "custom" ? {
+        ...(canManageAppointmentTerms && serviceId === "custom" ? {
           customServiceName: customServiceName.trim(),
           customDurationMinutes: parsedCustomDuration,
           servicePriceCents: priceCents,
-        } : showExistingPriceTerms ? {
+        } : canManageAppointmentTerms && showExistingPriceTerms ? {
           servicePriceCents: priceCents,
         } : {}),
       }, appointment.locationId ? { headers: locationHeaders(appointment.locationId) } : undefined);
@@ -842,7 +846,7 @@ function EditAppointmentDialog({
               <p className="text-xs text-red-300">{agendaCopy.professional.noCompatibleServices}</p>
             )}
           </div>
-          {serviceId === "custom" && (
+          {canManageAppointmentTerms && serviceId === "custom" && (
             <div className="grid gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 sm:grid-cols-2">
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="edit-custom-service-name">Descrição do serviço</Label>
@@ -879,7 +883,7 @@ function EditAppointmentDialog({
               </div>
             </div>
           )}
-          {showExistingPriceTerms && (
+          {canManageAppointmentTerms && showExistingPriceTerms && (
             <div className="space-y-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3">
               <div>
                 <p className="font-semibold text-amber-100">Preço específico desta marcação</p>
@@ -982,7 +986,7 @@ function EditAppointmentDialog({
               )}
             </div>
           )}
-          <Collapsible
+          {canManageInternalCosts && <Collapsible
             open={isExtrasOpen}
             onOpenChange={setIsExtrasOpen}
             className={cn(
@@ -1128,7 +1132,7 @@ function EditAppointmentDialog({
                 </div>
               )}
             </CollapsibleContent>
-          </Collapsible>
+          </Collapsible>}
           <Collapsible
             open={areInternalCostsOpen}
             onOpenChange={setAreInternalCostsOpen}
@@ -1335,6 +1339,8 @@ export function AppointmentDetailsDialog({
   canChangeStatus = canManageAppointment,
   canCancelAppointment = canManageAppointment,
   canManageCommunicationFollowups = false,
+  canManageInternalCosts = false,
+  canManageAppointmentTerms = false,
   pendingAction = null,
   locationLogoUrl,
 }: {
@@ -1373,6 +1379,8 @@ export function AppointmentDetailsDialog({
   canChangeStatus?: boolean;
   canCancelAppointment?: boolean;
   canManageCommunicationFollowups?: boolean;
+  canManageInternalCosts?: boolean;
+  canManageAppointmentTerms?: boolean;
   pendingAction?: AppointmentMutationPendingAction | null;
   locationLogoUrl?: string | null;
 }) {
@@ -1579,11 +1587,11 @@ export function AppointmentDetailsDialog({
         quantity: selection.quantity,
       };
     });
-    const internalCosts = (appointment.internalCosts ?? []).map((cost) => ({
+    const internalCosts = canManageInternalCosts ? (appointment.internalCosts ?? []).map((cost) => ({
       internalCostId: cost.internalCostDefinitionId,
       unitCostCents: cost.unitCostCentsSnapshot,
       quantity: cost.quantity,
-    }));
+    })) : undefined;
 
     onComplete(appointment.id, {
       expectedRevision: appointment.notificationRevision ?? 0,
@@ -1809,7 +1817,7 @@ export function AppointmentDetailsDialog({
                 <span className="shrink-0 text-primary">{formatAppointmentPrice(appointmentTotal)}</span>
               </div>
             </div>
-            {appointmentInternalCosts.length > 0 && (
+            {canManageInternalCosts && appointmentInternalCosts.length > 0 && (
               <div className="mt-3 space-y-2 rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-3 text-sm" data-testid="appointment-internal-costs-breakdown">
                 <p className="text-xs uppercase tracking-widest text-amber-200">{internalCostsCopy.title}</p>
                 {appointmentInternalCosts.map((cost) => <div key={cost.id} className="flex justify-between gap-4">
@@ -2055,6 +2063,8 @@ export function AppointmentDetailsDialog({
                       bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
                       toast={toast}
                       disabled={isAppointmentMutationPending}
+                      canManageInternalCosts={canManageInternalCosts}
+                      canManageAppointmentTerms={canManageAppointmentTerms}
                       locationLogoUrl={locationLogoUrl}
                     />
                 )}

@@ -16,19 +16,20 @@ import { formatBusinessCopy } from "@shared/business/copy/types";
 type Props = {
   barber: { id: number; name: string };
   location: { id: number; name: string; timezone: string };
+  readOnly?: boolean;
 };
 type ScheduleRow = Omit<AvailabilityRow, "barberId">;
 const dayOrder = [1, 2, 3, 4, 5, 6, 0];
 const clockTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
 // Mounted only in multi-location, keyed by location + barber by the caller.
-export function BarberLocationScheduleDialog({ barber, location }: Props) {
+export function BarberLocationScheduleDialog({ barber, location, readOnly = false }: Props) {
   const copy = useBusinessCopy().admin.schedules;
   const [open, setOpen] = useState(false);
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild>
       <Button variant="outline" size="sm" className="mb-3 w-full border-white/10" aria-label={formatBusinessCopy(copy.locationProfessionalAria, { name: barber.name })}>
-        <Clock className="mr-2 h-4 w-4" /> {copy.locationProfessionalTrigger}
+        <Clock className="mr-2 h-4 w-4" /> {readOnly ? "Consultar horários" : copy.locationProfessionalTrigger}
       </Button>
     </DialogTrigger>
     <DialogContent className="max-h-[90dvh] w-[95vw] max-w-xl overflow-y-auto border-white/10 bg-card text-white">
@@ -41,12 +42,12 @@ export function BarberLocationScheduleDialog({ barber, location }: Props) {
           })}
         </DialogDescription>
       </DialogHeader>
-      {open && <LoadSchedule barber={barber} location={location} onSaved={() => setOpen(false)} />}
+      {open && <LoadSchedule barber={barber} location={location} readOnly={readOnly} onSaved={() => setOpen(false)} />}
     </DialogContent>
   </Dialog>;
 }
 
-function LoadSchedule({ barber, location, onSaved }: Props & { onSaved: () => void }) {
+function LoadSchedule({ barber, location, readOnly = false, onSaved }: Props & { onSaved: () => void }) {
   const copy = useBusinessCopy().admin.schedules;
   const path = `/api/barbers/${barber.id}/availability`;
   const schedule = useQuery<ScheduleRow[]>({
@@ -68,10 +69,10 @@ function LoadSchedule({ barber, location, onSaved }: Props & { onSaved: () => vo
   if (schedule.isError || shop.isError) return <p role="alert">{copy.loadError}</p>;
   // Never initialise an editable form from stale cached rows during a location switch/reopen.
   if (!schedule.data || !shop.data || schedule.isFetching || shop.isFetching) return <p role="status" className="flex gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin" />{copy.loading}</p>;
-  return <ScheduleForm barber={barber} location={location} rows={schedule.data} shopRows={shop.data} onSaved={onSaved} />;
+  return <ScheduleForm barber={barber} location={location} readOnly={readOnly} rows={schedule.data} shopRows={shop.data} onSaved={onSaved} />;
 }
 
-function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
+function ScheduleForm({ barber, location, readOnly = false, rows, shopRows, onSaved }: Props & {
   rows: ScheduleRow[]; shopRows: ShopAvailabilityRow[]; onSaved: () => void;
 }) {
   const copy = useBusinessCopy().admin.schedules;
@@ -124,13 +125,15 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
   const updateDay = (day: number, data: Partial<typeof days[number]>) => setDays((current) => current.map((value, index) => index === day ? { ...value, ...data } : value));
   return <form className="min-w-0 space-y-4" onSubmit={(event) => {
     event.preventDefault();
+    if (readOnly) return;
     // Closed rows are intentional: [] means inherit shop hours, not a closed week.
     submitSchedule(days.flatMap<ScheduleRow>((day, dayOfWeek) => day.isWorking
       ? day.periods.map((period) => ({ ...period, dayOfWeek, isWorking: true }))
       : [{ dayOfWeek, startTime: "09:00", endTime: "19:00", isWorking: false }]));
   }}>
     <p className="text-sm text-gray-400">{rows.length ? copy.ownLocationSchedule : copy.inheritedLocationSchedule}</p>
-    <fieldset disabled={save.isPending} className="min-w-0 space-y-3">
+    {readOnly && <p className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-gray-300">Modo de consulta — estes horários não podem ser alterados.</p>}
+    <fieldset disabled={save.isPending || readOnly} className="min-w-0 space-y-3">
       {dayOrder.map((day) => <section key={day} className="min-w-0 space-y-2 rounded-lg border border-white/10 p-3" aria-label={weekdays[day]}>
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium">{weekdays[day]}</span>
@@ -152,10 +155,10 @@ function ScheduleForm({ barber, location, rows, shopRows, onSaved }: Props & {
           <Button type="button" variant="ghost" size="sm" onClick={() => updateDay(day, { periods: [...days[day].periods, { startTime: "14:00", endTime: "19:00" }] })}><Plus className="mr-1 h-3 w-3" />{copy.addPeriod}</Button>
         </> : <p className="text-xs text-gray-400">{copy.notWorkingAtLocation}</p>}
       </section>)}
-      <div className="flex flex-col gap-2 sm:flex-row">
+      {!readOnly && <div className="flex flex-col gap-2 sm:flex-row">
         <Button type="submit" variant="gold" className="flex-1">{save.isPending ? copy.saving : copy.saveLocationSchedule}</Button>
         <Button type="button" variant="outline" onClick={() => submitSchedule([])}>{copy.useEstablishmentSchedule}</Button>
-      </div>
+      </div>}
     </fieldset>
     {save.isError && <p role="alert" className="text-sm text-red-400">{save.error.message}</p>}
   </form>;

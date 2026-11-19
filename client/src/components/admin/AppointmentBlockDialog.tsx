@@ -73,6 +73,7 @@ type AppointmentBlockDialogProps = {
   bookingSlotIntervalMinutes: BookingSlotIntervalMinutes;
   isCheckingAvailability?: boolean;
   canCreateAsCompleted: boolean;
+  canManageSpecialTerms?: boolean;
   onSubmit: () => void;
   isSubmitting?: boolean;
   locationLogoUrl?: string | null;
@@ -98,6 +99,7 @@ export function AppointmentBlockDialog({
   bookingSlotIntervalMinutes,
   isCheckingAvailability = false,
   canCreateAsCompleted,
+  canManageSpecialTerms = false,
   onSubmit,
   isSubmitting = false,
   locationLogoUrl,
@@ -347,7 +349,7 @@ export function AppointmentBlockDialog({
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
+                  {canManageSpecialTerms && <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>
                       <Label htmlFor="outsideHours" className="cursor-pointer text-sm font-medium">Permitir horários fora do horário normal</Label>
                       <p className="text-xs text-gray-500">{agendaCopy.outsideHoursCreateHelp}</p>
@@ -362,9 +364,9 @@ export function AppointmentBlockDialog({
                         times: [],
                       })}
                     />
-                  </div>
+                  </div>}
 
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
+                  {canManageSpecialTerms && <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>
                       <Label htmlFor="specialTerms" className="cursor-pointer text-sm font-medium">Condições especiais desta marcação</Label>
                       <p className="text-xs text-gray-500">
@@ -389,7 +391,7 @@ export function AppointmentBlockDialog({
                         customServicePrice: "",
                       })}
                     />
-                  </div>
+                  </div>}
 
                   <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-background/50 px-3 py-3">
                     <div>

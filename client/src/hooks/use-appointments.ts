@@ -305,12 +305,17 @@ export function useCompleteAppointment() {
       expectedRevision: number;
       paymentMethod: Exclude<AppointmentPaymentMethod, "pending">;
       extras: Array<{ extraId: number; amountCents?: number; quantity?: number }>;
-      internalCosts: Array<{ internalCostId: number; unitCostCents?: number; quantity?: number }>;
+      internalCosts?: Array<{ internalCostId: number; unitCostCents?: number; quantity?: number }>;
     }) => {
       const response = await apiFetch(`/api/appointments/${id}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expectedRevision, paymentMethod, extras, internalCosts }),
+        body: JSON.stringify({
+          expectedRevision,
+          paymentMethod,
+          extras,
+          ...(internalCosts === undefined ? {} : { internalCosts }),
+        }),
       });
       if (!response.ok) {
         const error = await response.json().catch(() => null);

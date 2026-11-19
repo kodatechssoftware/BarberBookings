@@ -1659,6 +1659,12 @@ export default function Admin() {
     activeLocationId,
     (role) => role === "admin",
   );
+  const canBlockOwnTime = canUseRuntimeCapability(
+    user,
+    "appointments.block_time_own",
+    activeLocationId,
+    () => false,
+  );
   const canManageOwnAppointments = canUseRuntimeCapability(
     user,
     "appointments.manage_own",
@@ -1750,8 +1756,10 @@ export default function Admin() {
   const canAssignTeamLocation = canUseRuntimeCapability(user, "team.assign_location", activeLocationId, (role) => role === "admin");
   const canManageCatalogGlobal = canUseRuntimeCapability(user, "catalog.manage_global", activeLocationId, (role) => role === "admin");
   const canManageCatalogLocation = canUseRuntimeCapability(user, "catalog.manage_location", activeLocationId, (role) => role === "admin");
+  const canManageAppointmentTerms = canManageCatalogGlobal || canManageCatalogLocation;
   const canManageOwnHours = canUseRuntimeCapability(user, "hours.manage_own", activeLocationId, (role) => role === "admin");
   const canManageTeamHours = canUseRuntimeCapability(user, "hours.manage_team", activeLocationId, (role) => role === "admin");
+  const canViewTeamHours = canUseRuntimeCapability(user, "hours.view_team", activeLocationId, () => false);
   const canManageShopHours = canUseRuntimeCapability(user, "hours.manage_establishment", activeLocationId, (role) => role === "admin");
   const canManageExtras = canUseRuntimeCapability(user, "extras.manage", activeLocationId, (role) => role === "admin");
   const canManageExpenses = canUseRuntimeCapability(user, "finance.manage_expenses", activeLocationId, (role) => role === "admin");
@@ -1858,6 +1866,12 @@ export default function Admin() {
   });
   const canManageAppointmentRequests = canManageTeamAppointments
     && beautyV2Features?.appointmentRequests === true;
+  const canViewAppointmentRequests = (canManageAppointmentRequests || canUseRuntimeCapability(
+    user,
+    "appointment_requests.view",
+    activeLocation?.id ?? activeLocationId,
+    (role) => role === "admin",
+  )) && beautyV2Features?.appointmentRequests === true;
   const canManageRequestNotificationSettings = canUseRuntimeCapability(
     user,
     "settings.manage",
@@ -2171,7 +2185,10 @@ export default function Admin() {
     () => (manualLocationBarbersQuery.data || []).filter((barber) => barber.isVisible !== false),
     [manualLocationBarbersQuery.data],
   );
-  const blockBarbers = usesIndependentManualLocationData ? manualLocationBarbers : activeBarbers;
+  const allBlockBarbers = usesIndependentManualLocationData ? manualLocationBarbers : activeBarbers;
+  const blockBarbers = !blockData.isManualBooking && canBlockOwnTime && !canBlockTime
+    ? allBlockBarbers.filter((barber) => barber.id === operationalProfessionalId)
+    : allBlockBarbers;
   const blockServices = usesIndependentManualLocationData ? manualLocationServicesQuery.data : services;
   const blockAvailabilityRows = usesIndependentManualLocationData
     ? manualLocationBarberAvailabilityQuery.data
@@ -2710,7 +2727,10 @@ export default function Admin() {
   };
 
   const openAgendaExceptionDialog = (date?: Date) => {
-    openExceptionDialog(getAgendaSelectedBarberId(), date);
+    const ownProfessionalId = canBlockOwnTime && !canBlockTime && operationalProfessionalId
+      ? String(operationalProfessionalId)
+      : getAgendaSelectedBarberId();
+    openExceptionDialog(ownProfessionalId, date);
   };
 
   const openManualBookingDialog = (date?: Date, time?: string) => {
@@ -3390,13 +3410,14 @@ export default function Admin() {
     if (!user?.consultationMode) return;
     const allowedTabs = new Set([
       ...(canViewTeamAgenda ? ["dashboard", "appointments"] : []),
+      ...(canViewAppointmentRequests ? ["appointment-requests"] : []),
       ...(canViewTeam ? ["barbers"] : []),
       ...(canViewCatalog ? ["services"] : []),
     ]);
     if (allowedTabs.has(activeTab)) return;
     setSelectedAppointment(null);
     setActiveTab(canViewTeamAgenda ? "dashboard" : canViewTeam ? "barbers" : "services");
-  }, [activeTab, canViewCatalog, canViewTeam, canViewTeamAgenda, user?.consultationMode]);
+  }, [activeTab, canViewAppointmentRequests, canViewCatalog, canViewTeam, canViewTeamAgenda, user?.consultationMode]);
 
   const isDayClosed = (date: Date) => {
     const day = date.getDay();
@@ -4441,6 +4462,8 @@ export default function Admin() {
           canManageCommunicationFollowups={canManageTeamAppointments
             && canViewTeamCustomers
             && beautyV2Features?.notificationDeliveryStatus === true}
+          canManageInternalCosts={canManageExpenses}
+          canManageAppointmentTerms={canManageAppointmentTerms}
         />
 
         <Dialog
@@ -4586,6 +4609,7 @@ export default function Admin() {
           bookingSlotIntervalMinutes={bookingSlotIntervalMinutes}
           isCheckingAvailability={Boolean(blockData.barberId) && !hasLoadedBlockAppointments}
           canCreateAsCompleted={canCreateManualBookingAsCompleted}
+          canManageSpecialTerms={canManageAppointmentTerms}
           onSubmit={handleBlockTime}
           isSubmitting={isSubmittingBlock}
           locationLogoUrl={blockLocation?.logoUrl}
@@ -4601,7 +4625,7 @@ export default function Admin() {
           <TabsList className="admin-tabs-horizontal-scroll scrollbar-none w-full justify-start rounded-xl border border-white/10 bg-card/95 p-1 shadow-lg shadow-black/20 backdrop-blur supports-[backdrop-filter]:bg-card/85 md:shadow-none">
             {canViewTeamAgenda && <TabsTrigger value="dashboard" className={adminTabTriggerClass}><CalendarIcon className="w-4 h-4" /> Agenda</TabsTrigger>}
             {canViewTeamAgenda && <TabsTrigger value="appointments" className={adminTabTriggerClass}><Clock className="w-4 h-4" /> Marcações</TabsTrigger>}
-            {canManageAppointmentRequests && <TabsTrigger value="appointment-requests" className={adminTabTriggerClass}>
+            {canViewAppointmentRequests && <TabsTrigger value="appointment-requests" className={adminTabTriggerClass}>
               <Inbox className="w-4 h-4" /> Pedidos
               {(requestNotificationFeed?.pendingDecisionCount ?? 0) > 0 && (
                 <span
@@ -4654,7 +4678,7 @@ export default function Admin() {
               canFilterBarbers={canViewTeamAgenda}
               canManageSchedule={canMoveAppointments}
               canCreateManualAppointment={canCreateManualAppointment}
-              canBlockTime={canBlockTime}
+              canBlockTime={canBlockTime || canBlockOwnTime}
               onBarberFilterChange={setSelectedBarberFilter}
               onStatusFilterChange={setSelectedAgendaStatusFilter}
               onException={openAgendaExceptionDialog}
@@ -4752,7 +4776,7 @@ export default function Admin() {
             />
           </TabsContent>
 
-          {canManageAppointmentRequests && activeLocation && (
+          {canViewAppointmentRequests && activeLocation && (
             <TabsContent value="appointment-requests" className="space-y-6 outline-none">
               <AppointmentRequestsManager
                 locationId={activeLocation.id}
@@ -4760,6 +4784,7 @@ export default function Admin() {
                 openRequestId={notificationRequestId}
                 onOpenRequestHandled={() => setNotificationRequestId(null)}
                 canManageNotificationSettings={canManageRequestNotificationSettings}
+                readOnly={!canManageAppointmentRequests}
               />
             </TabsContent>
           )}
@@ -4942,12 +4967,14 @@ export default function Admin() {
                         )}
                       </div>
                     )}
-                    {multiLocationConfig?.enabled && activeLocation
-                      && (canManageTeamHours || (canManageOwnHours && operationalProfessionalId === barber.id)) && (
+                    {activeLocation
+                      && ((canViewTeamHours && !canManageTeamHours && !canManageOwnHours) || (multiLocationConfig?.enabled
+                        && (canManageTeamHours || (canManageOwnHours && operationalProfessionalId === barber.id)))) && (
                       <BarberLocationScheduleDialog
                         key={`${activeLocation.id}:${barber.id}`}
                         barber={barber}
                         location={activeLocation}
+                        readOnly={!(canManageTeamHours || (canManageOwnHours && operationalProfessionalId === barber.id))}
                       />
                     )}
                     <div className="flex flex-wrap gap-2">

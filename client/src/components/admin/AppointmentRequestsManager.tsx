@@ -39,7 +39,7 @@ type AppointmentRequest = {
   revision: number;
   customerName: string;
   customerEmail?: string | null;
-  customerPhone: string;
+  customerPhone?: string | null;
   requestedStartTime: string;
   appointmentId?: number | null;
   refusalReason?: string | null;
@@ -289,12 +289,14 @@ export function AppointmentRequestsManager({
   openRequestId = null,
   onOpenRequestHandled,
   canManageNotificationSettings = false,
+  readOnly = false,
 }: {
   locationId: number;
   timeZone: string;
   openRequestId?: number | null;
   onOpenRequestHandled?: () => void;
   canManageNotificationSettings?: boolean;
+  readOnly?: boolean;
 }) {
   const [status, setStatus] = useState<RequestStatus | "all">("pending");
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -324,7 +326,7 @@ export function AppointmentRequestsManager({
   });
   const proposalAvailability = useQuery<ProposalAvailability>({
     queryKey: ["admin-appointment-request-proposal-availability", locationId, selectedId, detail?.revision, proposalDate],
-    enabled: action === "propose" && selectedId !== null && Boolean(proposalDate),
+    enabled: !readOnly && action === "propose" && selectedId !== null && Boolean(proposalDate),
     staleTime: 0,
     refetchOnMount: "always",
     queryFn: async () => {
@@ -349,6 +351,7 @@ export function AppointmentRequestsManager({
   }, [proposalAvailability.data?.starts, proposalTime]);
 
   const openProposalDialog = () => {
+    if (readOnly) return;
     const today = dateKeyInTimeZone(new Date(), timeZone);
     const reference = detail?.activeProposal?.proposedStartTime ?? detail?.requestedStartTime;
     const requestedDate = reference ? dateKeyInTimeZone(new Date(reference), timeZone) : today;
@@ -359,6 +362,7 @@ export function AppointmentRequestsManager({
 
   const mutation = useMutation({
     mutationFn: async (kind: "approve" | "refuse" | "propose") => {
+      if (readOnly) throw new Error("O modo de consulta não permite alterar pedidos.");
       if (!selectedId) throw new Error("Pedido inválido.");
       let body: unknown = {};
       if (kind === "refuse") body = { reason: reason.trim() || null };
@@ -458,7 +462,9 @@ export function AppointmentRequestsManager({
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <h2 className="text-xl font-bold text-white">Pedidos de marcação</h2>
-        <p className="text-sm text-gray-400">Analise cada pedido antes de criar a marcação definitiva.</p>
+        <p className="text-sm text-gray-400">{readOnly
+          ? "Consulte os pedidos e o respetivo estado, sem alterar os dados."
+          : "Analise cada pedido antes de criar a marcação definitiva."}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {canManageNotificationSettings && <RequestNotificationSettingsDialog locationId={locationId} />}
@@ -482,7 +488,7 @@ export function AppointmentRequestsManager({
           <div className="flex items-center gap-2 text-sm"><CalendarClock className="h-4 w-4 text-primary" />{dateTime(request.requestedStartTime)}</div>
           <p className="line-clamp-2 text-sm text-gray-300">{request.segments.map((segment) => segment.serviceNameSnapshot).join(" + ")}</p>
           <Button variant="outline" className="w-full" onClick={() => setSelectedId(request.id)}>
-            {request.status === "pending" || request.status === "proposed" ? "Ver e decidir" : "Ver detalhe"}
+            {!readOnly && (request.status === "pending" || request.status === "proposed") ? "Ver e decidir" : "Ver detalhe"}
           </Button>
         </CardContent>
       </Card>)}</div>}
@@ -497,7 +503,7 @@ export function AppointmentRequestsManager({
         </DialogHeader>
         {loadingDetail || !detail ? <Loader2 className="mx-auto my-12 h-7 w-7 animate-spin text-primary" /> : <div className="space-y-5">
           <div className="grid gap-3 rounded-xl border border-white/10 p-4 text-sm sm:grid-cols-2">
-            <div><p className="text-gray-400">Cliente</p><p className="font-semibold">{detail.customerName}</p><p>{detail.customerPhone}</p><p>{detail.customerEmail}</p></div>
+            <div><p className="text-gray-400">Cliente</p><p className="font-semibold">{detail.customerName}</p>{detail.customerPhone && <p>{detail.customerPhone}</p>}{detail.customerEmail && <p>{detail.customerEmail}</p>}</div>
             <div><p className="text-gray-400">Horário pedido</p><p className="font-semibold">{dateTime(detail.requestedStartTime)}</p><p className="mt-2 text-gray-400">Estado</p><p>{statusLabels[detail.status]}</p></div>
           </div>
           <div className="space-y-2"><h3 className="font-semibold">Serviços</h3>{detail.segments.map((segment, index) => <div key={`${segment.position}-${segment.serviceId}`} className="flex justify-between gap-4 rounded-lg bg-background/50 p-3 text-sm"><span>{segment.position + 1}. {segment.serviceNameSnapshot}<small className="block text-gray-400">{segment.durationMinutes} min · {segment.barberName || "Profissional"}{index > 0 && segment.executionStage === detail.segments[index - 1].executionStage ? " · em simultâneo" : ""}</small></span><strong>{money(segment.servicePriceCentsSnapshot)}</strong></div>)}<div className="flex justify-between border-t border-white/10 pt-2 font-bold"><span>Total</span><span className="text-primary">{money(total)}</span></div></div>
@@ -530,7 +536,7 @@ export function AppointmentRequestsManager({
                   </div>
                 </div>
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              {!readOnly && <div className="flex flex-col gap-2 sm:flex-row">
                 <Button
                   type="button"
                   size="sm"
@@ -545,7 +551,7 @@ export function AppointmentRequestsManager({
                   disabled={resendProposalEmail.isPending}
                   onClick={() => resendProposalEmail.mutate()}
                 >{resendProposalEmail.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}Reenviar email</Button>}
-              </div>
+              </div>}
               <p className="flex items-start gap-2 text-xs text-gray-400">
                 <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 A ligação permite à cliente aceitar ou recusar esta proposta. Não a partilhe com terceiros.
@@ -577,7 +583,7 @@ export function AppointmentRequestsManager({
               })}
             </ol>
           </div>}
-          {(detail.status === "pending" || detail.status === "proposed") && <div className="grid gap-2 sm:grid-cols-3">
+          {!readOnly && (detail.status === "pending" || detail.status === "proposed") && <div className="grid gap-2 sm:grid-cols-3">
             <Button disabled={mutation.isPending || detail.status !== "pending"} onClick={() => mutation.mutate("approve")}><Check className="mr-2 h-4 w-4" />Aprovar</Button>
             <Button variant="outline" disabled={mutation.isPending} onClick={openProposalDialog}><MessageSquare className="mr-2 h-4 w-4" />Propor horário</Button>
             <Button variant="outline" className="border-red-400/30 text-red-300" disabled={mutation.isPending} onClick={() => setAction("refuse")}><X className="mr-2 h-4 w-4" />Recusar</Button>
@@ -586,7 +592,7 @@ export function AppointmentRequestsManager({
       </DialogContent>
     </Dialog>
 
-    <Dialog open={action !== null} onOpenChange={(open) => { if (!open && !mutation.isPending) setAction(null); }}>
+    <Dialog open={!readOnly && action !== null} onOpenChange={(open) => { if (!open && !mutation.isPending) setAction(null); }}>
       <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto border-white/10 bg-card text-white">
         <DialogHeader>
           <DialogTitle>{action === "refuse" ? "Recusar pedido" : "Propor outro horário"}</DialogTitle>
