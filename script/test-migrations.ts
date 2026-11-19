@@ -297,8 +297,8 @@ try {
     environment,
     migrationsDirectory,
   });
-  assert.equal(freshRun.applied.length, 32,
-    "an empty legacy baseline must apply every migration through 0033");
+  assert.equal(freshRun.applied.length, 33,
+    "an empty legacy baseline must apply every migration through 0034");
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointments")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("extra_definitions")}`)).rows[0].count), 0);
   assert.equal(Number((await pool.query(`SELECT count(*) AS count FROM ${freshTable("appointment_extras")}`)).rows[0].count), 0);
@@ -400,7 +400,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondFreshRun.applied.length, 0);
-  assert.equal(secondFreshRun.alreadyApplied, 32);
+  assert.equal(secondFreshRun.alreadyApplied, 33);
 
   const firstRun = await runSchemaMigrations(pool, {
     schemaName: schema,
@@ -1224,6 +1224,7 @@ try {
     "0031_public_team_profiles.sql",
     "0032_google_review_links.sql",
     "0033_team_profile_certificate_documents.sql",
+    "0034_beauty_v2_operational_permissions.sql",
   ]);
   assert.equal(parallelSchedulingMigrationRun.alreadyApplied, 24);
   assert.equal(Number((await pool.query(`
@@ -1252,6 +1253,19 @@ try {
       AND table_record.relname = 'barber_qualification_documents'
   `, [schema])).rows[0], { rls_enabled: true, policy_count: 0 },
   "0033 must keep certificate metadata behind deny-by-default RLS");
+  const operationalCapabilityConstraint = (await pool.query(`
+    SELECT pg_get_constraintdef(constraint_entry.oid) AS definition
+    FROM pg_constraint constraint_entry
+    INNER JOIN pg_class table_entry ON table_entry.oid = constraint_entry.conrelid
+    INNER JOIN pg_namespace namespace_entry ON namespace_entry.oid = table_entry.relnamespace
+    WHERE namespace_entry.nspname = $1
+      AND table_entry.relname = 'user_access_scope_capabilities'
+      AND constraint_entry.conname = 'user_access_scope_capabilities_code_check'
+  `, [schema])).rows[0]?.definition ?? "";
+  for (const capability of ["appointments.block_time_own", "appointment_requests.view", "hours.view_team"]) {
+    assert.match(operationalCapabilityConstraint, new RegExp(capability.replace(".", "\\.")),
+      `0034 must admit ${capability} without granting it to existing users`);
+  }
   assert.deepEqual((await pool.query(`
     SELECT position, execution_stage FROM ${table("appointment_service_segments")}
     WHERE appointment_id = $1 ORDER BY position
@@ -1584,7 +1598,7 @@ try {
     migrationsDirectory,
   });
   assert.equal(secondCompensationRun.applied.length, 0);
-  assert.equal(secondCompensationRun.alreadyApplied, 32);
+  assert.equal(secondCompensationRun.alreadyApplied, 33);
 
   const indexes = new Set((await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = $1`, [schema])).rows.map((row) => row.indexname));
   for (const index of [
@@ -2356,7 +2370,7 @@ try {
   assert.equal(inboundClaims.filter(Boolean).length, 1,
     "concurrent inbound messages from one sender must have exactly one auto-reply claim");
 
-  console.log("PASS: legacy data was preserved; migrations 0007 through 0033, default-off Beauty v2 feature settings, additive public team profiles, private certificate metadata and Google review links, sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
+  console.log("PASS: legacy data was preserved; migrations 0007 through 0034, Beauty-v2-only operational permission codes, default-off Beauty v2 feature settings, additive public team profiles, private certificate metadata and Google review links, sequential/parallel multi-service and appointment-request workflows, isolated administrative request notifications, proposal communication delivery state, manual communication follow-ups, consultation-role invariants, scheduled reminder outbox, recurring expense series, additive auth foundation, location-scoped blacklist, location-specific service offers and buffers, appointment availability windows, barber permissions and compensation, voucher payments, customer-note identities, commercial Extra/internal-cost constraints, immutable financial snapshots, transactional rollback and controlled re-execution passed on real PostgreSQL.");
 } finally {
   if (applicationPool) await applicationPool.end();
   if (pool) await pool.end();

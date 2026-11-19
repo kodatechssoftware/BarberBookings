@@ -42,9 +42,11 @@ type Fixture = {
   teamAppointmentA: Appointment;
   appointmentB: Appointment;
   userA: APIRequestContext;
+  beautyProfessional: APIRequestContext;
   userAB: APIRequestContext;
   administrator: APIRequestContext;
   userAId: number;
+  beautyProfessionalUserId: number;
   userABId: number;
   blacklistAId: number;
   blacklistBId: number;
@@ -184,6 +186,10 @@ test.beforeAll(async ({ playwright, baseURL }) => {
     headers: headersFor(locationA.id),
     data: workingEveryDay,
   }));
+  await expectOk(await administrator.patch(`/api/barbers/${teamProfessionalA.id}/availability`, {
+    headers: headersFor(locationA.id),
+    data: workingEveryDay,
+  }));
   await expectOk(await administrator.post("/api/admin/location-barbers", {
     headers: headersFor(locationB.id),
     data: { barberId: professionalA.id },
@@ -257,6 +263,18 @@ test.beforeAll(async ({ playwright, baseURL }) => {
       capabilities: localCapabilities,
     })),
   });
+  const beautyProfessional = await playwright.request.newContext({ baseURL });
+  const createdBeautyProfessional = await createCanonicalSession(administrator, beautyProfessional, {
+    displayName: "Beauty operational professional",
+    email: "beauty-operational@example.test",
+    professionalId: teamProfessionalA.id,
+    access: [{
+      kind: "location",
+      locationId: locationA.id,
+      preset: "professional",
+      capabilities: [],
+    }],
+  });
 
   fixture = {
     locationA,
@@ -271,9 +289,11 @@ test.beforeAll(async ({ playwright, baseURL }) => {
     teamAppointmentA,
     appointmentB,
     userA,
+    beautyProfessional,
     userAB,
     administrator,
     userAId: createdA.user.id,
+    beautyProfessionalUserId: createdBeautyProfessional.user.id,
     userABId: createdAB.user.id,
     blacklistAId: Number((await blacklistA.json()).id),
     blacklistBId: Number((await blacklistB.json()).id),
@@ -283,6 +303,7 @@ test.beforeAll(async ({ playwright, baseURL }) => {
 test.afterAll(async () => {
   await Promise.all([
     fixture?.userA.dispose(),
+    fixture?.beautyProfessional.dispose(),
     fixture?.userAB.dispose(),
     fixture?.administrator.dispose(),
   ]);
@@ -331,6 +352,226 @@ test("canonical scopes restrict location context and Professional linkage grants
   expect(adminMe).toMatchObject({ role: "admin", professionalId: null });
   const adminLocations = await (await expectOk(await administrator.get("/api/account/locations"))).json() as Location[];
   expect(adminLocations.map((location) => location.id)).toEqual(expect.arrayContaining([locationA.id, locationB.id]));
+});
+
+test("Beauty v2 Professional manages team bookings but not finance, catalogue or colleague absences", async () => {
+  const {
+    beautyProfessional,
+    beautyProfessionalUserId,
+    administrator,
+    locationA,
+    locationB,
+    professionalA,
+    teamProfessionalA,
+    serviceA,
+    teamAppointmentA,
+  } = fixture;
+  const headers = headersFor(locationA.id);
+  const me = await (await expectOk(await beautyProfessional.get("/api/admin/me"))).json();
+  const accessContract = JSON.stringify(me.access);
+  for (const capability of [
+    "appointments.create_manual",
+    "appointments.manage_team",
+    "appointments.change_status_team",
+    "appointments.block_time_own",
+    "customers.view_team",
+    "hours.view_team",
+  ]) expect(accessContract).toContain(capability);
+  for (const capability of [
+    "finance.view_own",
+    "finance.view_team",
+    "finance.manage_expenses",
+    "reports.export_own",
+    "reports.export_team",
+    "catalog.manage_location",
+    "users.manage",
+  ]) expect(accessContract).not.toContain(capability);
+
+  const teamAppointments = await (await expectOk(await beautyProfessional.get("/api/appointments?scope=team", {
+    headers,
+  }))).json() as Array<Record<string, unknown>>;
+  const colleagueAppointment = teamAppointments.find((appointment) => appointment.id === teamAppointmentA.id);
+  expect(colleagueAppointment).toMatchObject({ customerPhone: "+351910000102", operationalView: true });
+  expect(colleagueAppointment).not.toHaveProperty("cancelToken");
+  expect(colleagueAppointment).not.toHaveProperty("internalCosts");
+
+  const futureStart = (days: number, hour = 14) => {
+    const value = new Date();
+    value.setUTCDate(value.getUTCDate() + days);
+    value.setUTCHours(hour, 0, 0, 0);
+    return value;
+  };
+  const createStart = futureStart(40);
+  const create = await beautyProfessional.post("/api/appointments/block", {
+    headers,
+    data: {
+      barberId: professionalA.id,
+      serviceId: serviceA.id,
+      startTime: createStart.toISOString(),
+      name: "Cliente operacional Beauty v2",
+      phone: "+351910001001",
+      customerEmail: "beauty-operational-client@example.test",
+      isManualBooking: true,
+      isRecurring: false,
+    },
+  });
+  expect(create.status(), await create.text()).toBe(201);
+  const created = (await create.json()).appointments[0] as Appointment;
+  expect(created).toMatchObject({ barberId: professionalA.id, locationId: locationA.id });
+  expect(created).not.toHaveProperty("internalCosts");
+
+  const costDefinitionResponse = await administrator.post("/api/admin/internal-costs", {
+    headers,
+    data: {
+      name: "Custo interno operacional QA",
+      description: "Deve permanecer privado",
+      defaultUnitCostCents: 125,
+      unitLabel: "un.",
+      isActive: true,
+    },
+  });
+  expect(costDefinitionResponse.status(), await costDefinitionResponse.text()).toBe(201);
+  const costDefinition = await costDefinitionResponse.json();
+  const attachCost = await administrator.patch(`/api/appointments/${created.id}`, {
+    headers,
+    data: { internalCosts: [{ internalCostId: costDefinition.id, unitCostCents: 175, quantity: 2 }] },
+  });
+  expect(attachCost.ok(), await attachCost.text()).toBe(true);
+  const attachedAppointment = await attachCost.json();
+  const directCostPatch = await beautyProfessional.patch(`/api/appointments/${created.id}`, {
+    headers,
+    data: { internalCosts: [] },
+  });
+  expect(directCostPatch.status()).toBe(403);
+  expect(await directCostPatch.json()).toMatchObject({ code: "FINANCIAL_FIELDS_FORBIDDEN" });
+  const directCostCompletion = await beautyProfessional.post(`/api/appointments/${created.id}/complete`, {
+    headers,
+    data: {
+      expectedRevision: attachedAppointment.notificationRevision,
+      paymentMethod: "cash",
+      extras: [],
+      internalCosts: [],
+    },
+  });
+  expect(directCostCompletion.status()).toBe(403);
+  expect(await directCostCompletion.json()).toMatchObject({ code: "FINANCIAL_FIELDS_FORBIDDEN" });
+
+  const rescheduledStart = futureStart(41);
+  const rescheduled = await beautyProfessional.patch(`/api/appointments/${created.id}`, {
+    headers,
+    data: { startTime: rescheduledStart.toISOString() },
+  });
+  expect(rescheduled.ok(), await rescheduled.text()).toBe(true);
+  expect(await rescheduled.json()).toMatchObject({ startTime: rescheduledStart.toISOString() });
+  const adminAppointments = await (await expectOk(await administrator.get(
+    `/api/appointments?barberId=${professionalA.id}&date=${rescheduledStart.toISOString().slice(0, 10)}`,
+    { headers },
+  ))).json() as Array<Record<string, any>>;
+  expect(adminAppointments.find((appointment) => appointment.id === created.id)?.internalCosts).toEqual([
+    expect.objectContaining({
+      internalCostDefinitionId: costDefinition.id,
+      unitCostCentsSnapshot: 175,
+      quantity: 2,
+    }),
+  ]);
+
+  const cancelled = await beautyProfessional.patch(`/api/appointments/${created.id}/status`, {
+    headers,
+    data: { status: "cancelled", expectedStatus: "booked" },
+  });
+  expect(cancelled.ok(), await cancelled.text()).toBe(true);
+
+  const forbiddenFinancial = await beautyProfessional.post("/api/appointments/block", {
+    headers,
+    data: {
+      barberId: professionalA.id,
+      serviceId: serviceA.id,
+      startTime: futureStart(42).toISOString(),
+      name: "Não criar custos",
+      phone: "+351910001002",
+      isManualBooking: true,
+      isRecurring: false,
+      internalCosts: [],
+    },
+  });
+  expect(forbiddenFinancial.status()).toBe(403);
+  expect(await forbiddenFinancial.json()).toMatchObject({ code: "FINANCIAL_FIELDS_FORBIDDEN" });
+  expect((await beautyProfessional.get("/api/admin/internal-costs", { headers })).status()).toBe(403);
+  const forbiddenSpecialTerms = await beautyProfessional.post("/api/appointments/block", {
+    headers,
+    data: {
+      barberId: professionalA.id,
+      serviceId: serviceA.id,
+      startTime: futureStart(46).toISOString(),
+      name: "Não criar preço especial",
+      phone: "+351910001003",
+      isManualBooking: true,
+      isRecurring: false,
+      hasSpecialTerms: true,
+      servicePriceCents: 100,
+    },
+  });
+  expect(forbiddenSpecialTerms.status()).toBe(403);
+  expect(await forbiddenSpecialTerms.json()).toMatchObject({ code: "APPOINTMENT_TERMS_FORBIDDEN" });
+  expect((await beautyProfessional.patch(`/api/services/${serviceA.id}`, {
+    headers,
+    data: { price: 99_999 },
+  })).status()).toBe(403);
+  const today = new Date().toISOString().slice(0, 10);
+  expect((await beautyProfessional.get(`/api/admin/export?startDate=${today}&endDate=${today}`, {
+    headers,
+  })).status()).toBe(403);
+  expect((await beautyProfessional.get("/api/appointments?scope=team", {
+    headers: headersFor(locationB.id),
+  })).status()).toBe(403);
+
+  const ownAbsenceStart = futureStart(43, 18);
+  const ownAbsence = await beautyProfessional.post("/api/appointments/block", {
+    headers,
+    data: {
+      barberId: teamProfessionalA.id,
+      serviceId: null,
+      startTime: ownAbsenceStart.toISOString(),
+      startTimes: [ownAbsenceStart.toISOString()],
+      name: "AUSENCIA QA BEAUTY V2",
+      phone: "",
+      isManualBooking: false,
+    },
+  });
+  expect(ownAbsence.status(), await ownAbsence.text()).toBe(201);
+
+  const colleagueAbsenceStart = futureStart(44, 18);
+  const colleagueAbsence = await administrator.post("/api/appointments/block", {
+    headers,
+    data: {
+      barberId: professionalA.id,
+      serviceId: null,
+      startTime: colleagueAbsenceStart.toISOString(),
+      startTimes: [colleagueAbsenceStart.toISOString()],
+      name: "AUSENCIA QA COLEGA",
+      phone: "",
+      isManualBooking: false,
+    },
+  });
+  expect(colleagueAbsence.status(), await colleagueAbsence.text()).toBe(201);
+  const colleagueAbsenceId = Number((await colleagueAbsence.json()).appointments[0].id);
+  const tamperedAbsence = await beautyProfessional.patch(`/api/appointments/${colleagueAbsenceId}`, {
+    headers,
+    data: { startTime: futureStart(45, 18).toISOString() },
+  });
+  expect(tamperedAbsence.status()).toBe(403);
+
+  const auditLogs = await (await expectOk(await administrator.get("/api/admin/audit-logs?limit=100", {
+    headers,
+  }))).json() as Array<Record<string, unknown>>;
+  expect(auditLogs).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      action: "appointment.updated",
+      entityId: created.id,
+      actorUserId: beautyProfessionalUserId,
+      locationId: locationA.id,
+    }),
+  ]));
 });
 
 test("appointments, customers and notes do not leak across canonical location scopes", async () => {

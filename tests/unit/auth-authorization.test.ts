@@ -10,7 +10,10 @@ import {
   hasCanonicalOwnOrTeamCapability,
   redactTeamAgendaAppointment,
   toConsultationAppointment,
+  toConsultationAppointmentRequest,
   toConsultationProfessional,
+  toOperationalAppointment,
+  toOperationalProfessional,
 } from "../../server/auth-authorization";
 import { canUseRuntimeCapability } from "../../client/src/lib/auth-capabilities";
 
@@ -18,6 +21,67 @@ const locationA = 10;
 const locationB = 20;
 const professionalA = 101;
 const professionalB = 202;
+
+test("operational DTOs expose booking data but fail closed for financial and credential fields", () => {
+  const appointment = toOperationalAppointment({
+    id: 1,
+    locationId: locationA,
+    barberId: professionalA,
+    serviceId: 4,
+    startTime: "2036-01-01T10:00:00.000Z",
+    customerName: "Cliente QA",
+    customerEmail: "qa@example.test",
+    customerPhone: "910000000",
+    servicePriceCentsSnapshot: 3500,
+    compensationModelSnapshot: "commission",
+    commissionPercentSnapshot: 5000,
+    cancelToken: "secret-token",
+    internalCosts: [{ unitCostCentsSnapshot: 900 }],
+    extras: [{ extraDefinitionId: 2, nameSnapshot: "Extra", amountCentsSnapshot: 300, quantity: 1 }],
+  });
+  assert.equal(appointment.customerPhone, "910000000");
+  assert.equal(appointment.servicePriceCentsSnapshot, 3500);
+  assert.equal("internalCosts" in appointment, false);
+  assert.equal("cancelToken" in appointment, false);
+  assert.equal("compensationModelSnapshot" in appointment, false);
+
+  const team = toOperationalProfessional({
+    id: professionalA,
+    name: "Profissional QA",
+    email: "private@example.test",
+    userId: 12,
+    compensationModel: "commission",
+  });
+  assert.equal("email" in team, false);
+  assert.equal("userId" in team, false);
+  assert.equal("compensationModel" in team, false);
+});
+
+test("consultation request DTO omits customer contacts and secure proposal material", () => {
+  const request = toConsultationAppointmentRequest({
+    id: 9,
+    locationId: locationA,
+    status: "proposed",
+    customerName: "Cliente QA",
+    customerEmail: "private@example.test",
+    customerPhone: "910000000",
+    responseToken: "plaintext-secret",
+    activeProposal: {
+      id: 4,
+      proposedStartTime: "2036-01-01T11:00:00.000Z",
+      status: "pending",
+      responseTokenHash: "hash",
+      communication: { emailStatus: "sent", emailSentAt: "2036-01-01T09:00:00.000Z", emailErrorCode: "private" },
+    },
+  });
+  assert.equal("customerEmail" in request, false);
+  assert.equal("customerPhone" in request, false);
+  assert.equal("responseToken" in request, false);
+  assert.deepEqual(request.activeProposal?.communication, {
+    emailStatus: "sent",
+    emailSentAt: "2036-01-01T09:00:00.000Z",
+  });
+});
 
 function context(
   scopes: AccessScope[],

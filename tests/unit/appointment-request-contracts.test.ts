@@ -49,11 +49,15 @@ test("appointment request contracts normalize international phones and reject ma
   }));
 });
 
-test("every Admin appointment-request mutation is protected by the team management capability", async () => {
+test("request reads support consultation while every mutation requires team management", async () => {
   const source = await readFile(new URL("../../server/routes.ts", import.meta.url), "utf8");
   for (const route of [
-    "/api/admin/appointment-requests\", requireTeamAppointmentsManage",
-    "/api/admin/appointment-requests/:id\", requireTeamAppointmentsManage",
+    "/api/admin/appointment-requests\", requireAppointmentRequestsRead",
+    "/api/admin/appointment-requests/:id\", requireAppointmentRequestsRead",
+  ]) {
+    assert.ok(source.includes(route), `missing protected read route fragment: ${route}`);
+  }
+  for (const route of [
     "/api/admin/appointment-requests/:id/approve\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/refuse\", requireTeamAppointmentsManage",
     "/api/admin/appointment-requests/:id/proposal-availability\", requireTeamAppointmentsManage",

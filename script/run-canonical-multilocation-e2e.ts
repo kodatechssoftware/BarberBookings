@@ -90,6 +90,7 @@ try {
     MAX_LOCATIONS: "4",
     BUSINESS_VERTICAL: "beauty",
     BUSINESS_THEME: "beauty-clean",
+    BEAUTY_V2_FEATURES_ENABLED: "true",
     SHOP_NAME: "Loja A",
     SHOP_ADDRESS: "Morada A",
     SHOP_TIME_ZONE: "Europe/Lisbon",

@@ -212,3 +212,19 @@ test("public commercial snapshots contain no internal cost fields", async () => 
   assert.match(mutationInventory, /admin\\\/internal-costs/);
   assert.match(mutationInventory, /status\|complete/);
 });
+
+test("operational appointment routes preserve internal costs without exposing or accepting them", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [routes, details, hooks] = await Promise.all([
+    readFile(new URL("../../server/routes.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../client/src/components/admin/AppointmentDetailsDialog.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../client/src/hooks/use-appointments.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(routes, /const requireInternalCostsRead = requireAnyCapabilityAtLocation\(\s*\["finance\.manage_expenses"\]/);
+  assert.match(routes, /code: "FINANCIAL_FIELDS_FORBIDDEN"/);
+  assert.match(routes, /parsed\.internalCosts === undefined \? storage\.getAppointmentInternalCosts/);
+  assert.match(routes, /appointmentResponses\(req, locationId/);
+  assert.match(details, /canManageInternalCosts && appointmentInternalCosts\.length > 0/);
+  assert.match(details, /canManageInternalCosts \? \{ internalCosts: internalCostsPayload \} : \{\}/);
+  assert.match(hooks, /internalCosts === undefined \? \{\} : \{ internalCosts \}/);
+});

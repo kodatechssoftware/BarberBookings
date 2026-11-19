@@ -4,6 +4,8 @@ import {
   accessPresets,
   capabilityCodes,
   capabilityRegistry,
+  beautyV2ConsultationCapabilityCodes,
+  beautyV2ProfessionalCapabilityCodes,
   consultationCapabilityCodes,
   hasCapability,
   hasCapabilityAtLocation,
@@ -19,10 +21,12 @@ const expectedCapabilityCodes = [
   "agenda.view_team",
   "appointments.create_manual",
   "appointments.block_time",
+  "appointments.block_time_own",
   "appointments.manage_own",
   "appointments.manage_team",
   "appointments.change_status_own",
   "appointments.change_status_team",
+  "appointment_requests.view",
   "customers.view_own",
   "customers.view_team",
   "customers.notes_own",
@@ -35,6 +39,7 @@ const expectedCapabilityCodes = [
   "catalog.manage_global",
   "catalog.manage_location",
   "hours.manage_own",
+  "hours.view_team",
   "hours.manage_team",
   "hours.manage_establishment",
   "extras.manage",
@@ -124,6 +129,31 @@ test("the Consultation preset is an explicit read-only allowlist", () => {
   assert.equal(consultationCapabilityCodes.some((capability) => capability.includes("manage")), false);
   assert.equal(consultationCapabilityCodes.some((capability) => capability.includes("create")), false);
   assert.equal(consultationCapabilityCodes.some((capability) => capability.includes("export")), false);
+});
+
+test("Beauty v2 resolves operational presets without changing the shared Barber defaults", () => {
+  const professional = resolveEffectiveAccess([{
+    kind: "location",
+    locationId: 10,
+    preset: "professional",
+  }], { presetProfile: "beauty-v2" });
+  const consultation = resolveEffectiveAccess([{
+    kind: "location",
+    locationId: 10,
+    preset: "consultation",
+  }], { presetProfile: "beauty-v2" });
+
+  assert.deepEqual(professional.locationCapabilities[0].capabilities, [...beautyV2ProfessionalCapabilityCodes]);
+  assert.equal(hasCapabilityAtLocation(professional, "appointments.manage_team", 10), true);
+  assert.equal(hasCapabilityAtLocation(professional, "appointments.block_time_own", 10), true);
+  assert.equal(hasCapabilityAtLocation(professional, "finance.view_own", 10), false);
+  assert.equal(hasCapabilityAtLocation(professional, "reports.export_own", 10), false);
+  assert.equal(hasCapabilityAtLocation(professional, "customers.notes_own", 10), false);
+  assert.deepEqual(consultation.locationCapabilities[0].capabilities, [...beautyV2ConsultationCapabilityCodes]);
+  assert.equal(hasCapabilityAtLocation(consultation, "appointment_requests.view", 10), true);
+  assert.equal(hasCapabilityAtLocation(consultation, "hours.view_team", 10), true);
+  assert.deepEqual(professionalCapabilityCodes, accessPresets.professional.capabilities);
+  assert.deepEqual(consultationCapabilityCodes, accessPresets.consultation.capabilities);
 });
 
 test("global grants apply everywhere while local grants stay in their location", () => {

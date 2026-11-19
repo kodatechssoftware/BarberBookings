@@ -188,7 +188,7 @@ try {
   assert.deepEqual(consultationContext.consultationLocationIds, [1]);
   assert.deepEqual(consultationContext.access.locationCapabilities, [{
     locationId: 1,
-    capabilities: ["agenda.view_team", "team.view", "catalog.view"],
+    capabilities: ["agenda.view_team", "team.view", "catalog.view", "appointment_requests.view", "hours.view_team"],
   }]);
   await assert.rejects(
     pool.query(`

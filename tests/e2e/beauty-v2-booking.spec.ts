@@ -1,4 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import {
+  beautyV2ConsultationCapabilityCodes,
+  beautyV2ProfessionalCapabilityCodes,
+} from "../../shared/auth";
 
 const location = {
   id: 1, name: "Beauty Studio QA", slug: "beauty-qa", address: "Rua QA", logoUrl: null,
@@ -21,6 +25,99 @@ const professionals = [
   { id: 22, name: "Beatriz", specialty: "Nail art e pestanas", bio: null, avatar: null, color: "#d6a1ad", isVisible: true, locationCount: 1, serviceIds: [12, 15], allServicesAllowed: false },
   { id: 23, name: "Carolina", specialty: "Rosto e bem-estar", bio: null, avatar: null, color: "#d6a1ad", isVisible: true, locationCount: 1, serviceIds: [14, 16, 17], allServicesAllowed: false },
 ];
+
+test("Beauty v2 operational and consultation profiles expose only their approved actions", async ({ page }, testInfo) => {
+  const login = await page.request.post("/api/admin/login", {
+    data: { username: "admin", password: "Playwright-Beauty-v2-Admin-2026!" },
+  });
+  expect(login.ok(), await login.text()).toBe(true);
+  const [locationsResponse, barbersResponse] = await Promise.all([
+    page.request.get("/api/account/locations"),
+    page.request.get("/api/barbers?includeHidden=true"),
+  ]);
+  const [testLocation] = await locationsResponse.json();
+  const [testProfessional] = await barbersResponse.json();
+  expect(testLocation).toBeTruthy();
+  expect(testProfessional).toBeTruthy();
+
+  const request = {
+    id: 744, locationId: testLocation.id, status: "pending", revision: 1,
+    customerName: "Cliente Consulta QA", requestedStartTime: "2030-06-02T09:00:00.000Z",
+    appointmentId: null, refusalReason: null, createdAt: "2030-06-01T08:00:00.000Z",
+    segments: [{
+      position: 0, executionStage: 0, serviceId: 11, barberId: testProfessional.id,
+      barberName: testProfessional.name, startTime: "2030-06-02T09:00:00.000Z",
+      durationMinutes: 45, serviceNameSnapshot: "Manicure", servicePriceCentsSnapshot: 2500,
+    }],
+    activeProposal: null,
+    history: [{
+      id: 1, event_type: "request_created", actor_type: "client", actor_name: null,
+      from_status: null, to_status: "pending", reason: null, created_at: "2030-06-01T08:00:00.000Z",
+    }],
+  };
+  await page.route("**/api/beauty-v2/features", (route) => route.fulfill({ json: {
+    enabled: true, appointmentRequests: true, multiServiceAppointments: true,
+    parallelServiceScheduling: false, notificationDeliveryStatus: true,
+    consultationRole: true, teamProfiles: false, googleReviews: false,
+    appointmentRequestsAvailable: true,
+  } }));
+  await page.route("**/api/admin/appointment-requests**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    return route.fulfill({ json: path.endsWith("/744") ? request : [request] });
+  });
+
+  let profile: "professional" | "consultation" = "professional";
+  await page.route("**/api/admin/me", (route) => route.fulfill({ json: {
+    authorized: true,
+    role: profile === "professional" ? "barber" : "admin",
+    id: 9701,
+    userId: 9701,
+    professionalId: profile === "professional" ? testProfessional.id : null,
+    name: profile === "professional" ? testProfessional.name : "Consulta QA",
+    email: "hidden@example.test",
+    access: {
+      globalCapabilities: [],
+      locationCapabilities: [{
+        locationId: testLocation.id,
+        capabilities: profile === "professional"
+          ? beautyV2ProfessionalCapabilityCodes
+          : beautyV2ConsultationCapabilityCodes,
+      }],
+      presetLabels: [profile === "professional" ? "Profissional" : "Consulta"],
+    },
+    consultationAssigned: profile === "consultation",
+    consultationMode: profile === "consultation",
+    consultationLocationIds: profile === "consultation" ? [testLocation.id] : [],
+  } }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/admin");
+  await expect(page.getByRole("button", { name: "Marcação manual" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ausência" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Pedidos" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Custos internos" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Relatórios" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Funcionalidades" })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("beauty-v2-professional-mobile.png"), fullPage: true });
+
+  profile = "consultation";
+  await page.reload();
+  await expect(page.getByTestId("consultation-mode-badge")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Marcação manual" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ausência" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Pedidos" }).click();
+  await page.getByRole("button", { name: "Ver detalhe" }).click();
+  const detail = page.getByRole("dialog", { name: "Pedido de marcação" });
+  await expect(detail).toContainText("Cliente Consulta QA");
+  await expect(detail.getByRole("button", { name: "Aprovar" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Propor horário" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Recusar" })).toHaveCount(0);
+  await expect(detail).not.toContainText("hidden@example.test");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  expect(await detail.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("beauty-v2-consultation-desktop.png"), fullPage: true });
+});
 
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/admin/request-notifications**", (route) => route.fulfill({
