@@ -11,11 +11,14 @@ export {
 export {
   accessPresetKeys,
   accessPresets,
+  beautyV2ConsultationCapabilityCodes,
+  beautyV2ProfessionalCapabilityCodes,
   consultationCapabilityCodes,
   professionalCapabilityCodes,
   resolvePresetCapabilities,
   type AccessPreset,
   type AccessPresetKey,
+  type AccessPresetProfile,
 } from "./presets";
 export {
   hasCapability,

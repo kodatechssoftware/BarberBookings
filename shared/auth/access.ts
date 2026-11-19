@@ -3,15 +3,20 @@ import {
   type CapabilityCode,
   type OwnCapabilityCode,
 } from "./capabilities";
-import { accessPresets, resolvePresetCapabilities } from "./presets";
+import {
+  accessPresets,
+  resolvePresetCapabilities,
+  type AccessPresetProfile,
+} from "./presets";
 import type { AccessScope, EffectiveAccess } from "./types";
 
 function addScopeCapabilities(
   target: Set<CapabilityCode>,
   scope: AccessScope,
+  presetProfile: AccessPresetProfile,
 ): void {
   const capabilities = [
-    ...(scope.preset ? resolvePresetCapabilities(scope.preset) : []),
+    ...(scope.preset ? resolvePresetCapabilities(scope.preset, { profile: presetProfile }) : []),
     ...(scope.capabilities ?? []),
   ];
 
@@ -25,7 +30,11 @@ function addScopeCapabilities(
   }
 }
 
-export function resolveEffectiveAccess(scopes: readonly AccessScope[]): EffectiveAccess {
+export function resolveEffectiveAccess(
+  scopes: readonly AccessScope[],
+  options: { presetProfile?: AccessPresetProfile } = {},
+): EffectiveAccess {
+  const presetProfile = options.presetProfile ?? "default";
   const globalCapabilities = new Set<CapabilityCode>();
   const capabilitiesByLocation = new Map<number, Set<CapabilityCode>>();
   const presetLabels = new Set<string>();
@@ -34,7 +43,7 @@ export function resolveEffectiveAccess(scopes: readonly AccessScope[]): Effectiv
     if (scope.preset) presetLabels.add(accessPresets[scope.preset].label);
 
     if (scope.kind === "global") {
-      addScopeCapabilities(globalCapabilities, scope);
+      addScopeCapabilities(globalCapabilities, scope, presetProfile);
       continue;
     }
 
@@ -44,7 +53,7 @@ export function resolveEffectiveAccess(scopes: readonly AccessScope[]): Effectiv
 
     const locationCapabilities = capabilitiesByLocation.get(scope.locationId)
       ?? new Set<CapabilityCode>();
-    addScopeCapabilities(locationCapabilities, scope);
+    addScopeCapabilities(locationCapabilities, scope, presetProfile);
     capabilitiesByLocation.set(scope.locationId, locationCapabilities);
   }
 

@@ -259,6 +259,7 @@ import {
   toCanonicalMeResponse,
   validateCanonicalSession,
 } from "./auth-runtime";
+import { runtimeAccessPresetProfile } from "./auth-preset-profile";
 import { runInitialSeedPolicy } from "./initial-seed-policy";
 import {
   clearAuthenticatedSessionIdentity,
@@ -282,7 +283,10 @@ import {
   hasCanonicalOwnOrTeamCapability,
   redactTeamAgendaAppointment,
   toConsultationAppointment,
+  toConsultationAppointmentRequest,
   toConsultationProfessional,
+  toOperationalAppointment,
+  toOperationalProfessional,
   requireAllGlobalCapabilities,
   requireAnyCapabilityAtLocation,
   requireCapabilityAtLocation,
@@ -1665,16 +1669,31 @@ function sumAppointmentExtras(extras: Array<Pick<AppointmentExtra, "amountCentsS
 }
 
 async function attachCommercialAppointmentExtras<T extends Appointment>(appointments: T[]) {
-  const extras = await storage.getAppointmentExtras(appointments.map((appointment) => appointment.id));
+  const appointmentIds = appointments.map((appointment) => appointment.id);
+  const [extras, availabilityWindows] = await Promise.all([
+    storage.getAppointmentExtras(appointmentIds),
+    resolvedBusinessConfig.features.appointmentAvailabilityWindows
+      ? storage.getAppointmentAvailabilityWindows(appointmentIds)
+      : Promise.resolve([]),
+  ]);
   const extrasByAppointment = new Map<number, ReturnType<typeof commercialAppointmentExtra>[]>();
   for (const extra of extras) {
     const values = extrasByAppointment.get(extra.appointmentId) ?? [];
     values.push(commercialAppointmentExtra(extra));
     extrasByAppointment.set(extra.appointmentId, values);
   }
+  const windowsByAppointment = new Map<number, Array<{ startTime: Date; endTime: Date }>>();
+  for (const window of availabilityWindows) {
+    const values = windowsByAppointment.get(window.appointmentId) ?? [];
+    values.push({ startTime: window.startTime, endTime: window.endTime });
+    windowsByAppointment.set(window.appointmentId, values);
+  }
   return appointments.map((appointment) => ({
     ...appointment,
     extras: extrasByAppointment.get(appointment.id) ?? [],
+    ...(resolvedBusinessConfig.features.appointmentAvailabilityWindows
+      ? { availabilityWindows: windowsByAppointment.get(appointment.id) ?? [] }
+      : {}),
   }));
 }
 
@@ -1827,6 +1846,7 @@ async function replaceBarberServicesForLocation(
 function sanitizeBarberForResponse<T extends {
   email?: unknown;
   password?: unknown;
+  userId?: unknown;
   compensationModel?: unknown;
   commissionPercent?: unknown;
   chairRentCents?: unknown;
@@ -1839,6 +1859,7 @@ function sanitizeBarberForResponse<T extends {
   const {
     email,
     password: _password,
+    userId,
     compensationModel,
     commissionPercent,
     chairRentCents,
@@ -1847,7 +1868,7 @@ function sanitizeBarberForResponse<T extends {
   } = barber;
   return {
     ...publicBarber,
-    ...(includePrivateFields ? { email } : {}),
+    ...(includePrivateFields ? { email, userId } : {}),
     ...(includeFinancialFields
       ? { compensationModel, commissionPercent, chairRentCents, chairRentPeriod }
       : {}),
@@ -2272,6 +2293,14 @@ function isOperationalAppointment(appointment: Appointment) {
     "FÉRIAS",
     "FERIAS",
   ].some((marker) => name.includes(marker)) && !name.startsWith("RECORRENTE:");
+}
+
+function isBlockedTimeAppointment(appointment: Pick<Appointment,
+  "serviceId" | "serviceNameSnapshot" | "servicePriceCentsSnapshot"
+>) {
+  return appointment.serviceId === null
+    && appointment.serviceNameSnapshot == null
+    && appointment.servicePriceCentsSnapshot == null;
 }
 
 function getOverlappingBookedAppointments<T extends AppointmentLike>(
@@ -2786,7 +2815,7 @@ export async function registerRoutes(
   const requireExtrasManage = requireCapabilityAtLocation("extras.manage", requireAdmin);
   const requireExpensesManage = requireCapabilityAtLocation("finance.manage_expenses", requireAdmin);
   const requireInternalCostsRead = requireAnyCapabilityAtLocation(
-    ["appointments.create_manual", "appointments.manage_own", "appointments.manage_team", "finance.manage_expenses"],
+    ["finance.manage_expenses"],
     requireAdmin,
   );
   const requireInternalCostsManage = requireExpensesManage;
@@ -2804,6 +2833,37 @@ export async function registerRoutes(
   const requireTeamGlobalManage = requireGlobalCapability("team.manage_global", requireAdmin);
   const requireCompensationManage = requireCapabilityAtLocation("finance.manage_compensation", requireAdmin);
   const requireTeamAppointmentsManage = requireCapabilityAtLocation("appointments.manage_team", requireAdmin);
+  const requireAppointmentRequestsRead = requireAnyCapabilityAtLocation(
+    ["appointment_requests.view", "appointments.manage_team"],
+    requireAdmin,
+  );
+  const canManageInternalCosts = (req: Request, locationId: number) => {
+    if (authRuntimeMode === "canonical") {
+      const context = getCanonicalRequestAuthContext(req);
+      return Boolean(context && hasCanonicalCapability(context, "finance.manage_expenses", locationId));
+    }
+    const session = getAppSession(req);
+    return session.role === "admin" && Boolean(session.adminId);
+  };
+  const canManageAppointmentTerms = (req: Request, locationId: number) => {
+    if (authRuntimeMode === "canonical") {
+      const context = getCanonicalRequestAuthContext(req);
+      return Boolean(context && (
+        hasCanonicalCapability(context, "catalog.manage_location", locationId)
+        || hasCanonicalCapability(context, "catalog.manage_global")
+      ));
+    }
+    const session = getAppSession(req);
+    return session.role === "admin" && Boolean(session.adminId);
+  };
+  const appointmentResponses = async <T extends Appointment>(
+    req: Request,
+    locationId: number,
+    appointments: T[],
+  ) => {
+    if (canManageInternalCosts(req, locationId)) return attachAppointmentExtras(appointments);
+    return (await attachCommercialAppointmentExtras(appointments)).map(toOperationalAppointment);
+  };
   const requireManagementAuth = (req: Request, res: Response, next: NextFunction) => authRuntimeMode === "canonical"
     ? requireAuth(req, res, next)
     : requireAdmin(req, res, next);
@@ -3371,15 +3431,18 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/appointment-requests", requireTeamAppointmentsManage, async (req, res) => {
+  app.get("/api/admin/appointment-requests", requireAppointmentRequestsRead, async (req, res) => {
     try {
       const query = appointmentRequestListQuerySchema.parse(req.query);
-      return res.json(await listAppointmentRequestsWithPool(
+      const requests = await listAppointmentRequestsWithPool(
         pool,
         Number(res.locals.locationId),
         query.status,
         appointmentRequestOptions,
-      ));
+      );
+      const context = getCanonicalRequestAuthContext(req);
+      const consultation = Boolean(context?.consultationLocationIds.includes(Number(res.locals.locationId)));
+      return res.json(consultation ? requests.map(toConsultationAppointmentRequest) : requests);
     } catch (error) {
       const sent = sendAppointmentRequestError(res, error);
       if (sent) return sent;
@@ -3483,7 +3546,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/appointment-requests/:id", requireTeamAppointmentsManage, async (req, res) => {
+  app.get("/api/admin/appointment-requests/:id", requireAppointmentRequestsRead, async (req, res) => {
     try {
       const requestId = parsePositiveInteger(req.params.id);
       if (requestId === null) return res.status(400).json({ message: "Pedido inválido." });
@@ -3493,8 +3556,10 @@ export async function registerRoutes(
         Number(res.locals.locationId),
         appointmentRequestOptions,
       );
+      const context = getCanonicalRequestAuthContext(req);
+      const consultation = Boolean(context?.consultationLocationIds.includes(Number(res.locals.locationId)));
       return request
-        ? res.json(request)
+        ? res.json(consultation ? toConsultationAppointmentRequest(request) : request)
         : res.status(404).json({ code: "APPOINTMENT_REQUEST_NOT_FOUND", message: "Pedido não encontrado." });
     } catch (error) {
       const sent = sendAppointmentRequestError(res, error);
@@ -5776,11 +5841,18 @@ export async function registerRoutes(
       canonicalContext
       && canonicalContext.consultationLocationIds.includes(locationId),
     );
+    const isOperationalTeamView = Boolean(
+      canonicalContext
+      && hasCanonicalCapability(canonicalContext, "team.view", locationId)
+      && !hasCanonicalCapability(canonicalContext, "team.manage_global"),
+    );
 
     res.json(
       visibleBarbers.map((barber) =>
         isConsultationView
           ? toConsultationProfessional(barber)
+          : isOperationalTeamView
+            ? toOperationalProfessional(barber)
           : sanitizeBarberForResponse(
           avatarReferences && referencedBarberId(barber.avatar) === barber.id
             ? { ...barber, avatar: `${barber.avatar}&locationId=${locationId}` }
@@ -6011,6 +6083,11 @@ export async function registerRoutes(
     if (canonicalContext?.consultationLocationIds.includes(locationId)) {
       return res.json(toConsultationProfessional(responseBarber));
     }
+    if (canonicalContext
+      && hasCanonicalCapability(canonicalContext, "team.view", locationId)
+      && !hasCanonicalCapability(canonicalContext, "team.manage_global")) {
+      return res.json(toOperationalProfessional(responseBarber));
+    }
     res.json(sanitizeBarberForResponse(responseBarber, includePrivateFields, canViewTeamFinance));
   });
 
@@ -6153,6 +6230,27 @@ export async function registerRoutes(
     );
 
     const canonicalProfessionalId = canonicalContext?.professionalId ?? undefined;
+    const usesBeautyV2OperationalProfile = runtimeAccessPresetProfile() === "beauty-v2";
+    const canManageCanonicalAppointment = (appointment: Appointment) => {
+      if (!canonicalContext) return false;
+      if (usesBeautyV2OperationalProfile && isBlockedTimeAppointment(appointment)) {
+        return hasCanonicalCapability(canonicalContext, "appointments.block_time", locationId)
+          || Boolean(canonicalProfessionalId && appointment.barberId === canonicalProfessionalId
+            && hasCanonicalOwnCapability(
+              canonicalContext,
+              "appointments.block_time_own",
+              canonicalProfessionalId,
+              locationId,
+            ));
+      }
+      return hasCanonicalCapability(canonicalContext, "appointments.manage_team", locationId)
+        || Boolean(canonicalProfessionalId && hasCanonicalOwnCapability(
+          canonicalContext,
+          "appointments.manage_own",
+          appointment.barberId,
+          locationId,
+        ));
+    };
     const isConsultationView = Boolean(
       canonicalContext
       && canonicalContext.consultationLocationIds.includes(locationId),
@@ -6166,17 +6264,23 @@ export async function registerRoutes(
       locationId,
     ));
     if (authRuntimeMode === "canonical" && canViewAllCustomerData) {
-      const appointmentsWithExtras = await attachAppointmentExtras(appointmentsWithCommunicationFailures);
-      return res.json(appointmentsWithExtras.map((appointment) => ({
-        ...appointment,
-        canManage: hasCanonicalCapability(canonicalContext!, "appointments.manage_team", locationId)
-          || Boolean(canonicalProfessionalId && hasCanonicalOwnCapability(
-            canonicalContext!,
-            "appointments.manage_own",
-            appointment.barberId,
-            locationId,
-          )),
-      })));
+      if (canManageInternalCosts(req, locationId)) {
+        const appointmentsWithExtras = await attachAppointmentExtras(appointmentsWithCommunicationFailures);
+        return res.json(appointmentsWithExtras.map((appointment) => ({
+          ...appointment,
+          canManage: canManageCanonicalAppointment(appointment),
+        })));
+      }
+      const appointmentsWithExtras = await attachCommercialAppointmentExtras(appointmentsWithCommunicationFailures);
+      return res.json(appointmentsWithExtras.map((appointment) => {
+        const responseAppointment = {
+          ...appointment,
+          canManage: canManageCanonicalAppointment(appointment),
+        };
+        return usesBeautyV2OperationalProfile
+          ? toOperationalAppointment(responseAppointment)
+          : responseAppointment;
+      }));
     }
     if (authRuntimeMode !== "canonical" && appSession.role !== "barber") {
       const appointmentsWithExtras = await attachAppointmentExtras(appointmentsWithCommunicationFailures);
@@ -6201,15 +6305,13 @@ export async function registerRoutes(
         ))
         : isOwnAppointment;
       const canManage = authRuntimeMode === "canonical"
-        ? Boolean(canonicalContext && hasCanonicalOwnOrTeamCapability(canonicalContext, {
-          ownCapability: "appointments.manage_own",
-          teamCapability: "appointments.manage_team",
-          ownerProfessionalId: isOwnAppointment ? ownBarberId : appointment.barberId,
-          locationId,
-        }))
+        ? canManageCanonicalAppointment(appointment)
         : isOwnAppointment;
       if (canViewCustomer) {
-        return { ...ownAppointmentsById.get(appointment.id)!, canManage };
+        const responseAppointment = { ...ownAppointmentsById.get(appointment.id)!, canManage };
+        return usesBeautyV2OperationalProfile
+          ? toOperationalAppointment(responseAppointment)
+          : responseAppointment;
       }
 
       return { ...redactTeamAgendaAppointment(appointment), canManage };
@@ -6489,15 +6591,32 @@ export async function registerRoutes(
         // appointment uses create_manual; a calendar absence/block uses the
         // deliberately separate block_time grant. The payload is validated
         // below before either path can mutate data.
-        const requiredCapability = isManualBooking === true
-          ? "appointments.create_manual"
-          : "appointments.block_time";
-        if (!enforceCanonicalCapability(req, res, requiredCapability, locationId)) return;
+        if (isManualBooking === true) {
+          if (!enforceCanonicalCapability(req, res, "appointments.create_manual", locationId)) return;
+        } else {
+          const ownerProfessionalId = Number(barberId);
+          if (!Number.isInteger(ownerProfessionalId) || ownerProfessionalId <= 0) {
+            return res.status(400).json({ message: "Profissional inválida." });
+          }
+          if (!enforceCanonicalOwnOrTeamCapability(req, res, {
+            ownCapability: "appointments.block_time_own",
+            teamCapability: "appointments.block_time",
+            ownerProfessionalId,
+            locationId,
+          })) return;
+        }
       } else {
         const appSession = getAppSession(req);
         if (appSession.role !== "admin" || !appSession.adminId) {
           return res.status(401).json({ message: "Não autorizado" });
         }
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, "internalCosts")
+        && !canManageInternalCosts(req, locationId)) {
+        return res.status(403).json({
+          code: "FINANCIAL_FIELDS_FORBIDDEN",
+          message: "Não tem permissão para alterar custos internos.",
+        });
       }
       if (
         (isManualBooking !== undefined && typeof isManualBooking !== "boolean") ||
@@ -6591,6 +6710,12 @@ export async function registerRoutes(
       const hasCustomName = Object.prototype.hasOwnProperty.call(req.body, "customServiceName");
       const hasCustomDuration = Object.prototype.hasOwnProperty.call(req.body, "customDurationMinutes");
       const usesSpecialTerms = Boolean(isManualBooking && hasSpecialTerms);
+      if (usesSpecialTerms && !canManageAppointmentTerms(req, locationId)) {
+        return res.status(403).json({
+          code: "APPOINTMENT_TERMS_FORBIDDEN",
+          message: "Não tem permissão para definir preços ou condições especiais.",
+        });
+      }
       if (serviceIdNumber !== null && (!Number.isInteger(serviceIdNumber) || serviceIdNumber <= 0)) {
         return res.status(400).json({ message: "Serviço inválido." });
       }
@@ -6996,7 +7121,7 @@ export async function registerRoutes(
         }
       }
 
-      const appointmentsWithExtras = await attachAppointmentExtras(createdAppointments);
+      const appointmentsWithExtras = await appointmentResponses(req, locationId, createdAppointments);
       res.status(201).json({
         message: `${appointments.length} marcações criadas.`,
         appointments: appointmentsWithExtras,
@@ -7215,6 +7340,20 @@ export async function registerRoutes(
 
       const locationId = Number(res.locals.locationId);
       if (!currentApp || currentApp.locationId !== locationId) return res.status(404).json({ message: "Marcação não encontrada" });
+      if (hasInternalCostsPatch && !canManageInternalCosts(req, locationId)) {
+        return res.status(403).json({
+          code: "FINANCIAL_FIELDS_FORBIDDEN",
+          message: "Não tem permissão para alterar custos internos.",
+        });
+      }
+      if ((hasCustomNamePatch || hasCustomDurationPatch || hasServicePricePatch
+        || (hasAllowOutsideHoursPatch && allowOutsideHours === true))
+        && !canManageAppointmentTerms(req, locationId)) {
+        return res.status(403).json({
+          code: "APPOINTMENT_TERMS_FORBIDDEN",
+          message: "Não tem permissão para definir preços ou condições especiais.",
+        });
+      }
       const multiServiceSegments = await loadAppointmentServiceSegments([appointmentId]);
       const appointmentProfessionalIds = multiServiceSegments.length > 0
         ? Array.from(new Set(multiServiceSegments.map((segment) => segment.barberId)))
@@ -7248,7 +7387,16 @@ export async function registerRoutes(
         || hasAvailabilityWindowsPatch;
       if (authRuntimeMode === "canonical") {
         const isMultiServiceReschedule = multiServiceSegments.length > 0 && hasStartTimePatch;
-        if (isMultiServiceReschedule && appointmentProfessionalIds.length > 1) {
+        const requiresBeautyV2AbsenceOwnership = runtimeAccessPresetProfile() === "beauty-v2"
+          && isBlockedTimeAppointment(currentApp);
+        if (requiresBeautyV2AbsenceOwnership) {
+          if (!enforceCanonicalOwnOrTeamCapability(req, res, {
+            ownCapability: "appointments.block_time_own",
+            teamCapability: "appointments.block_time",
+            ownerProfessionalId: currentApp.barberId,
+            locationId,
+          })) return;
+        } else if (isMultiServiceReschedule && appointmentProfessionalIds.length > 1) {
           if (!enforceCanonicalCapability(req, res, "appointments.manage_team", locationId)) return;
         } else if ((hasAppointmentDetailsPatch || !hasStatusPatch) && !enforceCanonicalOwnOrTeamCapability(req, res, {
           ownCapability: "appointments.manage_own",
@@ -7256,7 +7404,7 @@ export async function registerRoutes(
           ownerProfessionalId: currentApp.barberId,
           locationId,
         })) return;
-        if (hasStatusPatch && !enforceCanonicalAnyOwnOrTeamCapability(req, res, [
+        if (!requiresBeautyV2AbsenceOwnership && hasStatusPatch && !enforceCanonicalAnyOwnOrTeamCapability(req, res, [
           {
             ownCapability: "appointments.change_status_own",
             teamCapability: "appointments.change_status_team",
@@ -7341,7 +7489,7 @@ export async function registerRoutes(
         });
         const updated = await storage.getAppointment(appointmentId);
         if (!updated) return res.status(409).json({ message: "A marcação foi alterada entretanto." });
-        const [withExtras] = await attachAppointmentExtras([updated]);
+        const [withExtras] = await appointmentResponses(req, locationId, [updated]);
         return res.json({
           ...withExtras,
           serviceSegments: result.segments,
@@ -7661,11 +7809,8 @@ export async function registerRoutes(
             status: latestAppointment?.status,
           });
         }
-        return res.json({
-          ...completed.appointment,
-          extras: completed.extras,
-          internalCosts: completed.internalCosts,
-        });
+        const [responseAppointment] = await appointmentResponses(req, locationId, [completed.appointment]);
+        return res.json(responseAppointment);
       }
       const updateResult = await storage.updateAppointmentWithNotification(
         appointmentId,
@@ -7736,7 +7881,7 @@ export async function registerRoutes(
       }
 
       const responseAppointment = updated
-        ? (await attachAppointmentExtras([updated]))[0]
+        ? (await appointmentResponses(req, locationId, [updated]))[0]
         : updated;
       res.json(responseAppointment);
     } catch (error) {
@@ -7771,12 +7916,18 @@ export async function registerRoutes(
           internalCostId: z.number().int().positive(),
           unitCostCents: z.number().int().min(0).max(1_000_000).optional(),
           quantity: z.number().int().min(1).max(9999).optional(),
-        })),
+        })).optional(),
       }).parse(req.body);
       const current = await storage.getAppointment(appointmentId);
       const locationId = Number(res.locals.locationId);
       if (!current || current.locationId !== locationId) {
         return res.status(404).json({ message: "Marcação não encontrada." });
+      }
+      if (parsed.internalCosts !== undefined && !canManageInternalCosts(req, locationId)) {
+        return res.status(403).json({
+          code: "FINANCIAL_FIELDS_FORBIDDEN",
+          message: "Não tem permissão para alterar custos internos.",
+        });
       }
       if (!enforceCanonicalAnyOwnOrTeamCapability(req, res, [{
         ownCapability: "appointments.change_status_own",
@@ -7797,13 +7948,21 @@ export async function registerRoutes(
       );
       const timingError = getAppointmentStatusTimingError(current, "completed", serviceDurations);
       if (timingError) return res.status(400).json({ message: timingError });
-      const actor = await getAuditActor(req);
+      const [actor, currentInternalCosts] = await Promise.all([
+        getAuditActor(req),
+        parsed.internalCosts === undefined ? storage.getAppointmentInternalCosts([appointmentId]) : Promise.resolve([]),
+      ]);
+      const preservedInternalCosts = parsed.internalCosts ?? currentInternalCosts.map((cost) => ({
+        internalCostId: cost.internalCostDefinitionId,
+        unitCostCents: cost.unitCostCentsSnapshot,
+        quantity: cost.quantity,
+      }));
       const result = await storage.completeAppointment({
         appointmentId,
         expectedRevision: parsed.expectedRevision,
         paymentMethod: parsed.paymentMethod,
         extras: parsed.extras,
-        internalCosts: parsed.internalCosts,
+        internalCosts: preservedInternalCosts,
         auditLog: {
           ...actor,
           locationId,
@@ -7816,7 +7975,7 @@ export async function registerRoutes(
             newStatus: "completed",
             paymentMethod: parsed.paymentMethod,
             commercialExtraCount: parsed.extras.length,
-            internalCostCount: parsed.internalCosts.length,
+            internalCostCount: preservedInternalCosts.length,
           }),
         },
       });
@@ -7828,11 +7987,8 @@ export async function registerRoutes(
           notificationRevision: latest?.notificationRevision,
         });
       }
-      res.json({
-        ...result.appointment,
-        extras: result.extras,
-        internalCosts: result.internalCosts,
-      });
+      const [responseAppointment] = await appointmentResponses(req, locationId, [result.appointment]);
+      res.json(responseAppointment);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.issues[0].message, field: error.issues[0].path.join(".") });
@@ -7871,7 +8027,17 @@ export async function registerRoutes(
       if (!currentApp || currentApp.locationId !== Number(res.locals.locationId)) return res.status(404).json({ message: "Marcação não encontrada" });
 
       const locationId = Number(res.locals.locationId);
-      if (!enforceCanonicalAnyOwnOrTeamCapability(req, res, [
+      const requiresBeautyV2AbsenceOwnership = authRuntimeMode === "canonical"
+        && runtimeAccessPresetProfile() === "beauty-v2"
+        && isBlockedTimeAppointment(currentApp);
+      if (requiresBeautyV2AbsenceOwnership) {
+        if (!enforceCanonicalOwnOrTeamCapability(req, res, {
+          ownCapability: "appointments.block_time_own",
+          teamCapability: "appointments.block_time",
+          ownerProfessionalId: currentApp.barberId,
+          locationId,
+        })) return;
+      } else if (!enforceCanonicalAnyOwnOrTeamCapability(req, res, [
         {
           ownCapability: "appointments.change_status_own",
           teamCapability: "appointments.change_status_team",
@@ -7956,11 +8122,8 @@ export async function registerRoutes(
             status: latestAppointment?.status,
           });
         }
-        return res.json({
-          ...completed.appointment,
-          extras: completed.extras,
-          internalCosts: completed.internalCosts,
-        });
+        const [responseAppointment] = await appointmentResponses(req, locationId, [completed.appointment]);
+        return res.json(responseAppointment);
       }
 
       const isCancellation = status === "cancelled" || status === "late_cancelled";
@@ -7997,7 +8160,8 @@ export async function registerRoutes(
           newPaymentMethod: paymentMethod,
         },
       });
-      res.json(updated);
+      const [responseAppointment] = await appointmentResponses(req, locationId, [updated]);
+      res.json(responseAppointment);
     } catch (error) {
       if (isAppointmentConflictError(error)) {
         return res.status(409).json({ message: "Este horário já está reservado." });
@@ -8220,7 +8384,7 @@ export async function registerRoutes(
         if (!updated) {
           return res.status(409).json({ message: PUBLIC_CYCLE_COPY.reschedule.backend.unavailable });
         }
-        const updatedWithExtras = (await attachAppointmentExtras([updated]))[0];
+        const updatedWithExtras = toOperationalAppointment((await attachCommercialAppointmentExtras([updated]))[0]);
         return res.json({
           ...updatedWithExtras,
           serviceSegments: result.segments,
@@ -8985,14 +9149,14 @@ export async function registerRoutes(
       const servicePrice = resolveAppointmentPriceCents(appointment, locationServicePrices);
       const extras = extrasByAppointment.get(appointment.id) ?? [];
 
-      return {
+      return toOperationalAppointment({
         ...appointment,
         barberName: barber?.name || "Desconhecido",
         serviceName: resolveAppointmentServiceName(appointment, locationServiceNames),
         servicePrice,
         extras: extras.map(commercialAppointmentExtra),
         totalPrice: servicePrice + sumAppointmentExtras(extras),
-      };
+      });
     });
     const metrics = summarizeCustomerAppointments(matchingAppointments);
     let customerNote;

@@ -14,6 +14,7 @@ import {
   resolveBeautyV2Features,
   type BeautyV2FeatureSetting,
 } from "@shared/business/v2-features";
+import { runtimeAccessPresetProfile } from "./auth-preset-profile";
 
 export const authRuntimeModes = ["legacy", "canonical"] as const;
 export type AuthRuntimeMode = (typeof authRuntimeModes)[number];
@@ -192,7 +193,7 @@ async function loadContextForUserRow(
     lastLoginAt: user.last_login_at,
     professionalId: link.professional_id,
     legacyAdminId: link.legacy_admin_id,
-    access: resolveEffectiveAccess(scopes),
+    access: resolveEffectiveAccess(scopes, { presetProfile: runtimeAccessPresetProfile() }),
     isGlobalAdministrator: scopes.some(
       (scope) => scope.kind === "global" && scope.preset === "administrator",
     ),

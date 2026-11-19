@@ -18,6 +18,7 @@ import {
   type BeautyV2FeatureSetting,
 } from "@shared/business/v2-features";
 import type { CanonicalAuthContext, CanonicalSessionIdentity } from "./auth-runtime";
+import { runtimeAccessPresetProfile } from "./auth-preset-profile";
 import { serializeSafeAuditMetadata } from "./audit-log-security";
 
 export class CanonicalUserManagementError extends Error {
@@ -371,7 +372,7 @@ async function assertConsultationFeatureEnabled(
 
 function effectiveScopeCapabilities(scope: AccessScope) {
   return new Set<CapabilityCode>([
-    ...(scope.preset ? resolvePresetCapabilities(scope.preset) : []),
+    ...(scope.preset ? resolvePresetCapabilities(scope.preset, { profile: runtimeAccessPresetProfile() }) : []),
     ...(scope.capabilities ?? []),
   ]);
 }
@@ -930,7 +931,7 @@ export async function replaceCanonicalUserAccess(
     if (userId === actor.user.id) {
       const resultingAccess = resolveEffectiveAccess(scopeRowsToScopes(
         await loadScopeRows(client, schema, userId),
-      ));
+      ), { presetProfile: runtimeAccessPresetProfile() });
       const retainsAccessManagement = input.mode === "replace_all"
         ? hasCapability(resultingAccess, "access.manage")
         : hasCapabilityAtLocation(resultingAccess, "access.manage", input.locationId!);

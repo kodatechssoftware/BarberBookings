@@ -26,6 +26,28 @@ export const professionalCapabilityCodes = [
 ] as const satisfies readonly CapabilityCode[];
 
 /**
+ * Beauty v2 salons use a collaborative operational model: every professional
+ * can help manage the location's day-to-day bookings. This list is resolved
+ * only by the Beauty v2 runtime and deliberately leaves the shared Barber
+ * preset unchanged. Explicit grants stored alongside the preset still apply.
+ */
+export const beautyV2ProfessionalCapabilityCodes = [
+  "agenda.view_own",
+  "agenda.view_team",
+  "appointments.create_manual",
+  "appointments.block_time_own",
+  "appointments.manage_own",
+  "appointments.manage_team",
+  "appointments.change_status_own",
+  "appointments.change_status_team",
+  "customers.view_own",
+  "customers.view_team",
+  "team.view",
+  "catalog.view",
+  "hours.view_team",
+] as const satisfies readonly CapabilityCode[];
+
+/**
  * Deliberately small, read-only preset used by reception/operations viewers.
  * Keep this list explicit: adding a capability to the registry must never
  * silently broaden consultation access.
@@ -35,6 +57,14 @@ export const consultationCapabilityCodes = [
   "team.view",
   "catalog.view",
 ] as const satisfies readonly CapabilityCode[];
+
+export const beautyV2ConsultationCapabilityCodes = [
+  ...consultationCapabilityCodes,
+  "appointment_requests.view",
+  "hours.view_team",
+] as const satisfies readonly CapabilityCode[];
+
+export type AccessPresetProfile = "default" | "beauty-v2";
 
 export const accessPresets = {
   administrator: {
@@ -63,6 +93,11 @@ export const accessPresets = {
 
 export function resolvePresetCapabilities(
   preset: AccessPresetKey,
+  options: { profile?: AccessPresetProfile } = {},
 ): readonly CapabilityCode[] {
+  if (options.profile === "beauty-v2") {
+    if (preset === "professional") return beautyV2ProfessionalCapabilityCodes;
+    if (preset === "consultation") return beautyV2ConsultationCapabilityCodes;
+  }
   return accessPresets[preset].capabilities;
 }

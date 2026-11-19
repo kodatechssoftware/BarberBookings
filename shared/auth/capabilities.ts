@@ -1,6 +1,7 @@
 export type CapabilityArea =
   | "agenda"
   | "appointments"
+  | "appointment_requests"
   | "customers"
   | "team"
   | "catalog"
@@ -43,6 +44,11 @@ export const capabilityRegistry = {
     description: "Create blocked-time or absence entries.",
     locationGrantAllowed: true,
   },
+  "appointments.block_time_own": {
+    area: "appointments",
+    description: "Create blocked-time or absence entries for the linked professional only.",
+    locationGrantAllowed: true,
+  },
   "appointments.manage_own": {
     area: "appointments",
     description: "Edit, reschedule or cancel the professional's own appointments.",
@@ -61,6 +67,11 @@ export const capabilityRegistry = {
   "appointments.change_status_team": {
     area: "appointments",
     description: "Change the status of team appointments.",
+    locationGrantAllowed: true,
+  },
+  "appointment_requests.view": {
+    area: "appointment_requests",
+    description: "View appointment requests without granting decision or communication actions.",
     locationGrantAllowed: true,
   },
   "customers.view_own": {
@@ -121,6 +132,11 @@ export const capabilityRegistry = {
   "hours.manage_own": {
     area: "hours",
     description: "Manage the professional's own working hours.",
+    locationGrantAllowed: true,
+  },
+  "hours.view_team": {
+    area: "hours",
+    description: "View the team's usual working hours without changing them.",
     locationGrantAllowed: true,
   },
   "hours.manage_team": {
@@ -208,6 +224,7 @@ export const capabilityCodes = Object.freeze(
 
 export const ownCapabilityCodes = [
   "agenda.view_own",
+  "appointments.block_time_own",
   "appointments.manage_own",
   "appointments.change_status_own",
   "customers.view_own",

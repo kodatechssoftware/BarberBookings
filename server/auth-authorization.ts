@@ -182,6 +182,151 @@ export function toConsultationAppointment<T extends Record<string, unknown>>(
 }
 
 /**
+ * Operational appointment data is allowlisted for professionals. It contains
+ * the customer contact and commercial terms needed to manage a booking, while
+ * excluding cancellation tokens, compensation snapshots and internal costs.
+ */
+export function toOperationalAppointment<T extends Record<string, unknown>>(
+  appointment: T,
+) {
+  const segments = Array.isArray(appointment.serviceSegments)
+    ? appointment.serviceSegments.map((value) => {
+        const segment = value as Record<string, unknown>;
+        return {
+          id: segment.id,
+          appointmentId: segment.appointmentId,
+          position: segment.position,
+          executionStage: segment.executionStage,
+          serviceId: segment.serviceId,
+          barberId: segment.barberId,
+          startTime: segment.startTime,
+          durationMinutes: segment.durationMinutes,
+          bufferBeforeMinutesSnapshot: segment.bufferBeforeMinutesSnapshot,
+          bufferAfterMinutesSnapshot: segment.bufferAfterMinutesSnapshot,
+          serviceNameSnapshot: segment.serviceNameSnapshot,
+          servicePriceCentsSnapshot: segment.servicePriceCentsSnapshot,
+        };
+      })
+    : [];
+  const extras = Array.isArray(appointment.extras)
+    ? appointment.extras.map((value) => {
+        const extra = value as Record<string, unknown>;
+        return {
+          extraDefinitionId: extra.extraDefinitionId,
+          nameSnapshot: extra.nameSnapshot,
+          amountCentsSnapshot: extra.amountCentsSnapshot,
+          quantity: extra.quantity,
+          position: extra.position,
+        };
+      })
+    : [];
+  const availabilityWindows = Array.isArray(appointment.availabilityWindows)
+    ? appointment.availabilityWindows.map((value) => {
+        const window = value as Record<string, unknown>;
+        return { startTime: window.startTime, endTime: window.endTime };
+      })
+    : [];
+  return {
+    id: appointment.id,
+    locationId: appointment.locationId,
+    barberId: appointment.barberId,
+    serviceId: appointment.serviceId,
+    startTime: appointment.startTime,
+    customerName: appointment.customerName,
+    customerEmail: appointment.customerEmail,
+    customerPhone: appointment.customerPhone,
+    durationMinutes: appointment.durationMinutes,
+    bufferBeforeMinutesSnapshot: appointment.bufferBeforeMinutesSnapshot,
+    bufferAfterMinutesSnapshot: appointment.bufferAfterMinutesSnapshot,
+    serviceNameSnapshot: appointment.serviceNameSnapshot,
+    servicePriceCentsSnapshot: appointment.servicePriceCentsSnapshot,
+    barberName: appointment.barberName,
+    serviceName: appointment.serviceName,
+    servicePrice: appointment.servicePrice,
+    totalPrice: appointment.totalPrice,
+    manualOutsideHours: appointment.manualOutsideHours,
+    status: appointment.status,
+    paymentMethod: appointment.paymentMethod,
+    cancelledAt: appointment.cancelledAt,
+    depositRequired: appointment.depositRequired,
+    depositReason: appointment.depositReason,
+    rescheduleRevision: appointment.rescheduleRevision,
+    notificationRevision: appointment.notificationRevision,
+    seriesId: appointment.seriesId,
+    seriesOccurrenceIndex: appointment.seriesOccurrenceIndex,
+    extras,
+    availabilityWindows,
+    serviceSegments: segments,
+    communicationFailures: appointment.communicationFailures,
+    canManage: appointment.canManage,
+    operationalView: true,
+  };
+}
+
+/** Read-only request DTO: no customer contacts, tokens or delivery errors. */
+export function toConsultationAppointmentRequest<T extends Record<string, unknown>>(
+  request: T,
+) {
+  const activeProposal = request.activeProposal && typeof request.activeProposal === "object"
+    ? request.activeProposal as Record<string, unknown>
+    : null;
+  const communication = activeProposal?.communication && typeof activeProposal.communication === "object"
+    ? activeProposal.communication as Record<string, unknown>
+    : null;
+  return {
+    id: request.id,
+    locationId: request.locationId,
+    status: request.status,
+    revision: request.revision,
+    customerName: request.customerName,
+    requestedStartTime: request.requestedStartTime,
+    appointmentId: request.appointmentId,
+    refusalReason: request.refusalReason,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    segments: Array.isArray(request.segments) ? request.segments.map((value) => {
+      const segment = value as Record<string, unknown>;
+      return {
+        id: segment.id,
+        position: segment.position,
+        executionStage: segment.executionStage,
+        serviceId: segment.serviceId,
+        barberId: segment.barberId,
+        barberName: segment.barberName,
+        startTime: segment.startTime,
+        durationMinutes: segment.durationMinutes,
+        serviceNameSnapshot: segment.serviceNameSnapshot,
+        servicePriceCentsSnapshot: segment.servicePriceCentsSnapshot,
+      };
+    }) : [],
+    activeProposal: activeProposal ? {
+      id: activeProposal.id,
+      proposedStartTime: activeProposal.proposedStartTime,
+      status: activeProposal.status,
+      expiresAt: activeProposal.expiresAt,
+      communication: communication ? {
+        emailStatus: communication.emailStatus,
+        emailSentAt: communication.emailSentAt,
+      } : null,
+    } : null,
+    history: Array.isArray(request.history) ? request.history.map((value) => {
+      const event = value as Record<string, unknown>;
+      return {
+        id: event.id,
+        event_type: event.event_type,
+        actor_type: event.actor_type,
+        actor_name: event.actor_name,
+        from_status: event.from_status,
+        to_status: event.to_status,
+        reason: event.reason,
+        created_at: event.created_at,
+      };
+    }) : undefined,
+    consultationView: true,
+  };
+}
+
+/**
  * The consultation team DTO is deliberately allowlisted. In particular it
  * must never inherit credentials, contact data or compensation fields added
  * to the internal professional model in the future.
@@ -197,6 +342,17 @@ export function toConsultationProfessional<T extends Record<string, unknown>>(
     color: professional.color,
     isVisible: professional.isVisible,
     serviceIds: professional.serviceIds,
+  };
+}
+
+export function toOperationalProfessional<T extends Record<string, unknown>>(
+  professional: T,
+) {
+  return {
+    ...toConsultationProfessional(professional),
+    locationCount: professional.locationCount,
+    allServicesAllowed: professional.allServicesAllowed,
+    operationalView: true,
   };
 }
 
